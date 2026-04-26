@@ -989,9 +989,12 @@ class _SongEditDialogState extends State<_SongEditDialog> {
   void initState() {
     super.initState();
     _titleController = TextEditingController(text: widget.song?.title ?? '');
-    _lyricsController = TextEditingController(text: widget.song?.lyrics ?? '');
+    // DB의 ### 구분자를 빈 줄로 변환해서 표시 (저장 시 역변환)
+    _lyricsController = TextEditingController(
+      text: _toEditText(widget.song?.lyrics ?? ''),
+    );
     _englishController = TextEditingController(
-      text: widget.song?.englishLyrics ?? '',
+      text: _toEditText(widget.song?.englishLyrics ?? ''),
     );
   }
 
@@ -1003,13 +1006,19 @@ class _SongEditDialogState extends State<_SongEditDialog> {
     super.dispose();
   }
 
+  // DB 저장용: ### 도 빈 줄로 통일한 뒤, 빈 줄 단위로 페이지 분리
   String _normalizeLyrics(String raw) {
-    return raw
-        .split('###')
+    final unified = raw.replaceAll(RegExp(r'[ \t]*###[ \t]*'), '\n\n');
+    return unified
+        .split(RegExp(r'\n[ \t]*\n+'))
         .map((page) => page.trim())
         .where((page) => page.isNotEmpty)
         .join('\n###\n');
   }
+
+  // 편집 화면 표시용: ### → 빈 줄
+  static String _toEditText(String stored) =>
+      stored.replaceAll('\n###\n', '\n\n');
 
   void _save() {
     final title = _titleController.text.trim();
@@ -1059,7 +1068,7 @@ class _SongEditDialogState extends State<_SongEditDialog> {
                 textAlignVertical: TextAlignVertical.top,
                 decoration: const InputDecoration(
                   labelText: '한글 가사',
-                  hintText: '페이지 구분: 새 줄에 ### 입력',
+                  hintText: '페이지 구분: 빈 줄 (또는 ###)',
                   border: OutlineInputBorder(),
                   alignLabelWithHint: true,
                 ),
@@ -1071,7 +1080,7 @@ class _SongEditDialogState extends State<_SongEditDialog> {
                 textAlignVertical: TextAlignVertical.top,
                 decoration: const InputDecoration(
                   labelText: '영어 가사',
-                  hintText: '페이지 구분: 새 줄에 ### 입력',
+                  hintText: '페이지 구분: 빈 줄 (또는 ###)',
                   border: OutlineInputBorder(),
                   alignLabelWithHint: true,
                 ),
