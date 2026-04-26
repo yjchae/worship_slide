@@ -25,6 +25,7 @@ class ImportResult {
     required this.importedCount,
     required this.failedCount,
     required this.failures,
+    required this.libreofficeMissing,
   });
 
   final List<PraiseSong> songs;
@@ -32,6 +33,7 @@ class ImportResult {
   final int importedCount;
   final int failedCount;
   final List<ImportFailure> failures;
+  final bool libreofficeMissing;
 }
 
 class PythonBridge {
@@ -61,6 +63,7 @@ class PythonBridge {
       importedCount: (json['imported_count'] as num?)?.toInt() ?? songs.length,
       failedCount: (json['failed_count'] as num?)?.toInt() ?? failures.length,
       failures: failures,
+      libreofficeMissing: (json['libreoffice_missing'] as bool?) ?? false,
     );
   }
 

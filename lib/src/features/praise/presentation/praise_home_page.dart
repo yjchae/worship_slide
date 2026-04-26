@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
@@ -166,6 +168,9 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(message)));
+      if (result.libreofficeMissing && mounted) {
+        await _showLibreofficeDialog();
+      }
     } catch (error) {
       if (!mounted) {
         return;
@@ -336,6 +341,45 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
       await _repository.updateSong(result);
     }
     await _loadSongs();
+  }
+
+  void _openUrl(String url) {
+    if (Platform.isMacOS) {
+      Process.run('open', [url]);
+    } else if (Platform.isWindows) {
+      Process.run('start', [url], runInShell: true);
+    } else {
+      Process.run('xdg-open', [url]);
+    }
+  }
+
+  Future<void> _showLibreofficeDialog() async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('LibreOffice가 필요합니다'),
+        content: const Text(
+          '.ppt 파일을 읽으려면 LibreOffice가 설치되어 있어야 합니다.\n\n'
+          '.pptx 파일은 LibreOffice 없이도 정상적으로 가져올 수 있습니다.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('닫기'),
+          ),
+          FilledButton.icon(
+            onPressed: () {
+              _openUrl(
+                'https://www.libreoffice.org/download/download-libreoffice/',
+              );
+              Navigator.of(context).pop();
+            },
+            icon: const Icon(Icons.download_rounded),
+            label: const Text('LibreOffice 다운로드'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _toggleSelection(PraiseSong song, bool isSelected) {

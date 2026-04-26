@@ -193,6 +193,10 @@ def process_presentation_file(file_path, presentation_path):
         }
 
 
+def _is_libreoffice_available():
+    return shutil.which("soffice") is not None
+
+
 def prepare_presentation_sources(file_paths):
     prepared_sources = []
     errors = []
@@ -208,6 +212,18 @@ def prepare_presentation_sources(file_paths):
                 ppt_groups.setdefault(file_path.parent, []).append(file_path)
         else:
             prepared_sources.append((file_path, file_path))
+
+    if ppt_groups and not _is_libreoffice_available():
+        for file_path_list in ppt_groups.values():
+            for file_path in file_path_list:
+                errors.append(
+                    {
+                        "file_name": file_path.name,
+                        "path": str(file_path),
+                        "error": "libreoffice_missing",
+                    }
+                )
+        ppt_groups = {}
 
     for index, directory in enumerate(sorted(ppt_groups, key=lambda item: str(item).casefold())):
         source_paths = sorted(ppt_groups[directory], key=lambda path: str(path).casefold())
@@ -311,6 +327,9 @@ def import_folder(folder):
                 "failed_count": len(errors),
                 "errors": errors,
                 "worker_count": get_import_worker_count(processed_count),
+                "libreoffice_missing": any(
+                    e["error"] == "libreoffice_missing" for e in errors
+                ),
             },
             ensure_ascii=False,
         )
