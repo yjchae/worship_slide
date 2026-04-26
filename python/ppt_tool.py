@@ -372,6 +372,13 @@ def add_song_slides(prs, song, style):
             english_run.font.color.rgb = english_color
 
 
+def _add_blank_slide(prs, style):
+    bg_color = parse_hex_color(style["background_color"])
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    slide.background.fill.solid()
+    slide.background.fill.fore_color.rgb = bg_color
+
+
 def export_presentation(payload_json):
     payload = json.loads(payload_json)
     output_path = Path(payload["output_path"])
@@ -388,8 +395,10 @@ def export_presentation(payload_json):
     prs.slide_width = Inches(13.333)
     prs.slide_height = Inches(7.5)
 
-    for song in songs:
+    for index, song in enumerate(songs):
         add_song_slides(prs, song, style)
+        if index < len(songs) - 1:
+            _add_blank_slide(prs, style)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     prs.save(str(output_path))

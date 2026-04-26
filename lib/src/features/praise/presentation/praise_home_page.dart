@@ -73,11 +73,15 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
   }
 
   Future<void> _loadSongs() async {
+    // 한글 IME 조합 중에는 건너뜀 — setState가 조합을 끊는 것을 방지
+    if (_searchController.value.composing != TextRange.empty) return;
     final songs = await _repository.searchSongs(_searchController.text);
     final storedCount = await _repository.countSongs();
     if (!mounted) {
       return;
     }
+    // DB 쿼리 대기 중에 새 조합이 시작됐을 수 있으므로 재확인
+    if (_searchController.value.composing != TextRange.empty) return;
     setState(() {
       _songs = songs;
       _storedCount = storedCount;
@@ -843,6 +847,14 @@ class _PreviewBox extends StatelessWidget {
   final ExportStyle style;
   final List<PraiseSong> selectedSongs;
 
+  // PPTX 슬라이드/텍스트박스 치수 (인치) — add_song_slides와 동일한 값
+  static const double _slideW = 13.333;
+  static const double _slideH = 7.5;
+  static const double _boxL = 0.7;
+  static const double _boxT = 0.6;
+  static const double _boxW = 11.9;
+  static const double _boxH = 5.4;
+
   @override
   Widget build(BuildContext context) {
     final sampleSong = selectedSongs.isEmpty ? null : selectedSongs.first;
@@ -862,47 +874,67 @@ class _PreviewBox extends StatelessWidget {
       VerticalTextPosition.bottom => Alignment.bottomCenter,
     };
 
-    return Container(
-      height: 220,
-      width: double.infinity,
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: style.backgroundColor,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Align(
-        alignment: alignment,
-        child: DefaultTextStyle(
-          style: const TextStyle(),
-          child: RichText(
-            textAlign: TextAlign.center,
-            maxLines: 6,
-            overflow: TextOverflow.ellipsis,
-            text: TextSpan(
-              children: [
-                TextSpan(
-                  text: sampleText,
-                  style: TextStyle(
-                    color: style.textColor,
-                    fontSize: style.fontSize,
-                    fontWeight: FontWeight.w700,
-                    height: 1.25,
-                  ),
+    // 16:9 비율로 슬라이드와 동일한 종횡비 유지
+    return AspectRatio(
+      aspectRatio: _slideW / _slideH,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final w = constraints.maxWidth;
+          final h = constraints.maxHeight;
+          // PPTX의 fontSize는 포인트(pt) 단위: 1pt = 1/72인치
+          // 슬라이드 높이 = _slideH * 72pt, 미리보기 높이 = h px
+          final fontScale = h / (_slideH * 72);
+
+          return ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              color: style.backgroundColor,
+              child: Padding(
+                padding: EdgeInsets.only(
+                  left: w * _boxL / _slideW,
+                  top: h * _boxT / _slideH,
+                  right: w * (1 - (_boxL + _boxW) / _slideW),
+                  bottom: h * (1 - (_boxT + _boxH) / _slideH),
                 ),
-                if (style.includeEnglishLyrics && sampleEnglishText.isNotEmpty)
-                  TextSpan(
-                    text: '\n$sampleEnglishText',
-                    style: TextStyle(
-                      color: style.englishTextColor,
-                      fontSize: style.fontSize * 0.8,
-                      fontWeight: FontWeight.w700,
-                      height: 1.3,
+                child: Align(
+                  alignment: alignment,
+                  child: DefaultTextStyle(
+                    style: const TextStyle(),
+                    child: RichText(
+                      textAlign: TextAlign.center,
+                      maxLines: 6,
+                      overflow: TextOverflow.ellipsis,
+                      text: TextSpan(
+                        children: [
+                          TextSpan(
+                            text: sampleText,
+                            style: TextStyle(
+                              color: style.textColor,
+                              fontSize: style.fontSize * fontScale,
+                              fontWeight: FontWeight.w700,
+                              height: 1.25,
+                            ),
+                          ),
+                          if (style.includeEnglishLyrics &&
+                              sampleEnglishText.isNotEmpty)
+                            TextSpan(
+                              text: '\n$sampleEnglishText',
+                              style: TextStyle(
+                                color: style.englishTextColor,
+                                fontSize: style.fontSize * 0.8 * fontScale,
+                                fontWeight: FontWeight.w700,
+                                height: 1.3,
+                              ),
+                            ),
+                        ],
+                      ),
                     ),
                   ),
-              ],
+                ),
+              ),
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
   }
