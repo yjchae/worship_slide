@@ -324,6 +324,20 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     ).showSnackBar(SnackBar(content: Text('${deletableIds.length}곡을 삭제했습니다.')));
   }
 
+  Future<void> _openSongEditor(PraiseSong? song) async {
+    final result = await showDialog<PraiseSong>(
+      context: context,
+      builder: (context) => _SongEditDialog(song: song),
+    );
+    if (result == null || !mounted) return;
+    if (song == null) {
+      await _repository.insertSong(result);
+    } else {
+      await _repository.updateSong(result);
+    }
+    await _loadSongs();
+  }
+
   void _toggleSelection(PraiseSong song, bool isSelected) {
     setState(() {
       if (isSelected) {
@@ -378,6 +392,8 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                           onChanged: _toggleSelection,
                           onDeleteSelected: _deleteSelectedSongs,
                           onClearAll: _clearAllSongs,
+                          onAddSong: () => _openSongEditor(null),
+                          onEditSong: _openSongEditor,
                         ),
                       ],
                     ),
@@ -579,6 +595,8 @@ class _SearchPanel extends StatelessWidget {
     required this.onChanged,
     required this.onDeleteSelected,
     required this.onClearAll,
+    required this.onAddSong,
+    required this.onEditSong,
   });
 
   final TextEditingController controller;
@@ -587,6 +605,8 @@ class _SearchPanel extends StatelessWidget {
   final void Function(PraiseSong song, bool isSelected) onChanged;
   final VoidCallback onDeleteSelected;
   final VoidCallback onClearAll;
+  final VoidCallback onAddSong;
+  final ValueChanged<PraiseSong> onEditSong;
 
   @override
   Widget build(BuildContext context) {
@@ -610,6 +630,12 @@ class _SearchPanel extends StatelessWidget {
                   ),
                   Text('${songs.length}건'),
                   const SizedBox(width: 12),
+                  OutlinedButton.icon(
+                    onPressed: onAddSong,
+                    icon: const Icon(Icons.add_rounded),
+                    label: const Text('새 곡'),
+                  ),
+                  const SizedBox(width: 8),
                   OutlinedButton.icon(
                     onPressed: selectedSongs.isEmpty ? null : onDeleteSelected,
                     icon: const Icon(Icons.delete_outline_rounded),
@@ -657,6 +683,11 @@ class _SearchPanel extends StatelessWidget {
                               overflow: TextOverflow.ellipsis,
                             ),
                             contentPadding: EdgeInsets.zero,
+                            secondary: IconButton(
+                              icon: const Icon(Icons.edit_outlined, size: 20),
+                              tooltip: '가사 수정',
+                              onPressed: () => onEditSong(song),
+                            ),
                           );
                         },
                       ),
@@ -935,6 +966,134 @@ class _PreviewBox extends StatelessWidget {
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+class _SongEditDialog extends StatefulWidget {
+  const _SongEditDialog({this.song});
+
+  final PraiseSong? song;
+
+  @override
+  State<_SongEditDialog> createState() => _SongEditDialogState();
+}
+
+class _SongEditDialogState extends State<_SongEditDialog> {
+  late final TextEditingController _titleController;
+  late final TextEditingController _lyricsController;
+  late final TextEditingController _englishController;
+
+  @override
+  void initState() {
+    super.initState();
+    _titleController = TextEditingController(text: widget.song?.title ?? '');
+    _lyricsController = TextEditingController(text: widget.song?.lyrics ?? '');
+    _englishController = TextEditingController(
+      text: widget.song?.englishLyrics ?? '',
+    );
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _lyricsController.dispose();
+    _englishController.dispose();
+    super.dispose();
+  }
+
+  String _normalizeLyrics(String raw) {
+    return raw
+        .split('###')
+        .map((page) => page.trim())
+        .where((page) => page.isNotEmpty)
+        .join('\n###\n');
+  }
+
+  void _save() {
+    final title = _titleController.text.trim();
+    if (title.isEmpty) return;
+    Navigator.of(context).pop(
+      PraiseSong(
+        id: widget.song?.id,
+        fileName: widget.song?.fileName ?? title,
+        title: title,
+        lyrics: _normalizeLyrics(_lyricsController.text),
+        englishLyrics: _normalizeLyrics(_englishController.text),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isNew = widget.song == null;
+    return Dialog(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 620),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                isNew ? '새 곡 추가' : '가사 수정',
+                style: const TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 20),
+              TextField(
+                controller: _titleController,
+                decoration: const InputDecoration(
+                  labelText: '제목',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _lyricsController,
+                maxLines: 10,
+                textAlignVertical: TextAlignVertical.top,
+                decoration: const InputDecoration(
+                  labelText: '한글 가사',
+                  hintText: '페이지 구분: 새 줄에 ### 입력',
+                  border: OutlineInputBorder(),
+                  alignLabelWithHint: true,
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _englishController,
+                maxLines: 10,
+                textAlignVertical: TextAlignVertical.top,
+                decoration: const InputDecoration(
+                  labelText: '영어 가사',
+                  hintText: '페이지 구분: 새 줄에 ### 입력',
+                  border: OutlineInputBorder(),
+                  alignLabelWithHint: true,
+                ),
+              ),
+              const SizedBox(height: 24),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: const Text('취소'),
+                  ),
+                  const SizedBox(width: 8),
+                  FilledButton(
+                    onPressed: _save,
+                    child: Text(isNew ? '추가' : '저장'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

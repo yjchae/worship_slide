@@ -62,6 +62,21 @@ class PraiseRepository {
     return rows.map(PraiseSong.fromMap).toList();
   }
 
+  Future<void> insertSong(PraiseSong song) async {
+    final db = await _databaseProvider.database;
+    await db.insert('praise_songs', song.toMap()..remove('id'));
+  }
+
+  Future<void> updateSong(PraiseSong song) async {
+    final db = await _databaseProvider.database;
+    await db.update(
+      'praise_songs',
+      song.toMap()..remove('id'),
+      where: 'id = ?',
+      whereArgs: [song.id],
+    );
+  }
+
   Future<int> countSongs() async {
     final db = await _databaseProvider.database;
     final result = await db.rawQuery(
