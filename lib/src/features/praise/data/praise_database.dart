@@ -1,5 +1,6 @@
+import 'dart:io';
+
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 class PraiseDatabase {
@@ -8,13 +9,21 @@ class PraiseDatabase {
   static final PraiseDatabase instance = PraiseDatabase._();
   Database? _database;
 
+  // 실행 파일 옆 폴더: macOS는 .app/Contents/MacOS/exe 이므로 3단계 위
+  static String get _dbDirectory {
+    final exe = File(Platform.resolvedExecutable);
+    if (Platform.isMacOS) {
+      return exe.parent.parent.parent.parent.path;
+    }
+    return exe.parent.path;
+  }
+
   Future<Database> get database async {
     if (_database != null) {
       return _database!;
     }
 
-    final appDir = await getApplicationSupportDirectory();
-    final dbPath = p.join(appDir.path, 'praise_lyrics.db');
+    final dbPath = p.join(_dbDirectory, 'praise_lyrics.db');
     _database = await openDatabase(
       dbPath,
       version: 2,
