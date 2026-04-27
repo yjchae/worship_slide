@@ -38,7 +38,7 @@ class ImportResult {
 
 class PythonBridge {
   Future<ImportResult> importFolder(String folderPath) async {
-    final result = await _runPython([_scriptPath, 'import', folderPath]);
+    final result = await _runTool(['import', folderPath]);
 
     final json = jsonDecode(result.stdout as String) as Map<String, dynamic>;
     final songsJson = json['songs'] as List<dynamic>;
@@ -86,23 +86,47 @@ class PythonBridge {
       'style': style.toJson(),
     });
 
-    final result = await _runPython([_scriptPath, 'export', payload]);
+    final result = await _runTool(['export', payload]);
 
     final json = jsonDecode(result.stdout as String) as Map<String, dynamic>;
     return json['output_path'] as String;
   }
 
-  Future<ProcessResult> _runPython(List<String> arguments) async {
-    final pythonPath = _pythonExecutablePath;
-    final result = await Process.run(pythonPath, arguments, runInShell: false);
+  // 컴파일된 바이너리 우선, 없으면 Python 스크립트로 폴백
+  Future<ProcessResult> _runTool(List<String> arguments) async {
+    final String executable;
+    final List<String> args;
+
+    final binary = _compiledBinaryPath;
+    if (binary != null) {
+      executable = binary;
+      args = arguments;
+    } else {
+      executable = _pythonExecutablePath;
+      args = [_scriptPath, ...arguments];
+    }
+
+    final result = await Process.run(executable, args, runInShell: false);
     if (result.exitCode != 0) {
       throw Exception(
         (result.stderr as String).trim().isEmpty
-            ? 'Python script failed.'
+            ? 'ppt_tool 실행 실패.'
             : (result.stderr as String).trim(),
       );
     }
     return result;
+  }
+
+  // PyInstaller로 빌드된 단독 실행 파일 탐색
+  String? get _compiledBinaryPath {
+    final name = Platform.isWindows ? 'ppt_tool.exe' : 'ppt_tool';
+    for (final root in _searchRoots) {
+      final candidate = File(p.join(root, 'python', name));
+      if (candidate.existsSync()) {
+        return candidate.path;
+      }
+    }
+    return null;
   }
 
   String get _pythonExecutablePath {
@@ -140,7 +164,7 @@ class PythonBridge {
     }
 
     throw Exception(
-      'python/ppt_tool.py 파일을 찾을 수 없습니다. '
+      'ppt_tool 실행 파일을 찾을 수 없습니다. '
       '현재 위치: ${Directory.current.path}, 실행 파일: ${Platform.resolvedExecutable}',
     );
   }

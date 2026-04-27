@@ -29,7 +29,21 @@ class ExportStyleStore {
       includeEnglishLyrics: json['include_english_lyrics'] as bool? ?? true,
       englishTextColor: _parseColor(
         json['english_text_color'] as String?,
-        const Color(0xFFE3F2FD),
+        const Color(0xFFFFF176),
+      ),
+      showSongTitle: json['show_song_title'] as bool? ?? false,
+      titleFontSize: (json['title_font_size'] as num?)?.toDouble() ?? 14,
+      titleTextColor: _parseColor(
+        json['title_text_color'] as String?,
+        const Color(0xB3FFFFFF),
+      ),
+      titleHorizontalPosition: HorizontalPosition.values.firstWhere(
+        (pos) => pos.name == json['title_horizontal_position'],
+        orElse: () => HorizontalPosition.right,
+      ),
+      titleVerticalPosition: VerticalTextPosition.values.firstWhere(
+        (pos) => pos.name == json['title_vertical_position'],
+        orElse: () => VerticalTextPosition.bottom,
       ),
     );
   }

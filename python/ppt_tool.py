@@ -29,13 +29,76 @@ def extract_text_from_shape(shape):
     return "\n".join(lines)
 
 
-def slide_lyrics(slide):
-    blocks = []
+def _find_title_texts(prs):
+    """텍스트가 있는 슬라이드의 80% 이상에서 동일한 전체 텍스트로 반복되는
+    텍스트박스의 내용을 반환한다. (위치가 아닌 shape 전체 텍스트의 완전 일치 기준)
+    가사 shape는 슬라이드마다 다른 내용을 가지므로 걸러지지 않고,
+    제목 shape만 동일 텍스트로 매 슬라이드에 반복되어 걸러진다."""
+    text_count = {}
+    content_slide_count = 0
+
+    for slide in prs.slides:
+        seen = set()
+        slide_has_text = False
+        for shape in slide.shapes:
+            text = extract_text_from_shape(shape).strip()
+            if not text:
+                continue
+            slide_has_text = True
+            if text not in seen:
+                seen.add(text)
+                text_count[text] = text_count.get(text, 0) + 1
+        if slide_has_text:
+            content_slide_count += 1
+
+    if content_slide_count < 2:
+        return set()
+
+    threshold = max(2, round(content_slide_count * 0.8))
+    return {text for text, count in text_count.items() if count >= threshold}
+
+
+def _shape_max_font_pt(shape):
+    """명시적으로 설정된 최대 폰트 크기(pt)를 반환. 없으면 None."""
+    if not hasattr(shape, "text_frame") or shape.text_frame is None:
+        return None
+    max_pt = None
+    for paragraph in shape.text_frame.paragraphs:
+        for run in paragraph.runs:
+            if run.font.size is not None:
+                pt = run.font.size.pt
+                max_pt = pt if max_pt is None else max(max_pt, pt)
+    return max_pt
+
+
+def slide_lyrics(slide, title_texts=None):
+    shapes_info = []
     for shape in slide.shapes:
         text = extract_text_from_shape(shape)
-        if text:
-            blocks.append(text)
-    return "\n".join(blocks).strip()
+        if not text:
+            continue
+        # shape 전체 텍스트가 반복 제목과 완전히 일치하는 shape만 제외
+        if title_texts and text.strip() in title_texts:
+            continue
+        shapes_info.append((text, _shape_max_font_pt(shape)))
+
+    if not shapes_info:
+        return ""
+    if len(shapes_info) == 1:
+        return shapes_info[0][0]
+
+    # 보조 필터: 명시적 폰트 크기가 최댓값의 60% 미만인 박스도 제목/캡션으로 간주
+    explicit_sizes = [size for _, size in shapes_info if size is not None]
+    if explicit_sizes:
+        max_size = max(explicit_sizes)
+        kept = [
+            text for text, size in shapes_info
+            if size is None or size >= max_size * 0.6
+        ]
+        if kept:
+            return "\n".join(kept).strip()
+
+    return "\n".join(text for text, _ in shapes_info).strip()
 
 
 def normalize_title(path):
@@ -155,11 +218,12 @@ def iter_presentation_files(root):
 def process_presentation_file(file_path, presentation_path):
     try:
         prs = Presentation(str(presentation_path))
+        title_texts = _find_title_texts(prs)
         korean_pages = []
         english_pages = []
 
         for slide in prs.slides:
-            page = slide_lyrics(slide)
+            page = slide_lyrics(slide, title_texts=title_texts)
             if not page:
                 continue
             korean_page, english_page = split_bilingual_page(page)
@@ -341,6 +405,54 @@ def parse_hex_color(hex_color):
     return RGBColor(int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16))
 
 
+_TITLE_BOX_HEIGHT = 0.55
+_TITLE_BOX_PADDING = 0.2
+_TITLE_BOX_WIDTH_SIDE = 5.8
+_TITLE_BOX_WIDTH_CENTER = 10.0
+_SLIDE_W = 13.333
+_SLIDE_H = 7.5
+
+
+def _add_title_textbox(slide, song_title, style):
+    title_font_size = Pt(style.get("title_font_size", 14))
+    title_color = parse_hex_color(style.get("title_text_color", "#B3FFFFFF"))
+    h_pos = style.get("title_horizontal_position", "right")
+    v_pos = style.get("title_vertical_position", "bottom")
+
+    if h_pos == "left":
+        title_left = _TITLE_BOX_PADDING
+        title_width = _TITLE_BOX_WIDTH_SIDE
+        text_align = PP_ALIGN.LEFT
+    elif h_pos == "center":
+        title_left = (_SLIDE_W - _TITLE_BOX_WIDTH_CENTER) / 2
+        title_width = _TITLE_BOX_WIDTH_CENTER
+        text_align = PP_ALIGN.CENTER
+    else:
+        title_left = _SLIDE_W - _TITLE_BOX_PADDING - _TITLE_BOX_WIDTH_SIDE
+        title_width = _TITLE_BOX_WIDTH_SIDE
+        text_align = PP_ALIGN.RIGHT
+
+    if v_pos == "top":
+        title_top = _TITLE_BOX_PADDING
+    elif v_pos == "middle":
+        title_top = (_SLIDE_H - _TITLE_BOX_HEIGHT) / 2
+    else:
+        title_top = _SLIDE_H - _TITLE_BOX_PADDING - _TITLE_BOX_HEIGHT
+
+    box = slide.shapes.add_textbox(
+        Inches(title_left), Inches(title_top),
+        Inches(title_width), Inches(_TITLE_BOX_HEIGHT),
+    )
+    frame = box.text_frame
+    frame.word_wrap = False
+    para = frame.paragraphs[0]
+    para.alignment = text_align
+    run = para.add_run()
+    run.text = song_title
+    run.font.size = title_font_size
+    run.font.color.rgb = title_color
+
+
 def add_song_slides(prs, song, style):
     bg_color = parse_hex_color(style["background_color"])
     text_color = parse_hex_color(style["text_color"])
@@ -348,6 +460,7 @@ def add_song_slides(prs, song, style):
     position = style["text_position"]
     include_english_lyrics = style.get("include_english_lyrics", False)
     english_color = parse_hex_color(style["english_text_color"])
+    show_song_title = style.get("show_song_title", False)
     korean_pages = [part.strip() for part in song["lyrics"].split("###")]
     english_pages = [part.strip() for part in song.get("english_lyrics", "").split("###")]
     page_count = max(len(korean_pages), len(english_pages))
@@ -378,7 +491,6 @@ def add_song_slides(prs, song, style):
         run.text = page
         run.font.size = font_size
         run.font.bold = True
-
         run.font.color.rgb = text_color
 
         if include_english_lyrics and english_page:
@@ -389,6 +501,9 @@ def add_song_slides(prs, song, style):
             english_run.font.size = Pt(style["font_size"] * 0.8)
             english_run.font.bold = True
             english_run.font.color.rgb = english_color
+
+        if show_song_title:
+            _add_title_textbox(slide, song.get("title", ""), style)
 
 
 def _add_blank_slide(prs, style):

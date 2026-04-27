@@ -24,6 +24,11 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     textPosition: VerticalTextPosition.middle,
     includeEnglishLyrics: true,
     englishTextColor: Color(0xFFFFF176),
+    showSongTitle: false,
+    titleFontSize: 14,
+    titleTextColor: Color(0xB3FFFFFF),
+    titleHorizontalPosition: HorizontalPosition.right,
+    titleVerticalPosition: VerticalTextPosition.bottom,
   );
 
   final PraiseRepository _repository = PraiseRepository();
@@ -397,6 +402,20 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     });
   }
 
+  void _onStagingReorder(int oldIndex, int newIndex) {
+    setState(() {
+      if (newIndex > oldIndex) newIndex--;
+      final song = _selectedSongs.removeAt(oldIndex);
+      _selectedSongs.insert(newIndex, song);
+    });
+  }
+
+  void _removeFromStaging(PraiseSong song) {
+    setState(() {
+      _selectedSongs.removeWhere((s) => s.id == song.id);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -415,12 +434,8 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _Header(
+                        _TopBar(
                           storedCount: _storedCount,
-                          selectedCount: _selectedSongs.length,
-                        ),
-                        const SizedBox(height: 20),
-                        _ImportPanel(
                           selectedFolder: _selectedFolder,
                           isImporting: _isImporting,
                           importTotalCount: _importTotalCount,
@@ -428,16 +443,26 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                           importStatusText: _importStatusText,
                           onImportPressed: _pickAndImportFolder,
                         ),
-                        const SizedBox(height: 16),
-                        _SearchPanel(
-                          controller: _searchController,
-                          songs: _songs,
-                          selectedSongs: _selectedSongs,
-                          onChanged: _toggleSelection,
-                          onDeleteSelected: _deleteSelectedSongs,
-                          onClearAll: _clearAllSongs,
-                          onAddSong: () => _openSongEditor(null),
-                          onEditSong: _openSongEditor,
+                        const SizedBox(height: 10),
+                        Expanded(
+                          child: _StagingPanel(
+                            selectedSongs: _selectedSongs,
+                            onReorder: _onStagingReorder,
+                            onRemove: _removeFromStaging,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Expanded(
+                          child: _SearchPanel(
+                            controller: _searchController,
+                            songs: _songs,
+                            selectedSongs: _selectedSongs,
+                            onChanged: _toggleSelection,
+                            onDeleteSelected: _deleteSelectedSongs,
+                            onClearAll: _clearAllSongs,
+                            onAddSong: () => _openSongEditor(null),
+                            onEditSong: _openSongEditor,
+                          ),
                         ),
                       ],
                     ),
@@ -465,17 +490,30 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
   }
 }
 
-class _Header extends StatelessWidget {
-  const _Header({required this.storedCount, required this.selectedCount});
+class _TopBar extends StatelessWidget {
+  const _TopBar({
+    required this.storedCount,
+    required this.selectedFolder,
+    required this.isImporting,
+    required this.importTotalCount,
+    required this.importSavedCount,
+    required this.importStatusText,
+    required this.onImportPressed,
+  });
 
   final int storedCount;
-  final int selectedCount;
+  final String? selectedFolder;
+  final bool isImporting;
+  final int importTotalCount;
+  final int importSavedCount;
+  final String? importStatusText;
+  final VoidCallback onImportPressed;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Container(
-      padding: const EdgeInsets.all(24),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(8),
         gradient: const LinearGradient(
@@ -486,146 +524,85 @@ class _Header extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          Text(
+            '찬양 가사 보관함',
+            style: theme.textTheme.titleMedium?.copyWith(
+              color: Colors.white,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.18),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  '찬양 가사 보관함',
-                  style: theme.textTheme.headlineMedium?.copyWith(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                  ),
+                const Text(
+                  '저장 ',
+                  style: TextStyle(color: Colors.white70, fontSize: 12),
                 ),
-                const SizedBox(height: 8),
                 Text(
-                  '폴더 안의 PPT/PPTX를 읽어 SQLite에 저장하고, 원하는 찬양만 골라 새 PPTX로 다시 묶습니다.',
-                  style: theme.textTheme.bodyLarge?.copyWith(
-                    color: Colors.white.withValues(alpha: 0.9),
+                  '$storedCount',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
               ],
             ),
           ),
-          const SizedBox(width: 16),
-          Wrap(
-            spacing: 12,
-            runSpacing: 12,
-            children: [
-              _StatBadge(label: '저장된 찬양', value: '$storedCount'),
-              _StatBadge(label: '선택한 찬양', value: '$selectedCount'),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _StatBadge extends StatelessWidget {
-  const _StatBadge({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 132,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.14),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: const TextStyle(color: Colors.white70)),
-          const SizedBox(height: 6),
-          Text(
-            value,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 28,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ImportPanel extends StatelessWidget {
-  const _ImportPanel({
-    required this.selectedFolder,
-    required this.isImporting,
-    required this.importTotalCount,
-    required this.importSavedCount,
-    required this.importStatusText,
-    required this.onImportPressed,
-  });
-
-  final String? selectedFolder;
-  final bool isImporting;
-  final int importTotalCount;
-  final int importSavedCount;
-  final String? importStatusText;
-  final VoidCallback onImportPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Row(
-          children: [
-            const Icon(Icons.folder_open_rounded, size: 28),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    '찬양 폴더 불러오기',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 6),
+          const SizedBox(width: 12),
+          Container(width: 1, height: 20, color: Colors.white30),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  selectedFolder ?? '아직 선택된 폴더가 없습니다.',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                ),
+                if (importStatusText != null)
                   Text(
-                    selectedFolder ?? '아직 선택된 폴더가 없습니다.',
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(color: Colors.grey.shade700),
-                  ),
-                  if (importStatusText != null) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      importTotalCount > 0
-                          ? '$importStatusText  $importSavedCount / $importTotalCount'
-                          : importStatusText!,
-                      style: TextStyle(
-                        color: Colors.teal.shade700,
-                        fontWeight: FontWeight.w600,
-                      ),
+                    importTotalCount > 0
+                        ? '$importStatusText  $importSavedCount / $importTotalCount'
+                        : importStatusText!,
+                    style: const TextStyle(
+                      color: Colors.white60,
+                      fontSize: 11,
                     ),
-                  ],
-                ],
-              ),
+                  ),
+              ],
             ),
-            const SizedBox(width: 16),
-            FilledButton.icon(
-              onPressed: isImporting ? null : onImportPressed,
-              icon: isImporting
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.upload_file_rounded),
-              label: Text(isImporting ? '읽는 중' : '폴더 선택'),
+          ),
+          const SizedBox(width: 10),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.white.withValues(alpha: 0.22),
+              foregroundColor: Colors.white,
             ),
-          ],
-        ),
+            onPressed: isImporting ? null : onImportPressed,
+            icon: isImporting
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : const Icon(Icons.upload_file_rounded, size: 16),
+            label: Text(isImporting ? '읽는 중' : '폴더 선택'),
+          ),
+        ],
       ),
     );
   }
@@ -654,8 +631,7 @@ class _SearchPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Expanded(
-      child: Card(
+    return Card(
         child: Padding(
           padding: const EdgeInsets.all(20),
           child: Column(
@@ -739,6 +715,100 @@ class _SearchPanel extends StatelessWidget {
             ],
           ),
         ),
+      );
+  }
+}
+
+class _StagingPanel extends StatelessWidget {
+  const _StagingPanel({
+    required this.selectedSongs,
+    required this.onReorder,
+    required this.onRemove,
+  });
+
+  final List<PraiseSong> selectedSongs;
+  final void Function(int oldIndex, int newIndex) onReorder;
+  final void Function(PraiseSong song) onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    '선택한 찬양 순서',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                  ),
+                ),
+                Text('${selectedSongs.length}곡'),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: selectedSongs.isEmpty
+                  ? const Center(
+                      child: Text(
+                        '왼쪽에서 찬양을 선택하면 순서가 여기에 표시됩니다.',
+                        style: TextStyle(color: Colors.grey),
+                        textAlign: TextAlign.center,
+                      ),
+                    )
+                  : ReorderableListView.builder(
+                      buildDefaultDragHandles: false,
+                      itemCount: selectedSongs.length,
+                      onReorder: onReorder,
+                      itemBuilder: (context, index) {
+                        final song = selectedSongs[index];
+                        return ListTile(
+                          key: ValueKey(song.id ?? song.title),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 4,
+                          ),
+                          leading: SizedBox(
+                            width: 28,
+                            child: Center(
+                              child: Text(
+                                '${index + 1}',
+                                style: const TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                          ),
+                          title: Text(
+                            song.title,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                icon: const Icon(Icons.close_rounded, size: 20),
+                                tooltip: '제거',
+                                onPressed: () => onRemove(song),
+                              ),
+                              ReorderableDragStartListener(
+                                index: index,
+                                child: const Icon(
+                                  Icons.drag_handle_rounded,
+                                  color: Colors.grey,
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -777,124 +847,239 @@ class _DesignPanel extends StatelessWidget {
             ),
             const SizedBox(height: 16),
             _PreviewBox(style: style, selectedSongs: selectedSongs),
-            const SizedBox(height: 20),
-            Text('글자 크기 ${style.fontSize.toStringAsFixed(0)}'),
-            Slider(
-              min: 18,
-              max: 54,
-              divisions: 9,
-              value: style.fontSize,
-              onChanged: (value) =>
-                  onStyleChanged(style.copyWith(fontSize: value)),
+            const SizedBox(height: 12),
+            Expanded(
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('글자 크기 ${style.fontSize.toStringAsFixed(0)}'),
+                    Slider(
+                      min: 18,
+                      max: 54,
+                      divisions: 9,
+                      value: style.fontSize,
+                      onChanged: (value) =>
+                          onStyleChanged(style.copyWith(fontSize: value)),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text('배경 색상'),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      children: swatches.map((color) {
+                        final selected =
+                            color.toARGB32() ==
+                            style.backgroundColor.toARGB32();
+                        return InkWell(
+                          borderRadius: BorderRadius.circular(999),
+                          onTap: () => onStyleChanged(
+                            style.copyWith(backgroundColor: color),
+                          ),
+                          child: Container(
+                            width: 34,
+                            height: 34,
+                            decoration: BoxDecoration(
+                              color: color,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: selected
+                                    ? Colors.black
+                                    : Colors.grey.shade300,
+                                width: selected ? 3 : 1,
+                              ),
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 20),
+                    const Text('한글 가사 색상'),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      children: textSwatches.map((color) {
+                        final selected =
+                            color.toARGB32() == style.textColor.toARGB32();
+                        return InkWell(
+                          borderRadius: BorderRadius.circular(999),
+                          onTap: () =>
+                              onStyleChanged(style.copyWith(textColor: color)),
+                          child: Container(
+                            width: 34,
+                            height: 34,
+                            decoration: BoxDecoration(
+                              color: color,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: selected
+                                    ? Colors.black
+                                    : Colors.grey.shade300,
+                                width: selected ? 3 : 1,
+                              ),
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 20),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('영어 가사 포함'),
+                      value: style.includeEnglishLyrics,
+                      onChanged: (value) => onStyleChanged(
+                        style.copyWith(includeEnglishLyrics: value),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text('영어 가사 색상'),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      children: textSwatches.map((color) {
+                        final selected =
+                            color.toARGB32() ==
+                            style.englishTextColor.toARGB32();
+                        return InkWell(
+                          borderRadius: BorderRadius.circular(999),
+                          onTap: () => onStyleChanged(
+                            style.copyWith(englishTextColor: color),
+                          ),
+                          child: Container(
+                            width: 34,
+                            height: 34,
+                            decoration: BoxDecoration(
+                              color: color,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: selected
+                                    ? Colors.black
+                                    : Colors.grey.shade300,
+                                width: selected ? 3 : 1,
+                              ),
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 20),
+                    const Text('글자 위치'),
+                    const SizedBox(height: 10),
+                    SegmentedButton<VerticalTextPosition>(
+                      segments: VerticalTextPosition.values
+                          .map(
+                            (position) => ButtonSegment<VerticalTextPosition>(
+                              value: position,
+                              label: Text(position.label),
+                            ),
+                          )
+                          .toList(),
+                      selected: {style.textPosition},
+                      onSelectionChanged: (selection) {
+                        onStyleChanged(
+                          style.copyWith(textPosition: selection.first),
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    const Divider(),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('제목 표시'),
+                      value: style.showSongTitle,
+                      onChanged: (value) =>
+                          onStyleChanged(style.copyWith(showSongTitle: value)),
+                    ),
+                    if (style.showSongTitle) ...[
+                      Text('제목 크기 ${style.titleFontSize.toStringAsFixed(0)}'),
+                      Slider(
+                        min: 8,
+                        max: 28,
+                        divisions: 10,
+                        value: style.titleFontSize,
+                        onChanged: (value) =>
+                            onStyleChanged(style.copyWith(titleFontSize: value)),
+                      ),
+                      const SizedBox(height: 4),
+                      const Text('제목 색상'),
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 10,
+                        runSpacing: 10,
+                        children: textSwatches.map((color) {
+                          final selected =
+                              color.toARGB32() ==
+                              style.titleTextColor.toARGB32();
+                          return InkWell(
+                            borderRadius: BorderRadius.circular(999),
+                            onTap: () => onStyleChanged(
+                              style.copyWith(titleTextColor: color),
+                            ),
+                            child: Container(
+                              width: 34,
+                              height: 34,
+                              decoration: BoxDecoration(
+                                color: color,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: selected
+                                      ? Colors.black
+                                      : Colors.grey.shade300,
+                                  width: selected ? 3 : 1,
+                                ),
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                      const SizedBox(height: 14),
+                      const Text('제목 수평 위치'),
+                      const SizedBox(height: 10),
+                      SegmentedButton<HorizontalPosition>(
+                        segments: HorizontalPosition.values
+                            .map(
+                              (pos) => ButtonSegment<HorizontalPosition>(
+                                value: pos,
+                                label: Text(pos.label),
+                              ),
+                            )
+                            .toList(),
+                        selected: {style.titleHorizontalPosition},
+                        onSelectionChanged: (selection) => onStyleChanged(
+                          style.copyWith(
+                            titleHorizontalPosition: selection.first,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      const Text('제목 수직 위치'),
+                      const SizedBox(height: 10),
+                      SegmentedButton<VerticalTextPosition>(
+                        segments: VerticalTextPosition.values
+                            .map(
+                              (pos) => ButtonSegment<VerticalTextPosition>(
+                                value: pos,
+                                label: Text(pos.label),
+                              ),
+                            )
+                            .toList(),
+                        selected: {style.titleVerticalPosition},
+                        onSelectionChanged: (selection) => onStyleChanged(
+                          style.copyWith(
+                            titleVerticalPosition: selection.first,
+                          ),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 16),
+                  ],
+                ),
+              ),
             ),
             const SizedBox(height: 8),
-            const Text('배경 색상'),
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: swatches.map((color) {
-                final selected =
-                    color.toARGB32() == style.backgroundColor.toARGB32();
-                return InkWell(
-                  borderRadius: BorderRadius.circular(999),
-                  onTap: () =>
-                      onStyleChanged(style.copyWith(backgroundColor: color)),
-                  child: Container(
-                    width: 34,
-                    height: 34,
-                    decoration: BoxDecoration(
-                      color: color,
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: selected ? Colors.black : Colors.grey.shade300,
-                        width: selected ? 3 : 1,
-                      ),
-                    ),
-                  ),
-                );
-              }).toList(),
-            ),
-            const SizedBox(height: 20),
-            const Text('한글 가사 색상'),
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: textSwatches.map((color) {
-                final selected = color.toARGB32() == style.textColor.toARGB32();
-                return InkWell(
-                  borderRadius: BorderRadius.circular(999),
-                  onTap: () => onStyleChanged(style.copyWith(textColor: color)),
-                  child: Container(
-                    width: 34,
-                    height: 34,
-                    decoration: BoxDecoration(
-                      color: color,
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: selected ? Colors.black : Colors.grey.shade300,
-                        width: selected ? 3 : 1,
-                      ),
-                    ),
-                  ),
-                );
-              }).toList(),
-            ),
-            const SizedBox(height: 20),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('영어 가사 포함'),
-              value: style.includeEnglishLyrics,
-              onChanged: (value) =>
-                  onStyleChanged(style.copyWith(includeEnglishLyrics: value)),
-            ),
-            const SizedBox(height: 8),
-            const Text('영어 가사 색상'),
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: textSwatches.map((color) {
-                final selected =
-                    color.toARGB32() == style.englishTextColor.toARGB32();
-                return InkWell(
-                  borderRadius: BorderRadius.circular(999),
-                  onTap: () =>
-                      onStyleChanged(style.copyWith(englishTextColor: color)),
-                  child: Container(
-                    width: 34,
-                    height: 34,
-                    decoration: BoxDecoration(
-                      color: color,
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: selected ? Colors.black : Colors.grey.shade300,
-                        width: selected ? 3 : 1,
-                      ),
-                    ),
-                  ),
-                );
-              }).toList(),
-            ),
-            const SizedBox(height: 20),
-            const Text('글자 위치'),
-            const SizedBox(height: 10),
-            SegmentedButton<VerticalTextPosition>(
-              segments: VerticalTextPosition.values
-                  .map(
-                    (position) => ButtonSegment<VerticalTextPosition>(
-                      value: position,
-                      label: Text(position.label),
-                    ),
-                  )
-                  .toList(),
-              selected: {style.textPosition},
-              onSelectionChanged: (selection) {
-                onStyleChanged(style.copyWith(textPosition: selection.first));
-              },
-            ),
-            const Spacer(),
             SizedBox(
               width: double.infinity,
               child: FilledButton.icon(
@@ -922,13 +1107,18 @@ class _PreviewBox extends StatelessWidget {
   final ExportStyle style;
   final List<PraiseSong> selectedSongs;
 
-  // PPTX 슬라이드/텍스트박스 치수 (인치) — add_song_slides와 동일한 값
+  // PPTX 슬라이드/텍스트박스 치수 (인치) — ppt_tool.py와 동일한 값
   static const double _slideW = 13.333;
   static const double _slideH = 7.5;
   static const double _boxL = 0.7;
   static const double _boxT = 0.6;
   static const double _boxW = 11.9;
   static const double _boxH = 5.4;
+  // 제목 텍스트박스 치수
+  static const double _titleBoxH = 0.55;
+  static const double _titlePad = 0.2;
+  static const double _titleBoxWSide = 5.8;
+  static const double _titleBoxWCenter = 10.0;
 
   @override
   Widget build(BuildContext context) {
@@ -949,64 +1139,109 @@ class _PreviewBox extends StatelessWidget {
       VerticalTextPosition.bottom => Alignment.bottomCenter,
     };
 
-    // 16:9 비율로 슬라이드와 동일한 종횡비 유지
     return AspectRatio(
       aspectRatio: _slideW / _slideH,
       child: LayoutBuilder(
         builder: (context, constraints) {
           final w = constraints.maxWidth;
           final h = constraints.maxHeight;
-          // PPTX의 fontSize는 포인트(pt) 단위: 1pt = 1/72인치
-          // 슬라이드 높이 = _slideH * 72pt, 미리보기 높이 = h px
           final fontScale = h / (_slideH * 72);
+
+          // 제목 텍스트박스 위치 계산
+          final double titleBoxW;
+          final double titleLeft;
+          final TextAlign titleAlign;
+          switch (style.titleHorizontalPosition) {
+            case HorizontalPosition.left:
+              titleBoxW = _titleBoxWSide;
+              titleLeft = _titlePad;
+              titleAlign = TextAlign.left;
+            case HorizontalPosition.center:
+              titleBoxW = _titleBoxWCenter;
+              titleLeft = (_slideW - _titleBoxWCenter) / 2;
+              titleAlign = TextAlign.center;
+            case HorizontalPosition.right:
+              titleBoxW = _titleBoxWSide;
+              titleLeft = _slideW - _titlePad - _titleBoxWSide;
+              titleAlign = TextAlign.right;
+          }
+          final double titleTop = switch (style.titleVerticalPosition) {
+            VerticalTextPosition.top => _titlePad,
+            VerticalTextPosition.middle => (_slideH - _titleBoxH) / 2,
+            VerticalTextPosition.bottom =>
+              _slideH - _titlePad - _titleBoxH,
+          };
 
           return ClipRRect(
             borderRadius: BorderRadius.circular(8),
-            child: Container(
-              color: style.backgroundColor,
-              child: Padding(
-                padding: EdgeInsets.only(
-                  left: w * _boxL / _slideW,
-                  top: h * _boxT / _slideH,
-                  right: w * (1 - (_boxL + _boxW) / _slideW),
-                  bottom: h * (1 - (_boxT + _boxH) / _slideH),
-                ),
-                child: Align(
-                  alignment: alignment,
-                  child: DefaultTextStyle(
-                    style: const TextStyle(),
-                    child: RichText(
-                      textAlign: TextAlign.center,
-                      maxLines: 6,
-                      overflow: TextOverflow.ellipsis,
-                      text: TextSpan(
-                        children: [
-                          TextSpan(
-                            text: sampleText,
-                            style: TextStyle(
-                              color: style.textColor,
-                              fontSize: style.fontSize * fontScale,
-                              fontWeight: FontWeight.w700,
-                              height: 1.25,
-                            ),
-                          ),
-                          if (style.includeEnglishLyrics &&
-                              sampleEnglishText.isNotEmpty)
-                            TextSpan(
-                              text: '\n$sampleEnglishText',
-                              style: TextStyle(
-                                color: style.englishTextColor,
-                                fontSize: style.fontSize * 0.8 * fontScale,
-                                fontWeight: FontWeight.w700,
-                                height: 1.3,
+            child: Stack(
+              children: [
+                // 배경 + 가사
+                Container(
+                  color: style.backgroundColor,
+                  child: Padding(
+                    padding: EdgeInsets.only(
+                      left: w * _boxL / _slideW,
+                      top: h * _boxT / _slideH,
+                      right: w * (1 - (_boxL + _boxW) / _slideW),
+                      bottom: h * (1 - (_boxT + _boxH) / _slideH),
+                    ),
+                    child: Align(
+                      alignment: alignment,
+                      child: DefaultTextStyle(
+                        style: const TextStyle(),
+                        child: RichText(
+                          textAlign: TextAlign.center,
+                          maxLines: 6,
+                          overflow: TextOverflow.ellipsis,
+                          text: TextSpan(
+                            children: [
+                              TextSpan(
+                                text: sampleText,
+                                style: TextStyle(
+                                  color: style.textColor,
+                                  fontSize: style.fontSize * fontScale,
+                                  fontWeight: FontWeight.w700,
+                                  height: 1.25,
+                                ),
                               ),
-                            ),
-                        ],
+                              if (style.includeEnglishLyrics &&
+                                  sampleEnglishText.isNotEmpty)
+                                TextSpan(
+                                  text: '\n$sampleEnglishText',
+                                  style: TextStyle(
+                                    color: style.englishTextColor,
+                                    fontSize: style.fontSize * 0.8 * fontScale,
+                                    fontWeight: FontWeight.w700,
+                                    height: 1.3,
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
+                // 제목 오버레이
+                if (style.showSongTitle && sampleSong != null)
+                  Positioned(
+                    left: w * titleLeft / _slideW,
+                    top: h * titleTop / _slideH,
+                    width: w * titleBoxW / _slideW,
+                    height: h * _titleBoxH / _slideH,
+                    child: Text(
+                      sampleSong.title,
+                      textAlign: titleAlign,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: style.titleTextColor,
+                        fontSize: style.titleFontSize * fontScale,
+                      ),
+                    ),
+                  ),
+              ],
             ),
           );
         },
