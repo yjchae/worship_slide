@@ -18,6 +18,26 @@ from pptx.util import Inches, Pt
 PPT_CONVERT_CHUNK_SIZE = 40
 PPT_CONVERT_PARALLELISM = 3
 
+_PRETENDARD_FONTS = ["Pretendard-Bold.ttf", "Pretendard-Regular.ttf"]
+
+
+def _get_font_path(filename):
+    if getattr(sys, "frozen", False):
+        return os.path.join(sys._MEIPASS, "fonts", filename)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(script_dir, "..", "assets", "fonts", filename)
+
+
+def _ensure_pretendard_installed():
+    fonts_dir = os.path.expanduser("~/Library/Fonts")
+    os.makedirs(fonts_dir, exist_ok=True)
+    for filename in _PRETENDARD_FONTS:
+        dest = os.path.join(fonts_dir, filename)
+        if not os.path.exists(dest):
+            src = _get_font_path(filename)
+            if os.path.exists(src):
+                shutil.copy2(src, dest)
+
 
 def extract_text_from_shape(shape):
     if not hasattr(shape, "text_frame") or shape.text_frame is None:
@@ -413,6 +433,11 @@ _TITLE_BOX_WIDTH_SIDE = 5.8
 _TITLE_BOX_WIDTH_CENTER = 10.0
 _SLIDE_W = 13.333
 _SLIDE_H = 7.5
+_LYRICS_BOX_PADDING = 0.7
+_LYRICS_BOX_TOP = 0.6
+_LYRICS_BOX_HEIGHT = 5.4
+_LYRICS_BOX_WIDTH_FULL = 11.9
+_LYRICS_BOX_WIDTH_SIDE = 8.5
 
 
 def _add_title_textbox(slide, song_title, style):
@@ -451,6 +476,7 @@ def _add_title_textbox(slide, song_title, style):
     para.alignment = text_align
     run = para.add_run()
     run.text = song_title
+    run.font.name = "Pretendard"
     run.font.size = title_font_size
     run.font.color.rgb = title_color
 
@@ -463,6 +489,18 @@ def add_song_slides(prs, song, style):
     include_english_lyrics = style.get("include_english_lyrics", False)
     english_color = parse_hex_color(style["english_text_color"])
     show_song_title = style.get("show_song_title", False)
+    lyrics_align_map = {"left": PP_ALIGN.LEFT, "center": PP_ALIGN.CENTER, "right": PP_ALIGN.RIGHT}
+    lyrics_text_align_str = style.get("lyrics_text_align", "center")
+    lyrics_align = lyrics_align_map.get(lyrics_text_align_str, PP_ALIGN.CENTER)
+    if lyrics_text_align_str == "left":
+        lyrics_box_left = _LYRICS_BOX_PADDING
+        lyrics_box_width = _LYRICS_BOX_WIDTH_SIDE
+    elif lyrics_text_align_str == "right":
+        lyrics_box_left = _SLIDE_W - _LYRICS_BOX_PADDING - _LYRICS_BOX_WIDTH_SIDE
+        lyrics_box_width = _LYRICS_BOX_WIDTH_SIDE
+    else:
+        lyrics_box_left = _LYRICS_BOX_PADDING
+        lyrics_box_width = _LYRICS_BOX_WIDTH_FULL
     korean_pages = [part.strip() for part in song["lyrics"].split("###")]
     english_pages = [part.strip() for part in song.get("english_lyrics", "").split("###")]
     page_count = max(len(korean_pages), len(english_pages))
@@ -477,7 +515,10 @@ def add_song_slides(prs, song, style):
         slide.background.fill.solid()
         slide.background.fill.fore_color.rgb = bg_color
 
-        textbox = slide.shapes.add_textbox(Inches(0.7), Inches(0.6), Inches(11.9), Inches(5.4))
+        textbox = slide.shapes.add_textbox(
+            Inches(lyrics_box_left), Inches(_LYRICS_BOX_TOP),
+            Inches(lyrics_box_width), Inches(_LYRICS_BOX_HEIGHT),
+        )
         frame = textbox.text_frame
         frame.clear()
         frame.word_wrap = True
@@ -488,18 +529,20 @@ def add_song_slides(prs, song, style):
         }[position]
 
         paragraph = frame.paragraphs[0]
-        paragraph.alignment = PP_ALIGN.CENTER
+        paragraph.alignment = lyrics_align
         run = paragraph.add_run()
         run.text = page
+        run.font.name = "Pretendard"
         run.font.size = font_size
         run.font.bold = True
         run.font.color.rgb = text_color
 
         if include_english_lyrics and english_page:
             english_paragraph = frame.add_paragraph()
-            english_paragraph.alignment = PP_ALIGN.CENTER
+            english_paragraph.alignment = lyrics_align
             english_run = english_paragraph.add_run()
             english_run.text = english_page
+            english_run.font.name = "Pretendard"
             english_run.font.size = Pt(style["font_size"] * 0.8)
             english_run.font.bold = True
             english_run.font.color.rgb = english_color
@@ -516,6 +559,7 @@ def _add_blank_slide(prs, style):
 
 
 def export_presentation(payload_json):
+    _ensure_pretendard_installed()
     payload = json.loads(payload_json)
     output_path = Path(payload["output_path"])
     songs = payload["songs"]

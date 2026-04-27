@@ -26,6 +26,10 @@ class ExportStyleStore {
         (position) => position.name == json['text_position'],
         orElse: () => VerticalTextPosition.middle,
       ),
+      lyricsTextAlign: HorizontalPosition.values.firstWhere(
+        (pos) => pos.name == json['lyrics_text_align'],
+        orElse: () => HorizontalPosition.center,
+      ),
       includeEnglishLyrics: json['include_english_lyrics'] as bool? ?? true,
       englishTextColor: _parseColor(
         json['english_text_color'] as String?,

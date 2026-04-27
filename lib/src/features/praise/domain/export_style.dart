@@ -24,6 +24,7 @@ class ExportStyle {
     required this.backgroundColor,
     required this.textColor,
     required this.textPosition,
+    required this.lyricsTextAlign,
     required this.includeEnglishLyrics,
     required this.englishTextColor,
     required this.showSongTitle,
@@ -37,6 +38,7 @@ class ExportStyle {
   final Color backgroundColor;
   final Color textColor;
   final VerticalTextPosition textPosition;
+  final HorizontalPosition lyricsTextAlign;
   final bool includeEnglishLyrics;
   final Color englishTextColor;
   final bool showSongTitle;
@@ -53,6 +55,7 @@ class ExportStyle {
       'text_color':
           '#${textColor.toARGB32().toRadixString(16).substring(2).toUpperCase()}',
       'text_position': textPosition.name,
+      'lyrics_text_align': lyricsTextAlign.name,
       'include_english_lyrics': includeEnglishLyrics,
       'english_text_color':
           '#${englishTextColor.toARGB32().toRadixString(16).substring(2).toUpperCase()}',
@@ -70,6 +73,7 @@ class ExportStyle {
     Color? backgroundColor,
     Color? textColor,
     VerticalTextPosition? textPosition,
+    HorizontalPosition? lyricsTextAlign,
     bool? includeEnglishLyrics,
     Color? englishTextColor,
     bool? showSongTitle,
@@ -83,6 +87,7 @@ class ExportStyle {
       backgroundColor: backgroundColor ?? this.backgroundColor,
       textColor: textColor ?? this.textColor,
       textPosition: textPosition ?? this.textPosition,
+      lyricsTextAlign: lyricsTextAlign ?? this.lyricsTextAlign,
       includeEnglishLyrics: includeEnglishLyrics ?? this.includeEnglishLyrics,
       englishTextColor: englishTextColor ?? this.englishTextColor,
       showSongTitle: showSongTitle ?? this.showSongTitle,

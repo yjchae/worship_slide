@@ -10,7 +10,9 @@ pyinstaller --onefile python/ppt_tool.py \
             --distpath python \
             --workpath /tmp/ppt_tool_build \
             --specpath /tmp/ppt_tool_build \
-            --name ppt_tool
+            --name ppt_tool \
+            --add-data "$(pwd)/assets/fonts/Pretendard-Bold.ttf:fonts" \
+            --add-data "$(pwd)/assets/fonts/Pretendard-Regular.ttf:fonts"
 echo "  → python/ppt_tool 생성 완료"
 
 echo ""

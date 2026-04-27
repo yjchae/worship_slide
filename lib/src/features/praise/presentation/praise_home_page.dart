@@ -22,6 +22,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     backgroundColor: Color(0xFF1B1B1B),
     textColor: Colors.white,
     textPosition: VerticalTextPosition.middle,
+    lyricsTextAlign: HorizontalPosition.center,
     includeEnglishLyrics: true,
     englishTextColor: Color(0xFFFFF176),
     showSongTitle: false,
@@ -966,7 +967,7 @@ class _DesignPanel extends StatelessWidget {
                       }).toList(),
                     ),
                     const SizedBox(height: 20),
-                    const Text('글자 위치'),
+                    const Text('글자 수직 위치'),
                     const SizedBox(height: 10),
                     SegmentedButton<VerticalTextPosition>(
                       segments: VerticalTextPosition.values
@@ -981,6 +982,25 @@ class _DesignPanel extends StatelessWidget {
                       onSelectionChanged: (selection) {
                         onStyleChanged(
                           style.copyWith(textPosition: selection.first),
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    const Text('글자 수평 정렬'),
+                    const SizedBox(height: 10),
+                    SegmentedButton<HorizontalPosition>(
+                      segments: HorizontalPosition.values
+                          .map(
+                            (pos) => ButtonSegment<HorizontalPosition>(
+                              value: pos,
+                              label: Text(pos.label),
+                            ),
+                          )
+                          .toList(),
+                      selected: {style.lyricsTextAlign},
+                      onSelectionChanged: (selection) {
+                        onStyleChanged(
+                          style.copyWith(lyricsTextAlign: selection.first),
                         );
                       },
                     ),
@@ -1110,10 +1130,12 @@ class _PreviewBox extends StatelessWidget {
   // PPTX 슬라이드/텍스트박스 치수 (인치) — ppt_tool.py와 동일한 값
   static const double _slideW = 13.333;
   static const double _slideH = 7.5;
-  static const double _boxL = 0.7;
-  static const double _boxT = 0.6;
-  static const double _boxW = 11.9;
-  static const double _boxH = 5.4;
+  // 가사 텍스트박스 치수
+  static const double _lyricsBoxPad = 0.7;
+  static const double _lyricsBoxT = 0.6;
+  static const double _lyricsBoxH = 5.4;
+  static const double _lyricsBoxWFull = 11.9;
+  static const double _lyricsBoxWSide = 8.5;
   // 제목 텍스트박스 치수
   static const double _titleBoxH = 0.55;
   static const double _titlePad = 0.2;
@@ -1138,6 +1160,26 @@ class _PreviewBox extends StatelessWidget {
       VerticalTextPosition.middle => Alignment.center,
       VerticalTextPosition.bottom => Alignment.bottomCenter,
     };
+
+    final lyricsTextAlign = switch (style.lyricsTextAlign) {
+      HorizontalPosition.left => TextAlign.left,
+      HorizontalPosition.center => TextAlign.center,
+      HorizontalPosition.right => TextAlign.right,
+    };
+
+    final double lyricsBoxL;
+    final double lyricsBoxW;
+    switch (style.lyricsTextAlign) {
+      case HorizontalPosition.left:
+        lyricsBoxL = _lyricsBoxPad;
+        lyricsBoxW = _lyricsBoxWSide;
+      case HorizontalPosition.center:
+        lyricsBoxL = _lyricsBoxPad;
+        lyricsBoxW = _lyricsBoxWFull;
+      case HorizontalPosition.right:
+        lyricsBoxL = _slideW - _lyricsBoxPad - _lyricsBoxWSide;
+        lyricsBoxW = _lyricsBoxWSide;
+    }
 
     return AspectRatio(
       aspectRatio: _slideW / _slideH,
@@ -1181,17 +1223,17 @@ class _PreviewBox extends StatelessWidget {
                   color: style.backgroundColor,
                   child: Padding(
                     padding: EdgeInsets.only(
-                      left: w * _boxL / _slideW,
-                      top: h * _boxT / _slideH,
-                      right: w * (1 - (_boxL + _boxW) / _slideW),
-                      bottom: h * (1 - (_boxT + _boxH) / _slideH),
+                      left: w * lyricsBoxL / _slideW,
+                      top: h * _lyricsBoxT / _slideH,
+                      right: w * (1 - (lyricsBoxL + lyricsBoxW) / _slideW),
+                      bottom: h * (1 - (_lyricsBoxT + _lyricsBoxH) / _slideH),
                     ),
                     child: Align(
                       alignment: alignment,
                       child: DefaultTextStyle(
                         style: const TextStyle(),
                         child: RichText(
-                          textAlign: TextAlign.center,
+                          textAlign: lyricsTextAlign,
                           maxLines: 6,
                           overflow: TextOverflow.ellipsis,
                           text: TextSpan(

@@ -23,8 +23,14 @@ void main() {
       backgroundColor: Color(0xFF0F4C5C),
       textColor: Colors.white,
       textPosition: VerticalTextPosition.bottom,
+      lyricsTextAlign: HorizontalPosition.center,
       includeEnglishLyrics: true,
       englishTextColor: Color(0xFFE3F2FD),
+      showSongTitle: false,
+      titleFontSize: 14,
+      titleTextColor: Color(0xB3FFFFFF),
+      titleHorizontalPosition: HorizontalPosition.right,
+      titleVerticalPosition: VerticalTextPosition.bottom,
     );
 
     expect(style.toJson(), {
@@ -32,8 +38,14 @@ void main() {
       'background_color': '#0F4C5C',
       'text_color': '#FFFFFF',
       'text_position': 'bottom',
+      'lyrics_text_align': 'center',
       'include_english_lyrics': true,
       'english_text_color': '#E3F2FD',
+      'show_song_title': false,
+      'title_font_size': 14.0,
+      'title_text_color': '#B3FFFFFF',
+      'title_horizontal_position': 'right',
+      'title_vertical_position': 'bottom',
     });
   });
 }
