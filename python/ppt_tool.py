@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import unicodedata
 from pathlib import Path
 
 from pptx import Presentation
@@ -102,7 +103,8 @@ def slide_lyrics(slide, title_texts=None):
 
 
 def normalize_title(path):
-    return path.stem.strip()
+    # macOS HFS+는 파일명을 NFD로 저장하므로 NFC로 변환해야 한글이 정상 표시됨
+    return unicodedata.normalize('NFC', path.stem.strip())
 
 
 def is_english_line(line):
