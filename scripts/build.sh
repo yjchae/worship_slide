@@ -19,15 +19,15 @@ echo "  → python/ppt_tool 생성 완료"
 echo ""
 echo "=== 2. Flutter macOS 릴리즈 빌드 ==="
 flutter build macos --release
-echo "  → build/macos/Build/Products/Release/praise_lyrics_app.app 생성 완료"
+echo "  → build/macos/Build/Products/Release/Worship Slides.app 생성 완료"
 
 echo ""
 echo "=== 3. 배포 폴더 생성 ==="
-DIST_DIR="dist/praise_lyrics"
+DIST_DIR="dist/worship_slides"
 rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR/python"
 
-cp -R build/macos/Build/Products/Release/praise_lyrics_app.app "$DIST_DIR/"
+cp -R "build/macos/Build/Products/Release/Worship Slides.app" "$DIST_DIR/"
 cp python/ppt_tool "$DIST_DIR/python/"
 cp python/ppt_tool.py "$DIST_DIR/python/"
 cp python/requirements.txt "$DIST_DIR/python/"

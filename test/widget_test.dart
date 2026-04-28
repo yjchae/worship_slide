@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:praise_lyrics_app/src/features/praise/domain/export_style.dart';
-import 'package:praise_lyrics_app/src/features/praise/domain/praise_song.dart';
+import 'package:worship_slides/src/features/praise/domain/export_style.dart';
+import 'package:worship_slides/src/features/praise/domain/praise_song.dart';
 
 void main() {
   test('lyrics are split into pages by ###', () {

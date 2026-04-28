@@ -159,7 +159,7 @@ def split_bilingual_page(text):
 
 def get_cache_root():
     home = Path.home()
-    return home / "Library" / "Caches" / "praise_lyrics_app" / "ppt_import_cache"
+    return home / "Library" / "Caches" / "worship_slides" / "ppt_import_cache"
 
 
 def get_ppt_cache_key(source_path):
@@ -174,10 +174,27 @@ def get_cached_pptx_path(source_path):
     return cache_root / f"{get_ppt_cache_key(source_path)}.pptx"
 
 
+def get_libreoffice_executable():
+    candidates = [
+        shutil.which("soffice"),
+        shutil.which("libreoffice"),
+        "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+        "/Applications/LibreOffice.app/Contents/MacOS/LibreOffice",
+    ]
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate
+    return None
+
+
 def convert_ppt_group_to_pptx(source_paths, output_dir):
+    libreoffice = get_libreoffice_executable()
+    if libreoffice is None:
+        raise RuntimeError("LibreOffice 실행 파일을 찾지 못했습니다.")
+
     subprocess.run(
         [
-            "soffice",
+            libreoffice,
             "--headless",
             "--convert-to",
             "pptx",
@@ -280,7 +297,7 @@ def process_presentation_file(file_path, presentation_path):
 
 
 def _is_libreoffice_available():
-    return shutil.which("soffice") is not None
+    return get_libreoffice_executable() is not None
 
 
 def prepare_presentation_sources(file_paths):

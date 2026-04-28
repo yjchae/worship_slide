@@ -1,8 +1,8 @@
-# CLAUDE.md — 찬양 가사 관리자
+# CLAUDE.md — Worship Slides
 
 ## 프로젝트 개요
 
-Flutter 데스크탑 앱 + Python 백엔드로 구성된 찬양 가사 관리 도구.
+Flutter 데스크탑 앱 + Python 백엔드로 구성된 예배 슬라이드 관리 도구.
 PPT/PPTX 폴더를 가져와 SQLite에 저장하고, 선택한 곡을 새 PPTX로 내보낸다.
 
 ## 주요 명령어
@@ -51,7 +51,7 @@ CLI 도구. Flutter에서 서브프로세스로 호출하며 stdout에 JSON을 �
 
 - `import <폴더>` — `.ppt`/`.pptx` 재귀 탐색 → 한/영 가사 분리 → JSON 출력
 - `export <JSON>` — 스타일 적용하여 새 PPTX 생성
-- `.ppt` 파일은 LibreOffice(`soffice --headless`)로 변환 후 처리; 결과는 `~/Library/Caches/praise_lyrics_app/ppt_import_cache/`에 캐시
+- `.ppt` 파일은 LibreOffice(`soffice --headless`)로 변환 후 처리; 결과는 `~/Library/Caches/worship_slides/ppt_import_cache/`에 캐시
 - 병렬 처리: `concurrent.futures.ThreadPoolExecutor`, 최대 8 워커
 
 ## 중요 설계 결정

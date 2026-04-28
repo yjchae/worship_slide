@@ -23,7 +23,7 @@ class PraiseDatabase {
       return _database!;
     }
 
-    final dbPath = p.join(_dbDirectory, 'praise_lyrics.db');
+    final dbPath = p.join(_dbDirectory, 'worship_slides.db');
     _database = await openDatabase(
       dbPath,
       version: 3,

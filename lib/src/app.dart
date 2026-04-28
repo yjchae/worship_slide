@@ -2,15 +2,15 @@ import 'package:flutter/material.dart';
 
 import 'features/praise/presentation/praise_home_page.dart';
 
-class PraiseLyricsApp extends StatelessWidget {
-  const PraiseLyricsApp({super.key});
+class WorshipSlidesApp extends StatelessWidget {
+  const WorshipSlidesApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     const baseColor = Color(0xFF1B6B5C);
 
     return MaterialApp(
-      title: '찬양 가사 관리자',
+      title: 'Worship Slides',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(

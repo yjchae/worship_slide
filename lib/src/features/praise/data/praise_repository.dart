@@ -1,6 +1,16 @@
 import '../domain/praise_song.dart';
 import 'praise_database.dart';
 
+class ImportSongsResult {
+  const ImportSongsResult({
+    required this.insertedCount,
+    required this.skippedCount,
+  });
+
+  final int insertedCount;
+  final int skippedCount;
+}
+
 class PraiseRepository {
   PraiseRepository({PraiseDatabase? database})
     : _databaseProvider = database ?? PraiseDatabase.instance;
@@ -22,6 +32,39 @@ class PraiseRepository {
           await onSongSaved(savedCount);
         }
       }
+    });
+  }
+
+  Future<ImportSongsResult> addNewSongs(
+    List<PraiseSong> songs, {
+    Future<void> Function(int savedCount, int skippedCount)? onProgress,
+  }) async {
+    final db = await _databaseProvider.database;
+    return db.transaction((txn) async {
+      var insertedCount = 0;
+      var skippedCount = 0;
+      for (final song in songs) {
+        final existing = await txn.query(
+          'praise_songs',
+          columns: ['id'],
+          where: 'title = ? AND lyrics = ?',
+          whereArgs: [song.title, song.lyrics],
+          limit: 1,
+        );
+        if (existing.isNotEmpty) {
+          skippedCount += 1;
+        } else {
+          await txn.insert('praise_songs', song.toMap()..remove('id'));
+          insertedCount += 1;
+        }
+        if (onProgress != null) {
+          await onProgress(insertedCount, skippedCount);
+        }
+      }
+      return ImportSongsResult(
+        insertedCount: insertedCount,
+        skippedCount: skippedCount,
+      );
     });
   }
 

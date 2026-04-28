@@ -202,29 +202,43 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
             ? '저장할 찬양이 없습니다.'
             : '가져온 찬양을 저장하는 중입니다.';
       });
+      var insertedCount = 0;
+      var duplicateCount = 0;
       if (result.songs.isNotEmpty) {
-        await _repository.replaceAllSongs(
+        final saveResult = await _repository.addNewSongs(
           result.songs,
-          onSongSaved: (savedCount) async {
+          onProgress: (savedCount, skippedCount) async {
             if (!mounted) return;
+            insertedCount = savedCount;
+            duplicateCount = skippedCount;
             setState(() {
               _importSavedCount = savedCount;
-              _importStatusText = '찬양을 저장하는 중입니다.';
+              _importStatusText = skippedCount == 0
+                  ? '찬양을 저장하는 중입니다.'
+                  : '찬양 저장 중입니다. 중복 $skippedCount개 건너뜀';
             });
             await Future<void>.delayed(Duration.zero);
           },
         );
+        insertedCount = saveResult.insertedCount;
+        duplicateCount = saveResult.skippedCount;
       }
       await _loadSongs();
       if (!mounted) return;
-      final message = switch ((result.importedCount, result.failedCount)) {
-        (0, 0) => '가져올 PPT/PPTX 파일을 찾지 못했습니다.',
-        (> 0, 0) => '${result.importedCount}개의 찬양을 저장했습니다.',
-        (0, > 0) =>
+      final message = switch ((
+        insertedCount,
+        duplicateCount,
+        result.failedCount,
+      )) {
+        (0, 0, 0) => '가져올 PPT/PPTX 파일을 찾지 못했습니다.',
+        (0, > 0, 0) => '이미 저장된 찬양 $duplicateCount개를 건너뛰었습니다.',
+        (> 0, 0, 0) => '$insertedCount개의 찬양을 추가했습니다.',
+        (> 0, > 0, 0) => '$insertedCount개 추가, 중복 $duplicateCount개 건너뜀',
+        (0, 0, > 0) =>
           '처리한 ${result.processedCount}개 중 저장된 파일이 없습니다. '
               '첫 오류: ${result.failures.first.fileName}',
         _ =>
-          '${result.importedCount}개 저장, ${result.failedCount}개 건너뜀 '
+          '$insertedCount개 추가, 중복 $duplicateCount개, 실패 ${result.failedCount}개 '
               '(총 ${result.processedCount}개 검사)',
       };
       ScaffoldMessenger.of(
@@ -299,7 +313,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     await FilePicker.skipEntitlementsChecks();
     final outputPath = await FilePicker.saveFile(
       dialogTitle: '저장할 PPTX 파일 선택',
-      fileName: 'praise_lyrics.pptx',
+      fileName: 'worship_slides.pptx',
       type: FileType.custom,
       allowedExtensions: ['pptx'],
     );
@@ -696,7 +710,7 @@ class _TopBar extends StatelessWidget {
       child: Row(
         children: [
           Text(
-            '찬양 가사 보관함',
+            '예배 슬라이드 보관함',
             style: theme.textTheme.titleMedium?.copyWith(
               color: Colors.white,
               fontWeight: FontWeight.w700,

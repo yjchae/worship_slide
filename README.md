@@ -1,4 +1,4 @@
-# 찬양 가사 관리자 (Praise Lyrics Manager)
+# Worship Slides
 
 PPT/PPTX 형식으로 보관된 찬양 파일을 한 곳에서 관리하고, 원하는 곡만 골라 새 PPTX로 내보내는 데스크탑 앱입니다.
 
@@ -87,4 +87,4 @@ python python/ppt_tool.py import /path/to/ppt/folder
 python python/ppt_tool.py export '{"output_path":"...","songs":[...],"style":{...}}'
 ```
 
-`.ppt` 파일은 LibreOffice로 `.pptx`로 먼저 변환 후 처리하며, 변환 결과는 `~/Library/Caches/praise_lyrics_app/ppt_import_cache/`에 캐시됩니다.
+`.ppt` 파일은 LibreOffice로 `.pptx`로 먼저 변환 후 처리하며, 변환 결과는 `~/Library/Caches/worship_slides/ppt_import_cache/`에 캐시됩니다.

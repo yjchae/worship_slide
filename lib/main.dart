@@ -7,5 +7,5 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   sqfliteFfiInit();
   databaseFactory = databaseFactoryFfi;
-  runApp(const PraiseLyricsApp());
+  runApp(const WorshipSlidesApp());
 }
