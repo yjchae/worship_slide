@@ -38,6 +38,10 @@ class ImportResult {
 }
 
 class PythonBridge {
+  bool _checkedScriptExecution = false;
+  String? _cachedScriptPath;
+  String? _cachedScriptExecutable;
+
   Future<ImportResult> importFolder(String folderPath) async {
     final result = await _runTool(['import', folderPath]);
 
@@ -98,18 +102,24 @@ class PythonBridge {
     return json['output_path'] as String;
   }
 
-  // 컴파일된 바이너리 우선, 없으면 Python 스크립트로 폴백
   Future<ProcessResult> _runTool(List<String> arguments) async {
     final String executable;
     final List<String> args;
 
+    final scriptExecution = await _scriptExecutionOrNull();
     final binary = _compiledBinaryPath;
-    if (binary != null) {
+
+    if (scriptExecution != null) {
+      executable = scriptExecution.executable;
+      args = [scriptExecution.scriptPath, ...arguments];
+    } else if (binary != null) {
       executable = binary;
       args = arguments;
     } else {
-      executable = _pythonExecutablePath;
-      args = [_scriptPath, ...arguments];
+      throw Exception(
+        'ppt_tool 실행 파일을 찾을 수 없습니다. '
+        '현재 위치: ${Directory.current.path}, 실행 파일: ${Platform.resolvedExecutable}',
+      );
     }
 
     final result = await Process.run(executable, args, runInShell: false);
@@ -123,20 +133,55 @@ class PythonBridge {
     return result;
   }
 
-  // PyInstaller로 빌드된 단독 실행 파일 탐색
+  Future<({String executable, String scriptPath})?>
+  _scriptExecutionOrNull() async {
+    if (_checkedScriptExecution) {
+      final executable = _cachedScriptExecutable;
+      final scriptPath = _cachedScriptPath;
+      if (executable == null || scriptPath == null) return null;
+      return (executable: executable, scriptPath: scriptPath);
+    }
+
+    _checkedScriptExecution = true;
+    for (final scriptPath in _scriptPathCandidates) {
+      final executable = _pythonExecutablePath(scriptPath);
+      try {
+        final result = await Process.run(executable, [
+          '-c',
+          'import pptx',
+        ], runInShell: false);
+        if (result.exitCode == 0) {
+          _cachedScriptExecutable = executable;
+          _cachedScriptPath = scriptPath;
+          return (executable: executable, scriptPath: scriptPath);
+        }
+      } on ProcessException {
+        continue;
+      }
+    }
+
+    return null;
+  }
+
+  // PyInstaller onefile/onedir 실행 파일 탐색
   String? get _compiledBinaryPath {
     final name = Platform.isWindows ? 'ppt_tool.exe' : 'ppt_tool';
     for (final root in _searchRoots) {
-      final candidate = File(p.join(root, 'python', name));
-      if (candidate.existsSync()) {
-        return candidate.path;
+      final flatCandidate = File(p.join(root, 'python', name));
+      if (flatCandidate.existsSync()) {
+        return flatCandidate.path;
+      }
+
+      final oneDirCandidate = File(p.join(root, 'python', 'ppt_tool', name));
+      if (oneDirCandidate.existsSync()) {
+        return oneDirCandidate.path;
       }
     }
     return null;
   }
 
-  String get _pythonExecutablePath {
-    final scriptRoot = File(_scriptPath).parent.parent.path;
+  String _pythonExecutablePath(String scriptPath) {
+    final scriptRoot = File(scriptPath).parent.parent.path;
     final scriptAdjacentPython = File(
       p.join(scriptRoot, '.venv', 'bin', 'python'),
     );
@@ -153,26 +198,27 @@ class PythonBridge {
     return 'python3';
   }
 
-  String get _scriptPath {
-    for (final root in _searchRoots) {
-      final candidate = p.join(root, 'python', 'ppt_tool.py');
-      if (File(candidate).existsSync()) {
-        return candidate;
+  List<String> get _scriptPathCandidates {
+    final candidates = <String>[];
+    final seen = <String>{};
+
+    void addCandidate(String path) {
+      final normalized = p.normalize(path);
+      if (seen.add(normalized) && File(normalized).existsSync()) {
+        candidates.add(normalized);
       }
+    }
+
+    for (final root in _searchRoots) {
+      addCandidate(p.join(root, 'python', 'ppt_tool.py'));
     }
 
     final discovered = _discoverProjectRoot();
     if (discovered != null) {
-      final candidate = p.join(discovered, 'python', 'ppt_tool.py');
-      if (File(candidate).existsSync()) {
-        return candidate;
-      }
+      addCandidate(p.join(discovered, 'python', 'ppt_tool.py'));
     }
 
-    throw Exception(
-      'ppt_tool 실행 파일을 찾을 수 없습니다. '
-      '현재 위치: ${Directory.current.path}, 실행 파일: ${Platform.resolvedExecutable}',
-    );
+    return candidates;
   }
 
   List<String> get _searchRoots {
