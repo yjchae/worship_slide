@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 
 import '../domain/export_style.dart';
 import '../domain/praise_song.dart';
+import '../domain/staging_item.dart';
 
 class ImportFailure {
   const ImportFailure({
@@ -69,20 +70,25 @@ class PythonBridge {
 
   Future<String> exportPresentation({
     required String outputPath,
-    required List<PraiseSong> songs,
+    required List<StagingItem> stagingItems,
     required ExportStyle style,
   }) async {
     final payload = jsonEncode({
       'output_path': outputPath,
-      'songs': songs
-          .map(
-            (song) => {
-              'title': song.title,
-              'lyrics': song.lyrics,
-              'english_lyrics': song.englishLyrics,
-            },
-          )
-          .toList(),
+      'songs': stagingItems.map((item) {
+        return switch (item) {
+          SongStagingItem(:final song) => {
+            'title': song.title,
+            'lyrics': song.lyrics,
+            'english_lyrics': song.englishLyrics,
+          },
+          BibleStagingItem(:final reference, :final text) => {
+            'title': reference,
+            'lyrics': text,
+            'english_lyrics': '',
+          },
+        };
+      }).toList(),
       'style': style.toJson(),
     });
 

@@ -2,12 +2,16 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
+import '../../../features/bible/data/bible_repository.dart';
+import '../../../features/bible/domain/bible_verse.dart';
 import '../data/export_style_store.dart';
 import '../data/praise_repository.dart';
 import '../data/python_bridge.dart';
 import '../domain/export_style.dart';
 import '../domain/praise_song.dart';
+import '../domain/staging_item.dart';
 
 class PraiseHomePage extends StatefulWidget {
   const PraiseHomePage({super.key});
@@ -35,14 +39,21 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
   final PraiseRepository _repository = PraiseRepository();
   final PythonBridge _pythonBridge = PythonBridge();
   final ExportStyleStore _styleStore = ExportStyleStore();
+  final BibleRepository _bibleRepository = BibleRepository();
   final TextEditingController _searchController = TextEditingController();
 
   List<PraiseSong> _songs = const [];
-  final List<PraiseSong> _selectedSongs = [];
+  final List<({int uid, StagingItem item})> _stagingItems = [];
+  int _nextUid = 0;
+  int? _previewStagingUid;
+  double _stagingPanelRatio = 0.46;
+
   String? _selectedFolder;
   bool _isImporting = false;
+  bool _isBibleImporting = false;
   bool _isExporting = false;
   int _storedCount = 0;
+  int _bibleVerseCount = 0;
   int _importTotalCount = 0;
   int _importSavedCount = 0;
   String? _importStatusText;
@@ -69,6 +80,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     super.initState();
     _loadSongs();
     _loadSavedStyle();
+    _loadBibleCount();
     _searchController.addListener(_loadSongs);
   }
 
@@ -80,15 +92,21 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     super.dispose();
   }
 
+  // ── 계산된 프로퍼티 ───────────────────────────────────────────────────
+
+  Set<int?> get _selectedSongIds => _stagingItems
+      .map((e) => e.item)
+      .whereType<SongStagingItem>()
+      .map((item) => item.song.id)
+      .toSet();
+
+  // ── 데이터 로딩 ──────────────────────────────────────────────────────
+
   Future<void> _loadSongs() async {
-    // 한글 IME 조합 중에는 건너뜀 — setState가 조합을 끊는 것을 방지
     if (_searchController.value.composing != TextRange.empty) return;
     final songs = await _repository.searchSongs(_searchController.text);
     final storedCount = await _repository.countSongs();
-    if (!mounted) {
-      return;
-    }
-    // DB 쿼리 대기 중에 새 조합이 시작됐을 수 있으므로 재확인
+    if (!mounted) return;
     if (_searchController.value.composing != TextRange.empty) return;
     setState(() {
       _songs = songs;
@@ -98,29 +116,73 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
 
   Future<void> _loadSavedStyle() async {
     final savedStyle = await _styleStore.load();
-    if (!mounted || savedStyle == null) {
-      return;
-    }
-    setState(() {
-      _style = savedStyle;
-    });
+    if (!mounted || savedStyle == null) return;
+    setState(() => _style = savedStyle);
   }
 
   Future<void> _updateStyle(ExportStyle style) async {
-    setState(() {
-      _style = style;
-    });
+    setState(() => _style = style);
     await _styleStore.save(style);
   }
+
+  // ── 스테이징 조작 ────────────────────────────────────────────────────
+
+  void _toggleSongSelection(PraiseSong song, bool isSelected) {
+    setState(() {
+      if (isSelected) {
+        final alreadyAdded = _stagingItems.any(
+          (e) =>
+              e.item is SongStagingItem &&
+              (e.item as SongStagingItem).song.id == song.id,
+        );
+        if (!alreadyAdded) {
+          _stagingItems.add((uid: _nextUid++, item: SongStagingItem(song)));
+        }
+      } else {
+        _stagingItems.removeWhere(
+          (e) =>
+              e.item is SongStagingItem &&
+              (e.item as SongStagingItem).song.id == song.id,
+        );
+      }
+    });
+  }
+
+  void _addBibleItem(BibleStagingItem item) {
+    setState(() {
+      final uid = _nextUid++;
+      _stagingItems.add((uid: uid, item: item));
+      _previewStagingUid = uid;
+    });
+  }
+
+  void _removeFromStaging(int uid) {
+    setState(() {
+      _stagingItems.removeWhere((e) => e.uid == uid);
+      if (_previewStagingUid == uid) {
+        _previewStagingUid = _stagingItems.isEmpty
+            ? null
+            : _stagingItems.first.uid;
+      }
+    });
+  }
+
+  void _onStagingReorder(int oldIndex, int newIndex) {
+    setState(() {
+      if (newIndex > oldIndex) newIndex--;
+      final entry = _stagingItems.removeAt(oldIndex);
+      _stagingItems.insert(newIndex, entry);
+    });
+  }
+
+  // ── PPT 찬양 가져오기 ────────────────────────────────────────────────
 
   Future<void> _pickAndImportFolder() async {
     await FilePicker.skipEntitlementsChecks();
     final folder = await FilePicker.getDirectoryPath(
       dialogTitle: '찬양 PPT 폴더 선택',
     );
-    if (folder == null) {
-      return;
-    }
+    if (folder == null) return;
 
     setState(() {
       _selectedFolder = folder;
@@ -132,9 +194,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
 
     try {
       final result = await _pythonBridge.importFolder(folder);
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
       setState(() {
         _importTotalCount = result.importedCount;
         _importSavedCount = 0;
@@ -146,9 +206,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
         await _repository.replaceAllSongs(
           result.songs,
           onSongSaved: (savedCount) async {
-            if (!mounted) {
-              return;
-            }
+            if (!mounted) return;
             setState(() {
               _importSavedCount = savedCount;
               _importStatusText = '찬양을 저장하는 중입니다.';
@@ -158,9 +216,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
         );
       }
       await _loadSongs();
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
       final message = switch ((result.importedCount, result.failedCount)) {
         (0, 0) => '가져올 PPT/PPTX 파일을 찾지 못했습니다.',
         (> 0, 0) => '${result.importedCount}개의 찬양을 저장했습니다.',
@@ -178,9 +234,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
         await _showLibreofficeDialog();
       }
     } catch (error) {
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('가져오기 실패: $error')));
@@ -194,11 +248,51 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     }
   }
 
-  Future<void> _exportPresentation() async {
-    if (_selectedSongs.isEmpty) {
+  // ── 성경 JSON 가져오기 ───────────────────────────────────────────────
+
+  Future<void> _loadBibleCount() async {
+    final count = await _bibleRepository.countVerses();
+    if (!mounted) return;
+    setState(() => _bibleVerseCount = count);
+  }
+
+  Future<void> _pickAndImportBible() async {
+    await FilePicker.skipEntitlementsChecks();
+    final result = await FilePicker.pickFiles(
+      dialogTitle: '성경 JSON 파일 선택',
+      type: FileType.custom,
+      allowedExtensions: ['json'],
+    );
+    if (result == null || result.files.isEmpty) return;
+    final path = result.files.first.path;
+    if (path == null) return;
+
+    setState(() => _isBibleImporting = true);
+    try {
+      final content = await File(path).readAsString();
+      final count = await _bibleRepository.importFromJson(content);
+      if (!mounted) return;
+      setState(() => _bibleVerseCount = count);
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('먼저 찬양을 선택해 주세요.')));
+      ).showSnackBar(SnackBar(content: Text('성경 $count절을 저장했습니다.')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('성경 불러오기 실패: $e')));
+    } finally {
+      if (mounted) setState(() => _isBibleImporting = false);
+    }
+  }
+
+  // ── PPTX 내보내기 ────────────────────────────────────────────────────
+
+  Future<void> _exportPresentation() async {
+    if (_stagingItems.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('먼저 찬양이나 성경 본문을 선택해 주세요.')));
       return;
     }
 
@@ -209,42 +303,31 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
       type: FileType.custom,
       allowedExtensions: ['pptx'],
     );
+    if (outputPath == null) return;
 
-    if (outputPath == null) {
-      return;
-    }
-
-    setState(() {
-      _isExporting = true;
-    });
+    setState(() => _isExporting = true);
 
     try {
       final savedPath = await _pythonBridge.exportPresentation(
         outputPath: outputPath,
-        songs: _selectedSongs,
+        stagingItems: _stagingItems.map((e) => e.item).toList(),
         style: _style,
       );
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('PPTX 저장 완료: $savedPath')));
     } catch (error) {
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('PPTX 저장 실패: $error')));
     } finally {
-      if (mounted) {
-        setState(() {
-          _isExporting = false;
-        });
-      }
+      if (mounted) setState(() => _isExporting = false);
     }
   }
+
+  // ── 곡 관리 ──────────────────────────────────────────────────────────
 
   Future<void> _clearAllSongs() async {
     final confirmed = await showDialog<bool>(
@@ -264,30 +347,25 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
         ],
       ),
     );
-
-    if (confirmed != true) {
-      return;
-    }
+    if (confirmed != true) return;
 
     await _repository.clearAllSongs();
-    if (!mounted) {
-      return;
-    }
+    if (!mounted) return;
     setState(() {
-      _selectedSongs.clear();
+      _stagingItems.removeWhere((e) => e.item is SongStagingItem);
     });
     await _loadSongs();
-    if (!mounted) {
-      return;
-    }
+    if (!mounted) return;
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(const SnackBar(content: Text('저장된 찬양을 모두 삭제했습니다.')));
   }
 
   Future<void> _deleteSelectedSongs() async {
-    final deletableIds = _selectedSongs
-        .map((song) => song.id)
+    final deletableIds = _stagingItems
+        .map((e) => e.item)
+        .whereType<SongStagingItem>()
+        .map((item) => item.song.id)
         .whereType<int>()
         .toList();
     if (deletableIds.isEmpty) {
@@ -314,22 +392,19 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
         ],
       ),
     );
-
-    if (confirmed != true) {
-      return;
-    }
+    if (confirmed != true) return;
 
     await _repository.deleteSongsByIds(deletableIds);
-    if (!mounted) {
-      return;
-    }
+    if (!mounted) return;
     setState(() {
-      _selectedSongs.removeWhere((song) => deletableIds.contains(song.id));
+      _stagingItems.removeWhere(
+        (e) =>
+            e.item is SongStagingItem &&
+            deletableIds.contains((e.item as SongStagingItem).song.id),
+      );
     });
     await _loadSongs();
-    if (!mounted) {
-      return;
-    }
+    if (!mounted) return;
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text('${deletableIds.length}곡을 삭제했습니다.')));
@@ -388,37 +463,19 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     );
   }
 
-  void _toggleSelection(PraiseSong song, bool isSelected) {
-    setState(() {
-      if (isSelected) {
-        final alreadySelected = _selectedSongs.any(
-          (selected) => selected.id == song.id,
-        );
-        if (!alreadySelected) {
-          _selectedSongs.add(song);
-        }
-      } else {
-        _selectedSongs.removeWhere((selected) => selected.id == song.id);
-      }
-    });
-  }
-
-  void _onStagingReorder(int oldIndex, int newIndex) {
-    setState(() {
-      if (newIndex > oldIndex) newIndex--;
-      final song = _selectedSongs.removeAt(oldIndex);
-      _selectedSongs.insert(newIndex, song);
-    });
-  }
-
-  void _removeFromStaging(PraiseSong song) {
-    setState(() {
-      _selectedSongs.removeWhere((s) => s.id == song.id);
-    });
-  }
+  // ── 빌드 ────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
+    StagingItem? previewItem;
+    for (final entry in _stagingItems) {
+      if (entry.uid == _previewStagingUid) {
+        previewItem = entry.item;
+        break;
+      }
+    }
+    previewItem ??= _stagingItems.isEmpty ? null : _stagingItems.first.item;
+
     return Scaffold(
       body: SafeArea(
         child: Padding(
@@ -437,32 +494,43 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                       children: [
                         _TopBar(
                           storedCount: _storedCount,
+                          bibleVerseCount: _bibleVerseCount,
                           selectedFolder: _selectedFolder,
                           isImporting: _isImporting,
+                          isBibleImporting: _isBibleImporting,
                           importTotalCount: _importTotalCount,
                           importSavedCount: _importSavedCount,
                           importStatusText: _importStatusText,
                           onImportPressed: _pickAndImportFolder,
+                          onBibleImportPressed: _pickAndImportBible,
                         ),
                         const SizedBox(height: 10),
                         Expanded(
-                          child: _StagingPanel(
-                            selectedSongs: _selectedSongs,
-                            onReorder: _onStagingReorder,
-                            onRemove: _removeFromStaging,
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        Expanded(
-                          child: _SearchPanel(
-                            controller: _searchController,
-                            songs: _songs,
-                            selectedSongs: _selectedSongs,
-                            onChanged: _toggleSelection,
-                            onDeleteSelected: _deleteSelectedSongs,
-                            onClearAll: _clearAllSongs,
-                            onAddSong: () => _openSongEditor(null),
-                            onEditSong: _openSongEditor,
+                          child: _ResizableWorkArea(
+                            stagingRatio: _stagingPanelRatio,
+                            onRatioChanged: (value) =>
+                                setState(() => _stagingPanelRatio = value),
+                            stagingPanel: _StagingPanel(
+                              stagingItems: _stagingItems,
+                              selectedUid: _previewStagingUid,
+                              onReorder: _onStagingReorder,
+                              onRemove: _removeFromStaging,
+                              onSelect: (uid) =>
+                                  setState(() => _previewStagingUid = uid),
+                            ),
+                            searchPanel: _SearchAndBiblePanel(
+                              searchController: _searchController,
+                              songs: _songs,
+                              selectedSongIds: _selectedSongIds,
+                              onSongChanged: _toggleSongSelection,
+                              onDeleteSelected: _deleteSelectedSongs,
+                              onClearAll: _clearAllSongs,
+                              onAddSong: () => _openSongEditor(null),
+                              onEditSong: _openSongEditor,
+                              bibleRepository: _bibleRepository,
+                              bibleVerseCount: _bibleVerseCount,
+                              onAddBibleItem: _addBibleItem,
+                            ),
                           ),
                         ),
                       ],
@@ -476,7 +544,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                       isExporting: _isExporting,
                       swatches: _swatches,
                       textSwatches: _textSwatches,
-                      selectedSongs: _selectedSongs,
+                      previewItem: previewItem,
                       onStyleChanged: _updateStyle,
                       onExportPressed: _exportPresentation,
                     ),
@@ -491,24 +559,126 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
   }
 }
 
+// ── ResizableWorkArea ─────────────────────────────────────────────────────
+
+class _ResizableWorkArea extends StatelessWidget {
+  const _ResizableWorkArea({
+    required this.stagingRatio,
+    required this.onRatioChanged,
+    required this.stagingPanel,
+    required this.searchPanel,
+  });
+
+  final double stagingRatio;
+  final ValueChanged<double> onRatioChanged;
+  final Widget stagingPanel;
+  final Widget searchPanel;
+
+  static const double _dividerHeight = 18;
+  static const double _minPanelHeight = 140;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final availableHeight = (constraints.maxHeight - _dividerHeight)
+            .clamp(0.0, double.infinity)
+            .toDouble();
+        final minRatio = availableHeight <= 0
+            ? 0.2
+            : (_minPanelHeight / availableHeight).clamp(0.12, 0.82);
+        final maxRatio = 1 - minRatio;
+        final ratio = stagingRatio.clamp(minRatio, maxRatio);
+        final stagingHeight = availableHeight * ratio;
+        final searchHeight = availableHeight - stagingHeight;
+
+        return Column(
+          children: [
+            SizedBox(height: stagingHeight, child: stagingPanel),
+            _PanelResizeHandle(
+              height: _dividerHeight,
+              color: colorScheme.outlineVariant,
+              onDrag: (delta) {
+                if (availableHeight <= 0) return;
+                final nextRatio = (ratio + delta / availableHeight).clamp(
+                  minRatio,
+                  maxRatio,
+                );
+                onRatioChanged(nextRatio);
+              },
+            ),
+            SizedBox(height: searchHeight, child: searchPanel),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _PanelResizeHandle extends StatelessWidget {
+  const _PanelResizeHandle({
+    required this.height,
+    required this.color,
+    required this.onDrag,
+  });
+
+  final double height;
+  final Color color;
+  final ValueChanged<double> onDrag;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.resizeRow,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onVerticalDragUpdate: (details) => onDrag(details.delta.dy),
+        child: SizedBox(
+          height: height,
+          child: Center(
+            child: Container(
+              width: 72,
+              height: 4,
+              decoration: BoxDecoration(
+                color: color,
+                borderRadius: BorderRadius.circular(99),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── TopBar ────────────────────────────────────────────────────────────────
+
 class _TopBar extends StatelessWidget {
   const _TopBar({
     required this.storedCount,
+    required this.bibleVerseCount,
     required this.selectedFolder,
     required this.isImporting,
+    required this.isBibleImporting,
     required this.importTotalCount,
     required this.importSavedCount,
     required this.importStatusText,
     required this.onImportPressed,
+    required this.onBibleImportPressed,
   });
 
   final int storedCount;
+  final int bibleVerseCount;
   final String? selectedFolder;
   final bool isImporting;
+  final bool isBibleImporting;
   final int importTotalCount;
   final int importSavedCount;
   final String? importStatusText;
   final VoidCallback onImportPressed;
+  final VoidCallback onBibleImportPressed;
 
   @override
   Widget build(BuildContext context) {
@@ -576,10 +746,7 @@ class _TopBar extends StatelessWidget {
                     importTotalCount > 0
                         ? '$importStatusText  $importSavedCount / $importTotalCount'
                         : importStatusText!,
-                    style: const TextStyle(
-                      color: Colors.white60,
-                      fontSize: 11,
-                    ),
+                    style: const TextStyle(color: Colors.white60, fontSize: 11),
                   ),
               ],
             ),
@@ -603,133 +770,53 @@ class _TopBar extends StatelessWidget {
                 : const Icon(Icons.upload_file_rounded, size: 16),
             label: Text(isImporting ? '읽는 중' : '폴더 선택'),
           ),
+          const SizedBox(width: 8),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.white.withValues(alpha: 0.22),
+              foregroundColor: Colors.white,
+            ),
+            onPressed: isBibleImporting ? null : onBibleImportPressed,
+            icon: isBibleImporting
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : const Icon(Icons.menu_book_rounded, size: 16),
+            label: Text(
+              isBibleImporting
+                  ? '저장 중'
+                  : bibleVerseCount > 0
+                  ? '성경 재불러오기'
+                  : '성경 불러오기',
+            ),
+          ),
         ],
       ),
     );
   }
 }
 
-class _SearchPanel extends StatelessWidget {
-  const _SearchPanel({
-    required this.controller,
-    required this.songs,
-    required this.selectedSongs,
-    required this.onChanged,
-    required this.onDeleteSelected,
-    required this.onClearAll,
-    required this.onAddSong,
-    required this.onEditSong,
-  });
-
-  final TextEditingController controller;
-  final List<PraiseSong> songs;
-  final List<PraiseSong> selectedSongs;
-  final void Function(PraiseSong song, bool isSelected) onChanged;
-  final VoidCallback onDeleteSelected;
-  final VoidCallback onClearAll;
-  final VoidCallback onAddSong;
-  final ValueChanged<PraiseSong> onEditSong;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  const Expanded(
-                    child: Text(
-                      '찬양 검색',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                  Text('${songs.length}건'),
-                  const SizedBox(width: 12),
-                  OutlinedButton.icon(
-                    onPressed: onAddSong,
-                    icon: const Icon(Icons.add_rounded),
-                    label: const Text('새 곡'),
-                  ),
-                  const SizedBox(width: 8),
-                  OutlinedButton.icon(
-                    onPressed: selectedSongs.isEmpty ? null : onDeleteSelected,
-                    icon: const Icon(Icons.delete_outline_rounded),
-                    label: const Text('선택 삭제'),
-                  ),
-                  const SizedBox(width: 8),
-                  OutlinedButton.icon(
-                    onPressed: songs.isEmpty ? null : onClearAll,
-                    icon: const Icon(Icons.restart_alt_rounded),
-                    label: const Text('DB 초기화'),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: controller,
-                decoration: const InputDecoration(
-                  prefixIcon: Icon(Icons.search_rounded),
-                  hintText: '제목 또는 가사로 검색',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Expanded(
-                child: songs.isEmpty
-                    ? const Center(child: Text('저장된 찬양이 없습니다. 먼저 폴더를 불러와 주세요.'))
-                    : ListView.separated(
-                        itemCount: songs.length,
-                        separatorBuilder: (context, index) =>
-                            const Divider(height: 1),
-                        itemBuilder: (context, index) {
-                          final song = songs[index];
-                          final selected = selectedSongs.any(
-                            (item) => item.id == song.id,
-                          );
-                          return CheckboxListTile(
-                            value: selected,
-                            onChanged: (value) =>
-                                onChanged(song, value ?? false),
-                            controlAffinity: ListTileControlAffinity.leading,
-                            title: Text(song.title),
-                            subtitle: Text(
-                              song.pages.join(' / '),
-                              maxLines: 3,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            contentPadding: EdgeInsets.zero,
-                            secondary: IconButton(
-                              icon: const Icon(Icons.edit_outlined, size: 20),
-                              tooltip: '가사 수정',
-                              onPressed: () => onEditSong(song),
-                            ),
-                          );
-                        },
-                      ),
-              ),
-            ],
-          ),
-        ),
-      );
-  }
-}
+// ── StagingPanel ──────────────────────────────────────────────────────────
 
 class _StagingPanel extends StatelessWidget {
   const _StagingPanel({
-    required this.selectedSongs,
+    required this.stagingItems,
+    required this.selectedUid,
     required this.onReorder,
     required this.onRemove,
+    required this.onSelect,
   });
 
-  final List<PraiseSong> selectedSongs;
+  final List<({int uid, StagingItem item})> stagingItems;
+  final int? selectedUid;
   final void Function(int oldIndex, int newIndex) onReorder;
-  final void Function(PraiseSong song) onRemove;
+  final void Function(int uid) onRemove;
+  final ValueChanged<int> onSelect;
 
   @override
   Widget build(BuildContext context) {
@@ -743,34 +830,41 @@ class _StagingPanel extends StatelessWidget {
               children: [
                 const Expanded(
                   child: Text(
-                    '선택한 찬양 순서',
+                    '선택한 순서',
                     style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
                   ),
                 ),
-                Text('${selectedSongs.length}곡'),
+                Text('${stagingItems.length}개'),
               ],
             ),
             const SizedBox(height: 12),
             Expanded(
-              child: selectedSongs.isEmpty
+              child: stagingItems.isEmpty
                   ? const Center(
                       child: Text(
-                        '왼쪽에서 찬양을 선택하면 순서가 여기에 표시됩니다.',
+                        '찬양이나 성경 본문을 선택하면 순서가 여기에 표시됩니다.',
                         style: TextStyle(color: Colors.grey),
                         textAlign: TextAlign.center,
                       ),
                     )
                   : ReorderableListView.builder(
                       buildDefaultDragHandles: false,
-                      itemCount: selectedSongs.length,
+                      itemCount: stagingItems.length,
                       onReorder: onReorder,
                       itemBuilder: (context, index) {
-                        final song = selectedSongs[index];
+                        final entry = stagingItems[index];
+                        final item = entry.item;
+                        final isBible = item is BibleStagingItem;
                         return ListTile(
-                          key: ValueKey(song.id ?? song.title),
+                          key: ValueKey(entry.uid),
+                          selected: entry.uid == selectedUid,
+                          selectedTileColor: Theme.of(
+                            context,
+                          ).colorScheme.primary.withValues(alpha: 0.08),
                           contentPadding: const EdgeInsets.symmetric(
                             horizontal: 4,
                           ),
+                          onTap: () => onSelect(entry.uid),
                           leading: SizedBox(
                             width: 28,
                             child: Center(
@@ -783,9 +877,44 @@ class _StagingPanel extends StatelessWidget {
                               ),
                             ),
                           ),
-                          title: Text(
-                            song.title,
+                          title: Row(
+                            children: [
+                              if (isBible)
+                                Container(
+                                  margin: const EdgeInsets.only(right: 6),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 5,
+                                    vertical: 1,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.blue.shade100,
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: Text(
+                                    '성경',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: Colors.blue.shade700,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                              Expanded(
+                                child: Text(
+                                  item.displayTitle,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                          subtitle: Text(
+                            item.previewText,
+                            maxLines: 1,
                             overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: Colors.grey,
+                            ),
                           ),
                           trailing: Row(
                             mainAxisSize: MainAxisSize.min,
@@ -793,7 +922,7 @@ class _StagingPanel extends StatelessWidget {
                               IconButton(
                                 icon: const Icon(Icons.close_rounded, size: 20),
                                 tooltip: '제거',
-                                onPressed: () => onRemove(song),
+                                onPressed: () => onRemove(entry.uid),
                               ),
                               ReorderableDragStartListener(
                                 index: index,
@@ -815,13 +944,627 @@ class _StagingPanel extends StatelessWidget {
   }
 }
 
+// ── SearchAndBiblePanel (탭 패널) ─────────────────────────────────────────
+
+class _SearchAndBiblePanel extends StatefulWidget {
+  const _SearchAndBiblePanel({
+    required this.searchController,
+    required this.songs,
+    required this.selectedSongIds,
+    required this.onSongChanged,
+    required this.onDeleteSelected,
+    required this.onClearAll,
+    required this.onAddSong,
+    required this.onEditSong,
+    required this.bibleRepository,
+    required this.bibleVerseCount,
+    required this.onAddBibleItem,
+  });
+
+  final TextEditingController searchController;
+  final List<PraiseSong> songs;
+  final Set<int?> selectedSongIds;
+  final void Function(PraiseSong, bool) onSongChanged;
+  final VoidCallback onDeleteSelected;
+  final VoidCallback onClearAll;
+  final VoidCallback onAddSong;
+  final ValueChanged<PraiseSong> onEditSong;
+  final BibleRepository bibleRepository;
+  final int bibleVerseCount;
+  final void Function(BibleStagingItem) onAddBibleItem;
+
+  @override
+  State<_SearchAndBiblePanel> createState() => _SearchAndBiblePanelState();
+}
+
+class _SearchAndBiblePanelState extends State<_SearchAndBiblePanel>
+    with SingleTickerProviderStateMixin {
+  late final TabController _tabController;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 2, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Column(
+        children: [
+          TabBar(
+            controller: _tabController,
+            tabs: const [
+              Tab(text: '찬양 검색'),
+              Tab(text: '성경 검색'),
+            ],
+          ),
+          Expanded(
+            child: TabBarView(
+              controller: _tabController,
+              children: [
+                _SongSearchContent(
+                  controller: widget.searchController,
+                  songs: widget.songs,
+                  selectedSongIds: widget.selectedSongIds,
+                  onChanged: widget.onSongChanged,
+                  onDeleteSelected: widget.onDeleteSelected,
+                  onClearAll: widget.onClearAll,
+                  onAddSong: widget.onAddSong,
+                  onEditSong: widget.onEditSong,
+                ),
+                _BibleSearchPanel(
+                  bibleRepository: widget.bibleRepository,
+                  bibleVerseCount: widget.bibleVerseCount,
+                  onAddItem: widget.onAddBibleItem,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── SongSearchContent ─────────────────────────────────────────────────────
+
+class _SongSearchContent extends StatelessWidget {
+  const _SongSearchContent({
+    required this.controller,
+    required this.songs,
+    required this.selectedSongIds,
+    required this.onChanged,
+    required this.onDeleteSelected,
+    required this.onClearAll,
+    required this.onAddSong,
+    required this.onEditSong,
+  });
+
+  final TextEditingController controller;
+  final List<PraiseSong> songs;
+  final Set<int?> selectedSongIds;
+  final void Function(PraiseSong song, bool isSelected) onChanged;
+  final VoidCallback onDeleteSelected;
+  final VoidCallback onClearAll;
+  final VoidCallback onAddSong;
+  final ValueChanged<PraiseSong> onEditSong;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '${songs.length}건',
+                  style: const TextStyle(fontSize: 13, color: Colors.grey),
+                ),
+              ),
+              OutlinedButton.icon(
+                onPressed: onAddSong,
+                icon: const Icon(Icons.add_rounded),
+                label: const Text('새 곡'),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed: selectedSongIds.isEmpty ? null : onDeleteSelected,
+                icon: const Icon(Icons.delete_outline_rounded),
+                label: const Text('선택 삭제'),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed: songs.isEmpty ? null : onClearAll,
+                icon: const Icon(Icons.restart_alt_rounded),
+                label: const Text('DB 초기화'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: controller,
+            decoration: const InputDecoration(
+              prefixIcon: Icon(Icons.search_rounded),
+              hintText: '제목 또는 가사로 검색',
+              border: OutlineInputBorder(),
+              isDense: true,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Expanded(
+            child: songs.isEmpty
+                ? const Center(child: Text('저장된 찬양이 없습니다. 먼저 폴더를 불러와 주세요.'))
+                : ListView.separated(
+                    itemCount: songs.length,
+                    separatorBuilder: (_, _) => const Divider(height: 1),
+                    itemBuilder: (context, index) {
+                      final song = songs[index];
+                      final selected = selectedSongIds.contains(song.id);
+                      return CheckboxListTile(
+                        value: selected,
+                        onChanged: (value) => onChanged(song, value ?? false),
+                        controlAffinity: ListTileControlAffinity.leading,
+                        title: Text(song.title),
+                        subtitle: Text(
+                          song.pages.join(' / '),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        contentPadding: EdgeInsets.zero,
+                        secondary: IconButton(
+                          icon: const Icon(Icons.edit_outlined, size: 20),
+                          tooltip: '가사 수정',
+                          onPressed: () => onEditSong(song),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── BibleSearchPanel ──────────────────────────────────────────────────────
+
+class _BibleSearchPanel extends StatefulWidget {
+  const _BibleSearchPanel({
+    required this.bibleRepository,
+    required this.bibleVerseCount,
+    required this.onAddItem,
+  });
+
+  final BibleRepository bibleRepository;
+  final int bibleVerseCount;
+  final void Function(BibleStagingItem) onAddItem;
+
+  @override
+  State<_BibleSearchPanel> createState() => _BibleSearchPanelState();
+}
+
+class _BibleSearchPanelState extends State<_BibleSearchPanel>
+    with AutomaticKeepAliveClientMixin {
+  // 탭 전환 시 상태 유지
+  @override
+  bool get wantKeepAlive => true;
+
+  bool _isLoading = false;
+  bool _hasData = false;
+  List<String> _bookNames = [];
+  String? _selectedBook;
+  final TextEditingController _chapterController = TextEditingController();
+  final TextEditingController _verseController = TextEditingController();
+  List<BibleVerse> _verses = const [];
+  final Set<int> _selectedVerseIds = {};
+  int? _lastSelectedVerseIndex;
+  int _versesPerPage = 2;
+  bool _isSearching = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadBookNames();
+  }
+
+  @override
+  void didUpdateWidget(_BibleSearchPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.bibleVerseCount != widget.bibleVerseCount) {
+      _loadBookNames();
+    }
+  }
+
+  @override
+  void dispose() {
+    _chapterController.dispose();
+    _verseController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadBookNames() async {
+    if (mounted) setState(() => _isLoading = true);
+    try {
+      final has = await widget.bibleRepository.hasData();
+      final books = has
+          ? await widget.bibleRepository.getBookNames()
+          : <String>[];
+      if (!mounted) return;
+      setState(() {
+        _hasData = has;
+        _bookNames = books;
+        if (_selectedBook != null && !books.contains(_selectedBook)) {
+          _selectedBook = null;
+        }
+      });
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _search() async {
+    final book = _selectedBook;
+    final chapter = int.tryParse(_chapterController.text.trim());
+    final verseText = _verseController.text.trim();
+    final verse = verseText.isEmpty ? null : int.tryParse(verseText);
+    if (book == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('성경을 선택해 주세요.')));
+      return;
+    }
+    if (chapter == null || chapter <= 0) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('장 번호를 입력해 주세요.')));
+      return;
+    }
+    if (verseText.isNotEmpty && (verse == null || verse <= 0)) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('절 번호를 올바르게 입력해 주세요.')));
+      return;
+    }
+
+    setState(() {
+      _isSearching = true;
+      _verses = const [];
+      _selectedVerseIds.clear();
+      _lastSelectedVerseIndex = null;
+    });
+
+    try {
+      final verses = await widget.bibleRepository.getVerses(
+        bookName: book,
+        chapter: chapter,
+        verse: verse,
+      );
+      if (!mounted) return;
+      setState(() => _verses = verses);
+      if (verses.isEmpty && mounted) {
+        final reference = verse == null
+            ? '$book $chapter장'
+            : '$book $chapter:$verse';
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$reference에 절이 없습니다.')));
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('검색 실패: $e')));
+    } finally {
+      if (mounted) setState(() => _isSearching = false);
+    }
+  }
+
+  void _addSelected() {
+    if (_selectedVerseIds.isEmpty) return;
+    final selected =
+        _verses.where((v) => _selectedVerseIds.contains(v.id)).toList()
+          ..sort((a, b) => a.verse.compareTo(b.verse));
+    if (selected.isEmpty) return;
+
+    final chunks = <List<BibleVerse>>[];
+    for (var i = 0; i < selected.length; i += _versesPerPage) {
+      final end = i + _versesPerPage > selected.length
+          ? selected.length
+          : i + _versesPerPage;
+      chunks.add(selected.sublist(i, end));
+    }
+
+    for (final chunk in chunks) {
+      final verseNums = chunk.map((v) => v.verse).toList();
+      final ref = _buildReference(
+        _selectedBook!,
+        chunk.first.chapter,
+        verseNums,
+      );
+      final text = chunk.length == 1
+          ? chunk.first.text
+          : chunk.map((v) => '${v.verse}. ${v.text}').join('\n');
+      widget.onAddItem(BibleStagingItem(reference: ref, text: text));
+    }
+    setState(() => _selectedVerseIds.clear());
+
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('${chunks.length}페이지 추가됨')));
+  }
+
+  int get _selectedBiblePageCount {
+    if (_selectedVerseIds.isEmpty) return 0;
+    return ((_selectedVerseIds.length - 1) ~/ _versesPerPage) + 1;
+  }
+
+  bool get _isShiftPressed {
+    final pressed = HardwareKeyboard.instance.logicalKeysPressed;
+    return pressed.contains(LogicalKeyboardKey.shiftLeft) ||
+        pressed.contains(LogicalKeyboardKey.shiftRight);
+  }
+
+  void _toggleVerseSelection(int index, bool isSelected) {
+    final lastIndex = _lastSelectedVerseIndex;
+    final shouldSelectRange =
+        isSelected && _isShiftPressed && lastIndex != null;
+
+    setState(() {
+      if (shouldSelectRange) {
+        final start = lastIndex < index ? lastIndex : index;
+        final end = lastIndex < index ? index : lastIndex;
+        for (var i = start; i <= end; i++) {
+          _selectedVerseIds.add(_verses[i].id);
+        }
+      } else if (isSelected) {
+        _selectedVerseIds.add(_verses[index].id);
+      } else {
+        _selectedVerseIds.remove(_verses[index].id);
+      }
+      _lastSelectedVerseIndex = index;
+    });
+  }
+
+  String _buildReference(String book, int chapter, List<int> verses) {
+    if (verses.isEmpty) return '';
+    verses.sort();
+    if (verses.length == 1) return '$book $chapter:${verses.first}';
+    bool contiguous = true;
+    for (int i = 1; i < verses.length; i++) {
+      if (verses[i] != verses[i - 1] + 1) {
+        contiguous = false;
+        break;
+      }
+    }
+    final verseStr = contiguous
+        ? '${verses.first}-${verses.last}'
+        : verses.join(',');
+    return '$book $chapter:$verseStr';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context); // AutomaticKeepAliveClientMixin 필수
+
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (!_hasData) {
+      return const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.menu_book_rounded, size: 48, color: Colors.grey),
+            SizedBox(height: 12),
+            Text(
+              '성경 데이터가 없습니다.\n상단의 \'성경 불러오기\' 버튼을 눌러 주세요.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.grey),
+            ),
+          ],
+        ),
+      );
+    }
+
+    const inputHeight = 56.0;
+
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 검색 입력 행
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                flex: 3,
+                child: SizedBox(
+                  height: inputHeight,
+                  child: DropdownButtonFormField<String>(
+                    initialValue: _selectedBook,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: '성경',
+                      border: OutlineInputBorder(),
+                      contentPadding: EdgeInsets.symmetric(horizontal: 12),
+                    ),
+                    hint: const Text('선택'),
+                    items: _bookNames
+                        .map((b) => DropdownMenuItem(value: b, child: Text(b)))
+                        .toList(),
+                    onChanged: (v) => setState(() => _selectedBook = v),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 96,
+                height: inputHeight,
+                child: TextField(
+                  controller: _chapterController,
+                  keyboardType: TextInputType.number,
+                  textAlign: TextAlign.center,
+                  textAlignVertical: TextAlignVertical.center,
+                  decoration: const InputDecoration(
+                    labelText: '장',
+                    border: OutlineInputBorder(),
+                    contentPadding: EdgeInsets.symmetric(horizontal: 12),
+                  ),
+                  onSubmitted: (_) => _search(),
+                ),
+              ),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 96,
+                height: inputHeight,
+                child: TextField(
+                  controller: _verseController,
+                  keyboardType: TextInputType.number,
+                  textAlign: TextAlign.center,
+                  textAlignVertical: TextAlignVertical.center,
+                  decoration: const InputDecoration(
+                    labelText: '절',
+                    border: OutlineInputBorder(),
+                    contentPadding: EdgeInsets.symmetric(horizontal: 12),
+                  ),
+                  onSubmitted: (_) => _search(),
+                ),
+              ),
+              const SizedBox(width: 8),
+              SizedBox(
+                height: inputHeight,
+                child: FilledButton(
+                  onPressed: _isSearching ? null : _search,
+                  child: const Text('검색'),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          // 결과 목록
+          Expanded(
+            child: _isSearching
+                ? const Center(child: CircularProgressIndicator())
+                : _verses.isEmpty
+                ? Center(
+                    child: Text(
+                      _selectedBook == null
+                          ? '성경을 선택하고 장 번호를 입력한 뒤\n검색 버튼을 눌러 주세요.'
+                          : '검색 버튼을 눌러 절을 불러오세요.',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.grey),
+                    ),
+                  )
+                : ListView.separated(
+                    itemCount: _verses.length,
+                    separatorBuilder: (_, _) => const Divider(height: 1),
+                    itemBuilder: (context, index) {
+                      final v = _verses[index];
+                      return CheckboxListTile(
+                        value: _selectedVerseIds.contains(v.id),
+                        onChanged: (val) =>
+                            _toggleVerseSelection(index, val ?? false),
+                        controlAffinity: ListTileControlAffinity.leading,
+                        title: RichText(
+                          text: TextSpan(
+                            style: DefaultTextStyle.of(context).style,
+                            children: [
+                              TextSpan(
+                                text: '${v.verse}절  ',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  color: Theme.of(context).colorScheme.primary,
+                                ),
+                              ),
+                              TextSpan(
+                                text: v.text,
+                                style: const TextStyle(fontSize: 13),
+                              ),
+                            ],
+                          ),
+                        ),
+                        contentPadding: EdgeInsets.zero,
+                        dense: true,
+                      );
+                    },
+                  ),
+          ),
+          // 추가 버튼
+          if (_verses.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                const Text('페이지당'),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 92,
+                  child: DropdownButtonFormField<int>(
+                    initialValue: _versesPerPage,
+                    isDense: true,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      contentPadding: EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 8,
+                      ),
+                    ),
+                    items: const [1, 2, 3, 4, 5, 10]
+                        .map(
+                          (value) => DropdownMenuItem(
+                            value: value,
+                            child: Text('$value절'),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) {
+                      if (value == null) return;
+                      setState(() => _versesPerPage = value);
+                    },
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: _selectedVerseIds.isEmpty ? null : _addSelected,
+                    icon: const Icon(Icons.add_rounded),
+                    label: Text(
+                      _selectedVerseIds.isEmpty
+                          ? '절을 선택하면 추가할 수 있습니다'
+                          : '${_selectedVerseIds.length}절 $_selectedBiblePageCount페이지로 추가',
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+// ── DesignPanel ───────────────────────────────────────────────────────────
+
 class _DesignPanel extends StatelessWidget {
   const _DesignPanel({
     required this.style,
     required this.isExporting,
     required this.swatches,
     required this.textSwatches,
-    required this.selectedSongs,
+    required this.previewItem,
     required this.onStyleChanged,
     required this.onExportPressed,
   });
@@ -830,7 +1573,7 @@ class _DesignPanel extends StatelessWidget {
   final bool isExporting;
   final List<Color> swatches;
   final List<Color> textSwatches;
-  final List<PraiseSong> selectedSongs;
+  final StagingItem? previewItem;
   final ValueChanged<ExportStyle> onStyleChanged;
   final VoidCallback onExportPressed;
 
@@ -847,7 +1590,7 @@ class _DesignPanel extends StatelessWidget {
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 16),
-            _PreviewBox(style: style, selectedSongs: selectedSongs),
+            _PreviewBox(style: style, previewItem: previewItem),
             const SizedBox(height: 12),
             Expanded(
               child: SingleChildScrollView(
@@ -1020,8 +1763,9 @@ class _DesignPanel extends StatelessWidget {
                         max: 28,
                         divisions: 10,
                         value: style.titleFontSize,
-                        onChanged: (value) =>
-                            onStyleChanged(style.copyWith(titleFontSize: value)),
+                        onChanged: (value) => onStyleChanged(
+                          style.copyWith(titleFontSize: value),
+                        ),
                       ),
                       const SizedBox(height: 4),
                       const Text('제목 색상'),
@@ -1111,7 +1855,7 @@ class _DesignPanel extends StatelessWidget {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.slideshow_rounded),
-                label: Text(isExporting ? '생성 중' : '선택한 찬양으로 PPTX 저장'),
+                label: Text(isExporting ? '생성 중' : '선택한 항목으로 PPTX 저장'),
               ),
             ),
           ],
@@ -1121,22 +1865,21 @@ class _DesignPanel extends StatelessWidget {
   }
 }
 
+// ── PreviewBox ────────────────────────────────────────────────────────────
+
 class _PreviewBox extends StatelessWidget {
-  const _PreviewBox({required this.style, required this.selectedSongs});
+  const _PreviewBox({required this.style, required this.previewItem});
 
   final ExportStyle style;
-  final List<PraiseSong> selectedSongs;
+  final StagingItem? previewItem;
 
-  // PPTX 슬라이드/텍스트박스 치수 (인치) — ppt_tool.py와 동일한 값
   static const double _slideW = 13.333;
   static const double _slideH = 7.5;
-  // 가사 텍스트박스 치수
   static const double _lyricsBoxPad = 0.7;
   static const double _lyricsBoxT = 0.6;
   static const double _lyricsBoxH = 5.4;
   static const double _lyricsBoxWFull = 11.9;
   static const double _lyricsBoxWSide = 8.5;
-  // 제목 텍스트박스 치수
   static const double _titleBoxH = 0.55;
   static const double _titlePad = 0.2;
   static const double _titleBoxWSide = 5.8;
@@ -1144,16 +1887,26 @@ class _PreviewBox extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final sampleSong = selectedSongs.isEmpty ? null : selectedSongs.first;
-    final sampleText = sampleSong == null
-        ? '선택한 찬양이 여기에 미리보기로 보입니다.'
-        : sampleSong.pages.isEmpty
-        ? sampleSong.title
-        : sampleSong.pages.first;
-    final sampleEnglishText =
-        sampleSong == null || sampleSong.englishPages.isEmpty
-        ? ''
-        : sampleSong.englishPages.first;
+    final String sampleText;
+    final String sampleEnglishText;
+    final String? titleText;
+
+    switch (previewItem) {
+      case SongStagingItem(:final song):
+        sampleText = song.pages.isEmpty ? song.title : song.pages.first;
+        sampleEnglishText = song.englishPages.isEmpty
+            ? ''
+            : song.englishPages.first;
+        titleText = song.title;
+      case BibleStagingItem(:final text, :final reference):
+        sampleText = text;
+        sampleEnglishText = '';
+        titleText = reference;
+      case null:
+        sampleText = '선택한 항목이 여기에 미리보기로 보입니다.';
+        sampleEnglishText = '';
+        titleText = null;
+    }
 
     final alignment = switch (style.textPosition) {
       VerticalTextPosition.top => Alignment.topCenter,
@@ -1189,7 +1942,6 @@ class _PreviewBox extends StatelessWidget {
           final h = constraints.maxHeight;
           final fontScale = h / (_slideH * 72);
 
-          // 제목 텍스트박스 위치 계산
           final double titleBoxW;
           final double titleLeft;
           final TextAlign titleAlign;
@@ -1210,15 +1962,13 @@ class _PreviewBox extends StatelessWidget {
           final double titleTop = switch (style.titleVerticalPosition) {
             VerticalTextPosition.top => _titlePad,
             VerticalTextPosition.middle => (_slideH - _titleBoxH) / 2,
-            VerticalTextPosition.bottom =>
-              _slideH - _titlePad - _titleBoxH,
+            VerticalTextPosition.bottom => _slideH - _titlePad - _titleBoxH,
           };
 
           return ClipRRect(
             borderRadius: BorderRadius.circular(8),
             child: Stack(
               children: [
-                // 배경 + 가사
                 Container(
                   color: style.backgroundColor,
                   child: Padding(
@@ -1265,15 +2015,14 @@ class _PreviewBox extends StatelessWidget {
                     ),
                   ),
                 ),
-                // 제목 오버레이
-                if (style.showSongTitle && sampleSong != null)
+                if (style.showSongTitle && titleText != null)
                   Positioned(
                     left: w * titleLeft / _slideW,
                     top: h * titleTop / _slideH,
                     width: w * titleBoxW / _slideW,
                     height: h * _titleBoxH / _slideH,
                     child: Text(
-                      sampleSong.title,
+                      titleText,
                       textAlign: titleAlign,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -1291,6 +2040,8 @@ class _PreviewBox extends StatelessWidget {
     );
   }
 }
+
+// ── SongEditDialog ────────────────────────────────────────────────────────
 
 class _SongEditDialog extends StatefulWidget {
   const _SongEditDialog({this.song});
@@ -1310,7 +2061,6 @@ class _SongEditDialogState extends State<_SongEditDialog> {
   void initState() {
     super.initState();
     _titleController = TextEditingController(text: widget.song?.title ?? '');
-    // DB의 ### 구분자를 빈 줄로 변환해서 표시 (저장 시 역변환)
     _lyricsController = TextEditingController(
       text: _toEditText(widget.song?.lyrics ?? ''),
     );
@@ -1327,7 +2077,6 @@ class _SongEditDialogState extends State<_SongEditDialog> {
     super.dispose();
   }
 
-  // DB 저장용: ### 도 빈 줄로 통일한 뒤, 빈 줄 단위로 페이지 분리
   String _normalizeLyrics(String raw) {
     final unified = raw.replaceAll(RegExp(r'[ \t]*###[ \t]*'), '\n\n');
     return unified
@@ -1337,7 +2086,6 @@ class _SongEditDialogState extends State<_SongEditDialog> {
         .join('\n###\n');
   }
 
-  // 편집 화면 표시용: ### → 빈 줄
   static String _toEditText(String stored) =>
       stored.replaceAll('\n###\n', '\n\n');
 

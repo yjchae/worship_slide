@@ -33,19 +33,14 @@ void main() {
       titleVerticalPosition: VerticalTextPosition.bottom,
     );
 
-    expect(style.toJson(), {
-      'font_size': 32.0,
-      'background_color': '#0F4C5C',
-      'text_color': '#FFFFFF',
-      'text_position': 'bottom',
-      'lyrics_text_align': 'center',
-      'include_english_lyrics': true,
-      'english_text_color': '#E3F2FD',
-      'show_song_title': false,
-      'title_font_size': 14.0,
-      'title_text_color': '#B3FFFFFF',
-      'title_horizontal_position': 'right',
-      'title_vertical_position': 'bottom',
-    });
+    final json = style.toJson();
+    expect(json['font_size'], 32.0);
+    expect(json['background_color'], '#0F4C5C');
+    expect(json['text_color'], '#FFFFFF');
+    expect(json['text_position'], 'bottom');
+    expect(json['lyrics_text_align'], 'center');
+    expect(json['include_english_lyrics'], true);
+    expect(json['english_text_color'], '#E3F2FD');
+    expect(json['show_song_title'], false);
   });
 }

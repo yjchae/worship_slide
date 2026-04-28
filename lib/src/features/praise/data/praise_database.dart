@@ -26,7 +26,7 @@ class PraiseDatabase {
     final dbPath = p.join(_dbDirectory, 'praise_lyrics.db');
     _database = await openDatabase(
       dbPath,
-      version: 2,
+      version: 3,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE praise_songs (
@@ -37,11 +37,43 @@ class PraiseDatabase {
             english_lyrics TEXT NOT NULL DEFAULT ''
           )
         ''');
+        await db.execute('''
+          CREATE TABLE bible_verses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            book_name TEXT NOT NULL,
+            chapter INTEGER NOT NULL,
+            verse INTEGER NOT NULL,
+            text TEXT NOT NULL
+          )
+        ''');
+        await db.execute(
+          'CREATE INDEX idx_bible_book ON bible_verses(book_name)',
+        );
+        await db.execute(
+          'CREATE INDEX idx_bible_ch ON bible_verses(book_name, chapter)',
+        );
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
           await db.execute(
             "ALTER TABLE praise_songs ADD COLUMN english_lyrics TEXT NOT NULL DEFAULT ''",
+          );
+        }
+        if (oldVersion < 3) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS bible_verses (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              book_name TEXT NOT NULL,
+              chapter INTEGER NOT NULL,
+              verse INTEGER NOT NULL,
+              text TEXT NOT NULL
+            )
+          ''');
+          await db.execute(
+            'CREATE INDEX IF NOT EXISTS idx_bible_book ON bible_verses(book_name)',
+          );
+          await db.execute(
+            'CREATE INDEX IF NOT EXISTS idx_bible_ch ON bible_verses(book_name, chapter)',
           );
         }
       },
