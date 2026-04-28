@@ -24,9 +24,24 @@ class BibleRepository {
   }
 
   Future<List<String>> getBookNames() async {
+    final versions = await getVersions();
+    if (versions.isEmpty) return const [];
+    return getBookNamesForVersion(versions.first);
+  }
+
+  Future<List<String>> getVersions() async {
     final db = await _db.database;
     final rows = await db.rawQuery(
-      'SELECT book_name FROM bible_verses GROUP BY book_name ORDER BY MIN(id)',
+      'SELECT bible_version FROM bible_verses GROUP BY bible_version ORDER BY MIN(id)',
+    );
+    return rows.map((r) => r['bible_version'] as String).toList();
+  }
+
+  Future<List<String>> getBookNamesForVersion(String version) async {
+    final db = await _db.database;
+    final rows = await db.rawQuery(
+      'SELECT book_name FROM bible_verses WHERE bible_version = ? GROUP BY book_name ORDER BY MIN(id)',
+      [version],
     );
     return rows.map((r) => r['book_name'] as String).toList();
   }
@@ -46,17 +61,26 @@ class BibleRepository {
     String bookName,
     int chapter,
   ) async {
-    return getVerses(bookName: bookName, chapter: chapter);
+    final versions = await getVersions();
+    if (versions.isEmpty) return const [];
+    return getVerses(
+      version: versions.first,
+      bookName: bookName,
+      chapter: chapter,
+    );
   }
 
   Future<List<BibleVerse>> getVerses({
+    required String version,
     required String bookName,
     required int chapter,
     int? verse,
   }) async {
     final db = await _db.database;
-    final where = StringBuffer('book_name = ? AND chapter = ?');
-    final whereArgs = <Object>[bookName, chapter];
+    final where = StringBuffer(
+      'bible_version = ? AND book_name = ? AND chapter = ?',
+    );
+    final whereArgs = <Object>[version, bookName, chapter];
     if (verse != null) {
       where.write(' AND verse = ?');
       whereArgs.add(verse);
@@ -82,7 +106,14 @@ class BibleRepository {
   }
 
   // JSON 임포트 — 기존 데이터 삭제 후 재삽입
-  Future<int> importFromJson(String jsonString) async {
+  Future<int> importFromJson(
+    String jsonString, {
+    required String version,
+  }) async {
+    final normalizedVersion = version.trim();
+    if (normalizedVersion.isEmpty) {
+      throw Exception('성경 버전 이름을 입력해 주세요.');
+    }
     final verses = _parseJson(jsonString);
     if (verses.isEmpty) {
       throw Exception('파싱된 절이 없습니다. JSON 형식을 확인해주세요.');
@@ -90,9 +121,14 @@ class BibleRepository {
 
     final db = await _db.database;
     await db.transaction((txn) async {
-      await txn.delete('bible_verses');
+      await txn.delete(
+        'bible_verses',
+        where: 'bible_version = ?',
+        whereArgs: [normalizedVersion],
+      );
       for (final v in verses) {
         await txn.insert('bible_verses', {
+          'bible_version': normalizedVersion,
           'book_name': v.bookName,
           'chapter': v.chapter,
           'verse': v.verse,

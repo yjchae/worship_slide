@@ -54,6 +54,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
   bool _isExporting = false;
   int _storedCount = 0;
   int _bibleVerseCount = 0;
+  int _bibleDataRevision = 0;
   int _importTotalCount = 0;
   int _importSavedCount = 0;
   String? _importStatusText;
@@ -280,16 +281,26 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     if (result == null || result.files.isEmpty) return;
     final path = result.files.first.path;
     if (path == null) return;
+    final defaultVersion = _versionNameFromPath(path);
+    final version = await _askBibleVersionName(defaultVersion);
+    if (version == null) return;
 
     setState(() => _isBibleImporting = true);
     try {
       final content = await File(path).readAsString();
-      final count = await _bibleRepository.importFromJson(content);
+      final count = await _bibleRepository.importFromJson(
+        content,
+        version: version,
+      );
+      final totalCount = await _bibleRepository.countVerses();
       if (!mounted) return;
-      setState(() => _bibleVerseCount = count);
+      setState(() {
+        _bibleVerseCount = totalCount;
+        _bibleDataRevision += 1;
+      });
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('성경 $count절을 저장했습니다.')));
+      ).showSnackBar(SnackBar(content: Text('$version 성경 $count절을 저장했습니다.')));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -298,6 +309,45 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     } finally {
       if (mounted) setState(() => _isBibleImporting = false);
     }
+  }
+
+  String _versionNameFromPath(String path) {
+    final fileName = File(path).uri.pathSegments.last;
+    final dotIndex = fileName.lastIndexOf('.');
+    return dotIndex <= 0 ? fileName : fileName.substring(0, dotIndex);
+  }
+
+  Future<String?> _askBibleVersionName(String initialValue) async {
+    final controller = TextEditingController(text: initialValue);
+    final version = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('성경 버전 이름'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: '버전',
+            hintText: '예: 개역개정, 새번역, KRV',
+            border: OutlineInputBorder(),
+          ),
+          onSubmitted: (_) => Navigator.of(context).pop(controller.text.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(controller.text.trim()),
+            child: const Text('저장'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (version == null || version.trim().isEmpty) return null;
+    return version.trim();
   }
 
   // ── PPTX 내보내기 ────────────────────────────────────────────────────
@@ -543,6 +593,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                               onEditSong: _openSongEditor,
                               bibleRepository: _bibleRepository,
                               bibleVerseCount: _bibleVerseCount,
+                              bibleDataRevision: _bibleDataRevision,
                               onAddBibleItem: _addBibleItem,
                             ),
                           ),
@@ -801,13 +852,7 @@ class _TopBar extends StatelessWidget {
                     ),
                   )
                 : const Icon(Icons.menu_book_rounded, size: 16),
-            label: Text(
-              isBibleImporting
-                  ? '저장 중'
-                  : bibleVerseCount > 0
-                  ? '성경 재불러오기'
-                  : '성경 불러오기',
-            ),
+            label: Text(isBibleImporting ? '저장 중' : '성경 불러오기'),
           ),
         ],
       ),
@@ -972,6 +1017,7 @@ class _SearchAndBiblePanel extends StatefulWidget {
     required this.onEditSong,
     required this.bibleRepository,
     required this.bibleVerseCount,
+    required this.bibleDataRevision,
     required this.onAddBibleItem,
   });
 
@@ -985,6 +1031,7 @@ class _SearchAndBiblePanel extends StatefulWidget {
   final ValueChanged<PraiseSong> onEditSong;
   final BibleRepository bibleRepository;
   final int bibleVerseCount;
+  final int bibleDataRevision;
   final void Function(BibleStagingItem) onAddBibleItem;
 
   @override
@@ -1036,6 +1083,7 @@ class _SearchAndBiblePanelState extends State<_SearchAndBiblePanel>
                 _BibleSearchPanel(
                   bibleRepository: widget.bibleRepository,
                   bibleVerseCount: widget.bibleVerseCount,
+                  bibleDataRevision: widget.bibleDataRevision,
                   onAddItem: widget.onAddBibleItem,
                 ),
               ],
@@ -1156,11 +1204,13 @@ class _BibleSearchPanel extends StatefulWidget {
   const _BibleSearchPanel({
     required this.bibleRepository,
     required this.bibleVerseCount,
+    required this.bibleDataRevision,
     required this.onAddItem,
   });
 
   final BibleRepository bibleRepository;
   final int bibleVerseCount;
+  final int bibleDataRevision;
   final void Function(BibleStagingItem) onAddItem;
 
   @override
@@ -1175,6 +1225,8 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
 
   bool _isLoading = false;
   bool _hasData = false;
+  List<String> _versionNames = [];
+  String? _selectedVersion;
   List<String> _bookNames = [];
   String? _selectedBook;
   final TextEditingController _chapterController = TextEditingController();
@@ -1194,8 +1246,9 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
   @override
   void didUpdateWidget(_BibleSearchPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.bibleVerseCount != widget.bibleVerseCount) {
-      _loadBookNames();
+    if (oldWidget.bibleVerseCount != widget.bibleVerseCount ||
+        oldWidget.bibleDataRevision != widget.bibleDataRevision) {
+      _loadBibleOptions();
     }
   }
 
@@ -1207,15 +1260,30 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
   }
 
   Future<void> _loadBookNames() async {
+    await _loadBibleOptions();
+  }
+
+  Future<void> _loadBibleOptions() async {
     if (mounted) setState(() => _isLoading = true);
     try {
       final has = await widget.bibleRepository.hasData();
-      final books = has
-          ? await widget.bibleRepository.getBookNames()
+      final versions = has
+          ? await widget.bibleRepository.getVersions()
           : <String>[];
+      var selectedVersion = _selectedVersion;
+      if (selectedVersion == null || !versions.contains(selectedVersion)) {
+        selectedVersion = versions.isEmpty ? null : versions.first;
+      }
+      final books = selectedVersion == null
+          ? <String>[]
+          : await widget.bibleRepository.getBookNamesForVersion(
+              selectedVersion,
+            );
       if (!mounted) return;
       setState(() {
         _hasData = has;
+        _versionNames = versions;
+        _selectedVersion = selectedVersion;
         _bookNames = books;
         if (_selectedBook != null && !books.contains(_selectedBook)) {
           _selectedBook = null;
@@ -1227,10 +1295,17 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
   }
 
   Future<void> _search() async {
+    final version = _selectedVersion;
     final book = _selectedBook;
     final chapter = int.tryParse(_chapterController.text.trim());
     final verseText = _verseController.text.trim();
     final verse = verseText.isEmpty ? null : int.tryParse(verseText);
+    if (version == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('성경 버전을 선택해 주세요.')));
+      return;
+    }
     if (book == null) {
       ScaffoldMessenger.of(
         context,
@@ -1259,6 +1334,7 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
 
     try {
       final verses = await widget.bibleRepository.getVerses(
+        version: version,
         bookName: book,
         chapter: chapter,
         verse: verse,
@@ -1284,7 +1360,9 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
   }
 
   void _addSelected() {
+    final version = _selectedVersion;
     if (_selectedVerseIds.isEmpty) return;
+    if (version == null) return;
     final selected =
         _verses.where((v) => _selectedVerseIds.contains(v.id)).toList()
           ..sort((a, b) => a.verse.compareTo(b.verse));
@@ -1301,6 +1379,7 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
     for (final chunk in chunks) {
       final verseNums = chunk.map((v) => v.verse).toList();
       final ref = _buildReference(
+        version,
         _selectedBook!,
         chunk.first.chapter,
         verseNums,
@@ -1349,10 +1428,30 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
     });
   }
 
-  String _buildReference(String book, int chapter, List<int> verses) {
+  Future<void> _selectVersion(String? version) async {
+    if (version == null || version == _selectedVersion) return;
+    setState(() {
+      _selectedVersion = version;
+      _selectedBook = null;
+      _bookNames = const [];
+      _verses = const [];
+      _selectedVerseIds.clear();
+      _lastSelectedVerseIndex = null;
+    });
+    final books = await widget.bibleRepository.getBookNamesForVersion(version);
+    if (!mounted) return;
+    setState(() => _bookNames = books);
+  }
+
+  String _buildReference(
+    String version,
+    String book,
+    int chapter,
+    List<int> verses,
+  ) {
     if (verses.isEmpty) return '';
     verses.sort();
-    if (verses.length == 1) return '$book $chapter:${verses.first}';
+    if (verses.length == 1) return '$version $book $chapter:${verses.first}';
     bool contiguous = true;
     for (int i = 1; i < verses.length; i++) {
       if (verses[i] != verses[i - 1] + 1) {
@@ -1363,7 +1462,7 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
     final verseStr = contiguous
         ? '${verses.first}-${verses.last}'
         : verses.join(',');
-    return '$book $chapter:$verseStr';
+    return '$version $book $chapter:$verseStr';
   }
 
   @override
@@ -1402,6 +1501,26 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
           Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
+              Expanded(
+                flex: 2,
+                child: SizedBox(
+                  height: inputHeight,
+                  child: DropdownButtonFormField<String>(
+                    initialValue: _selectedVersion,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: '버전',
+                      border: OutlineInputBorder(),
+                      contentPadding: EdgeInsets.symmetric(horizontal: 12),
+                    ),
+                    items: _versionNames
+                        .map((v) => DropdownMenuItem(value: v, child: Text(v)))
+                        .toList(),
+                    onChanged: _selectVersion,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
               Expanded(
                 flex: 3,
                 child: SizedBox(

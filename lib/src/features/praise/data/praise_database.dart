@@ -26,7 +26,7 @@ class PraiseDatabase {
     final dbPath = p.join(_dbDirectory, 'worship_slides.db');
     _database = await openDatabase(
       dbPath,
-      version: 3,
+      version: 4,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE praise_songs (
@@ -40,6 +40,7 @@ class PraiseDatabase {
         await db.execute('''
           CREATE TABLE bible_verses (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bible_version TEXT NOT NULL DEFAULT '기본',
             book_name TEXT NOT NULL,
             chapter INTEGER NOT NULL,
             verse INTEGER NOT NULL,
@@ -47,10 +48,13 @@ class PraiseDatabase {
           )
         ''');
         await db.execute(
-          'CREATE INDEX idx_bible_book ON bible_verses(book_name)',
+          'CREATE INDEX idx_bible_version ON bible_verses(bible_version)',
         );
         await db.execute(
-          'CREATE INDEX idx_bible_ch ON bible_verses(book_name, chapter)',
+          'CREATE INDEX idx_bible_book ON bible_verses(bible_version, book_name)',
+        );
+        await db.execute(
+          'CREATE INDEX idx_bible_ch ON bible_verses(bible_version, book_name, chapter)',
         );
       },
       onUpgrade: (db, oldVersion, newVersion) async {
@@ -63,17 +67,34 @@ class PraiseDatabase {
           await db.execute('''
             CREATE TABLE IF NOT EXISTS bible_verses (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
+              bible_version TEXT NOT NULL DEFAULT '기본',
               book_name TEXT NOT NULL,
               chapter INTEGER NOT NULL,
               verse INTEGER NOT NULL,
               text TEXT NOT NULL
             )
           ''');
+        }
+        if (oldVersion < 4) {
+          final columns = await db.rawQuery('PRAGMA table_info(bible_verses)');
+          final hasVersion = columns.any(
+            (column) => column['name'] == 'bible_version',
+          );
+          if (!hasVersion) {
+            await db.execute(
+              "ALTER TABLE bible_verses ADD COLUMN bible_version TEXT NOT NULL DEFAULT '기본'",
+            );
+          }
+          await db.execute('DROP INDEX IF EXISTS idx_bible_book');
+          await db.execute('DROP INDEX IF EXISTS idx_bible_ch');
           await db.execute(
-            'CREATE INDEX IF NOT EXISTS idx_bible_book ON bible_verses(book_name)',
+            'CREATE INDEX IF NOT EXISTS idx_bible_version ON bible_verses(bible_version)',
           );
           await db.execute(
-            'CREATE INDEX IF NOT EXISTS idx_bible_ch ON bible_verses(book_name, chapter)',
+            'CREATE INDEX IF NOT EXISTS idx_bible_book ON bible_verses(bible_version, book_name)',
+          );
+          await db.execute(
+            'CREATE INDEX IF NOT EXISTS idx_bible_ch ON bible_verses(bible_version, book_name, chapter)',
           );
         }
       },
