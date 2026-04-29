@@ -37,6 +37,22 @@ cp python/ppt_tool "$DIST_DIR/python/"
 cp python/ppt_tool.py "$DIST_DIR/python/"
 cp python/requirements.txt "$DIST_DIR/python/"
 
+cat > "$DIST_DIR/Unlock Worship Slides.command" <<'EOF'
+#!/bin/bash
+set -e
+
+cd "$(dirname "$0")"
+
+xattr -cr "Worship Slides.app"
+
+echo "Worship Slides.app 잠금 해제를 완료했습니다."
+echo "이제 앱을 더블클릭해서 실행하세요."
+echo
+read -n 1 -s -r -p "아무 키나 누르면 닫습니다..."
+echo
+EOF
+chmod +x "$DIST_DIR/Unlock Worship Slides.command"
+
 echo "  → $DIST_DIR 폴더 생성 완료"
 echo ""
 echo "배포 구조:"
