@@ -17,11 +17,15 @@ class ExportStyleStore {
     final json = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
     return ExportStyle(
       fontSize: (json['font_size'] as num?)?.toDouble() ?? 30,
-      backgroundColor: _parseColor(
+      backgroundColor: parseHexColor(
         json['background_color'] as String?,
         const Color(0xFF1B1B1B),
       ),
-      textColor: _parseColor(json['text_color'] as String?, Colors.white),
+      textColor: parseHexColor(json['text_color'] as String?, Colors.white),
+      bibleTextColor: parseHexColor(
+        json['bible_text_color'] as String?,
+        parseHexColor(json['text_color'] as String?, Colors.white),
+      ),
       textPosition: VerticalTextPosition.values.firstWhere(
         (position) => position.name == json['text_position'],
         orElse: () => VerticalTextPosition.middle,
@@ -30,14 +34,18 @@ class ExportStyleStore {
         (pos) => pos.name == json['lyrics_text_align'],
         orElse: () => HorizontalPosition.center,
       ),
+      bibleTextAlign: HorizontalPosition.values.firstWhere(
+        (pos) => pos.name == json['bible_text_align'],
+        orElse: () => HorizontalPosition.center,
+      ),
       includeEnglishLyrics: json['include_english_lyrics'] as bool? ?? true,
-      englishTextColor: _parseColor(
+      englishTextColor: parseHexColor(
         json['english_text_color'] as String?,
         const Color(0xFFFFF176),
       ),
       showSongTitle: json['show_song_title'] as bool? ?? false,
       titleFontSize: (json['title_font_size'] as num?)?.toDouble() ?? 14,
-      titleTextColor: _parseColor(
+      titleTextColor: parseHexColor(
         json['title_text_color'] as String?,
         const Color(0xB3FFFFFF),
       ),
@@ -61,12 +69,5 @@ class ExportStyleStore {
   Future<File> _settingsFile() async {
     final appDir = await getApplicationSupportDirectory();
     return File(p.join(appDir.path, 'export_style.json'));
-  }
-
-  Color _parseColor(String? value, Color fallback) {
-    if (value == null || value.length != 7 || !value.startsWith('#')) {
-      return fallback;
-    }
-    return Color(int.parse('FF${value.substring(1)}', radix: 16));
   }
 }

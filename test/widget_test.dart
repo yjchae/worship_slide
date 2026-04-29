@@ -22,8 +22,10 @@ void main() {
       fontSize: 32,
       backgroundColor: Color(0xFF0F4C5C),
       textColor: Colors.white,
+      bibleTextColor: Color(0xFFFFF8E1),
       textPosition: VerticalTextPosition.bottom,
       lyricsTextAlign: HorizontalPosition.center,
+      bibleTextAlign: HorizontalPosition.left,
       includeEnglishLyrics: true,
       englishTextColor: Color(0xFFE3F2FD),
       showSongTitle: false,
@@ -37,10 +39,19 @@ void main() {
     expect(json['font_size'], 32.0);
     expect(json['background_color'], '#0F4C5C');
     expect(json['text_color'], '#FFFFFF');
+    expect(json['bible_text_color'], '#FFF8E1');
     expect(json['text_position'], 'bottom');
     expect(json['lyrics_text_align'], 'center');
+    expect(json['bible_text_align'], 'left');
     expect(json['include_english_lyrics'], true);
     expect(json['english_text_color'], '#E3F2FD');
     expect(json['show_song_title'], false);
+  });
+
+  test('hex colors parse consistently', () {
+    expect(colorToHex(const Color(0xFFFFF8E1)), '#FFF8E1');
+    expect(tryParseHexColor('#0f4c5c'), const Color(0xFF0F4C5C));
+    expect(tryParseHexColor('FFF8E1'), const Color(0xFFFFF8E1));
+    expect(tryParseHexColor('#XYZXYZ'), isNull);
   });
 }

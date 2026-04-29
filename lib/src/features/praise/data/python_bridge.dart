@@ -82,11 +82,13 @@ class PythonBridge {
       'songs': stagingItems.map((item) {
         return switch (item) {
           SongStagingItem(:final song) => {
+            'type': 'song',
             'title': song.title,
             'lyrics': song.lyrics,
             'english_lyrics': song.englishLyrics,
           },
           BibleStagingItem(:final reference, :final text) => {
+            'type': 'bible',
             'title': reference,
             'lyrics': text,
             'english_lyrics': '',

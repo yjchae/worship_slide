@@ -25,8 +25,10 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     fontSize: 30,
     backgroundColor: Color(0xFF1B1B1B),
     textColor: Colors.white,
+    bibleTextColor: Colors.white,
     textPosition: VerticalTextPosition.middle,
     lyricsTextAlign: HorizontalPosition.center,
+    bibleTextAlign: HorizontalPosition.center,
     includeEnglishLyrics: true,
     englishTextColor: Color(0xFFFFF176),
     showSongTitle: false,
@@ -62,10 +64,15 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
 
   final List<Color> _swatches = const [
     Color(0xFF1B1B1B),
+    Color(0xFF121212),
     Color(0xFF0F4C5C),
+    Color(0xFF0B132B),
     Color(0xFF5F0F40),
+    Color(0xFF2D1E2F),
     Color(0xFF7A3E00),
+    Color(0xFF445D48),
     Color(0xFFF4F1EA),
+    Color(0xFFFFFFFF),
   ];
 
   final List<Color> _textSwatches = const [
@@ -74,6 +81,9 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     Color(0xFFE3F2FD),
     Color(0xFFFFF176),
     Color(0xFFFFCDD2),
+    Color(0xFFFFF8E1),
+    Color(0xFFC8E6C9),
+    Color(0xFFD1C4E9),
   ];
 
   @override
@@ -1710,6 +1720,137 @@ class _DesignPanel extends StatelessWidget {
   final ValueChanged<ExportStyle> onStyleChanged;
   final VoidCallback onExportPressed;
 
+  static final TextInputFormatter _hexInputFormatter =
+      FilteringTextInputFormatter.allow(RegExp(r'[0-9a-fA-F#]'));
+
+  List<ButtonSegment<HorizontalPosition>> _horizontalSegments() =>
+      HorizontalPosition.values
+          .map(
+            (pos) => ButtonSegment<HorizontalPosition>(
+              value: pos,
+              label: Text(pos.label),
+            ),
+          )
+          .toList(growable: false);
+
+  List<ButtonSegment<VerticalTextPosition>> _verticalSegments() =>
+      VerticalTextPosition.values
+          .map(
+            (pos) => ButtonSegment<VerticalTextPosition>(
+              value: pos,
+              label: Text(pos.label),
+            ),
+          )
+          .toList(growable: false);
+
+  Future<void> _showColorDialog(
+    BuildContext context, {
+    required String title,
+    required Color current,
+    required ValueChanged<Color> onSelected,
+  }) async {
+    final selected = await showDialog<Color>(
+      context: context,
+      builder: (context) => _HexColorDialog(
+        title: title,
+        initialColor: current,
+        inputFormatter: _hexInputFormatter,
+      ),
+    );
+    if (selected != null) onSelected(selected);
+  }
+
+  Widget _colorPicker({
+    required BuildContext context,
+    required String title,
+    required Color selectedColor,
+    required List<Color> colors,
+    required ValueChanged<Color> onSelected,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(child: Text(title)),
+            TextButton.icon(
+              onPressed: () => _showColorDialog(
+                context,
+                title: '$title 직접 입력',
+                current: selectedColor,
+                onSelected: onSelected,
+              ),
+              icon: const Icon(Icons.tune_rounded, size: 18),
+              label: Text(colorToHex(selectedColor)),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: colors.map((color) {
+            final selected = color.toARGB32() == selectedColor.toARGB32();
+            return InkWell(
+              borderRadius: BorderRadius.circular(999),
+              onTap: () => onSelected(color),
+              child: Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: color,
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: selected ? Colors.black : Colors.grey.shade300,
+                    width: selected ? 3 : 1,
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+      ],
+    );
+  }
+
+  Widget _horizontalPicker({
+    required String title,
+    required HorizontalPosition selected,
+    required ValueChanged<HorizontalPosition> onSelected,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title),
+        const SizedBox(height: 10),
+        SegmentedButton<HorizontalPosition>(
+          segments: _horizontalSegments(),
+          selected: {selected},
+          onSelectionChanged: (selection) => onSelected(selection.first),
+        ),
+      ],
+    );
+  }
+
+  Widget _verticalPicker({
+    required String title,
+    required VerticalTextPosition selected,
+    required ValueChanged<VerticalTextPosition> onSelected,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title),
+        const SizedBox(height: 10),
+        SegmentedButton<VerticalTextPosition>(
+          segments: _verticalSegments(),
+          selected: {selected},
+          onSelectionChanged: (selection) => onSelected(selection.first),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Card(
@@ -1740,66 +1881,32 @@ class _DesignPanel extends StatelessWidget {
                           onStyleChanged(style.copyWith(fontSize: value)),
                     ),
                     const SizedBox(height: 8),
-                    const Text('배경 색상'),
-                    const SizedBox(height: 10),
-                    Wrap(
-                      spacing: 10,
-                      runSpacing: 10,
-                      children: swatches.map((color) {
-                        final selected =
-                            color.toARGB32() ==
-                            style.backgroundColor.toARGB32();
-                        return InkWell(
-                          borderRadius: BorderRadius.circular(999),
-                          onTap: () => onStyleChanged(
-                            style.copyWith(backgroundColor: color),
-                          ),
-                          child: Container(
-                            width: 34,
-                            height: 34,
-                            decoration: BoxDecoration(
-                              color: color,
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: selected
-                                    ? Colors.black
-                                    : Colors.grey.shade300,
-                                width: selected ? 3 : 1,
-                              ),
-                            ),
-                          ),
-                        );
-                      }).toList(),
+                    _colorPicker(
+                      context: context,
+                      title: '배경 색상',
+                      selectedColor: style.backgroundColor,
+                      colors: swatches,
+                      onSelected: (color) => onStyleChanged(
+                        style.copyWith(backgroundColor: color),
+                      ),
                     ),
                     const SizedBox(height: 20),
-                    const Text('한글 가사 색상'),
-                    const SizedBox(height: 10),
-                    Wrap(
-                      spacing: 10,
-                      runSpacing: 10,
-                      children: textSwatches.map((color) {
-                        final selected =
-                            color.toARGB32() == style.textColor.toARGB32();
-                        return InkWell(
-                          borderRadius: BorderRadius.circular(999),
-                          onTap: () =>
-                              onStyleChanged(style.copyWith(textColor: color)),
-                          child: Container(
-                            width: 34,
-                            height: 34,
-                            decoration: BoxDecoration(
-                              color: color,
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: selected
-                                    ? Colors.black
-                                    : Colors.grey.shade300,
-                                width: selected ? 3 : 1,
-                              ),
-                            ),
-                          ),
-                        );
-                      }).toList(),
+                    _colorPicker(
+                      context: context,
+                      title: '한글 가사 색상',
+                      selectedColor: style.textColor,
+                      colors: textSwatches,
+                      onSelected: (color) =>
+                          onStyleChanged(style.copyWith(textColor: color)),
+                    ),
+                    const SizedBox(height: 20),
+                    _colorPicker(
+                      context: context,
+                      title: '성경 본문 색상',
+                      selectedColor: style.bibleTextColor,
+                      colors: textSwatches,
+                      onSelected: (color) =>
+                          onStyleChanged(style.copyWith(bibleTextColor: color)),
                     ),
                     const SizedBox(height: 20),
                     SwitchListTile(
@@ -1811,74 +1918,38 @@ class _DesignPanel extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 8),
-                    const Text('영어 가사 색상'),
-                    const SizedBox(height: 10),
-                    Wrap(
-                      spacing: 10,
-                      runSpacing: 10,
-                      children: textSwatches.map((color) {
-                        final selected =
-                            color.toARGB32() ==
-                            style.englishTextColor.toARGB32();
-                        return InkWell(
-                          borderRadius: BorderRadius.circular(999),
-                          onTap: () => onStyleChanged(
-                            style.copyWith(englishTextColor: color),
-                          ),
-                          child: Container(
-                            width: 34,
-                            height: 34,
-                            decoration: BoxDecoration(
-                              color: color,
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: selected
-                                    ? Colors.black
-                                    : Colors.grey.shade300,
-                                width: selected ? 3 : 1,
-                              ),
-                            ),
-                          ),
-                        );
-                      }).toList(),
+                    _colorPicker(
+                      context: context,
+                      title: '영어 가사 색상',
+                      selectedColor: style.englishTextColor,
+                      colors: textSwatches,
+                      onSelected: (color) => onStyleChanged(
+                        style.copyWith(englishTextColor: color),
+                      ),
                     ),
                     const SizedBox(height: 20),
-                    const Text('글자 수직 위치'),
-                    const SizedBox(height: 10),
-                    SegmentedButton<VerticalTextPosition>(
-                      segments: VerticalTextPosition.values
-                          .map(
-                            (position) => ButtonSegment<VerticalTextPosition>(
-                              value: position,
-                              label: Text(position.label),
-                            ),
-                          )
-                          .toList(),
-                      selected: {style.textPosition},
-                      onSelectionChanged: (selection) {
-                        onStyleChanged(
-                          style.copyWith(textPosition: selection.first),
-                        );
-                      },
+                    _verticalPicker(
+                      title: '글자 수직 위치',
+                      selected: style.textPosition,
+                      onSelected: (position) => onStyleChanged(
+                        style.copyWith(textPosition: position),
+                      ),
                     ),
                     const SizedBox(height: 14),
-                    const Text('글자 수평 정렬'),
-                    const SizedBox(height: 10),
-                    SegmentedButton<HorizontalPosition>(
-                      segments: HorizontalPosition.values
-                          .map(
-                            (pos) => ButtonSegment<HorizontalPosition>(
-                              value: pos,
-                              label: Text(pos.label),
-                            ),
-                          )
-                          .toList(),
-                      selected: {style.lyricsTextAlign},
-                      onSelectionChanged: (selection) {
-                        onStyleChanged(
-                          style.copyWith(lyricsTextAlign: selection.first),
-                        );
-                      },
+                    _horizontalPicker(
+                      title: '찬양 가사 수평 정렬',
+                      selected: style.lyricsTextAlign,
+                      onSelected: (position) => onStyleChanged(
+                        style.copyWith(lyricsTextAlign: position),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    _horizontalPicker(
+                      title: '성경 본문 수평 정렬',
+                      selected: style.bibleTextAlign,
+                      onSelected: (position) => onStyleChanged(
+                        style.copyWith(bibleTextAlign: position),
+                      ),
                     ),
                     const SizedBox(height: 12),
                     const Divider(),
@@ -1901,73 +1972,29 @@ class _DesignPanel extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(height: 4),
-                      const Text('제목 색상'),
-                      const SizedBox(height: 10),
-                      Wrap(
-                        spacing: 10,
-                        runSpacing: 10,
-                        children: textSwatches.map((color) {
-                          final selected =
-                              color.toARGB32() ==
-                              style.titleTextColor.toARGB32();
-                          return InkWell(
-                            borderRadius: BorderRadius.circular(999),
-                            onTap: () => onStyleChanged(
-                              style.copyWith(titleTextColor: color),
-                            ),
-                            child: Container(
-                              width: 34,
-                              height: 34,
-                              decoration: BoxDecoration(
-                                color: color,
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: selected
-                                      ? Colors.black
-                                      : Colors.grey.shade300,
-                                  width: selected ? 3 : 1,
-                                ),
-                              ),
-                            ),
-                          );
-                        }).toList(),
-                      ),
-                      const SizedBox(height: 14),
-                      const Text('제목 수평 위치'),
-                      const SizedBox(height: 10),
-                      SegmentedButton<HorizontalPosition>(
-                        segments: HorizontalPosition.values
-                            .map(
-                              (pos) => ButtonSegment<HorizontalPosition>(
-                                value: pos,
-                                label: Text(pos.label),
-                              ),
-                            )
-                            .toList(),
-                        selected: {style.titleHorizontalPosition},
-                        onSelectionChanged: (selection) => onStyleChanged(
-                          style.copyWith(
-                            titleHorizontalPosition: selection.first,
-                          ),
+                      _colorPicker(
+                        context: context,
+                        title: '제목 색상',
+                        selectedColor: style.titleTextColor,
+                        colors: textSwatches,
+                        onSelected: (color) => onStyleChanged(
+                          style.copyWith(titleTextColor: color),
                         ),
                       ),
                       const SizedBox(height: 14),
-                      const Text('제목 수직 위치'),
-                      const SizedBox(height: 10),
-                      SegmentedButton<VerticalTextPosition>(
-                        segments: VerticalTextPosition.values
-                            .map(
-                              (pos) => ButtonSegment<VerticalTextPosition>(
-                                value: pos,
-                                label: Text(pos.label),
-                              ),
-                            )
-                            .toList(),
-                        selected: {style.titleVerticalPosition},
-                        onSelectionChanged: (selection) => onStyleChanged(
-                          style.copyWith(
-                            titleVerticalPosition: selection.first,
-                          ),
+                      _horizontalPicker(
+                        title: '제목 수평 위치',
+                        selected: style.titleHorizontalPosition,
+                        onSelected: (position) => onStyleChanged(
+                          style.copyWith(titleHorizontalPosition: position),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      _verticalPicker(
+                        title: '제목 수직 위치',
+                        selected: style.titleVerticalPosition,
+                        onSelected: (position) => onStyleChanged(
+                          style.copyWith(titleVerticalPosition: position),
                         ),
                       ),
                     ],
@@ -1998,6 +2025,79 @@ class _DesignPanel extends StatelessWidget {
   }
 }
 
+class _HexColorDialog extends StatefulWidget {
+  const _HexColorDialog({
+    required this.title,
+    required this.initialColor,
+    required this.inputFormatter,
+  });
+
+  final String title;
+  final Color initialColor;
+  final TextInputFormatter inputFormatter;
+
+  @override
+  State<_HexColorDialog> createState() => _HexColorDialogState();
+}
+
+class _HexColorDialogState extends State<_HexColorDialog> {
+  late final TextEditingController _controller;
+  bool _hasError = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: colorToHex(widget.initialColor));
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final color = tryParseHexColor(_controller.text);
+    if (color == null) {
+      setState(() => _hasError = true);
+      return;
+    }
+    Navigator.of(context).pop(color);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.title),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        decoration: InputDecoration(
+          labelText: 'HEX 색상',
+          hintText: '#FFFFFF',
+          errorText: _hasError ? '#RRGGBB 형식으로 입력해 주세요.' : null,
+          border: const OutlineInputBorder(),
+        ),
+        inputFormatters: [
+          widget.inputFormatter,
+          LengthLimitingTextInputFormatter(7),
+        ],
+        onChanged: (_) {
+          if (_hasError) setState(() => _hasError = false);
+        },
+        onSubmitted: (_) => _submit(),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('취소'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('적용')),
+      ],
+    );
+  }
+}
+
 // ── PreviewBox ────────────────────────────────────────────────────────────
 
 class _PreviewBox extends StatelessWidget {
@@ -2023,6 +2123,7 @@ class _PreviewBox extends StatelessWidget {
     final String sampleText;
     final String sampleEnglishText;
     final String? titleText;
+    final bool isBiblePreview;
 
     switch (previewItem) {
       case SongStagingItem(:final song):
@@ -2031,14 +2132,17 @@ class _PreviewBox extends StatelessWidget {
             ? ''
             : song.englishPages.first;
         titleText = song.title;
+        isBiblePreview = false;
       case BibleStagingItem(:final text, :final reference):
         sampleText = text;
         sampleEnglishText = '';
         titleText = reference;
+        isBiblePreview = true;
       case null:
         sampleText = '선택한 항목이 여기에 미리보기로 보입니다.';
         sampleEnglishText = '';
         titleText = null;
+        isBiblePreview = false;
     }
 
     final alignment = switch (style.textPosition) {
@@ -2047,7 +2151,14 @@ class _PreviewBox extends StatelessWidget {
       VerticalTextPosition.bottom => Alignment.bottomCenter,
     };
 
-    final lyricsTextAlign = switch (style.lyricsTextAlign) {
+    final bodyTextAlign = isBiblePreview
+        ? style.bibleTextAlign
+        : style.lyricsTextAlign;
+    final bodyTextColor = isBiblePreview
+        ? style.bibleTextColor
+        : style.textColor;
+
+    final lyricsTextAlign = switch (bodyTextAlign) {
       HorizontalPosition.left => TextAlign.left,
       HorizontalPosition.center => TextAlign.center,
       HorizontalPosition.right => TextAlign.right,
@@ -2055,7 +2166,7 @@ class _PreviewBox extends StatelessWidget {
 
     final double lyricsBoxL;
     final double lyricsBoxW;
-    switch (style.lyricsTextAlign) {
+    switch (bodyTextAlign) {
       case HorizontalPosition.left:
         lyricsBoxL = _lyricsBoxPad;
         lyricsBoxW = _lyricsBoxWSide;
@@ -2124,7 +2235,7 @@ class _PreviewBox extends StatelessWidget {
                               TextSpan(
                                 text: sampleText,
                                 style: TextStyle(
-                                  color: style.textColor,
+                                  color: bodyTextColor,
                                   fontSize: style.fontSize * fontScale,
                                   fontWeight: FontWeight.w700,
                                   height: 1.25,

@@ -470,6 +470,24 @@ _LYRICS_BOX_TOP = 0.6
 _LYRICS_BOX_HEIGHT = 5.4
 _LYRICS_BOX_WIDTH_FULL = 11.9
 _LYRICS_BOX_WIDTH_SIDE = 8.5
+_TEXT_ALIGN_MAP = {
+    "left": PP_ALIGN.LEFT,
+    "center": PP_ALIGN.CENTER,
+    "right": PP_ALIGN.RIGHT,
+}
+
+
+def _lyrics_text_layout(horizontal_position):
+    text_align = _TEXT_ALIGN_MAP.get(horizontal_position, PP_ALIGN.CENTER)
+    if horizontal_position == "left":
+        return _LYRICS_BOX_PADDING, _LYRICS_BOX_WIDTH_SIDE, text_align
+    if horizontal_position == "right":
+        return (
+            _SLIDE_W - _LYRICS_BOX_PADDING - _LYRICS_BOX_WIDTH_SIDE,
+            _LYRICS_BOX_WIDTH_SIDE,
+            text_align,
+        )
+    return _LYRICS_BOX_PADDING, _LYRICS_BOX_WIDTH_FULL, text_align
 
 
 def _add_title_textbox(slide, song_title, style):
@@ -514,25 +532,21 @@ def _add_title_textbox(slide, song_title, style):
 
 
 def add_song_slides(prs, song, style):
+    is_bible = song.get("type") == "bible"
     bg_color = parse_hex_color(style["background_color"])
-    text_color = parse_hex_color(style["text_color"])
+    text_color_key = "bible_text_color" if is_bible else "text_color"
+    text_color = parse_hex_color(style.get(text_color_key, style["text_color"]))
     font_size = Pt(style["font_size"])
     position = style["text_position"]
     include_english_lyrics = style.get("include_english_lyrics", False)
     english_color = parse_hex_color(style["english_text_color"])
     show_song_title = style.get("show_song_title", False)
-    lyrics_align_map = {"left": PP_ALIGN.LEFT, "center": PP_ALIGN.CENTER, "right": PP_ALIGN.RIGHT}
-    lyrics_text_align_str = style.get("lyrics_text_align", "center")
-    lyrics_align = lyrics_align_map.get(lyrics_text_align_str, PP_ALIGN.CENTER)
-    if lyrics_text_align_str == "left":
-        lyrics_box_left = _LYRICS_BOX_PADDING
-        lyrics_box_width = _LYRICS_BOX_WIDTH_SIDE
-    elif lyrics_text_align_str == "right":
-        lyrics_box_left = _SLIDE_W - _LYRICS_BOX_PADDING - _LYRICS_BOX_WIDTH_SIDE
-        lyrics_box_width = _LYRICS_BOX_WIDTH_SIDE
-    else:
-        lyrics_box_left = _LYRICS_BOX_PADDING
-        lyrics_box_width = _LYRICS_BOX_WIDTH_FULL
+    lyrics_text_align_str = style.get(
+        "bible_text_align" if is_bible else "lyrics_text_align", "center"
+    )
+    lyrics_box_left, lyrics_box_width, lyrics_align = _lyrics_text_layout(
+        lyrics_text_align_str
+    )
     korean_pages = [part.strip() for part in song["lyrics"].split("###")]
     english_pages = [part.strip() for part in song.get("english_lyrics", "").split("###")]
     page_count = max(len(korean_pages), len(english_pages))
