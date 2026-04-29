@@ -29,7 +29,15 @@ def _get_font_path(filename):
 
 
 def _ensure_pretendard_installed():
-    fonts_dir = os.path.expanduser("~/Library/Fonts")
+    import platform
+    system = platform.system()
+    if system == "Windows":
+        local_appdata = os.environ.get("LOCALAPPDATA", "")
+        if not local_appdata:
+            return
+        fonts_dir = os.path.join(local_appdata, "Microsoft", "Windows", "Fonts")
+    else:
+        fonts_dir = os.path.expanduser("~/Library/Fonts")
     os.makedirs(fonts_dir, exist_ok=True)
     for filename in _PRETENDARD_FONTS:
         dest = os.path.join(fonts_dir, filename)
@@ -158,8 +166,13 @@ def split_bilingual_page(text):
 
 
 def get_cache_root():
-    home = Path.home()
-    return home / "Library" / "Caches" / "worship_slides" / "ppt_import_cache"
+    import platform
+    if platform.system() == "Windows":
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        if local_appdata:
+            return Path(local_appdata) / "worship_slides" / "ppt_import_cache"
+        return Path.home() / "AppData" / "Local" / "worship_slides" / "ppt_import_cache"
+    return Path.home() / "Library" / "Caches" / "worship_slides" / "ppt_import_cache"
 
 
 def get_ppt_cache_key(source_path):
@@ -180,6 +193,8 @@ def get_libreoffice_executable():
         shutil.which("libreoffice"),
         "/Applications/LibreOffice.app/Contents/MacOS/soffice",
         "/Applications/LibreOffice.app/Contents/MacOS/LibreOffice",
+        r"C:\Program Files\LibreOffice\program\soffice.exe",
+        r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
     ]
     for candidate in candidates:
         if candidate and os.path.exists(candidate):

@@ -1,0 +1,119 @@
+name: Build Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+          cache: pip
+          cache-dependency-path: python/requirements.txt
+
+      - name: Enable Windows desktop
+        shell: pwsh
+        run: flutter config --enable-windows-desktop
+
+      - name: Get Flutter packages
+        shell: pwsh
+        run: flutter pub get
+
+      - name: Build distribution
+        shell: pwsh
+        run: ./scripts/build.ps1
+
+      - name: Package distribution
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $zipPath = "dist/worship_slides-windows-$tag.zip"
+          Compress-Archive -Path "dist/worship_slides/*" -DestinationPath $zipPath -Force
+          "zip_path=$zipPath" >> $env:GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: worship_slides-windows-${{ github.ref_name }}
+          path: ${{ env.zip_path }}
+          if-no-files-found: error
+
+      - name: Upload release asset
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.zip_path }}
+
+  build-macos:
+    name: Build macOS
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+          cache: pip
+          cache-dependency-path: python/requirements.txt
+
+      - name: Enable macOS desktop
+        shell: bash
+        run: flutter config --enable-macos-desktop
+
+      - name: Get Flutter packages
+        shell: bash
+        run: flutter pub get
+
+      - name: Build distribution
+        shell: bash
+        run: ./scripts/build.sh
+
+      - name: Package distribution
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          zip_path="dist/worship_slides-macos-${tag}.zip"
+          ditto -c -k --sequesterRsrc --keepParent "dist/worship_slides" "$zip_path"
+          echo "zip_path=$zip_path" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: worship_slides-macos-${{ github.ref_name }}
+          path: ${{ env.zip_path }}
+          if-no-files-found: error
+
+      - name: Upload release asset
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.zip_path }}

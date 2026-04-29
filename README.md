@@ -50,6 +50,31 @@ flutter run -d windows
 flutter run -d linux
 ```
 
+## Windows 배포 빌드
+
+Windows에서는 PowerShell에서 아래 스크립트를 실행하면 Python 도구(`ppt_tool.exe`)와 Flutter 릴리즈 앱을 함께 빌드하고, 실행에 필요한 파일을 `dist\worship_slides`에 모읍니다.
+
+```powershell
+.\scripts\build.ps1
+```
+
+사전 준비:
+
+- Flutter Windows 데스크톱 빌드 환경(Visual Studio C++ 워크로드 포함)
+- Python 3
+- `.ppt` 파일까지 가져오려면 LibreOffice 설치
+
+생성된 앱은 `dist\worship_slides\worship_slides.exe`로 실행할 수 있습니다.
+
+## GitHub Actions 릴리즈 빌드
+
+`v*` 형식의 태그를 푸시하면 Windows/macOS 빌드가 자동으로 실행되고, `dist\worship_slides-windows-<tag>.zip`과 `dist\worship_slides-macos-<tag>.zip` 파일이 Actions artifact와 GitHub Release asset으로 업로드됩니다.
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
 ## 프로젝트 구조
 
 ```
@@ -87,4 +112,4 @@ python python/ppt_tool.py import /path/to/ppt/folder
 python python/ppt_tool.py export '{"output_path":"...","songs":[...],"style":{...}}'
 ```
 
-`.ppt` 파일은 LibreOffice로 `.pptx`로 먼저 변환 후 처리하며, 변환 결과는 `~/Library/Caches/worship_slides/ppt_import_cache/`에 캐시됩니다.
+`.ppt` 파일은 LibreOffice로 `.pptx`로 먼저 변환 후 처리하며, 변환 결과는 macOS에서는 `~/Library/Caches/worship_slides/ppt_import_cache/`, Windows에서는 `%LOCALAPPDATA%\worship_slides\ppt_import_cache\`에 캐시됩니다.

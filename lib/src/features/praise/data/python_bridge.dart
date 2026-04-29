@@ -182,20 +182,23 @@ class PythonBridge {
 
   String _pythonExecutablePath(String scriptPath) {
     final scriptRoot = File(scriptPath).parent.parent.path;
+    final venvBin = Platform.isWindows ? 'Scripts' : 'bin';
+    final pythonExe = Platform.isWindows ? 'python.exe' : 'python';
+
     final scriptAdjacentPython = File(
-      p.join(scriptRoot, '.venv', 'bin', 'python'),
+      p.join(scriptRoot, '.venv', venvBin, pythonExe),
     );
     if (scriptAdjacentPython.existsSync()) {
       return scriptAdjacentPython.path;
     }
 
     for (final root in _searchRoots) {
-      final localPython = File(p.join(root, '.venv', 'bin', 'python'));
+      final localPython = File(p.join(root, '.venv', venvBin, pythonExe));
       if (localPython.existsSync()) {
         return localPython.path;
       }
     }
-    return 'python3';
+    return Platform.isWindows ? 'python' : 'python3';
   }
 
   List<String> get _scriptPathCandidates {
@@ -247,7 +250,8 @@ class PythonBridge {
   }
 
   String? _discoverProjectRoot() {
-    final home = Platform.environment['HOME'];
+    final home =
+        Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'];
     if (home == null || home.isEmpty) {
       return null;
     }

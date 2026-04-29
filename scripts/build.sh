@@ -4,8 +4,13 @@ set -e
 cd "$(dirname "$0")/.."
 
 echo "=== 1. Python 바이너리 빌드 ==="
+if [ ! -x ".venv/bin/python" ]; then
+  echo "  -> .venv not found. Creating it now."
+  python3 -m venv .venv
+fi
+
 source .venv/bin/activate
-pip install -q pyinstaller python-pptx
+pip install -q -r python/requirements.txt
 rm -rf python/ppt_tool
 pyinstaller --onefile python/ppt_tool.py \
             --distpath python \
