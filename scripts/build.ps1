@@ -33,10 +33,12 @@ if (-not (Test-Path ".venv\Scripts\python.exe")) {
 
 Invoke-Checked ".venv\Scripts\python.exe" @("-m", "pip", "install", "-q", "-r", "python\requirements.txt")
 
-if (Test-Path "python\ppt_tool.exe") { Remove-Item -Force "python\ppt_tool.exe" }
-
-$tempDir = Join-Path $env:TEMP "ppt_tool_build"
 $projectRoot = (Get-Location).Path
+$pyinstallerWorkDir = Join-Path $projectRoot "build\pyinstaller_windows"
+
+if (Test-Path "python\ppt_tool.exe") { Remove-Item -Force "python\ppt_tool.exe" }
+if (Test-Path $pyinstallerWorkDir) { Remove-Item -Recurse -Force $pyinstallerWorkDir }
+New-Item -ItemType Directory -Force -Path $pyinstallerWorkDir | Out-Null
 
 Invoke-Checked ".venv\Scripts\python.exe" @(
     "-m",
@@ -48,9 +50,9 @@ Invoke-Checked ".venv\Scripts\python.exe" @(
     "--distpath",
     "python",
     "--workpath",
-    $tempDir,
+    $pyinstallerWorkDir,
     "--specpath",
-    $tempDir,
+    $pyinstallerWorkDir,
     "--name",
     "ppt_tool",
     "--add-data=$projectRoot\assets\fonts\Pretendard-Bold.ttf;fonts",
