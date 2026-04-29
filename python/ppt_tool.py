@@ -255,7 +255,7 @@ def iter_presentation_files(root):
                 {
                     "warning": f"폴더를 읽지 못했습니다: {error.filename}",
                 },
-                ensure_ascii=False,
+                ensure_ascii=True,
             ),
             file=sys.stderr,
         )
@@ -449,7 +449,7 @@ def import_folder(folder):
                     e["error"] == "libreoffice_missing" for e in errors
                 ),
             },
-            ensure_ascii=False,
+            ensure_ascii=True,
         )
     )
 
@@ -614,7 +614,7 @@ def export_presentation(payload_json):
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     prs.save(str(output_path))
-    print(json.dumps({"output_path": str(output_path)}, ensure_ascii=False))
+    print(json.dumps({"output_path": str(output_path)}, ensure_ascii=True))
 
 
 def main():
