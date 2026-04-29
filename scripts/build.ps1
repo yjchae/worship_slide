@@ -5,6 +5,19 @@ $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 Set-Location (Join-Path $scriptDir "..")
 
+function Invoke-Checked {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $FilePath,
+        [string[]] $ArgumentList = @()
+    )
+
+    & $FilePath @ArgumentList
+    if ($LASTEXITCODE -ne 0) {
+        throw "$FilePath failed with exit code $LASTEXITCODE."
+    }
+}
+
 Write-Host "=== 1. Build Python binary ===" -ForegroundColor Cyan
 
 if (-not (Test-Path ".venv\Scripts\python.exe")) {
@@ -18,23 +31,35 @@ if (-not (Test-Path ".venv\Scripts\python.exe")) {
     }
 }
 
-& .venv\Scripts\python.exe -m pip install -q -r python\requirements.txt
+Invoke-Checked ".venv\Scripts\python.exe" @("-m", "pip", "install", "-q", "-r", "python\requirements.txt")
 
 if (Test-Path "python\ppt_tool.exe") { Remove-Item -Force "python\ppt_tool.exe" }
 
 $tempDir = Join-Path $env:TEMP "ppt_tool_build"
 $projectRoot = (Get-Location).Path
 
-& .venv\Scripts\pyinstaller.exe `
-    --onefile `
-    python\ppt_tool.py `
-    --distpath python `
-    --workpath $tempDir `
-    --specpath $tempDir `
-    --name ppt_tool `
-    "--add-data=$projectRoot\assets\fonts\Pretendard-Bold.ttf;fonts" `
+Invoke-Checked ".venv\Scripts\python.exe" @(
+    "-m",
+    "PyInstaller",
+    "--noconfirm",
+    "--clean",
+    "--onefile",
+    "python\ppt_tool.py",
+    "--distpath",
+    "python",
+    "--workpath",
+    $tempDir,
+    "--specpath",
+    $tempDir,
+    "--name",
+    "ppt_tool",
+    "--add-data=$projectRoot\assets\fonts\Pretendard-Bold.ttf;fonts",
     "--add-data=$projectRoot\assets\fonts\Pretendard-Regular.ttf;fonts"
+)
 
+if (-not (Test-Path "python\ppt_tool.exe")) {
+    throw "PyInstaller completed but python\ppt_tool.exe was not created."
+}
 Write-Host "  -> Created python\ppt_tool.exe" -ForegroundColor Green
 
 Write-Host ""
@@ -42,7 +67,7 @@ Write-Host "=== 2. Build Flutter Windows release ===" -ForegroundColor Cyan
 if (-not (Get-Command flutter -ErrorAction SilentlyContinue)) {
     throw "Flutter was not found. Add the Flutter SDK bin folder to PATH, then run this script again."
 }
-flutter build windows --release
+Invoke-Checked "flutter" @("build", "windows", "--release")
 Write-Host "  -> Created build\windows\x64\runner\Release" -ForegroundColor Green
 
 Write-Host ""
