@@ -43,15 +43,32 @@ set -e
 
 cd "$(dirname "$0")"
 
-xattr -cr "Worship Slides.app"
+xattr -cr .
+xattr -rd com.apple.quarantine . 2>/dev/null || true
+xattr -rd com.apple.provenance . 2>/dev/null || true
 
-echo "Worship Slides.app 잠금 해제를 완료했습니다."
+echo "Worship Slides 잠금 해제를 완료했습니다."
 echo "이제 앱을 더블클릭해서 실행하세요."
 echo
 read -n 1 -s -r -p "아무 키나 누르면 닫습니다..."
 echo
 EOF
 chmod +x "$DIST_DIR/Unlock Worship Slides.command"
+xattr -cr "$DIST_DIR"
+xattr -rd com.apple.quarantine "$DIST_DIR" 2>/dev/null || true
+xattr -rd com.apple.provenance "$DIST_DIR" 2>/dev/null || true
+
+cat > "$DIST_DIR/처음 실행 안내.txt" <<'EOF'
+macOS가 Unlock Worship Slides.command 실행을 막으면 아래 둘 중 하나로 실행하세요.
+
+1. Unlock Worship Slides.command를 우클릭한 뒤 열기를 선택합니다.
+
+2. 터미널에서 아래 명령을 실행합니다.
+   cd "이 폴더 경로"
+   xattr -cr .
+
+그 다음 Worship Slides.app을 더블클릭하면 됩니다.
+EOF
 
 echo "  → $DIST_DIR 폴더 생성 완료"
 echo ""
