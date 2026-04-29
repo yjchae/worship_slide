@@ -465,11 +465,10 @@ _TITLE_BOX_WIDTH_SIDE = 5.8
 _TITLE_BOX_WIDTH_CENTER = 10.0
 _SLIDE_W = 13.333
 _SLIDE_H = 7.5
-_LYRICS_BOX_PADDING = 0.7
 _LYRICS_BOX_TOP = 0.6
 _LYRICS_BOX_HEIGHT = 5.4
-_LYRICS_BOX_WIDTH_FULL = 11.9
-_LYRICS_BOX_WIDTH_SIDE = 8.5
+_LYRICS_BOX_WIDTH = _SLIDE_W * 0.9
+_LYRICS_BOX_LEFT = (_SLIDE_W - _LYRICS_BOX_WIDTH) / 2
 _TEXT_ALIGN_MAP = {
     "left": PP_ALIGN.LEFT,
     "center": PP_ALIGN.CENTER,
@@ -479,15 +478,7 @@ _TEXT_ALIGN_MAP = {
 
 def _lyrics_text_layout(horizontal_position):
     text_align = _TEXT_ALIGN_MAP.get(horizontal_position, PP_ALIGN.CENTER)
-    if horizontal_position == "left":
-        return _LYRICS_BOX_PADDING, _LYRICS_BOX_WIDTH_SIDE, text_align
-    if horizontal_position == "right":
-        return (
-            _SLIDE_W - _LYRICS_BOX_PADDING - _LYRICS_BOX_WIDTH_SIDE,
-            _LYRICS_BOX_WIDTH_SIDE,
-            text_align,
-        )
-    return _LYRICS_BOX_PADDING, _LYRICS_BOX_WIDTH_FULL, text_align
+    return _LYRICS_BOX_LEFT, _LYRICS_BOX_WIDTH, text_align
 
 
 def _add_title_textbox(slide, song_title, style):

@@ -69,7 +69,6 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     Color(0xFF0B132B),
     Color(0xFF5F0F40),
     Color(0xFF2D1E2F),
-    Color(0xFF7A3E00),
     Color(0xFF445D48),
     Color(0xFFF4F1EA),
     Color(0xFFFFFFFF),
@@ -2108,11 +2107,10 @@ class _PreviewBox extends StatelessWidget {
 
   static const double _slideW = 13.333;
   static const double _slideH = 7.5;
-  static const double _lyricsBoxPad = 0.7;
   static const double _lyricsBoxT = 0.6;
   static const double _lyricsBoxH = 5.4;
-  static const double _lyricsBoxWFull = 11.9;
-  static const double _lyricsBoxWSide = 8.5;
+  static const double _lyricsBoxW = _slideW * 0.9;
+  static const double _lyricsBoxL = (_slideW - _lyricsBoxW) / 2;
   static const double _titleBoxH = 0.55;
   static const double _titlePad = 0.2;
   static const double _titleBoxWSide = 5.8;
@@ -2164,20 +2162,6 @@ class _PreviewBox extends StatelessWidget {
       HorizontalPosition.right => TextAlign.right,
     };
 
-    final double lyricsBoxL;
-    final double lyricsBoxW;
-    switch (bodyTextAlign) {
-      case HorizontalPosition.left:
-        lyricsBoxL = _lyricsBoxPad;
-        lyricsBoxW = _lyricsBoxWSide;
-      case HorizontalPosition.center:
-        lyricsBoxL = _lyricsBoxPad;
-        lyricsBoxW = _lyricsBoxWFull;
-      case HorizontalPosition.right:
-        lyricsBoxL = _slideW - _lyricsBoxPad - _lyricsBoxWSide;
-        lyricsBoxW = _lyricsBoxWSide;
-    }
-
     return AspectRatio(
       aspectRatio: _slideW / _slideH,
       child: LayoutBuilder(
@@ -2217,9 +2201,9 @@ class _PreviewBox extends StatelessWidget {
                   color: style.backgroundColor,
                   child: Padding(
                     padding: EdgeInsets.only(
-                      left: w * lyricsBoxL / _slideW,
+                      left: w * _lyricsBoxL / _slideW,
                       top: h * _lyricsBoxT / _slideH,
-                      right: w * (1 - (lyricsBoxL + lyricsBoxW) / _slideW),
+                      right: w * (1 - (_lyricsBoxL + _lyricsBoxW) / _slideW),
                       bottom: h * (1 - (_lyricsBoxT + _lyricsBoxH) / _slideH),
                     ),
                     child: Align(
