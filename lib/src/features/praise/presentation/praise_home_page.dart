@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../../../features/bible/data/bible_repository.dart';
 import '../../../features/bible/domain/bible_verse.dart';
+import '../../../features/update/update_service.dart';
 import '../data/export_style_store.dart';
 import '../data/praise_repository.dart';
 import '../data/python_bridge.dart';
@@ -43,6 +44,11 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
   final ExportStyleStore _styleStore = ExportStyleStore();
   final BibleRepository _bibleRepository = BibleRepository();
   final TextEditingController _searchController = TextEditingController();
+  final UpdateService _updateService = UpdateService();
+
+  UpdateInfo? _pendingUpdate;
+  bool _isDownloadingUpdate = false;
+  double _updateProgress = 0.0;
 
   List<PraiseSong> _songs = const [];
   final List<({int uid, StagingItem item})> _stagingItems = [];
@@ -92,6 +98,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     _loadSavedStyle();
     _loadBibleCount();
     _searchController.addListener(_loadSongs);
+    _checkForUpdates();
   }
 
   @override
@@ -133,6 +140,36 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
   Future<void> _updateStyle(ExportStyle style) async {
     setState(() => _style = style);
     await _styleStore.save(style);
+  }
+
+  // ── 업데이트 ─────────────────────────────────────────────────────────
+
+  Future<void> _checkForUpdates() async {
+    final info = await _updateService.checkForUpdates();
+    if (!mounted || info == null) return;
+    setState(() => _pendingUpdate = info);
+  }
+
+  Future<void> _startUpdate() async {
+    if (_pendingUpdate == null) return;
+    setState(() {
+      _isDownloadingUpdate = true;
+      _updateProgress = 0.0;
+    });
+    try {
+      await _updateService.downloadAndInstall(
+        _pendingUpdate!,
+        onProgress: (p) {
+          if (mounted) setState(() => _updateProgress = p);
+        },
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isDownloadingUpdate = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('업데이트 실패: $e')));
+    }
   }
 
   // ── 스테이징 조작 ────────────────────────────────────────────────────
@@ -565,6 +602,17 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        if (_pendingUpdate != null) ...[
+                          _UpdateBanner(
+                            version: _pendingUpdate!.version,
+                            isDownloading: _isDownloadingUpdate,
+                            progress: _updateProgress,
+                            onUpdate: _startUpdate,
+                            onDismiss: () =>
+                                setState(() => _pendingUpdate = null),
+                          ),
+                          const SizedBox(height: 8),
+                        ],
                         _TopBar(
                           storedCount: _storedCount,
                           bibleVerseCount: _bibleVerseCount,
@@ -2270,6 +2318,79 @@ class _PreviewBox extends StatelessWidget {
 }
 
 // ── SongEditDialog ────────────────────────────────────────────────────────
+
+// ── 업데이트 배너 ─────────────────────────────────────────────────────
+
+class _UpdateBanner extends StatelessWidget {
+  const _UpdateBanner({
+    required this.version,
+    required this.isDownloading,
+    required this.progress,
+    required this.onUpdate,
+    required this.onDismiss,
+  });
+
+  final String version;
+  final bool isDownloading;
+  final double progress;
+  final VoidCallback onUpdate;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+        color: scheme.primaryContainer,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.system_update_rounded, color: scheme.onPrimaryContainer),
+          const SizedBox(width: 10),
+          Expanded(
+            child: isDownloading
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '업데이트 다운로드 중... ${(progress * 100).toStringAsFixed(0)}%',
+                        style: TextStyle(color: scheme.onPrimaryContainer),
+                      ),
+                      const SizedBox(height: 4),
+                      LinearProgressIndicator(value: progress > 0 ? progress : null),
+                    ],
+                  )
+                : Text(
+                    '새 버전 v$version이 출시되었습니다.',
+                    style: TextStyle(
+                      color: scheme.onPrimaryContainer,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+          ),
+          if (!isDownloading) ...[
+            const SizedBox(width: 8),
+            FilledButton.tonal(
+              onPressed: onUpdate,
+              child: const Text('지금 업데이트'),
+            ),
+            const SizedBox(width: 4),
+            IconButton(
+              icon: const Icon(Icons.close),
+              color: scheme.onPrimaryContainer,
+              tooltip: '닫기',
+              onPressed: onDismiss,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+// ── 곡 편집 다이얼로그 ─────────────────────────────────────────────────
 
 class _SongEditDialog extends StatefulWidget {
   const _SongEditDialog({this.song});
