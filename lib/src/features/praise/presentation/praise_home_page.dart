@@ -25,19 +25,26 @@ class PraiseHomePage extends StatefulWidget {
 class _PraiseHomePageState extends State<PraiseHomePage> {
   static const ExportStyle _defaultStyle = ExportStyle(
     fontSize: 30,
+    bibleFontSize: 30,
     backgroundColor: Color(0xFF1B1B1B),
     textColor: Colors.white,
     bibleTextColor: Colors.white,
     textPosition: VerticalTextPosition.middle,
+    bibleTextPosition: VerticalTextPosition.middle,
     lyricsTextAlign: HorizontalPosition.center,
     bibleTextAlign: HorizontalPosition.center,
     includeEnglishLyrics: true,
     englishTextColor: Color(0xFFFFF176),
     showSongTitle: false,
+    showBibleTitle: false,
     titleFontSize: 14,
+    bibleTitleFontSize: 14,
     titleTextColor: Color(0xB3FFFFFF),
+    bibleTitleTextColor: Color(0xB3FFFFFF),
     titleHorizontalPosition: HorizontalPosition.right,
     titleVerticalPosition: VerticalTextPosition.bottom,
+    bibleTitleHorizontalPosition: HorizontalPosition.right,
+    bibleTitleVerticalPosition: VerticalTextPosition.bottom,
   );
 
   final PraiseRepository _repository = PraiseRepository();
@@ -1301,7 +1308,6 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
   @override
   void initState() {
     super.initState();
-    _bookController.addListener(_onBibleInputChanged);
     _chapterController.addListener(_onBibleInputChanged);
     _verseController.addListener(_onBibleInputChanged);
     _loadBookNames();
@@ -1319,9 +1325,7 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
   @override
   void dispose() {
     _searchDebounce?.cancel();
-    _bookController
-      ..removeListener(_onBibleInputChanged)
-      ..dispose();
+    _bookController.dispose();
     _chapterController.removeListener(_onBibleInputChanged);
     _verseController.removeListener(_onBibleInputChanged);
     _chapterController.dispose();
@@ -1367,8 +1371,9 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
     }
   }
 
-  void _onBibleInputChanged() {
+  void _onBibleInputChanged({bool isComposing = false}) {
     if (_isSyncingBookController) return;
+    if (isComposing) return;
     final typedBook = _bookController.text.trim();
     final matchedBook = _matchingBook(typedBook);
     if (matchedBook != _selectedBook) {
@@ -1394,6 +1399,16 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
     _isSyncingBookController = true;
     _bookController.text = value;
     _isSyncingBookController = false;
+  }
+
+  void _setBookEditingValue(TextEditingValue value) {
+    _isSyncingBookController = true;
+    _bookController.value = value;
+    _isSyncingBookController = false;
+  }
+
+  bool _isComposing(TextEditingValue value) {
+    return value.composing.isValid && !value.composing.isCollapsed;
   }
 
   String? _matchingBook(String value) {
@@ -1673,8 +1688,14 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
                                 horizontal: 12,
                               ),
                             ),
-                            onChanged: (value) => _bookController.text = value,
+                            onChanged: (_) {
+                              _setBookEditingValue(controller.value);
+                              _onBibleInputChanged(
+                                isComposing: _isComposing(controller.value),
+                              );
+                            },
                             onSubmitted: (_) {
+                              _setBookEditingValue(controller.value);
                               onFieldSubmitted();
                               _search();
                             },
@@ -2036,16 +2057,6 @@ class _DesignPanel extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('글자 크기 ${style.fontSize.toStringAsFixed(0)}'),
-                    Slider(
-                      min: 18,
-                      max: 54,
-                      divisions: 9,
-                      value: style.fontSize,
-                      onChanged: (value) =>
-                          onStyleChanged(style.copyWith(fontSize: value)),
-                    ),
-                    const SizedBox(height: 8),
                     _controlSection(
                       children: [
                         _colorPicker(
@@ -2057,128 +2068,29 @@ class _DesignPanel extends StatelessWidget {
                             style.copyWith(backgroundColor: color),
                           ),
                         ),
-                        _colorPicker(
-                          context: context,
-                          title: '한글 가사 색상',
-                          selectedColor: style.textColor,
-                          colors: textSwatches,
-                          onSelected: (color) =>
-                              onStyleChanged(style.copyWith(textColor: color)),
-                        ),
-                        _colorPicker(
-                          context: context,
-                          title: '성경 본문 색상',
-                          selectedColor: style.bibleTextColor,
-                          colors: textSwatches,
-                          onSelected: (color) => onStyleChanged(
-                            style.copyWith(bibleTextColor: color),
-                          ),
-                        ),
                       ],
                     ),
-                    const SizedBox(height: 20),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('영어 가사 포함'),
-                      value: style.includeEnglishLyrics,
-                      onChanged: (value) => onStyleChanged(
-                        style.copyWith(includeEnglishLyrics: value),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    _controlSection(
-                      children: [
-                        _colorPicker(
-                          context: context,
-                          title: '영어 가사 색상',
-                          selectedColor: style.englishTextColor,
-                          colors: textSwatches,
-                          onSelected: (color) => onStyleChanged(
-                            style.copyWith(englishTextColor: color),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 20),
-                    _controlSection(
-                      children: [
-                        _verticalPicker(
-                          title: '글자 수직 위치',
-                          selected: style.textPosition,
-                          onSelected: (position) => onStyleChanged(
-                            style.copyWith(textPosition: position),
-                          ),
-                        ),
-                        _horizontalPicker(
-                          title: '찬양 가사 수평 정렬',
-                          selected: style.lyricsTextAlign,
-                          onSelected: (position) => onStyleChanged(
-                            style.copyWith(lyricsTextAlign: position),
-                          ),
-                        ),
-                        _horizontalPicker(
-                          title: '성경 본문 수평 정렬',
-                          selected: style.bibleTextAlign,
-                          onSelected: (position) => onStyleChanged(
-                            style.copyWith(bibleTextAlign: position),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    const Divider(),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('제목 표시'),
-                      value: style.showSongTitle,
-                      onChanged: (value) =>
-                          onStyleChanged(style.copyWith(showSongTitle: value)),
-                    ),
-                    if (style.showSongTitle) ...[
-                      Text('제목 크기 ${style.titleFontSize.toStringAsFixed(0)}'),
-                      Slider(
-                        min: 8,
-                        max: 28,
-                        divisions: 10,
-                        value: style.titleFontSize,
-                        onChanged: (value) => onStyleChanged(
-                          style.copyWith(titleFontSize: value),
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      _controlSection(
-                        children: [
-                          _colorPicker(
+                    const SizedBox(height: 16),
+                    _StyleTabControls(
+                      style: style,
+                      textSwatches: textSwatches,
+                      colorPicker:
+                          ({
+                            required title,
+                            required selectedColor,
+                            required colors,
+                            required onSelected,
+                          }) => _colorPicker(
                             context: context,
-                            title: '제목 색상',
-                            selectedColor: style.titleTextColor,
-                            colors: textSwatches,
-                            onSelected: (color) => onStyleChanged(
-                              style.copyWith(titleTextColor: color),
-                            ),
+                            title: title,
+                            selectedColor: selectedColor,
+                            colors: colors,
+                            onSelected: onSelected,
                           ),
-                        ],
-                      ),
-                      const SizedBox(height: 14),
-                      _controlSection(
-                        children: [
-                          _horizontalPicker(
-                            title: '제목 수평 위치',
-                            selected: style.titleHorizontalPosition,
-                            onSelected: (position) => onStyleChanged(
-                              style.copyWith(titleHorizontalPosition: position),
-                            ),
-                          ),
-                          _verticalPicker(
-                            title: '제목 수직 위치',
-                            selected: style.titleVerticalPosition,
-                            onSelected: (position) => onStyleChanged(
-                              style.copyWith(titleVerticalPosition: position),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
+                      verticalPicker: _verticalPicker,
+                      horizontalPicker: _horizontalPicker,
+                      onStyleChanged: onStyleChanged,
+                    ),
                     const SizedBox(height: 16),
                   ],
                 ),
@@ -2186,6 +2098,281 @@ class _DesignPanel extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _StyleTabControls extends StatefulWidget {
+  const _StyleTabControls({
+    required this.style,
+    required this.textSwatches,
+    required this.colorPicker,
+    required this.verticalPicker,
+    required this.horizontalPicker,
+    required this.onStyleChanged,
+  });
+
+  final ExportStyle style;
+  final List<Color> textSwatches;
+  final Widget Function({
+    required String title,
+    required Color selectedColor,
+    required List<Color> colors,
+    required ValueChanged<Color> onSelected,
+  })
+  colorPicker;
+  final Widget Function({
+    required String title,
+    required VerticalTextPosition selected,
+    required ValueChanged<VerticalTextPosition> onSelected,
+  })
+  verticalPicker;
+  final Widget Function({
+    required String title,
+    required HorizontalPosition selected,
+    required ValueChanged<HorizontalPosition> onSelected,
+  })
+  horizontalPicker;
+  final ValueChanged<ExportStyle> onStyleChanged;
+
+  @override
+  State<_StyleTabControls> createState() => _StyleTabControlsState();
+}
+
+class _StyleTabControlsState extends State<_StyleTabControls> {
+  int _selectedTabIndex = 0;
+
+  Widget _controlSection({required List<Widget> children}) {
+    return Column(
+      children: [
+        for (var i = 0; i < children.length; i++) ...[
+          if (i > 0) const SizedBox(height: 8),
+          children[i],
+        ],
+      ],
+    );
+  }
+
+  Widget _fontSizeSlider({
+    required String title,
+    required double value,
+    required ValueChanged<double> onChanged,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('$title ${value.toStringAsFixed(0)}'),
+        Slider(
+          min: 18,
+          max: 54,
+          divisions: 9,
+          value: value,
+          onChanged: onChanged,
+        ),
+      ],
+    );
+  }
+
+  Widget _titleSizeSlider({
+    required double value,
+    required ValueChanged<double> onChanged,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('제목 크기 ${value.toStringAsFixed(0)}'),
+        Slider(
+          min: 8,
+          max: 28,
+          divisions: 10,
+          value: value,
+          onChanged: onChanged,
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DefaultTabController(
+      length: 2,
+      child: Column(
+        children: [
+          TabBar(
+            onTap: (index) => setState(() => _selectedTabIndex = index),
+            tabs: const [
+              Tab(text: '찬양'),
+              Tab(text: '성경본문'),
+            ],
+          ),
+          const SizedBox(height: 14),
+          IndexedStack(
+            index: _selectedTabIndex,
+            children: [
+              _controlSection(
+                children: [
+                  _fontSizeSlider(
+                    title: '글자 크기',
+                    value: widget.style.fontSize,
+                    onChanged: (value) => widget.onStyleChanged(
+                      widget.style.copyWith(fontSize: value),
+                    ),
+                  ),
+                  widget.colorPicker(
+                    title: '한글 가사 색상',
+                    selectedColor: widget.style.textColor,
+                    colors: widget.textSwatches,
+                    onSelected: (color) => widget.onStyleChanged(
+                      widget.style.copyWith(textColor: color),
+                    ),
+                  ),
+                  widget.colorPicker(
+                    title: '영어 가사 색상',
+                    selectedColor: widget.style.englishTextColor,
+                    colors: widget.textSwatches,
+                    onSelected: (color) => widget.onStyleChanged(
+                      widget.style.copyWith(englishTextColor: color),
+                    ),
+                  ),
+                  widget.verticalPicker(
+                    title: '가사 수직 위치',
+                    selected: widget.style.textPosition,
+                    onSelected: (position) => widget.onStyleChanged(
+                      widget.style.copyWith(textPosition: position),
+                    ),
+                  ),
+                  widget.horizontalPicker(
+                    title: '가사 수평 정렬',
+                    selected: widget.style.lyricsTextAlign,
+                    onSelected: (position) => widget.onStyleChanged(
+                      widget.style.copyWith(lyricsTextAlign: position),
+                    ),
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('제목 표시'),
+                    value: widget.style.showSongTitle,
+                    onChanged: (value) => widget.onStyleChanged(
+                      widget.style.copyWith(showSongTitle: value),
+                    ),
+                  ),
+                  if (widget.style.showSongTitle)
+                    _titleSizeSlider(
+                      value: widget.style.titleFontSize,
+                      onChanged: (value) => widget.onStyleChanged(
+                        widget.style.copyWith(titleFontSize: value),
+                      ),
+                    ),
+                  if (widget.style.showSongTitle)
+                    widget.colorPicker(
+                      title: '제목 색상',
+                      selectedColor: widget.style.titleTextColor,
+                      colors: widget.textSwatches,
+                      onSelected: (color) => widget.onStyleChanged(
+                        widget.style.copyWith(titleTextColor: color),
+                      ),
+                    ),
+                  if (widget.style.showSongTitle)
+                    widget.horizontalPicker(
+                      title: '제목 수평 위치',
+                      selected: widget.style.titleHorizontalPosition,
+                      onSelected: (position) => widget.onStyleChanged(
+                        widget.style.copyWith(
+                          titleHorizontalPosition: position,
+                        ),
+                      ),
+                    ),
+                  if (widget.style.showSongTitle)
+                    widget.verticalPicker(
+                      title: '제목 수직 위치',
+                      selected: widget.style.titleVerticalPosition,
+                      onSelected: (position) => widget.onStyleChanged(
+                        widget.style.copyWith(titleVerticalPosition: position),
+                      ),
+                    ),
+                ],
+              ),
+              _controlSection(
+                children: [
+                  _fontSizeSlider(
+                    title: '글자 크기',
+                    value: widget.style.bibleFontSize,
+                    onChanged: (value) => widget.onStyleChanged(
+                      widget.style.copyWith(bibleFontSize: value),
+                    ),
+                  ),
+                  widget.colorPicker(
+                    title: '본문 색상',
+                    selectedColor: widget.style.bibleTextColor,
+                    colors: widget.textSwatches,
+                    onSelected: (color) => widget.onStyleChanged(
+                      widget.style.copyWith(bibleTextColor: color),
+                    ),
+                  ),
+                  widget.verticalPicker(
+                    title: '본문 수직 위치',
+                    selected: widget.style.bibleTextPosition,
+                    onSelected: (position) => widget.onStyleChanged(
+                      widget.style.copyWith(bibleTextPosition: position),
+                    ),
+                  ),
+                  widget.horizontalPicker(
+                    title: '본문 수평 정렬',
+                    selected: widget.style.bibleTextAlign,
+                    onSelected: (position) => widget.onStyleChanged(
+                      widget.style.copyWith(bibleTextAlign: position),
+                    ),
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('제목 표시'),
+                    value: widget.style.showBibleTitle,
+                    onChanged: (value) => widget.onStyleChanged(
+                      widget.style.copyWith(showBibleTitle: value),
+                    ),
+                  ),
+                  if (widget.style.showBibleTitle)
+                    _titleSizeSlider(
+                      value: widget.style.bibleTitleFontSize,
+                      onChanged: (value) => widget.onStyleChanged(
+                        widget.style.copyWith(bibleTitleFontSize: value),
+                      ),
+                    ),
+                  if (widget.style.showBibleTitle)
+                    widget.colorPicker(
+                      title: '제목 색상',
+                      selectedColor: widget.style.bibleTitleTextColor,
+                      colors: widget.textSwatches,
+                      onSelected: (color) => widget.onStyleChanged(
+                        widget.style.copyWith(bibleTitleTextColor: color),
+                      ),
+                    ),
+                  if (widget.style.showBibleTitle)
+                    widget.horizontalPicker(
+                      title: '제목 수평 위치',
+                      selected: widget.style.bibleTitleHorizontalPosition,
+                      onSelected: (position) => widget.onStyleChanged(
+                        widget.style.copyWith(
+                          bibleTitleHorizontalPosition: position,
+                        ),
+                      ),
+                    ),
+                  if (widget.style.showBibleTitle)
+                    widget.verticalPicker(
+                      title: '제목 수직 위치',
+                      selected: widget.style.bibleTitleVerticalPosition,
+                      onSelected: (position) => widget.onStyleChanged(
+                        widget.style.copyWith(
+                          bibleTitleVerticalPosition: position,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -2211,6 +2398,8 @@ class _HexColorDialog extends StatefulWidget {
 class _HexColorDialogState extends State<_HexColorDialog> {
   late final TextEditingController _controller;
   bool _hasError = false;
+
+  static final List<Color> _fullPalette = _buildFullPalette();
 
   @override
   void initState() {
@@ -2238,65 +2427,122 @@ class _HexColorDialogState extends State<_HexColorDialog> {
     Navigator.of(context).pop(color);
   }
 
+  static List<Color> _buildFullPalette() {
+    const hues = <double>[
+      0,
+      15,
+      30,
+      45,
+      60,
+      90,
+      120,
+      150,
+      180,
+      210,
+      240,
+      270,
+      300,
+      330,
+    ];
+    const values = <double>[0.95, 0.78, 0.62, 0.46];
+    const saturations = <double>[0.28, 0.52, 0.76, 1.0];
+    final colors = <Color>[
+      const Color(0xFFFFFFFF),
+      const Color(0xFFEDEDED),
+      const Color(0xFFC8C8C8),
+      const Color(0xFF8A8A8A),
+      const Color(0xFF4A4A4A),
+      const Color(0xFF000000),
+    ];
+
+    for (final hue in hues) {
+      for (final value in values) {
+        for (final saturation in saturations) {
+          colors.add(HSVColor.fromAHSV(1, hue, saturation, value).toColor());
+        }
+      }
+    }
+    return colors;
+  }
+
+  Widget _paletteGrid(
+    BuildContext context, {
+    required List<Color> colors,
+    required double size,
+    required double spacing,
+  }) {
+    return Wrap(
+      spacing: spacing,
+      runSpacing: spacing,
+      children: colors.map((color) {
+        final selected = color.toARGB32() == widget.initialColor.toARGB32();
+        return Tooltip(
+          message: colorToHex(color),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(999),
+            onTap: () => _selectColor(color),
+            child: Container(
+              width: size,
+              height: size,
+              decoration: BoxDecoration(
+                color: color,
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: selected
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).dividerColor,
+                  width: selected ? 3 : 1,
+                ),
+              ),
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
       title: Text(widget.title),
       content: SizedBox(
-        width: 320,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: widget.colors.map((color) {
-                final selected =
-                    color.toARGB32() == widget.initialColor.toARGB32();
-                return Tooltip(
-                  message: colorToHex(color),
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(999),
-                    onTap: () => _selectColor(color),
-                    child: Container(
-                      width: 34,
-                      height: 34,
-                      decoration: BoxDecoration(
-                        color: color,
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: selected
-                              ? Theme.of(context).colorScheme.primary
-                              : Theme.of(context).dividerColor,
-                          width: selected ? 3 : 1,
-                        ),
-                      ),
-                    ),
-                  ),
-                );
-              }).toList(),
-            ),
-            const SizedBox(height: 18),
-            TextField(
-              controller: _controller,
-              autofocus: true,
-              decoration: InputDecoration(
-                labelText: 'HEX 색상',
-                hintText: '#FFFFFF',
-                errorText: _hasError ? '#RRGGBB 형식으로 입력해 주세요.' : null,
-                border: const OutlineInputBorder(),
+        width: 360,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _paletteGrid(
+                context,
+                colors: widget.colors,
+                size: 34,
+                spacing: 10,
               ),
-              inputFormatters: [
-                widget.inputFormatter,
-                LengthLimitingTextInputFormatter(7),
-              ],
-              onChanged: (_) {
-                if (_hasError) setState(() => _hasError = false);
-              },
-              onSubmitted: (_) => _submit(),
-            ),
-          ],
+              const SizedBox(height: 18),
+              Text('전체 색상', style: Theme.of(context).textTheme.labelMedium),
+              const SizedBox(height: 10),
+              _paletteGrid(context, colors: _fullPalette, size: 18, spacing: 5),
+              const SizedBox(height: 18),
+              TextField(
+                controller: _controller,
+                autofocus: false,
+                decoration: InputDecoration(
+                  labelText: 'HEX 색상',
+                  hintText: '#FFFFFF',
+                  errorText: _hasError ? '#RRGGBB 형식으로 입력해 주세요.' : null,
+                  border: const OutlineInputBorder(),
+                ),
+                inputFormatters: [
+                  widget.inputFormatter,
+                  LengthLimitingTextInputFormatter(7),
+                ],
+                onChanged: (_) {
+                  if (_hasError) setState(() => _hasError = false);
+                },
+                onSubmitted: (_) => _submit(),
+              ),
+            ],
+          ),
         ),
       ),
       actions: [
@@ -2356,7 +2602,27 @@ class _PreviewBox extends StatelessWidget {
         isBiblePreview = false;
     }
 
-    final alignment = switch (style.textPosition) {
+    final bodyTextPosition = isBiblePreview
+        ? style.bibleTextPosition
+        : style.textPosition;
+    final titleHorizontalPosition = isBiblePreview
+        ? style.bibleTitleHorizontalPosition
+        : style.titleHorizontalPosition;
+    final titleVerticalPosition = isBiblePreview
+        ? style.bibleTitleVerticalPosition
+        : style.titleVerticalPosition;
+    final bodyFontSize = isBiblePreview ? style.bibleFontSize : style.fontSize;
+    final showTitle = isBiblePreview
+        ? style.showBibleTitle
+        : style.showSongTitle;
+    final titleFontSize = isBiblePreview
+        ? style.bibleTitleFontSize
+        : style.titleFontSize;
+    final titleTextColor = isBiblePreview
+        ? style.bibleTitleTextColor
+        : style.titleTextColor;
+
+    final alignment = switch (bodyTextPosition) {
       VerticalTextPosition.top => Alignment.topCenter,
       VerticalTextPosition.middle => Alignment.center,
       VerticalTextPosition.bottom => Alignment.bottomCenter,
@@ -2386,7 +2652,7 @@ class _PreviewBox extends StatelessWidget {
           final double titleBoxW;
           final double titleLeft;
           final TextAlign titleAlign;
-          switch (style.titleHorizontalPosition) {
+          switch (titleHorizontalPosition) {
             case HorizontalPosition.left:
               titleBoxW = _titleBoxWSide;
               titleLeft = _titlePad;
@@ -2400,7 +2666,7 @@ class _PreviewBox extends StatelessWidget {
               titleLeft = _slideW - _titlePad - _titleBoxWSide;
               titleAlign = TextAlign.right;
           }
-          final double titleTop = switch (style.titleVerticalPosition) {
+          final double titleTop = switch (titleVerticalPosition) {
             VerticalTextPosition.top => _titlePad,
             VerticalTextPosition.middle => (_slideH - _titleBoxH) / 2,
             VerticalTextPosition.bottom => _slideH - _titlePad - _titleBoxH,
@@ -2433,7 +2699,7 @@ class _PreviewBox extends StatelessWidget {
                                 text: sampleText,
                                 style: TextStyle(
                                   color: bodyTextColor,
-                                  fontSize: style.fontSize * fontScale,
+                                  fontSize: bodyFontSize * fontScale,
                                   fontWeight: FontWeight.w700,
                                   height: 1.25,
                                 ),
@@ -2456,7 +2722,7 @@ class _PreviewBox extends StatelessWidget {
                     ),
                   ),
                 ),
-                if (style.showSongTitle && titleText != null)
+                if (showTitle && titleText != null)
                   Positioned(
                     left: w * titleLeft / _slideW,
                     top: h * titleTop / _slideH,
@@ -2468,8 +2734,8 @@ class _PreviewBox extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        color: style.titleTextColor,
-                        fontSize: style.titleFontSize * fontScale,
+                        color: titleTextColor,
+                        fontSize: titleFontSize * fontScale,
                       ),
                     ),
                   ),

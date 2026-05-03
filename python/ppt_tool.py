@@ -484,11 +484,23 @@ def _lyrics_text_layout(horizontal_position):
     return _LYRICS_BOX_LEFT, _LYRICS_BOX_WIDTH, text_align
 
 
-def _add_title_textbox(slide, song_title, style):
-    title_font_size = Pt(style.get("title_font_size", 14))
-    title_color = parse_hex_color(style.get("title_text_color", "#B3FFFFFF"))
-    h_pos = style.get("title_horizontal_position", "right")
-    v_pos = style.get("title_vertical_position", "bottom")
+def _add_title_textbox(slide, song_title, style, is_bible=False):
+    title_font_size = Pt(style.get(
+        "bible_title_font_size" if is_bible else "title_font_size",
+        style.get("title_font_size", 14),
+    ))
+    title_color = parse_hex_color(style.get(
+        "bible_title_text_color" if is_bible else "title_text_color",
+        style.get("title_text_color", "#B3FFFFFF"),
+    ))
+    h_pos = style.get(
+        "bible_title_horizontal_position" if is_bible else "title_horizontal_position",
+        style.get("title_horizontal_position", "right"),
+    )
+    v_pos = style.get(
+        "bible_title_vertical_position" if is_bible else "title_vertical_position",
+        style.get("title_vertical_position", "bottom"),
+    )
 
     if h_pos == "left":
         title_left = _TITLE_BOX_PADDING
@@ -572,11 +584,20 @@ def add_song_slides(prs, song, style):
     bg_color = parse_hex_color(style["background_color"])
     text_color_key = "bible_text_color" if is_bible else "text_color"
     text_color = parse_hex_color(style.get(text_color_key, style["text_color"]))
-    font_size = Pt(style["font_size"])
-    position = style["text_position"]
+    font_size = Pt(style.get(
+        "bible_font_size" if is_bible else "font_size",
+        style["font_size"],
+    ))
+    position = style.get(
+        "bible_text_position" if is_bible else "text_position",
+        style["text_position"],
+    )
     include_english_lyrics = style.get("include_english_lyrics", False)
     english_color = parse_hex_color(style["english_text_color"])
-    show_song_title = style.get("show_song_title", False)
+    show_song_title = style.get(
+        "show_bible_title" if is_bible else "show_song_title",
+        style.get("show_song_title", False),
+    )
     lyrics_text_align_str = style.get(
         "bible_text_align" if is_bible else "lyrics_text_align", "center"
     )
@@ -628,7 +649,7 @@ def add_song_slides(prs, song, style):
             )
 
         if show_song_title:
-            _add_title_textbox(slide, song.get("title", ""), style)
+            _add_title_textbox(slide, song.get("title", ""), style, is_bible=is_bible)
 
 
 def _add_blank_slide(prs, style):

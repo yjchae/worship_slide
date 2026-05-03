@@ -17,6 +17,10 @@ class ExportStyleStore {
     final json = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
     return ExportStyle(
       fontSize: (json['font_size'] as num?)?.toDouble() ?? 30,
+      bibleFontSize:
+          (json['bible_font_size'] as num?)?.toDouble() ??
+          (json['font_size'] as num?)?.toDouble() ??
+          30,
       backgroundColor: parseHexColor(
         json['background_color'] as String?,
         const Color(0xFF1B1B1B),
@@ -28,6 +32,12 @@ class ExportStyleStore {
       ),
       textPosition: VerticalTextPosition.values.firstWhere(
         (position) => position.name == json['text_position'],
+        orElse: () => VerticalTextPosition.middle,
+      ),
+      bibleTextPosition: VerticalTextPosition.values.firstWhere(
+        (position) =>
+            position.name ==
+            (json['bible_text_position'] ?? json['text_position']),
         orElse: () => VerticalTextPosition.middle,
       ),
       lyricsTextAlign: HorizontalPosition.values.firstWhere(
@@ -44,10 +54,25 @@ class ExportStyleStore {
         const Color(0xFFFFF176),
       ),
       showSongTitle: json['show_song_title'] as bool? ?? false,
+      showBibleTitle:
+          json['show_bible_title'] as bool? ??
+          json['show_song_title'] as bool? ??
+          false,
       titleFontSize: (json['title_font_size'] as num?)?.toDouble() ?? 14,
+      bibleTitleFontSize:
+          (json['bible_title_font_size'] as num?)?.toDouble() ??
+          (json['title_font_size'] as num?)?.toDouble() ??
+          14,
       titleTextColor: parseHexColor(
         json['title_text_color'] as String?,
         const Color(0xB3FFFFFF),
+      ),
+      bibleTitleTextColor: parseHexColor(
+        json['bible_title_text_color'] as String?,
+        parseHexColor(
+          json['title_text_color'] as String?,
+          const Color(0xB3FFFFFF),
+        ),
       ),
       titleHorizontalPosition: HorizontalPosition.values.firstWhere(
         (pos) => pos.name == json['title_horizontal_position'],
@@ -55,6 +80,20 @@ class ExportStyleStore {
       ),
       titleVerticalPosition: VerticalTextPosition.values.firstWhere(
         (pos) => pos.name == json['title_vertical_position'],
+        orElse: () => VerticalTextPosition.bottom,
+      ),
+      bibleTitleHorizontalPosition: HorizontalPosition.values.firstWhere(
+        (pos) =>
+            pos.name ==
+            (json['bible_title_horizontal_position'] ??
+                json['title_horizontal_position']),
+        orElse: () => HorizontalPosition.right,
+      ),
+      bibleTitleVerticalPosition: VerticalTextPosition.values.firstWhere(
+        (pos) =>
+            pos.name ==
+            (json['bible_title_vertical_position'] ??
+                json['title_vertical_position']),
         orElse: () => VerticalTextPosition.bottom,
       ),
     );
