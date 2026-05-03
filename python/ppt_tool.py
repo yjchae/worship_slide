@@ -463,10 +463,10 @@ def parse_hex_color(hex_color):
 
 _TITLE_BOX_HEIGHT = 0.55
 _TITLE_BOX_PADDING = 0.2
-_TITLE_BOX_WIDTH_SIDE = 5.8
 _TITLE_BOX_WIDTH_CENTER = 10.0
 _SLIDE_W = 13.333
 _SLIDE_H = 7.5
+_TITLE_BOX_WIDTH_SIDE = _SLIDE_W - (_TITLE_BOX_PADDING * 2)
 _LYRICS_BOX_TOP = 0.6
 _LYRICS_BOX_HEIGHT = 5.4
 _LYRICS_BOX_BOTTOM = _SLIDE_H - _LYRICS_BOX_TOP - _LYRICS_BOX_HEIGHT
@@ -537,7 +537,7 @@ def _add_title_textbox(slide, song_title, style, is_bible=False):
         Inches(title_width), Inches(_TITLE_BOX_HEIGHT),
     )
     frame = box.text_frame
-    frame.word_wrap = True
+    frame.word_wrap = False
     para = frame.paragraphs[0]
     para.alignment = text_align
     run = para.add_run()
