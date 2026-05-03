@@ -1847,30 +1847,20 @@ class _DesignPanel extends StatelessWidget {
   static final TextInputFormatter _hexInputFormatter =
       FilteringTextInputFormatter.allow(RegExp(r'[0-9a-fA-F#]'));
 
-  List<ButtonSegment<HorizontalPosition>> _horizontalSegments() =>
-      HorizontalPosition.values
-          .map(
-            (pos) => ButtonSegment<HorizontalPosition>(
-              value: pos,
-              label: Text(pos.label),
-            ),
-          )
-          .toList(growable: false);
-
-  List<ButtonSegment<VerticalTextPosition>> _verticalSegments() =>
-      VerticalTextPosition.values
-          .map(
-            (pos) => ButtonSegment<VerticalTextPosition>(
-              value: pos,
-              label: Text(pos.label),
-            ),
-          )
-          .toList(growable: false);
+  List<ButtonSegment<T>> _segments<T>(
+    List<T> values,
+    String Function(T value) labelOf,
+  ) => values
+      .map(
+        (value) => ButtonSegment<T>(value: value, label: Text(labelOf(value))),
+      )
+      .toList(growable: false);
 
   Future<void> _showColorDialog(
     BuildContext context, {
     required String title,
     required Color current,
+    required List<Color> colors,
     required ValueChanged<Color> onSelected,
   }) async {
     final selected = await showDialog<Color>(
@@ -1878,6 +1868,7 @@ class _DesignPanel extends StatelessWidget {
       builder: (context) => _HexColorDialog(
         title: title,
         initialColor: current,
+        colors: colors,
         inputFormatter: _hexInputFormatter,
       ),
     );
@@ -1891,47 +1882,92 @@ class _DesignPanel extends StatelessWidget {
     required List<Color> colors,
     required ValueChanged<Color> onSelected,
   }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Expanded(child: Text(title)),
-            TextButton.icon(
-              onPressed: () => _showColorDialog(
-                context,
-                title: '$title 직접 입력',
-                current: selectedColor,
-                onSelected: onSelected,
-              ),
-              icon: const Icon(Icons.tune_rounded, size: 18),
-              label: Text(colorToHex(selectedColor)),
+    final textColor =
+        ThemeData.estimateBrightnessForColor(selectedColor) == Brightness.dark
+        ? Colors.white
+        : Colors.black;
+
+    return OutlinedButton(
+      style: OutlinedButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ),
+      onPressed: () => _showColorDialog(
+        context,
+        title: title,
+        current: selectedColor,
+        colors: colors,
+        onSelected: onSelected,
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              title,
+              style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
             ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: colors.map((color) {
-            final selected = color.toARGB32() == selectedColor.toARGB32();
-            return InkWell(
-              borderRadius: BorderRadius.circular(999),
-              onTap: () => onSelected(color),
-              child: Container(
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(
-                  color: color,
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: selected ? Colors.black : Colors.grey.shade300,
-                    width: selected ? 3 : 1,
-                  ),
-                ),
-              ),
-            );
-          }).toList(),
+          ),
+          Container(
+            width: 28,
+            height: 28,
+            decoration: BoxDecoration(
+              color: selectedColor,
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: Theme.of(context).dividerColor),
+            ),
+            child: Icon(
+              Icons.palette_outlined,
+              size: 16,
+              color: textColor.withValues(alpha: 0.9),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            colorToHex(selectedColor),
+            style: TextStyle(
+              color: Theme.of(context).colorScheme.primary,
+              fontFeatures: const [FontFeature.tabularFigures()],
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _controlSection({required List<Widget> children}) {
+    return Column(
+      children: [
+        for (var i = 0; i < children.length; i++) ...[
+          if (i > 0) const SizedBox(height: 8),
+          children[i],
+        ],
+      ],
+    );
+  }
+
+  Widget _segmentedPicker<T>({
+    required String title,
+    required T selected,
+    required List<T> values,
+    required String Function(T value) labelOf,
+    required ValueChanged<T> onSelected,
+  }) {
+    return Row(
+      children: [
+        Expanded(child: Text(title, overflow: TextOverflow.ellipsis)),
+        const SizedBox(width: 12),
+        Flexible(
+          flex: 0,
+          child: SegmentedButton<T>(
+            segments: _segments(values, labelOf),
+            selected: {selected},
+            style: const ButtonStyle(
+              visualDensity: VisualDensity(horizontal: -2, vertical: -2),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            onSelectionChanged: (selection) => onSelected(selection.first),
+          ),
         ),
       ],
     );
@@ -1942,17 +1978,12 @@ class _DesignPanel extends StatelessWidget {
     required HorizontalPosition selected,
     required ValueChanged<HorizontalPosition> onSelected,
   }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(title),
-        const SizedBox(height: 10),
-        SegmentedButton<HorizontalPosition>(
-          segments: _horizontalSegments(),
-          selected: {selected},
-          onSelectionChanged: (selection) => onSelected(selection.first),
-        ),
-      ],
+    return _segmentedPicker<HorizontalPosition>(
+      title: title,
+      selected: selected,
+      values: HorizontalPosition.values,
+      labelOf: (position) => position.label,
+      onSelected: onSelected,
     );
   }
 
@@ -1961,17 +1992,12 @@ class _DesignPanel extends StatelessWidget {
     required VerticalTextPosition selected,
     required ValueChanged<VerticalTextPosition> onSelected,
   }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(title),
-        const SizedBox(height: 10),
-        SegmentedButton<VerticalTextPosition>(
-          segments: _verticalSegments(),
-          selected: {selected},
-          onSelectionChanged: (selection) => onSelected(selection.first),
-        ),
-      ],
+    return _segmentedPicker<VerticalTextPosition>(
+      title: title,
+      selected: selected,
+      values: VerticalTextPosition.values,
+      labelOf: (position) => position.label,
+      onSelected: onSelected,
     );
   }
 
@@ -2020,32 +2046,35 @@ class _DesignPanel extends StatelessWidget {
                           onStyleChanged(style.copyWith(fontSize: value)),
                     ),
                     const SizedBox(height: 8),
-                    _colorPicker(
-                      context: context,
-                      title: '배경 색상',
-                      selectedColor: style.backgroundColor,
-                      colors: swatches,
-                      onSelected: (color) => onStyleChanged(
-                        style.copyWith(backgroundColor: color),
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    _colorPicker(
-                      context: context,
-                      title: '한글 가사 색상',
-                      selectedColor: style.textColor,
-                      colors: textSwatches,
-                      onSelected: (color) =>
-                          onStyleChanged(style.copyWith(textColor: color)),
-                    ),
-                    const SizedBox(height: 20),
-                    _colorPicker(
-                      context: context,
-                      title: '성경 본문 색상',
-                      selectedColor: style.bibleTextColor,
-                      colors: textSwatches,
-                      onSelected: (color) =>
-                          onStyleChanged(style.copyWith(bibleTextColor: color)),
+                    _controlSection(
+                      children: [
+                        _colorPicker(
+                          context: context,
+                          title: '배경 색상',
+                          selectedColor: style.backgroundColor,
+                          colors: swatches,
+                          onSelected: (color) => onStyleChanged(
+                            style.copyWith(backgroundColor: color),
+                          ),
+                        ),
+                        _colorPicker(
+                          context: context,
+                          title: '한글 가사 색상',
+                          selectedColor: style.textColor,
+                          colors: textSwatches,
+                          onSelected: (color) =>
+                              onStyleChanged(style.copyWith(textColor: color)),
+                        ),
+                        _colorPicker(
+                          context: context,
+                          title: '성경 본문 색상',
+                          selectedColor: style.bibleTextColor,
+                          colors: textSwatches,
+                          onSelected: (color) => onStyleChanged(
+                            style.copyWith(bibleTextColor: color),
+                          ),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 20),
                     SwitchListTile(
@@ -2057,38 +2086,44 @@ class _DesignPanel extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 8),
-                    _colorPicker(
-                      context: context,
-                      title: '영어 가사 색상',
-                      selectedColor: style.englishTextColor,
-                      colors: textSwatches,
-                      onSelected: (color) => onStyleChanged(
-                        style.copyWith(englishTextColor: color),
-                      ),
+                    _controlSection(
+                      children: [
+                        _colorPicker(
+                          context: context,
+                          title: '영어 가사 색상',
+                          selectedColor: style.englishTextColor,
+                          colors: textSwatches,
+                          onSelected: (color) => onStyleChanged(
+                            style.copyWith(englishTextColor: color),
+                          ),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 20),
-                    _verticalPicker(
-                      title: '글자 수직 위치',
-                      selected: style.textPosition,
-                      onSelected: (position) => onStyleChanged(
-                        style.copyWith(textPosition: position),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    _horizontalPicker(
-                      title: '찬양 가사 수평 정렬',
-                      selected: style.lyricsTextAlign,
-                      onSelected: (position) => onStyleChanged(
-                        style.copyWith(lyricsTextAlign: position),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    _horizontalPicker(
-                      title: '성경 본문 수평 정렬',
-                      selected: style.bibleTextAlign,
-                      onSelected: (position) => onStyleChanged(
-                        style.copyWith(bibleTextAlign: position),
-                      ),
+                    _controlSection(
+                      children: [
+                        _verticalPicker(
+                          title: '글자 수직 위치',
+                          selected: style.textPosition,
+                          onSelected: (position) => onStyleChanged(
+                            style.copyWith(textPosition: position),
+                          ),
+                        ),
+                        _horizontalPicker(
+                          title: '찬양 가사 수평 정렬',
+                          selected: style.lyricsTextAlign,
+                          onSelected: (position) => onStyleChanged(
+                            style.copyWith(lyricsTextAlign: position),
+                          ),
+                        ),
+                        _horizontalPicker(
+                          title: '성경 본문 수평 정렬',
+                          selected: style.bibleTextAlign,
+                          onSelected: (position) => onStyleChanged(
+                            style.copyWith(bibleTextAlign: position),
+                          ),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 12),
                     const Divider(),
@@ -2111,30 +2146,37 @@ class _DesignPanel extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(height: 4),
-                      _colorPicker(
-                        context: context,
-                        title: '제목 색상',
-                        selectedColor: style.titleTextColor,
-                        colors: textSwatches,
-                        onSelected: (color) => onStyleChanged(
-                          style.copyWith(titleTextColor: color),
-                        ),
+                      _controlSection(
+                        children: [
+                          _colorPicker(
+                            context: context,
+                            title: '제목 색상',
+                            selectedColor: style.titleTextColor,
+                            colors: textSwatches,
+                            onSelected: (color) => onStyleChanged(
+                              style.copyWith(titleTextColor: color),
+                            ),
+                          ),
+                        ],
                       ),
                       const SizedBox(height: 14),
-                      _horizontalPicker(
-                        title: '제목 수평 위치',
-                        selected: style.titleHorizontalPosition,
-                        onSelected: (position) => onStyleChanged(
-                          style.copyWith(titleHorizontalPosition: position),
-                        ),
-                      ),
-                      const SizedBox(height: 14),
-                      _verticalPicker(
-                        title: '제목 수직 위치',
-                        selected: style.titleVerticalPosition,
-                        onSelected: (position) => onStyleChanged(
-                          style.copyWith(titleVerticalPosition: position),
-                        ),
+                      _controlSection(
+                        children: [
+                          _horizontalPicker(
+                            title: '제목 수평 위치',
+                            selected: style.titleHorizontalPosition,
+                            onSelected: (position) => onStyleChanged(
+                              style.copyWith(titleHorizontalPosition: position),
+                            ),
+                          ),
+                          _verticalPicker(
+                            title: '제목 수직 위치',
+                            selected: style.titleVerticalPosition,
+                            onSelected: (position) => onStyleChanged(
+                              style.copyWith(titleVerticalPosition: position),
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                     const SizedBox(height: 16),
@@ -2153,11 +2195,13 @@ class _HexColorDialog extends StatefulWidget {
   const _HexColorDialog({
     required this.title,
     required this.initialColor,
+    required this.colors,
     required this.inputFormatter,
   });
 
   final String title;
   final Color initialColor;
+  final List<Color> colors;
   final TextInputFormatter inputFormatter;
 
   @override
@@ -2189,27 +2233,71 @@ class _HexColorDialogState extends State<_HexColorDialog> {
     Navigator.of(context).pop(color);
   }
 
+  void _selectColor(Color color) {
+    _controller.text = colorToHex(color);
+    Navigator.of(context).pop(color);
+  }
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
       title: Text(widget.title),
-      content: TextField(
-        controller: _controller,
-        autofocus: true,
-        decoration: InputDecoration(
-          labelText: 'HEX 색상',
-          hintText: '#FFFFFF',
-          errorText: _hasError ? '#RRGGBB 형식으로 입력해 주세요.' : null,
-          border: const OutlineInputBorder(),
+      content: SizedBox(
+        width: 320,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: widget.colors.map((color) {
+                final selected =
+                    color.toARGB32() == widget.initialColor.toARGB32();
+                return Tooltip(
+                  message: colorToHex(color),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(999),
+                    onTap: () => _selectColor(color),
+                    child: Container(
+                      width: 34,
+                      height: 34,
+                      decoration: BoxDecoration(
+                        color: color,
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: selected
+                              ? Theme.of(context).colorScheme.primary
+                              : Theme.of(context).dividerColor,
+                          width: selected ? 3 : 1,
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 18),
+            TextField(
+              controller: _controller,
+              autofocus: true,
+              decoration: InputDecoration(
+                labelText: 'HEX 색상',
+                hintText: '#FFFFFF',
+                errorText: _hasError ? '#RRGGBB 형식으로 입력해 주세요.' : null,
+                border: const OutlineInputBorder(),
+              ),
+              inputFormatters: [
+                widget.inputFormatter,
+                LengthLimitingTextInputFormatter(7),
+              ],
+              onChanged: (_) {
+                if (_hasError) setState(() => _hasError = false);
+              },
+              onSubmitted: (_) => _submit(),
+            ),
+          ],
         ),
-        inputFormatters: [
-          widget.inputFormatter,
-          LengthLimitingTextInputFormatter(7),
-        ],
-        onChanged: (_) {
-          if (_hasError) setState(() => _hasError = false);
-        },
-        onSubmitted: (_) => _submit(),
       ),
       actions: [
         TextButton(
@@ -2436,7 +2524,9 @@ class _UpdateBanner extends StatelessWidget {
                         style: TextStyle(color: scheme.onPrimaryContainer),
                       ),
                       const SizedBox(height: 4),
-                      LinearProgressIndicator(value: progress > 0 ? progress : null),
+                      LinearProgressIndicator(
+                        value: progress > 0 ? progress : null,
+                      ),
                     ],
                   )
                 : Text(
