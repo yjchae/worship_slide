@@ -38,6 +38,8 @@ class ExportStyle {
   const ExportStyle({
     required this.fontSize,
     required this.bibleFontSize,
+    required this.textBoxTop,
+    required this.bibleTextBoxTop,
     required this.backgroundColor,
     required this.textColor,
     required this.bibleTextColor,
@@ -61,6 +63,8 @@ class ExportStyle {
 
   final double fontSize;
   final double bibleFontSize;
+  final double textBoxTop;
+  final double bibleTextBoxTop;
   final Color backgroundColor;
   final Color textColor;
   final Color bibleTextColor;
@@ -85,6 +89,8 @@ class ExportStyle {
     return {
       'font_size': fontSize,
       'bible_font_size': bibleFontSize,
+      'text_box_top': textBoxTop,
+      'bible_text_box_top': bibleTextBoxTop,
       'background_color': colorToHex(backgroundColor),
       'text_color': colorToHex(textColor),
       'bible_text_color': colorToHex(bibleTextColor),
@@ -110,6 +116,8 @@ class ExportStyle {
   ExportStyle copyWith({
     double? fontSize,
     double? bibleFontSize,
+    double? textBoxTop,
+    double? bibleTextBoxTop,
     Color? backgroundColor,
     Color? textColor,
     Color? bibleTextColor,
@@ -133,6 +141,8 @@ class ExportStyle {
     return ExportStyle(
       fontSize: fontSize ?? this.fontSize,
       bibleFontSize: bibleFontSize ?? this.bibleFontSize,
+      textBoxTop: textBoxTop ?? this.textBoxTop,
+      bibleTextBoxTop: bibleTextBoxTop ?? this.bibleTextBoxTop,
       backgroundColor: backgroundColor ?? this.backgroundColor,
       textColor: textColor ?? this.textColor,
       bibleTextColor: bibleTextColor ?? this.bibleTextColor,

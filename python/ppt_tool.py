@@ -469,6 +469,7 @@ _SLIDE_W = 13.333
 _SLIDE_H = 7.5
 _LYRICS_BOX_TOP = 0.6
 _LYRICS_BOX_HEIGHT = 5.4
+_LYRICS_BOX_BOTTOM = _SLIDE_H - _LYRICS_BOX_TOP - _LYRICS_BOX_HEIGHT
 _LYRICS_BOX_WIDTH = _SLIDE_W * 0.9
 _LYRICS_BOX_LEFT = (_SLIDE_W - _LYRICS_BOX_WIDTH) / 2
 _TEXT_ALIGN_MAP = {
@@ -482,6 +483,15 @@ _FONT_NAME = "Pretendard"
 def _lyrics_text_layout(horizontal_position):
     text_align = _TEXT_ALIGN_MAP.get(horizontal_position, PP_ALIGN.CENTER)
     return _LYRICS_BOX_LEFT, _LYRICS_BOX_WIDTH, text_align
+
+
+def _lyrics_box_vertical_layout(style, is_bible):
+    top = float(style.get(
+        "bible_text_box_top" if is_bible else "text_box_top",
+        _LYRICS_BOX_TOP,
+    ))
+    top = min(max(top, 0.3), _SLIDE_H - _LYRICS_BOX_BOTTOM - 1.0)
+    return top, _SLIDE_H - top - _LYRICS_BOX_BOTTOM
 
 
 def _add_title_textbox(slide, song_title, style, is_bible=False):
@@ -617,10 +627,13 @@ def add_song_slides(prs, song, style):
         slide = prs.slides.add_slide(prs.slide_layouts[6])
         slide.background.fill.solid()
         slide.background.fill.fore_color.rgb = bg_color
+        lyrics_box_top, lyrics_box_height = _lyrics_box_vertical_layout(
+            style, is_bible
+        )
 
         textbox = slide.shapes.add_textbox(
-            Inches(lyrics_box_left), Inches(_LYRICS_BOX_TOP),
-            Inches(lyrics_box_width), Inches(_LYRICS_BOX_HEIGHT),
+            Inches(lyrics_box_left), Inches(lyrics_box_top),
+            Inches(lyrics_box_width), Inches(lyrics_box_height),
         )
         frame = textbox.text_frame
         frame.clear()

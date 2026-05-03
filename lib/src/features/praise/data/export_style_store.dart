@@ -21,6 +21,11 @@ class ExportStyleStore {
           (json['bible_font_size'] as num?)?.toDouble() ??
           (json['font_size'] as num?)?.toDouble() ??
           30,
+      textBoxTop: (json['text_box_top'] as num?)?.toDouble() ?? 0.6,
+      bibleTextBoxTop:
+          (json['bible_text_box_top'] as num?)?.toDouble() ??
+          (json['text_box_top'] as num?)?.toDouble() ??
+          0.6,
       backgroundColor: parseHexColor(
         json['background_color'] as String?,
         const Color(0xFF1B1B1B),

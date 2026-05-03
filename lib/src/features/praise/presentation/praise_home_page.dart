@@ -26,6 +26,8 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
   static const ExportStyle _defaultStyle = ExportStyle(
     fontSize: 30,
     bibleFontSize: 30,
+    textBoxTop: 0.6,
+    bibleTextBoxTop: 0.6,
     backgroundColor: Color(0xFF1B1B1B),
     textColor: Colors.white,
     bibleTextColor: Colors.white,
@@ -2174,6 +2176,25 @@ class _StyleTabControlsState extends State<_StyleTabControls> {
     );
   }
 
+  Widget _topMarginSlider({
+    required double value,
+    required ValueChanged<double> onChanged,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('본문 상단 여백 ${value.toStringAsFixed(1)}'),
+        Slider(
+          min: 0.3,
+          max: 2.2,
+          divisions: 19,
+          value: value.clamp(0.3, 2.2),
+          onChanged: onChanged,
+        ),
+      ],
+    );
+  }
+
   Widget _titleSizeSlider({
     required double value,
     required ValueChanged<double> onChanged,
@@ -2240,6 +2261,12 @@ class _StyleTabControlsState extends State<_StyleTabControls> {
                     selected: widget.style.textPosition,
                     onSelected: (position) => widget.onStyleChanged(
                       widget.style.copyWith(textPosition: position),
+                    ),
+                  ),
+                  _topMarginSlider(
+                    value: widget.style.textBoxTop,
+                    onChanged: (value) => widget.onStyleChanged(
+                      widget.style.copyWith(textBoxTop: value),
                     ),
                   ),
                   widget.horizontalPicker(
@@ -2315,6 +2342,12 @@ class _StyleTabControlsState extends State<_StyleTabControls> {
                     selected: widget.style.bibleTextPosition,
                     onSelected: (position) => widget.onStyleChanged(
                       widget.style.copyWith(bibleTextPosition: position),
+                    ),
+                  ),
+                  _topMarginSlider(
+                    value: widget.style.bibleTextBoxTop,
+                    onChanged: (value) => widget.onStyleChanged(
+                      widget.style.copyWith(bibleTextBoxTop: value),
                     ),
                   ),
                   widget.horizontalPicker(
@@ -2568,6 +2601,7 @@ class _PreviewBox extends StatelessWidget {
   static const double _slideH = 7.5;
   static const double _lyricsBoxT = 0.6;
   static const double _lyricsBoxH = 5.4;
+  static const double _lyricsBoxBottom = _slideH - _lyricsBoxT - _lyricsBoxH;
   static const double _lyricsBoxW = _slideW * 0.9;
   static const double _lyricsBoxL = (_slideW - _lyricsBoxW) / 2;
   static const double _titleBoxH = 0.55;
@@ -2612,6 +2646,10 @@ class _PreviewBox extends StatelessWidget {
         ? style.bibleTitleVerticalPosition
         : style.titleVerticalPosition;
     final bodyFontSize = isBiblePreview ? style.bibleFontSize : style.fontSize;
+    final bodyBoxTop = isBiblePreview
+        ? style.bibleTextBoxTop
+        : style.textBoxTop;
+    final bodyBoxHeight = _slideH - bodyBoxTop - _lyricsBoxBottom;
     final showTitle = isBiblePreview
         ? style.showBibleTitle
         : style.showSongTitle;
@@ -2681,9 +2719,9 @@ class _PreviewBox extends StatelessWidget {
                   child: Padding(
                     padding: EdgeInsets.only(
                       left: w * _lyricsBoxL / _slideW,
-                      top: h * _lyricsBoxT / _slideH,
+                      top: h * bodyBoxTop / _slideH,
                       right: w * (1 - (_lyricsBoxL + _lyricsBoxW) / _slideW),
-                      bottom: h * (1 - (_lyricsBoxT + _lyricsBoxH) / _slideH),
+                      bottom: h * (1 - (bodyBoxTop + bodyBoxHeight) / _slideH),
                     ),
                     child: Align(
                       alignment: alignment,

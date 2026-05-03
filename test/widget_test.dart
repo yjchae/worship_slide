@@ -21,6 +21,8 @@ void main() {
     const style = ExportStyle(
       fontSize: 32,
       bibleFontSize: 36,
+      textBoxTop: 0.8,
+      bibleTextBoxTop: 1.1,
       backgroundColor: Color(0xFF0F4C5C),
       textColor: Colors.white,
       bibleTextColor: Color(0xFFFFF8E1),
@@ -45,6 +47,8 @@ void main() {
     final json = style.toJson();
     expect(json['font_size'], 32.0);
     expect(json['bible_font_size'], 36.0);
+    expect(json['text_box_top'], 0.8);
+    expect(json['bible_text_box_top'], 1.1);
     expect(json['background_color'], '#0F4C5C');
     expect(json['text_color'], '#FFFFFF');
     expect(json['bible_text_color'], '#FFF8E1');
