@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -890,7 +891,7 @@ class _TopBar extends StatelessWidget {
                     ),
                   )
                 : const Icon(Icons.upload_file_rounded, size: 16),
-            label: Text(isImporting ? '읽는 중' : '폴더 선택'),
+            label: Text(isImporting ? '읽는 중' : '찬양폴더 선택'),
           ),
           const SizedBox(width: 8),
           FilledButton.icon(
@@ -1286,6 +1287,7 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
   String? _selectedVersion;
   List<String> _bookNames = [];
   String? _selectedBook;
+  final TextEditingController _bookController = TextEditingController();
   final TextEditingController _chapterController = TextEditingController();
   final TextEditingController _verseController = TextEditingController();
   List<BibleVerse> _verses = const [];
@@ -1293,10 +1295,15 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
   int? _lastSelectedVerseIndex;
   int _versesPerPage = 2;
   bool _isSearching = false;
+  bool _isSyncingBookController = false;
+  Timer? _searchDebounce;
 
   @override
   void initState() {
     super.initState();
+    _bookController.addListener(_onBibleInputChanged);
+    _chapterController.addListener(_onBibleInputChanged);
+    _verseController.addListener(_onBibleInputChanged);
     _loadBookNames();
   }
 
@@ -1311,6 +1318,12 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
+    _bookController
+      ..removeListener(_onBibleInputChanged)
+      ..dispose();
+    _chapterController.removeListener(_onBibleInputChanged);
+    _verseController.removeListener(_onBibleInputChanged);
     _chapterController.dispose();
     _verseController.dispose();
     super.dispose();
@@ -1336,49 +1349,97 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
           : await widget.bibleRepository.getBookNamesForVersion(
               selectedVersion,
             );
+      final selectedBook =
+          _selectedBook != null && books.contains(_selectedBook)
+          ? _selectedBook
+          : null;
       if (!mounted) return;
       setState(() {
         _hasData = has;
         _versionNames = versions;
         _selectedVersion = selectedVersion;
         _bookNames = books;
-        if (_selectedBook != null && !books.contains(_selectedBook)) {
-          _selectedBook = null;
-        }
+        _selectedBook = selectedBook;
       });
+      _setBookText(selectedBook ?? '');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  Future<void> _search() async {
+  void _onBibleInputChanged() {
+    if (_isSyncingBookController) return;
+    final typedBook = _bookController.text.trim();
+    final matchedBook = _matchingBook(typedBook);
+    if (matchedBook != _selectedBook) {
+      setState(() {
+        _selectedBook = matchedBook;
+        if (matchedBook == null) {
+          _verses = const [];
+          _selectedVerseIds.clear();
+          _lastSelectedVerseIndex = null;
+        }
+      });
+    }
+
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 350), () {
+      if (!mounted) return;
+      _search(showMessages: false);
+    });
+  }
+
+  void _setBookText(String value) {
+    if (_bookController.text == value) return;
+    _isSyncingBookController = true;
+    _bookController.text = value;
+    _isSyncingBookController = false;
+  }
+
+  String? _matchingBook(String value) {
+    final normalized = value.toLowerCase();
+    for (final book in _bookNames) {
+      if (book.toLowerCase() == normalized) return book;
+    }
+    return null;
+  }
+
+  Future<void> _search({bool showMessages = true}) async {
     final version = _selectedVersion;
     final book = _selectedBook;
     final chapter = int.tryParse(_chapterController.text.trim());
     final verseText = _verseController.text.trim();
     final verse = verseText.isEmpty ? null : int.tryParse(verseText);
     if (version == null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('성경 버전을 선택해 주세요.')));
+      if (showMessages) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('성경 버전을 선택해 주세요.')));
+      }
       return;
     }
     if (book == null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('성경을 선택해 주세요.')));
+      if (showMessages) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('성경을 선택해 주세요.')));
+      }
       return;
     }
     if (chapter == null || chapter <= 0) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('장 번호를 입력해 주세요.')));
+      if (showMessages) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('장 번호를 입력해 주세요.')));
+      }
       return;
     }
     if (verseText.isNotEmpty && (verse == null || verse <= 0)) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('절 번호를 올바르게 입력해 주세요.')));
+      if (showMessages) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('절 번호를 올바르게 입력해 주세요.')));
+      }
       return;
     }
 
@@ -1398,7 +1459,7 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
       );
       if (!mounted) return;
       setState(() => _verses = verses);
-      if (verses.isEmpty && mounted) {
+      if (verses.isEmpty && mounted && showMessages) {
         final reference = verse == null
             ? '$book $chapter장'
             : '$book $chapter:$verse';
@@ -1408,9 +1469,11 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('검색 실패: $e')));
+      if (showMessages) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('검색 실패: $e')));
+      }
     } finally {
       if (mounted) setState(() => _isSearching = false);
     }
@@ -1441,9 +1504,7 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
         chunk.first.chapter,
         verseNums,
       );
-      final text = chunk.length == 1
-          ? chunk.first.text
-          : chunk.map((v) => '${v.verse}. ${v.text}').join('\n');
+      final text = chunk.map((v) => '${v.verse}. ${v.text}').join('\n');
       widget.onAddItem(BibleStagingItem(reference: ref, text: text));
     }
     setState(() => _selectedVerseIds.clear());
@@ -1495,6 +1556,7 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
       _selectedVerseIds.clear();
       _lastSelectedVerseIndex = null;
     });
+    _setBookText('');
     final books = await widget.bibleRepository.getBookNamesForVersion(version);
     if (!mounted) return;
     setState(() => _bookNames = books);
@@ -1582,19 +1644,42 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
                 flex: 3,
                 child: SizedBox(
                   height: inputHeight,
-                  child: DropdownButtonFormField<String>(
-                    initialValue: _selectedBook,
-                    isExpanded: true,
-                    decoration: const InputDecoration(
-                      labelText: '성경',
-                      border: OutlineInputBorder(),
-                      contentPadding: EdgeInsets.symmetric(horizontal: 12),
-                    ),
-                    hint: const Text('선택'),
-                    items: _bookNames
-                        .map((b) => DropdownMenuItem(value: b, child: Text(b)))
-                        .toList(),
-                    onChanged: (v) => setState(() => _selectedBook = v),
+                  child: Autocomplete<String>(
+                    key: ValueKey(_selectedVersion),
+                    initialValue: TextEditingValue(text: _bookController.text),
+                    optionsBuilder: (textEditingValue) {
+                      final query = textEditingValue.text.trim().toLowerCase();
+                      if (query.isEmpty) return _bookNames;
+                      return _bookNames.where(
+                        (book) => book.toLowerCase().contains(query),
+                      );
+                    },
+                    onSelected: (book) {
+                      _bookController.text = book;
+                      setState(() => _selectedBook = book);
+                      _search(showMessages: false);
+                    },
+                    fieldViewBuilder:
+                        (context, controller, focusNode, onFieldSubmitted) {
+                          return TextField(
+                            controller: controller,
+                            focusNode: focusNode,
+                            textAlignVertical: TextAlignVertical.center,
+                            decoration: const InputDecoration(
+                              labelText: '성경 검색',
+                              prefixIcon: Icon(Icons.search_rounded),
+                              border: OutlineInputBorder(),
+                              contentPadding: EdgeInsets.symmetric(
+                                horizontal: 12,
+                              ),
+                            ),
+                            onChanged: (value) => _bookController.text = value,
+                            onSubmitted: (_) {
+                              onFieldSubmitted();
+                              _search();
+                            },
+                          );
+                        },
                   ),
                 ),
               ),
@@ -1632,14 +1717,6 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
                   onSubmitted: (_) => _search(),
                 ),
               ),
-              const SizedBox(width: 8),
-              SizedBox(
-                height: inputHeight,
-                child: FilledButton(
-                  onPressed: _isSearching ? null : _search,
-                  child: const Text('검색'),
-                ),
-              ),
             ],
           ),
           const SizedBox(height: 8),
@@ -1651,8 +1728,8 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
                 ? Center(
                     child: Text(
                       _selectedBook == null
-                          ? '성경을 선택하고 장 번호를 입력한 뒤\n검색 버튼을 눌러 주세요.'
-                          : '검색 버튼을 눌러 절을 불러오세요.',
+                          ? '성경과 장 번호를 입력해 주세요.'
+                          : '장 번호를 입력하면 절을 불러옵니다.',
                       textAlign: TextAlign.center,
                       style: const TextStyle(color: Colors.grey),
                     ),
@@ -1910,6 +1987,21 @@ class _DesignPanel extends StatelessWidget {
               'PPTX 디자인',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
             ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: isExporting ? null : onExportPressed,
+                icon: isExporting
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.slideshow_rounded),
+                label: Text(isExporting ? '생성 중' : '선택한 항목으로 PPTX 저장'),
+              ),
+            ),
             const SizedBox(height: 16),
             _PreviewBox(style: style, previewItem: previewItem),
             const SizedBox(height: 12),
@@ -2048,21 +2140,6 @@ class _DesignPanel extends StatelessWidget {
                     const SizedBox(height: 16),
                   ],
                 ),
-              ),
-            ),
-            const SizedBox(height: 8),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: isExporting ? null : onExportPressed,
-                icon: isExporting
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.slideshow_rounded),
-                label: Text(isExporting ? '생성 중' : '선택한 항목으로 PPTX 저장'),
               ),
             ),
           ],

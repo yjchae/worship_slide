@@ -80,8 +80,6 @@ New-Item -ItemType Directory -Force -Path "$distDir\python" | Out-Null
 
 Copy-Item -Recurse "build\windows\x64\runner\Release\*" "$distDir\"
 Copy-Item "python\ppt_tool.exe" "$distDir\python\"
-Copy-Item "python\ppt_tool.py" "$distDir\python\"
-Copy-Item "python\requirements.txt" "$distDir\python\"
 
 Write-Host "  -> Created $distDir" -ForegroundColor Green
 Write-Host ""

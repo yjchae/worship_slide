@@ -13,6 +13,8 @@ from pathlib import Path
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
+from pptx.oxml.ns import qn
+from pptx.oxml.xmlchemy import OxmlElement
 from pptx.util import Inches, Pt
 
 PPT_CONVERT_CHUNK_SIZE = 40
@@ -474,6 +476,7 @@ _TEXT_ALIGN_MAP = {
     "center": PP_ALIGN.CENTER,
     "right": PP_ALIGN.RIGHT,
 }
+_FONT_NAME = "Pretendard"
 
 
 def _lyrics_text_layout(horizontal_position):
@@ -512,14 +515,56 @@ def _add_title_textbox(slide, song_title, style):
         Inches(title_width), Inches(_TITLE_BOX_HEIGHT),
     )
     frame = box.text_frame
-    frame.word_wrap = False
+    frame.word_wrap = True
     para = frame.paragraphs[0]
     para.alignment = text_align
     run = para.add_run()
-    run.text = song_title
-    run.font.name = "Pretendard"
+    run.text = _normalize_ppt_text(song_title)
+    _set_run_font(run)
     run.font.size = title_font_size
     run.font.color.rgb = title_color
+
+
+def _normalize_ppt_text(text):
+    return unicodedata.normalize("NFC", text or "")
+
+
+def _set_run_font(run):
+    run.font.name = _FONT_NAME
+    rpr = run._r.get_or_add_rPr()
+    for tag in ("a:latin", "a:ea", "a:cs"):
+        font = rpr.find(qn(tag))
+        if font is None:
+            font = OxmlElement(tag)
+            rpr.append(font)
+        font.set("typeface", _FONT_NAME)
+
+
+def _add_text_run(paragraph, text, font_size, color):
+    run = paragraph.add_run()
+    run.text = _normalize_ppt_text(text)
+    _set_run_font(run)
+    run.font.size = font_size
+    run.font.bold = True
+    run.font.color.rgb = color
+
+
+def _format_bible_paragraph(paragraph, text_align, font_size):
+    paragraph.alignment = text_align
+    hanging_width = font_size.pt * 1.7
+    paragraph.margin_left = Pt(hanging_width)
+    paragraph.first_line_indent = Pt(-hanging_width)
+
+
+def _add_bible_page_text(frame, page, text_align, font_size, text_color):
+    lines = [line.strip() for line in page.splitlines() if line.strip()]
+    if not lines:
+        return
+
+    for index, line in enumerate(lines):
+        paragraph = frame.paragraphs[0] if index == 0 else frame.add_paragraph()
+        _format_bible_paragraph(paragraph, text_align, font_size)
+        _add_text_run(paragraph, line, font_size, text_color)
 
 
 def add_song_slides(prs, song, style):
@@ -565,24 +610,22 @@ def add_song_slides(prs, song, style):
             "bottom": MSO_ANCHOR.BOTTOM,
         }[position]
 
-        paragraph = frame.paragraphs[0]
-        paragraph.alignment = lyrics_align
-        run = paragraph.add_run()
-        run.text = page
-        run.font.name = "Pretendard"
-        run.font.size = font_size
-        run.font.bold = True
-        run.font.color.rgb = text_color
+        if is_bible:
+            _add_bible_page_text(frame, page, lyrics_align, font_size, text_color)
+        else:
+            paragraph = frame.paragraphs[0]
+            paragraph.alignment = lyrics_align
+            _add_text_run(paragraph, page, font_size, text_color)
 
         if include_english_lyrics and english_page:
             english_paragraph = frame.add_paragraph()
             english_paragraph.alignment = lyrics_align
-            english_run = english_paragraph.add_run()
-            english_run.text = english_page
-            english_run.font.name = "Pretendard"
-            english_run.font.size = Pt(style["font_size"] * 0.8)
-            english_run.font.bold = True
-            english_run.font.color.rgb = english_color
+            _add_text_run(
+                english_paragraph,
+                english_page,
+                Pt(style["font_size"] * 0.8),
+                english_color,
+            )
 
         if show_song_title:
             _add_title_textbox(slide, song.get("title", ""), style)

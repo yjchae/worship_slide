@@ -9,16 +9,16 @@ if [ ! -x ".venv/bin/python" ]; then
   python3 -m venv .venv
 fi
 
-source .venv/bin/activate
-pip install -q -r python/requirements.txt
+VENV_PYTHON="$(pwd)/.venv/bin/python"
+"$VENV_PYTHON" -m pip install -q -r python/requirements.txt
 rm -rf python/ppt_tool
-pyinstaller --onefile python/ppt_tool.py \
-            --distpath python \
-            --workpath /tmp/ppt_tool_build \
-            --specpath /tmp/ppt_tool_build \
-            --name ppt_tool \
-            --add-data "$(pwd)/assets/fonts/Pretendard-Bold.ttf:fonts" \
-            --add-data "$(pwd)/assets/fonts/Pretendard-Regular.ttf:fonts"
+"$VENV_PYTHON" -m PyInstaller --onefile python/ppt_tool.py \
+                       --distpath python \
+                       --workpath /tmp/ppt_tool_build \
+                       --specpath /tmp/ppt_tool_build \
+                       --name ppt_tool \
+                       --add-data "$(pwd)/assets/fonts/Pretendard-Bold.ttf:fonts" \
+                       --add-data "$(pwd)/assets/fonts/Pretendard-Regular.ttf:fonts"
 echo "  → python/ppt_tool 생성 완료"
 
 echo ""
@@ -34,8 +34,6 @@ mkdir -p "$DIST_DIR/python"
 
 cp -R "build/macos/Build/Products/Release/Worship Slides.app" "$DIST_DIR/"
 cp python/ppt_tool "$DIST_DIR/python/"
-cp python/ppt_tool.py "$DIST_DIR/python/"
-cp python/requirements.txt "$DIST_DIR/python/"
 
 cat > "$DIST_DIR/Unlock Worship Slides.command" <<'EOF'
 #!/bin/bash

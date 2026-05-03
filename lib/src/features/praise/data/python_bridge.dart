@@ -38,10 +38,6 @@ class ImportResult {
 }
 
 class PythonBridge {
-  bool _checkedScriptExecution = false;
-  String? _cachedScriptPath;
-  String? _cachedScriptExecutable;
-
   Future<ImportResult> importFolder(String folderPath) async {
     final result = await _runTool(['import', folderPath]);
 
@@ -105,26 +101,15 @@ class PythonBridge {
   }
 
   Future<ProcessResult> _runTool(List<String> arguments) async {
-    final String executable;
-    final List<String> args;
-
-    final scriptExecution = await _scriptExecutionOrNull();
     final binary = _compiledBinaryPath;
-
-    if (scriptExecution != null) {
-      executable = scriptExecution.executable;
-      args = [scriptExecution.scriptPath, ...arguments];
-    } else if (binary != null) {
-      executable = binary;
-      args = arguments;
-    } else {
+    if (binary == null) {
       throw Exception(
         'ppt_tool 실행 파일을 찾을 수 없습니다. '
         '현재 위치: ${Directory.current.path}, 실행 파일: ${Platform.resolvedExecutable}',
       );
     }
 
-    final result = await Process.run(executable, args, runInShell: false);
+    final result = await Process.run(binary, arguments, runInShell: false);
     if (result.exitCode != 0) {
       throw Exception(
         (result.stderr as String).trim().isEmpty
@@ -133,36 +118,6 @@ class PythonBridge {
       );
     }
     return result;
-  }
-
-  Future<({String executable, String scriptPath})?>
-  _scriptExecutionOrNull() async {
-    if (_checkedScriptExecution) {
-      final executable = _cachedScriptExecutable;
-      final scriptPath = _cachedScriptPath;
-      if (executable == null || scriptPath == null) return null;
-      return (executable: executable, scriptPath: scriptPath);
-    }
-
-    _checkedScriptExecution = true;
-    for (final scriptPath in _scriptPathCandidates) {
-      final executable = _pythonExecutablePath(scriptPath);
-      try {
-        final result = await Process.run(executable, [
-          '-c',
-          'import pptx',
-        ], runInShell: false);
-        if (result.exitCode == 0) {
-          _cachedScriptExecutable = executable;
-          _cachedScriptPath = scriptPath;
-          return (executable: executable, scriptPath: scriptPath);
-        }
-      } on ProcessException {
-        continue;
-      }
-    }
-
-    return null;
   }
 
   // PyInstaller onefile/onedir 실행 파일 탐색
@@ -180,50 +135,6 @@ class PythonBridge {
       }
     }
     return null;
-  }
-
-  String _pythonExecutablePath(String scriptPath) {
-    final scriptRoot = File(scriptPath).parent.parent.path;
-    final venvBin = Platform.isWindows ? 'Scripts' : 'bin';
-    final pythonExe = Platform.isWindows ? 'python.exe' : 'python';
-
-    final scriptAdjacentPython = File(
-      p.join(scriptRoot, '.venv', venvBin, pythonExe),
-    );
-    if (scriptAdjacentPython.existsSync()) {
-      return scriptAdjacentPython.path;
-    }
-
-    for (final root in _searchRoots) {
-      final localPython = File(p.join(root, '.venv', venvBin, pythonExe));
-      if (localPython.existsSync()) {
-        return localPython.path;
-      }
-    }
-    return Platform.isWindows ? 'python' : 'python3';
-  }
-
-  List<String> get _scriptPathCandidates {
-    final candidates = <String>[];
-    final seen = <String>{};
-
-    void addCandidate(String path) {
-      final normalized = p.normalize(path);
-      if (seen.add(normalized) && File(normalized).existsSync()) {
-        candidates.add(normalized);
-      }
-    }
-
-    for (final root in _searchRoots) {
-      addCandidate(p.join(root, 'python', 'ppt_tool.py'));
-    }
-
-    final discovered = _discoverProjectRoot();
-    if (discovered != null) {
-      addCandidate(p.join(discovered, 'python', 'ppt_tool.py'));
-    }
-
-    return candidates;
   }
 
   List<String> get _searchRoots {
@@ -249,54 +160,5 @@ class PythonBridge {
     }
 
     return roots.toList();
-  }
-
-  String? _discoverProjectRoot() {
-    final home =
-        Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'];
-    if (home == null || home.isEmpty) {
-      return null;
-    }
-
-    final bases = <String>[
-      p.join(home, 'workspace'),
-      p.join(home, 'Documents'),
-      p.join(home, 'Desktop'),
-    ];
-
-    for (final base in bases) {
-      final root = Directory(base);
-      if (!root.existsSync()) {
-        continue;
-      }
-
-      try {
-        for (final entity in root.listSync(
-          recursive: true,
-          followLinks: false,
-        )) {
-          if (entity is! File) {
-            continue;
-          }
-          if (p.basename(entity.path) != 'ppt_tool.py') {
-            continue;
-          }
-
-          final pythonDir = p.basename(p.dirname(entity.path));
-          if (pythonDir != 'python') {
-            continue;
-          }
-
-          final projectRoot = p.dirname(p.dirname(entity.path));
-          if (File(p.join(projectRoot, 'pubspec.yaml')).existsSync()) {
-            return projectRoot;
-          }
-        }
-      } on FileSystemException {
-        continue;
-      }
-    }
-
-    return null;
   }
 }
