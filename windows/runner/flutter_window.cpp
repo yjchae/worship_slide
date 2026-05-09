@@ -25,6 +25,11 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+
+  presentation_channel_ =
+      std::make_unique<PresentationChannel>(GetHandle());
+  presentation_channel_->Setup(flutter_controller_->engine());
+
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -40,6 +45,8 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  presentation_channel_.reset();
+
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }

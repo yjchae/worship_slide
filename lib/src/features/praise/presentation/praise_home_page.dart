@@ -272,7 +272,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
       final pageData = _buildSlidePageData(_currentSlideIndex);
       await _presentationChannel.invokeMethod(
         'openWindow',
-        pageData.toJsonString(),
+        pageData.toJson(),
       );
       if (!mounted) return;
       setState(() => _isPresentationOpen = true);
@@ -297,7 +297,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
       final pageData = _buildSlidePageData(_currentSlideIndex);
       await _presentationChannel.invokeMethod(
         'updatePage',
-        pageData.toJsonString(),
+        pageData.toJson(),
       );
     } catch (_) {
       if (mounted) setState(() => _isPresentationOpen = false);
