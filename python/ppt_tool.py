@@ -676,6 +676,8 @@ def export_presentation(payload_json):
     _ensure_pretendard_installed()
     payload = json.loads(payload_json)
     output_path = Path(payload["output_path"])
+    if output_path.suffix.lower() != ".pptx":
+        output_path = output_path.with_suffix(".pptx")
     songs = payload["songs"]
     style = payload["style"]
 

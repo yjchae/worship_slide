@@ -36,7 +36,7 @@ lib/src/features/praise/
   data/
     praise_database.dart    -- SQLite 스키마, 테이블 생성
     praise_repository.dart  -- 곡 CRUD (searchSongs, replaceAllSongs, deleteSongsByIds, clearAllSongs)
-    python_bridge.dart      -- Process.run()으로 ppt_tool.py 호출; .venv/bin/python 자동 탐색
+    python_bridge.dart      -- Process.run()으로 PyInstaller ppt_tool 실행 파일 호출
     export_style_store.dart -- 스타일 설정을 로컬 파일에 JSON으로 저장
   domain/
     praise_song.dart        -- PraiseSong 모델; pages/englishPages는 "###" 구분자로 분리
@@ -56,7 +56,7 @@ CLI 도구. Flutter에서 서브프로세스로 호출하며 stdout에 JSON을 �
 
 ## 중요 설계 결정
 
-- **Python 탐색 순서** (`python_bridge.dart`): 스크립트 인접 `.venv` → 실행 파일 경로 상위 `.venv` → `python3`
+- **Python 실행 방식** (`python_bridge.dart`): PyInstaller로 빌드된 `python/ppt_tool` 실행 파일만 탐색·호출
 - **가사 페이지 구분자**: `"###"` — DB 저장 시 단일 문자열로 직렬화
 - **한/영 분리 기준** (`is_english_line`): 라틴 문자 비율 ≥ 60% 이면 영어 줄로 판단
 - **스타일 미리보기**: `_PreviewBox`에서 선택된 첫 번째 곡의 첫 페이지를 실시간 렌더링

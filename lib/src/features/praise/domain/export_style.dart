@@ -113,6 +113,69 @@ class ExportStyle {
     };
   }
 
+  factory ExportStyle.fromJson(Map<String, dynamic> json) {
+    VerticalTextPosition parseVertical(String? name) =>
+        VerticalTextPosition.values.firstWhere(
+          (e) => e.name == name,
+          orElse: () => VerticalTextPosition.middle,
+        );
+    HorizontalPosition parseHorizontal(String? name) =>
+        HorizontalPosition.values.firstWhere(
+          (e) => e.name == name,
+          orElse: () => HorizontalPosition.center,
+        );
+    return ExportStyle(
+      fontSize: (json['font_size'] as num).toDouble(),
+      bibleFontSize: (json['bible_font_size'] as num).toDouble(),
+      textBoxTop: (json['text_box_top'] as num).toDouble(),
+      bibleTextBoxTop: (json['bible_text_box_top'] as num).toDouble(),
+      backgroundColor: parseHexColor(
+        json['background_color'] as String?,
+        const Color(0xFF1B1B1B),
+      ),
+      textColor: parseHexColor(json['text_color'] as String?, Colors.white),
+      bibleTextColor: parseHexColor(
+        json['bible_text_color'] as String?,
+        Colors.white,
+      ),
+      textPosition: parseVertical(json['text_position'] as String?),
+      bibleTextPosition: parseVertical(json['bible_text_position'] as String?),
+      lyricsTextAlign: parseHorizontal(json['lyrics_text_align'] as String?),
+      bibleTextAlign: parseHorizontal(json['bible_text_align'] as String?),
+      includeEnglishLyrics:
+          (json['include_english_lyrics'] as bool?) ?? true,
+      englishTextColor: parseHexColor(
+        json['english_text_color'] as String?,
+        const Color(0xFFFFF176),
+      ),
+      showSongTitle: (json['show_song_title'] as bool?) ?? false,
+      showBibleTitle: (json['show_bible_title'] as bool?) ?? false,
+      titleFontSize: (json['title_font_size'] as num?)?.toDouble() ?? 14.0,
+      bibleTitleFontSize:
+          (json['bible_title_font_size'] as num?)?.toDouble() ?? 14.0,
+      titleTextColor: parseHexColor(
+        json['title_text_color'] as String?,
+        const Color(0xB3FFFFFF),
+      ),
+      bibleTitleTextColor: parseHexColor(
+        json['bible_title_text_color'] as String?,
+        const Color(0xB3FFFFFF),
+      ),
+      titleHorizontalPosition: parseHorizontal(
+        json['title_horizontal_position'] as String?,
+      ),
+      titleVerticalPosition: parseVertical(
+        json['title_vertical_position'] as String?,
+      ),
+      bibleTitleHorizontalPosition: parseHorizontal(
+        json['bible_title_horizontal_position'] as String?,
+      ),
+      bibleTitleVerticalPosition: parseVertical(
+        json['bible_title_vertical_position'] as String?,
+      ),
+    );
+  }
+
   ExportStyle copyWith({
     double? fontSize,
     double? bibleFontSize,

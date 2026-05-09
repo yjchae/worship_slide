@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
 
 import '../../../features/bible/data/bible_repository.dart';
 import '../../../features/bible/domain/bible_verse.dart';
@@ -14,6 +15,7 @@ import '../data/python_bridge.dart';
 import '../domain/export_style.dart';
 import '../domain/praise_song.dart';
 import '../domain/staging_item.dart';
+import 'slide_page_data.dart';
 
 class PraiseHomePage extends StatefulWidget {
   const PraiseHomePage({super.key});
@@ -22,7 +24,32 @@ class PraiseHomePage extends StatefulWidget {
   State<PraiseHomePage> createState() => _PraiseHomePageState();
 }
 
+// 슬라이드 한 페이지 정보 (스테이징 아이템에서 펼쳐진 단위)
+class _SlideInfo {
+  const _SlideInfo({
+    required this.stagingUid,
+    required this.mainText,
+    required this.englishText,
+    required this.title,
+    required this.isBible,
+  });
+  final int stagingUid;
+  final String mainText;
+  final String englishText;
+  final String? title;
+  final bool isBible;
+}
+
 class _PraiseHomePageState extends State<PraiseHomePage> {
+  static const MethodChannel _savePanelChannel = MethodChannel(
+    'worship_slides/save_panel',
+  );
+  static const MethodChannel _presentationChannel = MethodChannel(
+    'worship_slides/presentation',
+  );
+  static const MethodChannel _mainPresentationChannel = MethodChannel(
+    'worship_slides/presentation_main',
+  );
   static const ExportStyle _defaultStyle = ExportStyle(
     fontSize: 30,
     bibleFontSize: 30,
@@ -78,6 +105,10 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
   String? _importStatusText;
   ExportStyle _style = _defaultStyle;
 
+  // 발표 모드
+  int _currentSlideIndex = 0;
+  bool _isPresentationOpen = false;
+
   final List<Color> _swatches = const [
     Color(0xFF1B1B1B),
     Color(0xFF121212),
@@ -109,6 +140,12 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     _loadBibleCount();
     _searchController.addListener(_loadSongs);
     _checkForUpdates();
+    _mainPresentationChannel.setMethodCallHandler((call) async {
+      if (call.method == 'presentationClosed' && mounted) {
+        setState(() => _isPresentationOpen = false);
+      }
+      return null;
+    });
   }
 
   @override
@@ -150,6 +187,157 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
   Future<void> _updateStyle(ExportStyle style) async {
     setState(() => _style = style);
     await _styleStore.save(style);
+    await _sendCurrentSlide();
+  }
+
+  // ── 발표 모드 ────────────────────────────────────────────────────────────
+
+  List<_SlideInfo> get _allSlides {
+    final slides = <_SlideInfo>[];
+    for (final entry in _stagingItems) {
+      final item = entry.item;
+      if (item is SongStagingItem) {
+        final song = item.song;
+        final pages = song.pages;
+        final englishPages = song.englishPages;
+        for (var i = 0; i < pages.length; i++) {
+          slides.add(
+            _SlideInfo(
+              stagingUid: entry.uid,
+              mainText: pages[i],
+              englishText: i < englishPages.length ? englishPages[i] : '',
+              title: song.title,
+              isBible: false,
+            ),
+          );
+        }
+      } else if (item is BibleStagingItem) {
+        slides.add(
+          _SlideInfo(
+            stagingUid: entry.uid,
+            mainText: item.text,
+            englishText: '',
+            title: item.reference,
+            isBible: true,
+          ),
+        );
+      }
+    }
+    return slides;
+  }
+
+  void _clampCurrentSlideIndex() {
+    final total = _allSlides.length;
+    if (total == 0) {
+      _currentSlideIndex = 0;
+    } else if (_currentSlideIndex >= total) {
+      _currentSlideIndex = total - 1;
+    }
+  }
+
+  int _findFirstSlideForStaging(int stagingUid) {
+    final slides = _allSlides;
+    for (var i = 0; i < slides.length; i++) {
+      if (slides[i].stagingUid == stagingUid) return i;
+    }
+    return _currentSlideIndex;
+  }
+
+  SlidePageData _buildSlidePageData(int index) {
+    final slides = _allSlides;
+    final slide = index < slides.length ? slides[index] : null;
+    return SlidePageData(
+      mainText: slide?.mainText ?? '',
+      englishText: slide?.englishText ?? '',
+      title: slide?.title,
+      isBible: slide?.isBible ?? false,
+      pageIndex: index,
+      totalPages: slides.length,
+      style: _style,
+    );
+  }
+
+  Future<void> _openPresentation() async {
+    final slides = _allSlides;
+    if (slides.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('표시할 슬라이드가 없습니다. 찬양이나 성경 본문을 먼저 선택해 주세요.'),
+        ),
+      );
+      return;
+    }
+    try {
+      final pageData = _buildSlidePageData(_currentSlideIndex);
+      await _presentationChannel.invokeMethod(
+        'openWindow',
+        pageData.toJsonString(),
+      );
+      if (!mounted) return;
+      setState(() => _isPresentationOpen = true);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('발표 화면 열기 실패: $e')));
+    }
+  }
+
+  Future<void> _closePresentation() async {
+    try {
+      await _presentationChannel.invokeMethod('closeWindow');
+    } catch (_) {}
+    if (mounted) setState(() => _isPresentationOpen = false);
+  }
+
+  Future<void> _sendCurrentSlide() async {
+    if (!_isPresentationOpen) return;
+    try {
+      final pageData = _buildSlidePageData(_currentSlideIndex);
+      await _presentationChannel.invokeMethod(
+        'updatePage',
+        pageData.toJsonString(),
+      );
+    } catch (_) {
+      if (mounted) setState(() => _isPresentationOpen = false);
+    }
+  }
+
+  Future<void> _prevSlide() async {
+    final slides = _allSlides;
+    if (slides.isEmpty || _currentSlideIndex <= 0) return;
+    setState(() {
+      _currentSlideIndex--;
+      _previewStagingUid = slides[_currentSlideIndex].stagingUid;
+    });
+    await _sendCurrentSlide();
+  }
+
+  Future<void> _nextSlide() async {
+    final slides = _allSlides;
+    if (slides.isEmpty || _currentSlideIndex >= slides.length - 1) return;
+    setState(() {
+      _currentSlideIndex++;
+      _previewStagingUid = slides[_currentSlideIndex].stagingUid;
+    });
+    await _sendCurrentSlide();
+  }
+
+  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    if (!_isPresentationOpen) return KeyEventResult.ignored;
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.arrowRight ||
+        event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      _nextSlide();
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowLeft ||
+        event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      _prevSlide();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
   }
 
   // ── 업데이트 ─────────────────────────────────────────────────────────
@@ -201,6 +389,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
               e.item is SongStagingItem &&
               (e.item as SongStagingItem).song.id == song.id,
         );
+        _clampCurrentSlideIndex();
       }
     });
   }
@@ -221,6 +410,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
             ? null
             : _stagingItems.first.uid;
       }
+      _clampCurrentSlideIndex();
     });
   }
 
@@ -229,6 +419,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
       if (newIndex > oldIndex) newIndex--;
       final entry = _stagingItems.removeAt(oldIndex);
       _stagingItems.insert(newIndex, entry);
+      _clampCurrentSlideIndex();
     });
   }
 
@@ -416,20 +607,15 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
       return;
     }
 
-    await FilePicker.skipEntitlementsChecks();
-    final outputPath = await FilePicker.saveFile(
-      dialogTitle: '저장할 PPTX 파일 선택',
-      fileName: 'worship_slides.pptx',
-      type: FileType.custom,
-      allowedExtensions: ['pptx'],
-    );
+    final outputPath = await _pickPptxOutputPath();
     if (outputPath == null) return;
+    final normalizedOutputPath = _withPptxExtension(outputPath);
 
     setState(() => _isExporting = true);
 
     try {
       final savedPath = await _pythonBridge.exportPresentation(
-        outputPath: outputPath,
+        outputPath: normalizedOutputPath,
         stagingItems: _stagingItems.map((e) => e.item).toList(),
         style: _style,
       );
@@ -445,6 +631,34 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     } finally {
       if (mounted) setState(() => _isExporting = false);
     }
+  }
+
+  String _withPptxExtension(String outputPath) {
+    if (p.extension(outputPath).toLowerCase() == '.pptx') {
+      return outputPath;
+    }
+    return p.setExtension(outputPath, '.pptx');
+  }
+
+  Future<String?> _pickPptxOutputPath() async {
+    if (Platform.isMacOS) {
+      try {
+        return await _savePanelChannel.invokeMethod<String>(
+          'showPptxSavePanel',
+          const {'title': '저장할 PPTX 파일 선택', 'fileName': 'worship_slides.pptx'},
+        );
+      } on MissingPluginException {
+        // Fall through to file_picker for non-standard runners.
+      }
+    }
+
+    await FilePicker.skipEntitlementsChecks();
+    return FilePicker.saveFile(
+      dialogTitle: '저장할 PPTX 파일 선택',
+      fileName: 'worship_slides.pptx',
+      type: FileType.custom,
+      allowedExtensions: ['pptx'],
+    );
   }
 
   // ── 곡 관리 ──────────────────────────────────────────────────────────
@@ -473,6 +687,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     if (!mounted) return;
     setState(() {
       _stagingItems.removeWhere((e) => e.item is SongStagingItem);
+      _clampCurrentSlideIndex();
     });
     await _loadSongs();
     if (!mounted) return;
@@ -522,6 +737,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
             e.item is SongStagingItem &&
             deletableIds.contains((e.item as SongStagingItem).song.id),
       );
+      _clampCurrentSlideIndex();
     });
     await _loadSongs();
     if (!mounted) return;
@@ -596,78 +812,104 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     }
     previewItem ??= _stagingItems.isEmpty ? null : _stagingItems.first.item;
 
-    return Scaffold(
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final isWide = constraints.maxWidth >= 1120;
-              return Flex(
-                direction: isWide ? Axis.horizontal : Axis.vertical,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    flex: 7,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (_pendingUpdate != null) ...[
-                          _UpdateBanner(
-                            version: _pendingUpdate!.version,
-                            isDownloading: _isDownloadingUpdate,
-                            progress: _updateProgress,
-                            onUpdate: _startUpdate,
-                            onDismiss: () =>
-                                setState(() => _pendingUpdate = null),
+    final slides = _allSlides;
+    final currentSlideTitle = slides.isEmpty
+        ? null
+        : slides[_currentSlideIndex.clamp(0, slides.length - 1)].title;
+
+    return Focus(
+      autofocus: true,
+      onKeyEvent: _handleKeyEvent,
+      child: Scaffold(
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final isWide = constraints.maxWidth >= 1120;
+                return Flex(
+                  direction: isWide ? Axis.horizontal : Axis.vertical,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      flex: 7,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (_pendingUpdate != null) ...[
+                            _UpdateBanner(
+                              version: _pendingUpdate!.version,
+                              isDownloading: _isDownloadingUpdate,
+                              progress: _updateProgress,
+                              onUpdate: _startUpdate,
+                              onDismiss: () =>
+                                  setState(() => _pendingUpdate = null),
+                            ),
+                            const SizedBox(height: 8),
+                          ],
+                          _TopBar(
+                            storedCount: _storedCount,
+                            bibleVerseCount: _bibleVerseCount,
+                            selectedFolder: _selectedFolder,
+                            isImporting: _isImporting,
+                            isBibleImporting: _isBibleImporting,
+                            importTotalCount: _importTotalCount,
+                            importSavedCount: _importSavedCount,
+                            importStatusText: _importStatusText,
+                            onImportPressed: _pickAndImportFolder,
+                            onBibleImportPressed: _pickAndImportBible,
                           ),
                           const SizedBox(height: 8),
-                        ],
-                        _TopBar(
-                          storedCount: _storedCount,
-                          bibleVerseCount: _bibleVerseCount,
-                          selectedFolder: _selectedFolder,
-                          isImporting: _isImporting,
-                          isBibleImporting: _isBibleImporting,
-                          importTotalCount: _importTotalCount,
-                          importSavedCount: _importSavedCount,
-                          importStatusText: _importStatusText,
-                          onImportPressed: _pickAndImportFolder,
-                          onBibleImportPressed: _pickAndImportBible,
-                        ),
-                        const SizedBox(height: 10),
-                        Expanded(
-                          child: _ResizableWorkArea(
-                            stagingRatio: _stagingPanelRatio,
-                            onRatioChanged: (value) =>
-                                setState(() => _stagingPanelRatio = value),
-                            stagingPanel: _StagingPanel(
-                              stagingItems: _stagingItems,
-                              selectedUid: _previewStagingUid,
-                              onReorder: _onStagingReorder,
-                              onRemove: _removeFromStaging,
-                              onSelect: (uid) =>
-                                  setState(() => _previewStagingUid = uid),
-                            ),
-                            searchPanel: _SearchAndBiblePanel(
-                              searchController: _searchController,
-                              songs: _songs,
-                              selectedSongIds: _selectedSongIds,
-                              onSongChanged: _toggleSongSelection,
-                              onDeleteSelected: _deleteSelectedSongs,
-                              onClearAll: _clearAllSongs,
-                              onAddSong: () => _openSongEditor(null),
-                              onEditSong: _openSongEditor,
-                              bibleRepository: _bibleRepository,
-                              bibleVerseCount: _bibleVerseCount,
-                              bibleDataRevision: _bibleDataRevision,
-                              onAddBibleItem: _addBibleItem,
+                          _PresentationControlBar(
+                            slidesReady: slides.isNotEmpty,
+                            isPresentationOpen: _isPresentationOpen,
+                            currentSlideIndex: _currentSlideIndex,
+                            totalSlides: slides.length,
+                            currentSlideTitle: currentSlideTitle,
+                            onOpen: _openPresentation,
+                            onClose: _closePresentation,
+                            onPrev: _prevSlide,
+                            onNext: _nextSlide,
+                          ),
+                          const SizedBox(height: 10),
+                          Expanded(
+                            child: _ResizableWorkArea(
+                              stagingRatio: _stagingPanelRatio,
+                              onRatioChanged: (value) =>
+                                  setState(() => _stagingPanelRatio = value),
+                              stagingPanel: _StagingPanel(
+                                stagingItems: _stagingItems,
+                                selectedUid: _previewStagingUid,
+                                onReorder: _onStagingReorder,
+                                onRemove: _removeFromStaging,
+                                onSelect: (uid) {
+                                  setState(() {
+                                    _previewStagingUid = uid;
+                                    _currentSlideIndex =
+                                        _findFirstSlideForStaging(uid);
+                                  });
+                                  _sendCurrentSlide();
+                                },
+                              ),
+                              searchPanel: _SearchAndBiblePanel(
+                                searchController: _searchController,
+                                songs: _songs,
+                                selectedSongIds: _selectedSongIds,
+                                onSongChanged: _toggleSongSelection,
+                                onDeleteSelected: _deleteSelectedSongs,
+                                onClearAll: _clearAllSongs,
+                                onAddSong: () => _openSongEditor(null),
+                                onEditSong: _openSongEditor,
+                                bibleRepository: _bibleRepository,
+                                bibleVerseCount: _bibleVerseCount,
+                                bibleDataRevision: _bibleDataRevision,
+                                onAddBibleItem: _addBibleItem,
+                              ),
                             ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
                   SizedBox(width: isWide ? 20 : 0, height: isWide ? 0 : 20),
                   Expanded(
                     flex: 4,
@@ -686,6 +928,131 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
             },
           ),
         ),
+      ),
+    ),   // Scaffold
+  );     // Focus
+  }
+}
+
+// ── PresentationControlBar ───────────────────────────────────────────────
+
+class _PresentationControlBar extends StatelessWidget {
+  const _PresentationControlBar({
+    required this.slidesReady,
+    required this.isPresentationOpen,
+    required this.currentSlideIndex,
+    required this.totalSlides,
+    required this.currentSlideTitle,
+    required this.onOpen,
+    required this.onClose,
+    required this.onPrev,
+    required this.onNext,
+  });
+
+  final bool slidesReady;
+  final bool isPresentationOpen;
+  final int currentSlideIndex;
+  final int totalSlides;
+  final String? currentSlideTitle;
+  final VoidCallback onOpen;
+  final VoidCallback onClose;
+  final VoidCallback onPrev;
+  final VoidCallback onNext;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        color: isPresentationOpen
+            ? cs.primaryContainer
+            : cs.surfaceContainerHighest,
+      ),
+      child: Row(
+        children: [
+          Icon(
+            Icons.tv_rounded,
+            size: 18,
+            color: isPresentationOpen ? cs.onPrimaryContainer : cs.onSurfaceVariant,
+          ),
+          const SizedBox(width: 8),
+          if (isPresentationOpen && currentSlideTitle != null) ...[
+            Expanded(
+              child: Text(
+                currentSlideTitle!,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: cs.onPrimaryContainer,
+                ),
+              ),
+            ),
+          ] else ...[
+            Text(
+              isPresentationOpen ? '발표 중' : '발표 화면',
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                color: isPresentationOpen
+                    ? cs.onPrimaryContainer
+                    : cs.onSurfaceVariant,
+              ),
+            ),
+            const Spacer(),
+          ],
+          if (isPresentationOpen) ...[
+            IconButton(
+              icon: const Icon(Icons.arrow_back_ios_rounded, size: 16),
+              tooltip: '이전  ←',
+              color: cs.onPrimaryContainer,
+              onPressed: currentSlideIndex > 0 ? onPrev : null,
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              decoration: BoxDecoration(
+                color: cs.surface,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                '${currentSlideIndex + 1} / $totalSlides',
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  fontFeatures: [FontFeature.tabularFigures()],
+                ),
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.arrow_forward_ios_rounded, size: 16),
+              tooltip: '다음  →',
+              color: cs.onPrimaryContainer,
+              onPressed: currentSlideIndex < totalSlides - 1 ? onNext : null,
+            ),
+            const SizedBox(width: 4),
+            FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.red.shade400,
+                foregroundColor: Colors.white,
+                visualDensity: VisualDensity.compact,
+              ),
+              onPressed: onClose,
+              icon: const Icon(Icons.stop_rounded, size: 16),
+              label: const Text('종료'),
+            ),
+          ] else ...[
+            FilledButton.icon(
+              onPressed: slidesReady ? onOpen : null,
+              icon: const Icon(Icons.play_arrow_rounded, size: 18),
+              label: const Text('발표 시작'),
+              style: FilledButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }
