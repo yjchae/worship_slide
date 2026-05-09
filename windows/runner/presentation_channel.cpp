@@ -69,7 +69,7 @@ void PresentationChannel::Setup(flutter::FlutterEngine* engine) {
   cmd_->SetMethodCallHandler(
       [this](const flutter::MethodCall<EV>& call,
              std::unique_ptr<flutter::MethodResult<EV>> result) {
-        const auto* data = std::get_if<flutter::EncodableMap>(&call.GetArguments());
+        const auto* data = std::get_if<flutter::EncodableMap>(call.arguments());
 
         if (call.method_name() == "openWindow") {
           OpenWindow();
@@ -286,7 +286,7 @@ void PresentationChannel::Paint(HDC hdc, RECT cli) const {
     case 2: startY = bodyBottom - totalH; break;
     default: startY = bodyTop + (bodyBoxH - totalH) / 2; break;
   }
-  startY = max(bodyTop, startY);
+  startY = std::max(bodyTop, startY);
 
   // Draw main text
   SelectObject(hdc, mainFont);
