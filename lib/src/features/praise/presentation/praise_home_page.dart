@@ -16,6 +16,7 @@ import '../domain/export_style.dart';
 import '../domain/praise_song.dart';
 import '../domain/staging_item.dart';
 import 'slide_page_data.dart';
+import 'slide_render_view.dart';
 
 class PraiseHomePage extends StatefulWidget {
   const PraiseHomePage({super.key});
@@ -32,12 +33,14 @@ class _SlideInfo {
     required this.englishText,
     required this.title,
     required this.isBible,
+    required this.pageIndexInItem,
   });
   final int stagingUid;
   final String mainText;
   final String englishText;
   final String? title;
   final bool isBible;
+  final int pageIndexInItem; // 해당 아이템(곡/성경) 내의 페이지 인덱스
 }
 
 class _PraiseHomePageState extends State<PraiseHomePage> {
@@ -209,6 +212,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
               englishText: i < englishPages.length ? englishPages[i] : '',
               title: song.title,
               isBible: false,
+              pageIndexInItem: i,
             ),
           );
         }
@@ -220,6 +224,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
             englishText: '',
             title: item.reference,
             isBible: true,
+            pageIndexInItem: 0,
           ),
         );
       }
@@ -321,6 +326,87 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     setState(() {
       _currentSlideIndex++;
       _previewStagingUid = slides[_currentSlideIndex].stagingUid;
+    });
+    await _sendCurrentSlide();
+  }
+
+  Future<void> _editSlide(int slideIndex) async {
+    final slides = _allSlides;
+    if (slideIndex >= slides.length) return;
+    final info = slides[slideIndex];
+
+    final result = await showDialog<(String, String)?>(
+      context: context,
+      builder: (_) => _SlideQuickEditDialog(
+        mainText: info.mainText,
+        englishText: info.englishText,
+        isBible: info.isBible,
+        title: info.title,
+      ),
+    );
+    if (result == null || !mounted) return;
+    final (newMain, newEnglish) = result;
+    _applySlideEdit(info, newMain, newEnglish, slideIndex);
+  }
+
+  void _applySlideEdit(
+    _SlideInfo info,
+    String newMain,
+    String newEnglish,
+    int slideIndex,
+  ) {
+    final stagingIndex =
+        _stagingItems.indexWhere((e) => e.uid == info.stagingUid);
+    if (stagingIndex == -1) return;
+
+    final entry = _stagingItems[stagingIndex];
+    final item = entry.item;
+
+    StagingItem newItem;
+    if (item is SongStagingItem) {
+      final song = item.song;
+      final pages = List<String>.from(song.pages);
+      final englishPages = List<String>.from(song.englishPages);
+
+      if (info.pageIndexInItem < pages.length) {
+        pages[info.pageIndexInItem] = newMain;
+      }
+      // 영어 페이지 길이를 한국어 페이지에 맞춰 패딩
+      while (englishPages.length < pages.length) {
+        englishPages.add('');
+      }
+      englishPages[info.pageIndexInItem] = newEnglish;
+
+      newItem = SongStagingItem(
+        PraiseSong(
+          id: song.id,
+          fileName: song.fileName,
+          title: song.title,
+          lyrics: pages.join('###'),
+          englishLyrics: englishPages.join('###'),
+        ),
+      );
+    } else if (item is BibleStagingItem) {
+      newItem = BibleStagingItem(reference: item.reference, text: newMain);
+    } else {
+      return;
+    }
+
+    setState(() {
+      _stagingItems[stagingIndex] = (uid: entry.uid, item: newItem);
+    });
+
+    if (_currentSlideIndex == slideIndex) {
+      _sendCurrentSlide();
+    }
+  }
+
+  Future<void> _goToSlide(int index) async {
+    final slides = _allSlides;
+    if (index < 0 || index >= slides.length) return;
+    setState(() {
+      _currentSlideIndex = index;
+      _previewStagingUid = slides[index].stagingUid;
     });
     await _sendCurrentSlide();
   }
@@ -882,6 +968,19 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                             onPrev: _prevSlide,
                             onNext: _nextSlide,
                           ),
+                          if (_isPresentationOpen) ...[
+                            const SizedBox(height: 10),
+                            SizedBox(
+                              height: 160,
+                              child: _PresentationControllerPanel(
+                                slides: slides,
+                                currentIndex: _currentSlideIndex,
+                                style: _style,
+                                onSlideSelected: _goToSlide,
+                                onSlideEdit: _editSlide,
+                              ),
+                            ),
+                          ],
                           const SizedBox(height: 10),
                           Expanded(
                             child: _ResizableWorkArea(
@@ -3036,190 +3135,47 @@ class _PreviewBox extends StatelessWidget {
   final ExportStyle style;
   final StagingItem? previewItem;
 
-  static const double _slideW = 13.333;
-  static const double _slideH = 7.5;
-  static const double _lyricsBoxT = 0.6;
-  static const double _lyricsBoxH = 5.4;
-  static const double _lyricsBoxBottom = _slideH - _lyricsBoxT - _lyricsBoxH;
-  static const double _lyricsBoxW = _slideW * 0.9;
-  static const double _lyricsBoxL = (_slideW - _lyricsBoxW) / 2;
-  static const double _titleBoxH = 0.55;
-  static const double _titlePad = 0.2;
-  static const double _titleBoxWSide = _slideW - (_titlePad * 2);
-  static const double _titleBoxWCenter = 10.0;
-
   @override
   Widget build(BuildContext context) {
     final String sampleText;
     final String sampleEnglishText;
     final String? titleText;
-    final bool isBiblePreview;
+    final bool isBible;
 
     switch (previewItem) {
       case SongStagingItem(:final song):
         sampleText = song.pages.isEmpty ? song.title : song.pages.first;
-        sampleEnglishText = song.englishPages.isEmpty
-            ? ''
-            : song.englishPages.first;
+        sampleEnglishText =
+            song.englishPages.isEmpty ? '' : song.englishPages.first;
         titleText = song.title;
-        isBiblePreview = false;
+        isBible = false;
       case BibleStagingItem(:final text, :final reference):
         sampleText = text;
         sampleEnglishText = '';
         titleText = reference;
-        isBiblePreview = true;
+        isBible = true;
       case null:
         sampleText = '선택한 항목이 여기에 미리보기로 보입니다.';
         sampleEnglishText = '';
         titleText = null;
-        isBiblePreview = false;
+        isBible = false;
     }
 
-    final bodyTextPosition = isBiblePreview
-        ? style.bibleTextPosition
-        : style.textPosition;
-    final titleHorizontalPosition = isBiblePreview
-        ? style.bibleTitleHorizontalPosition
-        : style.titleHorizontalPosition;
-    final titleVerticalPosition = isBiblePreview
-        ? style.bibleTitleVerticalPosition
-        : style.titleVerticalPosition;
-    final bodyFontSize = isBiblePreview ? style.bibleFontSize : style.fontSize;
-    final bodyBoxTop = isBiblePreview
-        ? style.bibleTextBoxTop
-        : style.textBoxTop;
-    final bodyBoxHeight = _slideH - bodyBoxTop - _lyricsBoxBottom;
-    final showTitle = isBiblePreview
-        ? style.showBibleTitle
-        : style.showSongTitle;
-    final titleFontSize = isBiblePreview
-        ? style.bibleTitleFontSize
-        : style.titleFontSize;
-    final titleTextColor = isBiblePreview
-        ? style.bibleTitleTextColor
-        : style.titleTextColor;
-
-    final alignment = switch (bodyTextPosition) {
-      VerticalTextPosition.top => Alignment.topCenter,
-      VerticalTextPosition.middle => Alignment.center,
-      VerticalTextPosition.bottom => Alignment.bottomCenter,
-    };
-
-    final bodyTextAlign = isBiblePreview
-        ? style.bibleTextAlign
-        : style.lyricsTextAlign;
-    final bodyTextColor = isBiblePreview
-        ? style.bibleTextColor
-        : style.textColor;
-
-    final lyricsTextAlign = switch (bodyTextAlign) {
-      HorizontalPosition.left => TextAlign.left,
-      HorizontalPosition.center => TextAlign.center,
-      HorizontalPosition.right => TextAlign.right,
-    };
-
     return AspectRatio(
-      aspectRatio: _slideW / _slideH,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final w = constraints.maxWidth;
-          final h = constraints.maxHeight;
-          final fontScale = h / (_slideH * 72);
-
-          final double titleBoxW;
-          final double titleLeft;
-          final TextAlign titleAlign;
-          switch (titleHorizontalPosition) {
-            case HorizontalPosition.left:
-              titleBoxW = _titleBoxWSide;
-              titleLeft = _titlePad;
-              titleAlign = TextAlign.left;
-            case HorizontalPosition.center:
-              titleBoxW = _titleBoxWCenter;
-              titleLeft = (_slideW - _titleBoxWCenter) / 2;
-              titleAlign = TextAlign.center;
-            case HorizontalPosition.right:
-              titleBoxW = _titleBoxWSide;
-              titleLeft = _slideW - _titlePad - _titleBoxWSide;
-              titleAlign = TextAlign.right;
-          }
-          final double titleTop = switch (titleVerticalPosition) {
-            VerticalTextPosition.top => _titlePad,
-            VerticalTextPosition.middle => (_slideH - _titleBoxH) / 2,
-            VerticalTextPosition.bottom => _slideH - _titlePad - _titleBoxH,
-          };
-
-          return ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: Stack(
-              children: [
-                Container(
-                  color: style.backgroundColor,
-                  child: Padding(
-                    padding: EdgeInsets.only(
-                      left: w * _lyricsBoxL / _slideW,
-                      top: h * bodyBoxTop / _slideH,
-                      right: w * (1 - (_lyricsBoxL + _lyricsBoxW) / _slideW),
-                      bottom: h * (1 - (bodyBoxTop + bodyBoxHeight) / _slideH),
-                    ),
-                    child: Align(
-                      alignment: alignment,
-                      child: DefaultTextStyle(
-                        style: const TextStyle(),
-                        child: RichText(
-                          textAlign: lyricsTextAlign,
-                          maxLines: 6,
-                          overflow: TextOverflow.ellipsis,
-                          text: TextSpan(
-                            children: [
-                              TextSpan(
-                                text: sampleText,
-                                style: TextStyle(
-                                  color: bodyTextColor,
-                                  fontSize: bodyFontSize * fontScale,
-                                  fontWeight: FontWeight.w700,
-                                  height: 1.25,
-                                ),
-                              ),
-                              if (style.includeEnglishLyrics &&
-                                  sampleEnglishText.isNotEmpty)
-                                TextSpan(
-                                  text: '\n$sampleEnglishText',
-                                  style: TextStyle(
-                                    color: style.englishTextColor,
-                                    fontSize: style.fontSize * 0.8 * fontScale,
-                                    fontWeight: FontWeight.w700,
-                                    height: 1.3,
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                if (showTitle && titleText != null)
-                  Positioned(
-                    left: w * titleLeft / _slideW,
-                    top: h * titleTop / _slideH,
-                    width: w * titleBoxW / _slideW,
-                    height: h * _titleBoxH / _slideH,
-                    child: Text(
-                      titleText,
-                      textAlign: titleAlign,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: titleTextColor,
-                        fontSize: titleFontSize * fontScale,
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          );
-        },
+      aspectRatio: 13.333 / 7.5,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: SlideRenderView(
+          data: SlidePageData(
+            mainText: sampleText,
+            englishText: sampleEnglishText,
+            title: titleText,
+            isBible: isBible,
+            pageIndex: 0,
+            totalPages: 1,
+            style: style,
+          ),
+        ),
       ),
     );
   }
@@ -3432,6 +3388,310 @@ class _SongEditDialogState extends State<_SongEditDialog> {
           ),
         ),
       ),
+    );
+  }
+}
+
+// ── PresentationControllerPanel ───────────────────────────────────────────
+
+class _PresentationControllerPanel extends StatefulWidget {
+  const _PresentationControllerPanel({
+    required this.slides,
+    required this.currentIndex,
+    required this.style,
+    required this.onSlideSelected,
+    required this.onSlideEdit,
+  });
+
+  final List<_SlideInfo> slides;
+  final int currentIndex;
+  final ExportStyle style;
+  final ValueChanged<int> onSlideSelected;
+  final ValueChanged<int> onSlideEdit;
+
+  @override
+  State<_PresentationControllerPanel> createState() =>
+      _PresentationControllerPanelState();
+}
+
+class _PresentationControllerPanelState
+    extends State<_PresentationControllerPanel> {
+  final _scrollController = ScrollController();
+
+  static const double _thumbnailWidth = 210;
+  static const double _itemSpacing = 8;
+  static const double _padding = 10;
+
+  @override
+  void didUpdateWidget(_PresentationControllerPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.currentIndex != widget.currentIndex) {
+      _scrollToCurrentItem();
+    }
+  }
+
+  void _scrollToCurrentItem() {
+    if (!_scrollController.hasClients) return;
+    final targetOffset =
+        widget.currentIndex * (_thumbnailWidth + _itemSpacing) + _padding;
+    final viewportWidth = _scrollController.position.viewportDimension;
+    final centeredOffset = targetOffset - (viewportWidth - _thumbnailWidth) / 2;
+    _scrollController.animateTo(
+      centeredOffset.clamp(0.0, _scrollController.position.maxScrollExtent),
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+    );
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: ListView.builder(
+        controller: _scrollController,
+        scrollDirection: Axis.horizontal,
+        padding: EdgeInsets.all(_padding),
+        itemCount: widget.slides.length,
+        itemBuilder: (context, i) {
+          final info = widget.slides[i];
+          final pageData = SlidePageData(
+            mainText: info.mainText,
+            englishText: info.englishText,
+            title: info.title,
+            isBible: info.isBible,
+            pageIndex: i,
+            totalPages: widget.slides.length,
+            style: widget.style,
+          );
+          return SizedBox(
+            width: _thumbnailWidth,
+            child: Padding(
+              padding: EdgeInsets.only(
+                right: i < widget.slides.length - 1 ? _itemSpacing : 0,
+              ),
+              child: _SlideThumbnail(
+                data: pageData,
+                isSelected: i == widget.currentIndex,
+                index: i,
+                onTap: () => widget.onSlideSelected(i),
+                onEdit: () => widget.onSlideEdit(i),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+// ── SlideThumbnail ────────────────────────────────────────────────────────
+
+class _SlideThumbnail extends StatefulWidget {
+  const _SlideThumbnail({
+    required this.data,
+    required this.isSelected,
+    required this.index,
+    required this.onTap,
+    required this.onEdit,
+  });
+
+  final SlidePageData data;
+  final bool isSelected;
+  final int index;
+  final VoidCallback onTap;
+  final VoidCallback onEdit;
+
+  @override
+  State<_SlideThumbnail> createState() => _SlideThumbnailState();
+}
+
+class _SlideThumbnailState extends State<_SlideThumbnail> {
+  bool _hovered = false;
+
+  static const double _aspectRatio = 13.333 / 7.5;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
+    return GestureDetector(
+      onTap: widget.onTap,
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Expanded(
+              child: Stack(
+                children: [
+                  Container(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(5),
+                      border: Border.all(
+                        color: widget.isSelected
+                            ? cs.primary
+                            : cs.outlineVariant,
+                        width: widget.isSelected ? 2.5 : 1,
+                      ),
+                      boxShadow: widget.isSelected
+                          ? [
+                              BoxShadow(
+                                color: cs.primary.withValues(alpha: 0.35),
+                                blurRadius: 6,
+                                spreadRadius: 1,
+                              ),
+                            ]
+                          : null,
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: AspectRatio(
+                        aspectRatio: _aspectRatio,
+                        child: SlideRenderView(data: widget.data),
+                      ),
+                    ),
+                  ),
+                  if (_hovered)
+                    Positioned(
+                      top: 4,
+                      right: 4,
+                      child: GestureDetector(
+                        onTap: widget.onEdit,
+                        child: Container(
+                          padding: const EdgeInsets.all(5),
+                          decoration: BoxDecoration(
+                            color: cs.surface.withValues(alpha: 0.92),
+                            borderRadius: BorderRadius.circular(5),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.2),
+                                blurRadius: 4,
+                              ),
+                            ],
+                          ),
+                          child: Icon(
+                            Icons.edit_rounded,
+                            size: 13,
+                            color: cs.primary,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '${widget.index + 1}',
+              style: TextStyle(
+                fontSize: 11,
+                color: widget.isSelected ? cs.primary : cs.onSurfaceVariant,
+                fontWeight:
+                    widget.isSelected ? FontWeight.w700 : FontWeight.normal,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── SlideQuickEditDialog ──────────────────────────────────────────────────
+
+class _SlideQuickEditDialog extends StatefulWidget {
+  const _SlideQuickEditDialog({
+    required this.mainText,
+    required this.englishText,
+    required this.isBible,
+    this.title,
+  });
+
+  final String mainText;
+  final String englishText;
+  final bool isBible;
+  final String? title;
+
+  @override
+  State<_SlideQuickEditDialog> createState() => _SlideQuickEditDialogState();
+}
+
+class _SlideQuickEditDialogState extends State<_SlideQuickEditDialog> {
+  late final TextEditingController _mainCtrl;
+  late final TextEditingController _englishCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _mainCtrl = TextEditingController(text: widget.mainText);
+    _englishCtrl = TextEditingController(text: widget.englishText);
+  }
+
+  @override
+  void dispose() {
+    _mainCtrl.dispose();
+    _englishCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final titleLabel = widget.title != null
+        ? '슬라이드 수정 — ${widget.title}'
+        : '슬라이드 수정';
+    return AlertDialog(
+      title: Text(titleLabel),
+      content: SizedBox(
+        width: 520,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: _mainCtrl,
+              maxLines: 7,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: '본문',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            if (!widget.isBible) ...[
+              const SizedBox(height: 12),
+              TextField(
+                controller: _englishCtrl,
+                maxLines: 4,
+                decoration: const InputDecoration(
+                  labelText: '영어 가사 (선택)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('취소'),
+        ),
+        FilledButton(
+          onPressed: () =>
+              Navigator.pop(context, (_mainCtrl.text, _englishCtrl.text)),
+          child: const Text('적용'),
+        ),
+      ],
     );
   }
 }

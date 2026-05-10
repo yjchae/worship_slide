@@ -10,13 +10,14 @@ class PresentationWindowController: NSWindowController {
   convenience init() {
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 1280, height: 720),
-      styleMask: [.titled, .closable, .resizable, .miniaturizable],
+      styleMask: .borderless,
       backing: .buffered,
       defer: false
     )
-    window.title = "발표 화면"
     window.isReleasedWhenClosed = false
     window.backgroundColor = .black
+    window.level = .screenSaver
+    window.collectionBehavior = [.fullScreenAuxiliary]
     self.init(window: window)
 
     let config = WKWebViewConfiguration()
@@ -27,15 +28,8 @@ class PresentationWindowController: NSWindowController {
 
   func show(on screen: NSScreen? = nil) {
     guard let window = self.window else { return }
-    if let screen = screen {
-      let sf = screen.frame
-      let wf = window.frame
-      let x = sf.minX + (sf.width - wf.width) / 2
-      let y = sf.minY + (sf.height - wf.height) / 2
-      window.setFrameOrigin(NSPoint(x: x, y: y))
-    } else {
-      window.center()
-    }
+    let targetScreen = screen ?? NSScreen.main ?? NSScreen.screens[0]
+    window.setFrame(targetScreen.frame, display: true)
     window.makeKeyAndOrderFront(nil)
   }
 
@@ -153,7 +147,7 @@ class PresentationWindowController: NSWindowController {
         top:\(String(format:"%.4f",bodyBoxTopPct))%;
         height:\(String(format:"%.4f",bodyBoxHeightPct))%;
         display:flex;flex-direction:column;
-        justify-content:\(justifyContent);align-items:center;}
+        justify-content:\(justifyContent);align-items:center;overflow:visible;}
       .main-text{color:\(textColor);font-size:calc(\(fontSize)/540*100vh);
         font-weight:700;line-height:1.25;text-align:\(textAlign);
         white-space:pre-wrap;width:100%;}
@@ -166,6 +160,21 @@ class PresentationWindowController: NSWindowController {
         \(englishSection)
       </div>
       \(titleSection)
+    <script>
+    requestAnimationFrame(function(){
+      var box = document.querySelector('.body-box');
+      if (!box) return;
+      var boxH = box.offsetHeight;
+      var totalH = 0;
+      for (var i = 0; i < box.children.length; i++) {
+        totalH += box.children[i].offsetHeight;
+      }
+      if (totalH <= boxH * 1.01) return;
+      var scale = boxH / totalH * 0.97;
+      box.style.transform = 'scale(' + scale + ')';
+      box.style.transformOrigin = '\(justifyContent == "flex-end" ? "bottom" : "top") center';
+    });
+    </script>
     </body></html>
     """
   }
