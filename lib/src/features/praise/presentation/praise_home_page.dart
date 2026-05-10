@@ -86,6 +86,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
   UpdateInfo? _pendingUpdate;
   bool _isDownloadingUpdate = false;
   double _updateProgress = 0.0;
+  bool _isCheckingUpdate = false;
 
   List<PraiseSong> _songs = const [];
   final List<({int uid, StagingItem item})> _stagingItems = [];
@@ -343,9 +344,14 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
   // ── 업데이트 ─────────────────────────────────────────────────────────
 
   Future<void> _checkForUpdates() async {
+    if (_isCheckingUpdate) return;
+    setState(() => _isCheckingUpdate = true);
     final info = await _updateService.checkForUpdates();
-    if (!mounted || info == null) return;
-    setState(() => _pendingUpdate = info);
+    if (!mounted) return;
+    setState(() {
+      _isCheckingUpdate = false;
+      if (info != null) _pendingUpdate = info;
+    });
   }
 
   Future<void> _startUpdate() async {
@@ -858,6 +864,9 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                             importStatusText: _importStatusText,
                             onImportPressed: _pickAndImportFolder,
                             onBibleImportPressed: _pickAndImportBible,
+                            isCheckingUpdate: _isCheckingUpdate,
+                            hasUpdate: _pendingUpdate != null,
+                            onCheckUpdate: _checkForUpdates,
                           ),
                           const SizedBox(height: 8),
                           _PresentationControlBar(
@@ -1166,6 +1175,9 @@ class _TopBar extends StatelessWidget {
     required this.importStatusText,
     required this.onImportPressed,
     required this.onBibleImportPressed,
+    required this.isCheckingUpdate,
+    required this.hasUpdate,
+    required this.onCheckUpdate,
   });
 
   final int storedCount;
@@ -1178,6 +1190,9 @@ class _TopBar extends StatelessWidget {
   final String? importStatusText;
   final VoidCallback onImportPressed;
   final VoidCallback onBibleImportPressed;
+  final bool isCheckingUpdate;
+  final bool hasUpdate;
+  final VoidCallback onCheckUpdate;
 
   @override
   Widget build(BuildContext context) {
@@ -1251,6 +1266,25 @@ class _TopBar extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 10),
+          if (!hasUpdate)
+            Tooltip(
+              message: '업데이트 확인',
+              child: IconButton(
+                onPressed: isCheckingUpdate ? null : onCheckUpdate,
+                icon: isCheckingUpdate
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white54,
+                        ),
+                      )
+                    : const Icon(Icons.refresh_rounded,
+                        size: 18, color: Colors.white54),
+              ),
+            ),
+          const SizedBox(width: 4),
           FilledButton.icon(
             style: FilledButton.styleFrom(
               backgroundColor: Colors.white.withValues(alpha: 0.22),
