@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -27,54 +28,71 @@ class UpdateService {
   static const _apiUrl =
       'https://api.github.com/repos/$_owner/$_repo/releases/latest';
 
-  Future<UpdateInfo?> checkForUpdates() async {
-    try {
-      final info = await PackageInfo.fromPlatform();
-      final current = info.version;
-
-      final response = await http
-          .get(
-            Uri.parse(_apiUrl),
-            headers: {'Accept': 'application/vnd.github.v3+json'},
-          )
-          .timeout(const Duration(seconds: 10));
-
-      if (response.statusCode != 200) return null;
-
-      final data = json.decode(response.body) as Map<String, dynamic>;
-      final tagName = data['tag_name'] as String;
-      final latest =
-          tagName.startsWith('v') ? tagName.substring(1) : tagName;
-
-      if (!_isNewer(latest, current)) return null;
-
-      final assets = data['assets'] as List<dynamic>;
-      String? downloadUrl;
-      final platformId = Platform.isMacOS
-          ? 'macos'
-          : Platform.isWindows
-              ? 'windows'
-              : null;
-
-      if (platformId != null) {
-        for (final asset in assets) {
-          final name = asset['name'] as String;
-          if (name.contains(platformId) && name.endsWith('.zip')) {
-            downloadUrl = asset['browser_download_url'] as String;
-            break;
-          }
-        }
+  Future<UpdateInfo?> checkForUpdates({int maxAttempts = 1}) async {
+    for (var attempt = 0; attempt < maxAttempts; attempt++) {
+      if (attempt > 0) {
+        await Future.delayed(Duration(seconds: attempt * 5));
       }
+      try {
+        return await _fetchUpdateInfo();
+      } on SocketException catch (e) {
+        debugPrint('[UpdateService] attempt $attempt network error: $e');
+      } on TimeoutException catch (e) {
+        debugPrint('[UpdateService] attempt $attempt timeout: $e');
+      } catch (e, st) {
+        debugPrint('[UpdateService] unexpected error: $e\n$st');
+        return null;
+      }
+    }
+    return null;
+  }
 
-      return UpdateInfo(
-        version: latest,
-        tagName: tagName,
-        releaseUrl: data['html_url'] as String,
-        downloadUrl: downloadUrl,
-      );
-    } catch (_) {
+  Future<UpdateInfo?> _fetchUpdateInfo() async {
+    final info = await PackageInfo.fromPlatform();
+    final current = info.version;
+
+    final response = await http
+        .get(
+          Uri.parse(_apiUrl),
+          headers: {'Accept': 'application/vnd.github.v3+json'},
+        )
+        .timeout(const Duration(seconds: 15));
+
+    if (response.statusCode != 200) {
+      debugPrint('[UpdateService] HTTP ${response.statusCode}');
       return null;
     }
+
+    final data = json.decode(response.body) as Map<String, dynamic>;
+    final tagName = data['tag_name'] as String;
+    final latest = tagName.startsWith('v') ? tagName.substring(1) : tagName;
+
+    if (!_isNewer(latest, current)) return null;
+
+    final assets = data['assets'] as List<dynamic>;
+    String? downloadUrl;
+    final platformId = Platform.isMacOS
+        ? 'macos'
+        : Platform.isWindows
+            ? 'windows'
+            : null;
+
+    if (platformId != null) {
+      for (final asset in assets) {
+        final name = asset['name'] as String;
+        if (name.contains(platformId) && name.endsWith('.zip')) {
+          downloadUrl = asset['browser_download_url'] as String;
+          break;
+        }
+      }
+    }
+
+    return UpdateInfo(
+      version: latest,
+      tagName: tagName,
+      releaseUrl: data['html_url'] as String,
+      downloadUrl: downloadUrl,
+    );
   }
 
   bool _isNewer(String latest, String current) {
