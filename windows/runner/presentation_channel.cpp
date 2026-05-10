@@ -107,10 +107,12 @@ void PresentationChannel::OpenWindow() {
     }, reinterpret_cast<LPARAM>(&mi));
 
   RECT wr;
+  DWORD exStyle;
   if (mi.second) {
     MONITORINFO info = { sizeof(info) };
     GetMonitorInfo(mi.second, &info);
-    wr = info.rcWork;
+    wr = info.rcMonitor;  // full screen including taskbar
+    exStyle = WS_EX_TOPMOST;
   } else {
     MONITORINFO info = { sizeof(info) };
     GetMonitorInfo(mi.primary, &info);
@@ -120,16 +122,15 @@ void PresentationChannel::OpenWindow() {
     wr.top    = info.rcWork.top  + (sh - 720)  / 2;
     wr.right  = wr.left + 1280;
     wr.bottom = wr.top  + 720;
+    exStyle = 0;
   }
 
-  DWORD style = WS_OVERLAPPEDWINDOW;
-  RECT adj = wr;
-  AdjustWindowRect(&adj, style, FALSE);
+  DWORD style = mi.second ? WS_POPUP : WS_OVERLAPPEDWINDOW;
 
   hwnd_ = CreateWindowExW(
-      0, kClass, L"발표 화면", style,
-      adj.left, adj.top,
-      adj.right - adj.left, adj.bottom - adj.top,
+      exStyle, kClass, L"발표 화면", style,
+      wr.left, wr.top,
+      wr.right - wr.left, wr.bottom - wr.top,
       nullptr, nullptr, GetModuleHandle(nullptr), nullptr);
 
   ShowWindow(hwnd_, SW_SHOW);

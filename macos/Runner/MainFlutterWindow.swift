@@ -10,7 +10,7 @@ class PresentationWindowController: NSWindowController {
   convenience init() {
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 1280, height: 720),
-      styleMask: .borderless,
+      styleMask: [.borderless],
       backing: .buffered,
       defer: false
     )
