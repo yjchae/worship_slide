@@ -28,8 +28,8 @@ class UpdateService {
   static const _apiUrl =
       'https://api.github.com/repos/$_owner/$_repo/releases/latest';
 
-  Future<UpdateInfo?> checkForUpdates() async {
-    for (var attempt = 0; attempt < 3; attempt++) {
+  Future<UpdateInfo?> checkForUpdates({int maxAttempts = 1}) async {
+    for (var attempt = 0; attempt < maxAttempts; attempt++) {
       if (attempt > 0) {
         await Future.delayed(Duration(seconds: attempt * 5));
       }

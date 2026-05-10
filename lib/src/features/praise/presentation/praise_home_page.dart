@@ -140,7 +140,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     _loadSavedStyle();
     _loadBibleCount();
     _searchController.addListener(_loadSongs);
-    _checkForUpdates();
+    _checkForUpdates(isStartup: true);
     _mainPresentationChannel.setMethodCallHandler((call) async {
       if (call.method == 'presentationClosed' && mounted) {
         setState(() => _isPresentationOpen = false);
@@ -343,10 +343,12 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
 
   // ── 업데이트 ─────────────────────────────────────────────────────────
 
-  Future<void> _checkForUpdates() async {
+  Future<void> _checkForUpdates({bool isStartup = false}) async {
     if (_isCheckingUpdate) return;
     setState(() => _isCheckingUpdate = true);
-    final info = await _updateService.checkForUpdates();
+    final info = await _updateService.checkForUpdates(
+      maxAttempts: isStartup ? 3 : 1,
+    );
     if (!mounted) return;
     setState(() {
       _isCheckingUpdate = false;
