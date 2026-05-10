@@ -16,6 +16,7 @@ import '../domain/export_style.dart';
 import '../domain/praise_song.dart';
 import '../domain/staging_item.dart';
 import 'slide_page_data.dart';
+import 'slide_render_view.dart';
 
 class PraiseHomePage extends StatefulWidget {
   const PraiseHomePage({super.key});
@@ -320,6 +321,16 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     setState(() {
       _currentSlideIndex++;
       _previewStagingUid = slides[_currentSlideIndex].stagingUid;
+    });
+    await _sendCurrentSlide();
+  }
+
+  Future<void> _goToSlide(int index) async {
+    final slides = _allSlides;
+    if (index < 0 || index >= slides.length) return;
+    setState(() {
+      _currentSlideIndex = index;
+      _previewStagingUid = slides[index].stagingUid;
     });
     await _sendCurrentSlide();
   }
@@ -871,6 +882,18 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                             onPrev: _prevSlide,
                             onNext: _nextSlide,
                           ),
+                          if (_isPresentationOpen) ...[
+                            const SizedBox(height: 10),
+                            SizedBox(
+                              height: 160,
+                              child: _PresentationControllerPanel(
+                                slides: slides,
+                                currentIndex: _currentSlideIndex,
+                                style: _style,
+                                onSlideSelected: _goToSlide,
+                              ),
+                            ),
+                          ],
                           const SizedBox(height: 10),
                           Expanded(
                             child: _ResizableWorkArea(
@@ -3395,6 +3418,176 @@ class _SongEditDialogState extends State<_SongEditDialog> {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ── PresentationControllerPanel ───────────────────────────────────────────
+
+class _PresentationControllerPanel extends StatefulWidget {
+  const _PresentationControllerPanel({
+    required this.slides,
+    required this.currentIndex,
+    required this.style,
+    required this.onSlideSelected,
+  });
+
+  final List<_SlideInfo> slides;
+  final int currentIndex;
+  final ExportStyle style;
+  final ValueChanged<int> onSlideSelected;
+
+  @override
+  State<_PresentationControllerPanel> createState() =>
+      _PresentationControllerPanelState();
+}
+
+class _PresentationControllerPanelState
+    extends State<_PresentationControllerPanel> {
+  final _scrollController = ScrollController();
+
+  static const double _thumbnailWidth = 210;
+  static const double _itemSpacing = 8;
+  static const double _padding = 10;
+
+  @override
+  void didUpdateWidget(_PresentationControllerPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.currentIndex != widget.currentIndex) {
+      _scrollToCurrentItem();
+    }
+  }
+
+  void _scrollToCurrentItem() {
+    if (!_scrollController.hasClients) return;
+    final targetOffset =
+        widget.currentIndex * (_thumbnailWidth + _itemSpacing) + _padding;
+    final viewportWidth = _scrollController.position.viewportDimension;
+    final centeredOffset = targetOffset - (viewportWidth - _thumbnailWidth) / 2;
+    _scrollController.animateTo(
+      centeredOffset.clamp(
+        0.0,
+        _scrollController.position.maxScrollExtent,
+      ),
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+    );
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: ListView.builder(
+        controller: _scrollController,
+        scrollDirection: Axis.horizontal,
+        padding: EdgeInsets.all(_padding),
+        itemCount: widget.slides.length,
+        itemBuilder: (context, i) {
+          final info = widget.slides[i];
+          final pageData = SlidePageData(
+            mainText: info.mainText,
+            englishText: info.englishText,
+            title: info.title,
+            isBible: info.isBible,
+            pageIndex: i,
+            totalPages: widget.slides.length,
+            style: widget.style,
+          );
+          return SizedBox(
+            width: _thumbnailWidth,
+            child: Padding(
+              padding: EdgeInsets.only(
+                right: i < widget.slides.length - 1 ? _itemSpacing : 0,
+              ),
+              child: _SlideThumbnail(
+                data: pageData,
+                isSelected: i == widget.currentIndex,
+                index: i,
+                onTap: () => widget.onSlideSelected(i),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+// ── SlideThumbnail ────────────────────────────────────────────────────────
+
+class _SlideThumbnail extends StatelessWidget {
+  const _SlideThumbnail({
+    required this.data,
+    required this.isSelected,
+    required this.index,
+    required this.onTap,
+  });
+
+  final SlidePageData data;
+  final bool isSelected;
+  final int index;
+  final VoidCallback onTap;
+
+  static const double _aspectRatio = 13.333 / 7.5;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(5),
+                border: Border.all(
+                  color: isSelected ? cs.primary : cs.outlineVariant,
+                  width: isSelected ? 2.5 : 1,
+                ),
+                boxShadow: isSelected
+                    ? [
+                        BoxShadow(
+                          color: cs.primary.withValues(alpha: 0.35),
+                          blurRadius: 6,
+                          spreadRadius: 1,
+                        ),
+                      ]
+                    : null,
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: AspectRatio(
+                  aspectRatio: _aspectRatio,
+                  child: SlideRenderView(data: data),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '${index + 1}',
+            style: TextStyle(
+              fontSize: 11,
+              color: isSelected ? cs.primary : cs.onSurfaceVariant,
+              fontWeight: isSelected ? FontWeight.w700 : FontWeight.normal,
+            ),
+          ),
+        ],
       ),
     );
   }
