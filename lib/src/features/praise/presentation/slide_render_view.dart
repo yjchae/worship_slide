@@ -100,33 +100,41 @@ class SlideRenderView extends StatelessWidget {
                 ),
                 child: Align(
                   alignment: bodyAlignment,
-                  child: DefaultTextStyle(
-                    style: const TextStyle(),
-                    child: RichText(
-                      textAlign: textAlign,
-                      text: TextSpan(
-                        children: [
-                          TextSpan(
-                            text: data.mainText,
-                            style: TextStyle(
-                              color: bodyTextColor,
-                              fontSize: bodyFontSize * fontScale,
-                              fontWeight: FontWeight.w700,
-                              height: 1.25,
-                            ),
-                          ),
-                          if (style.includeEnglishLyrics &&
-                              data.englishText.isNotEmpty)
-                            TextSpan(
-                              text: '\n${data.englishText}',
-                              style: TextStyle(
-                                color: style.englishTextColor,
-                                fontSize: style.fontSize * 0.8 * fontScale,
-                                fontWeight: FontWeight.w700,
-                                height: 1.3,
+                  // FittedBox: 텍스트가 영역을 초과할 때 자동 축소
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: bodyAlignment,
+                    child: SizedBox(
+                      width: w * _lyricsBoxW / _slideW,
+                      child: DefaultTextStyle(
+                        style: const TextStyle(),
+                        child: RichText(
+                          textAlign: textAlign,
+                          text: TextSpan(
+                            children: [
+                              TextSpan(
+                                text: data.mainText,
+                                style: TextStyle(
+                                  color: bodyTextColor,
+                                  fontSize: bodyFontSize * fontScale,
+                                  fontWeight: FontWeight.w700,
+                                  height: 1.25,
+                                ),
                               ),
-                            ),
-                        ],
+                              if (style.includeEnglishLyrics &&
+                                  data.englishText.isNotEmpty)
+                                TextSpan(
+                                  text: '\n${data.englishText}',
+                                  style: TextStyle(
+                                    color: style.englishTextColor,
+                                    fontSize: style.fontSize * 0.8 * fontScale,
+                                    fontWeight: FontWeight.w700,
+                                    height: 1.3,
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
                       ),
                     ),
                   ),

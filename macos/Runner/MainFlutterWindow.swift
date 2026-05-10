@@ -153,7 +153,7 @@ class PresentationWindowController: NSWindowController {
         top:\(String(format:"%.4f",bodyBoxTopPct))%;
         height:\(String(format:"%.4f",bodyBoxHeightPct))%;
         display:flex;flex-direction:column;
-        justify-content:\(justifyContent);align-items:center;}
+        justify-content:\(justifyContent);align-items:center;overflow:visible;}
       .main-text{color:\(textColor);font-size:calc(\(fontSize)/540*100vh);
         font-weight:700;line-height:1.25;text-align:\(textAlign);
         white-space:pre-wrap;width:100%;}
@@ -166,6 +166,21 @@ class PresentationWindowController: NSWindowController {
         \(englishSection)
       </div>
       \(titleSection)
+    <script>
+    (function(){
+      var box = document.querySelector('.body-box');
+      if (!box) return;
+      var boxH = box.offsetHeight;
+      var totalH = 0;
+      for (var i = 0; i < box.children.length; i++) {
+        totalH += box.children[i].offsetHeight;
+      }
+      if (totalH <= boxH * 1.01) return;
+      var scale = boxH / totalH * 0.97;
+      box.style.transform = 'scale(' + scale + ')';
+      box.style.transformOrigin = '\(justifyContent == "flex-end" ? "bottom" : "top") center';
+    })();
+    </script>
     </body></html>
     """
   }
