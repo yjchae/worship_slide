@@ -100,7 +100,6 @@ class SlideRenderView extends StatelessWidget {
                 ),
                 child: Align(
                   alignment: bodyAlignment,
-                  // FittedBox: 텍스트가 영역을 초과할 때 자동 축소
                   child: FittedBox(
                     fit: BoxFit.scaleDown,
                     alignment: bodyAlignment,

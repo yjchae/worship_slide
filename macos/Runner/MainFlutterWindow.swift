@@ -167,7 +167,7 @@ class PresentationWindowController: NSWindowController {
       </div>
       \(titleSection)
     <script>
-    (function(){
+    requestAnimationFrame(function(){
       var box = document.querySelector('.body-box');
       if (!box) return;
       var boxH = box.offsetHeight;
@@ -179,7 +179,7 @@ class PresentationWindowController: NSWindowController {
       var scale = boxH / totalH * 0.97;
       box.style.transform = 'scale(' + scale + ')';
       box.style.transformOrigin = '\(justifyContent == "flex-end" ? "bottom" : "top") center';
-    })();
+    });
     </script>
     </body></html>
     """
