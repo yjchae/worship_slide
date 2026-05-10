@@ -10,13 +10,14 @@ class PresentationWindowController: NSWindowController {
   convenience init() {
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 1280, height: 720),
-      styleMask: [.titled, .closable, .resizable, .miniaturizable],
+      styleMask: [.borderless],
       backing: .buffered,
       defer: false
     )
     window.title = "발표 화면"
     window.isReleasedWhenClosed = false
     window.backgroundColor = .black
+    window.level = .floating
     self.init(window: window)
 
     let config = WKWebViewConfiguration()
@@ -27,15 +28,8 @@ class PresentationWindowController: NSWindowController {
 
   func show(on screen: NSScreen? = nil) {
     guard let window = self.window else { return }
-    if let screen = screen {
-      let sf = screen.frame
-      let wf = window.frame
-      let x = sf.minX + (sf.width - wf.width) / 2
-      let y = sf.minY + (sf.height - wf.height) / 2
-      window.setFrameOrigin(NSPoint(x: x, y: y))
-    } else {
-      window.center()
-    }
+    let targetScreen = screen ?? NSScreen.main ?? NSScreen.screens[0]
+    window.setFrame(targetScreen.frame, display: false)
     window.makeKeyAndOrderFront(nil)
   }
 
