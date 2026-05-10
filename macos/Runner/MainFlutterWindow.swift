@@ -6,6 +6,7 @@ import WebKit
 
 class PresentationWindowController: NSWindowController {
   private var webView: WKWebView!
+  private var keyMonitor: Any?
 
   convenience init() {
     let window = NSWindow(
@@ -31,6 +32,22 @@ class PresentationWindowController: NSWindowController {
     let targetScreen = screen ?? NSScreen.main ?? NSScreen.screens[0]
     window.setFrame(targetScreen.frame, display: true)
     window.makeKeyAndOrderFront(nil)
+
+    keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+      if event.keyCode == 53 { // ESC
+        self?.window?.close()
+        return nil
+      }
+      return event
+    }
+    NotificationCenter.default.addObserver(
+      forName: NSWindow.willCloseNotification, object: window, queue: .main
+    ) { [weak self] _ in
+      if let monitor = self?.keyMonitor {
+        NSEvent.removeMonitor(monitor)
+        self?.keyMonitor = nil
+      }
+    }
   }
 
   // data: Dart의 SlidePageData.toJson() 결과 ([String:Any])
