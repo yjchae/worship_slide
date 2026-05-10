@@ -96,6 +96,13 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
   int _nextUid = 0;
   int? _previewStagingUid;
   double _stagingPanelRatio = 0.46;
+  bool _isSearchCollapsed = false;
+  bool _isDesignCollapsed = false;
+  bool _isSlideOrderCollapsed = false;
+  bool _isSlideOrderMaximized = false;
+  bool _isStagingCollapsed = false;
+  double _presentationPanelRatio = 0.28;
+  String _slideJumpBuffer = '';
 
   String? _selectedFolder;
   bool _isImporting = false;
@@ -294,7 +301,13 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     try {
       await _presentationChannel.invokeMethod('closeWindow');
     } catch (_) {}
-    if (mounted) setState(() => _isPresentationOpen = false);
+    if (mounted) {
+      setState(() {
+        _isPresentationOpen = false;
+        _isSlideOrderCollapsed = false;
+        _isSlideOrderMaximized = false;
+      });
+    }
   }
 
   Future<void> _sendCurrentSlide() async {
@@ -411,16 +424,61 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     await _sendCurrentSlide();
   }
 
+  static final _digitKeys = <LogicalKeyboardKey, String>{
+    LogicalKeyboardKey.digit0: '0', LogicalKeyboardKey.digit1: '1',
+    LogicalKeyboardKey.digit2: '2', LogicalKeyboardKey.digit3: '3',
+    LogicalKeyboardKey.digit4: '4', LogicalKeyboardKey.digit5: '5',
+    LogicalKeyboardKey.digit6: '6', LogicalKeyboardKey.digit7: '7',
+    LogicalKeyboardKey.digit8: '8', LogicalKeyboardKey.digit9: '9',
+    LogicalKeyboardKey.numpad0: '0', LogicalKeyboardKey.numpad1: '1',
+    LogicalKeyboardKey.numpad2: '2', LogicalKeyboardKey.numpad3: '3',
+    LogicalKeyboardKey.numpad4: '4', LogicalKeyboardKey.numpad5: '5',
+    LogicalKeyboardKey.numpad6: '6', LogicalKeyboardKey.numpad7: '7',
+    LogicalKeyboardKey.numpad8: '8', LogicalKeyboardKey.numpad9: '9',
+  };
+
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
     if (!_isPresentationOpen) return KeyEventResult.ignored;
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
-    if (event.logicalKey == LogicalKeyboardKey.arrowRight ||
-        event.logicalKey == LogicalKeyboardKey.arrowDown) {
+
+    final key = event.logicalKey;
+
+    final digit = _digitKeys[key];
+    if (digit != null) {
+      setState(() => _slideJumpBuffer += digit);
+      return KeyEventResult.handled;
+    }
+
+    if (key == LogicalKeyboardKey.enter ||
+        key == LogicalKeyboardKey.numpadEnter) {
+      if (_slideJumpBuffer.isNotEmpty) {
+        final target = int.tryParse(_slideJumpBuffer) ?? 0;
+        setState(() => _slideJumpBuffer = '');
+        if (target >= 1) {
+          _goToSlide((target - 1).clamp(0, _allSlides.length - 1));
+        }
+        return KeyEventResult.handled;
+      }
+    }
+
+    if (key == LogicalKeyboardKey.escape) {
+      if (_slideJumpBuffer.isNotEmpty) {
+        setState(() => _slideJumpBuffer = '');
+        return KeyEventResult.handled;
+      }
+    }
+
+    if (_slideJumpBuffer.isNotEmpty) {
+      setState(() => _slideJumpBuffer = '');
+    }
+
+    if (key == LogicalKeyboardKey.arrowRight ||
+        key == LogicalKeyboardKey.arrowDown) {
       _nextSlide();
       return KeyEventResult.handled;
     }
-    if (event.logicalKey == LogicalKeyboardKey.arrowLeft ||
-        event.logicalKey == LogicalKeyboardKey.arrowUp) {
+    if (key == LogicalKeyboardKey.arrowLeft ||
+        key == LogicalKeyboardKey.arrowUp) {
       _prevSlide();
       return KeyEventResult.handled;
     }
@@ -963,76 +1021,167 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                             currentSlideIndex: _currentSlideIndex,
                             totalSlides: slides.length,
                             currentSlideTitle: currentSlideTitle,
+                            slideJumpBuffer: _slideJumpBuffer,
                             onOpen: _openPresentation,
                             onClose: _closePresentation,
                             onPrev: _prevSlide,
                             onNext: _nextSlide,
                           ),
-                          if (_isPresentationOpen) ...[
-                            const SizedBox(height: 10),
-                            SizedBox(
-                              height: 160,
-                              child: _PresentationControllerPanel(
-                                slides: slides,
-                                currentIndex: _currentSlideIndex,
-                                style: _style,
-                                onSlideSelected: _goToSlide,
-                                onSlideEdit: _editSlide,
-                              ),
-                            ),
-                          ],
                           const SizedBox(height: 10),
                           Expanded(
-                            child: _ResizableWorkArea(
-                              stagingRatio: _stagingPanelRatio,
-                              onRatioChanged: (value) =>
-                                  setState(() => _stagingPanelRatio = value),
-                              stagingPanel: _StagingPanel(
-                                stagingItems: _stagingItems,
-                                selectedUid: _previewStagingUid,
-                                onReorder: _onStagingReorder,
-                                onRemove: _removeFromStaging,
-                                onSelect: (uid) {
-                                  setState(() {
-                                    _previewStagingUid = uid;
-                                    _currentSlideIndex =
-                                        _findFirstSlideForStaging(uid);
-                                  });
-                                  _sendCurrentSlide();
-                                },
-                              ),
-                              searchPanel: _SearchAndBiblePanel(
-                                searchController: _searchController,
-                                songs: _songs,
-                                selectedSongIds: _selectedSongIds,
-                                onSongChanged: _toggleSongSelection,
-                                onDeleteSelected: _deleteSelectedSongs,
-                                onClearAll: _clearAllSongs,
-                                onAddSong: () => _openSongEditor(null),
-                                onEditSong: _openSongEditor,
-                                bibleRepository: _bibleRepository,
-                                bibleVerseCount: _bibleVerseCount,
-                                bibleDataRevision: _bibleDataRevision,
-                                onAddBibleItem: _addBibleItem,
-                              ),
-                            ),
+                            child: _isPresentationOpen
+                                ? _PresentingLayout(
+                                    presentationRatio: _presentationPanelRatio,
+                                    onPresentationRatioChanged: (v) => setState(
+                                      () => _presentationPanelRatio = v,
+                                    ),
+                                    isSlideOrderCollapsed: _isSlideOrderCollapsed,
+                                    isSlideOrderMaximized: _isSlideOrderMaximized,
+                                    presentationPanel:
+                                        _PresentationControllerPanel(
+                                          slides: slides,
+                                          currentIndex: _currentSlideIndex,
+                                          style: _style,
+                                          onSlideSelected: _goToSlide,
+                                          onSlideEdit: _editSlide,
+                                          onCollapse: () => setState(
+                                            () => _isSlideOrderCollapsed = true,
+                                          ),
+                                          isMaximized: _isSlideOrderMaximized,
+                                          onToggleMaximized: () => setState(
+                                            () => _isSlideOrderMaximized =
+                                                !_isSlideOrderMaximized,
+                                          ),
+                                        ),
+                                    collapsedSlideStrip:
+                                        _CollapsedSlideOrderStrip(
+                                          currentIndex: _currentSlideIndex,
+                                          totalSlides: slides.length,
+                                          onExpand: () => setState(
+                                            () =>
+                                                _isSlideOrderCollapsed = false,
+                                          ),
+                                        ),
+                                    workArea: _ResizableWorkArea(
+                                      stagingRatio: _stagingPanelRatio,
+                                      onRatioChanged: (value) => setState(
+                                        () => _stagingPanelRatio = value,
+                                      ),
+                                      isSearchCollapsed: _isSearchCollapsed,
+                                      isStagingCollapsed: _isStagingCollapsed,
+                                      stagingPanel: _StagingPanel(
+                                        stagingItems: _stagingItems,
+                                        selectedUid: _previewStagingUid,
+                                        onReorder: _onStagingReorder,
+                                        onRemove: _removeFromStaging,
+                                        isCollapsed: _isStagingCollapsed,
+                                        onToggleCollapsed: () => setState(
+                                          () => _isStagingCollapsed =
+                                              !_isStagingCollapsed,
+                                        ),
+                                        onSelect: (uid) {
+                                          setState(() {
+                                            _previewStagingUid = uid;
+                                            _currentSlideIndex =
+                                                _findFirstSlideForStaging(uid);
+                                          });
+                                          _sendCurrentSlide();
+                                        },
+                                      ),
+                                      searchPanel: _SearchAndBiblePanel(
+                                        searchController: _searchController,
+                                        songs: _songs,
+                                        selectedSongIds: _selectedSongIds,
+                                        onSongChanged: _toggleSongSelection,
+                                        onDeleteSelected: _deleteSelectedSongs,
+                                        onClearAll: _clearAllSongs,
+                                        onAddSong: () => _openSongEditor(null),
+                                        onEditSong: _openSongEditor,
+                                        bibleRepository: _bibleRepository,
+                                        bibleVerseCount: _bibleVerseCount,
+                                        bibleDataRevision: _bibleDataRevision,
+                                        onAddBibleItem: _addBibleItem,
+                                        isCollapsed: _isSearchCollapsed,
+                                        onToggleCollapsed: () => setState(
+                                          () => _isSearchCollapsed =
+                                              !_isSearchCollapsed,
+                                        ),
+                                      ),
+                                    ),
+                                  )
+                                : _ResizableWorkArea(
+                                    stagingRatio: _stagingPanelRatio,
+                                    onRatioChanged: (value) => setState(
+                                      () => _stagingPanelRatio = value,
+                                    ),
+                                    isSearchCollapsed: _isSearchCollapsed,
+                                    isStagingCollapsed: _isStagingCollapsed,
+                                    stagingPanel: _StagingPanel(
+                                      stagingItems: _stagingItems,
+                                      selectedUid: _previewStagingUid,
+                                      onReorder: _onStagingReorder,
+                                      onRemove: _removeFromStaging,
+                                      isCollapsed: _isStagingCollapsed,
+                                      onToggleCollapsed: () => setState(
+                                        () => _isStagingCollapsed =
+                                            !_isStagingCollapsed,
+                                      ),
+                                      onSelect: (uid) {
+                                        setState(() {
+                                          _previewStagingUid = uid;
+                                          _currentSlideIndex =
+                                              _findFirstSlideForStaging(uid);
+                                        });
+                                        _sendCurrentSlide();
+                                      },
+                                    ),
+                                    searchPanel: _SearchAndBiblePanel(
+                                      searchController: _searchController,
+                                      songs: _songs,
+                                      selectedSongIds: _selectedSongIds,
+                                      onSongChanged: _toggleSongSelection,
+                                      onDeleteSelected: _deleteSelectedSongs,
+                                      onClearAll: _clearAllSongs,
+                                      onAddSong: () => _openSongEditor(null),
+                                      onEditSong: _openSongEditor,
+                                      bibleRepository: _bibleRepository,
+                                      bibleVerseCount: _bibleVerseCount,
+                                      bibleDataRevision: _bibleDataRevision,
+                                      onAddBibleItem: _addBibleItem,
+                                      isCollapsed: _isSearchCollapsed,
+                                      onToggleCollapsed: () => setState(
+                                        () => _isSearchCollapsed =
+                                            !_isSearchCollapsed,
+                                      ),
+                                    ),
+                                  ),
                           ),
                         ],
                       ),
                     ),
                   SizedBox(width: isWide ? 20 : 0, height: isWide ? 0 : 20),
-                  Expanded(
-                    flex: 4,
-                    child: _DesignPanel(
-                      style: _style,
-                      isExporting: _isExporting,
-                      swatches: _swatches,
-                      textSwatches: _textSwatches,
-                      previewItem: previewItem,
-                      onStyleChanged: _updateStyle,
-                      onExportPressed: _exportPresentation,
+                  if (_isDesignCollapsed)
+                    _CollapsedPanelStrip(
+                      label: 'PPTX 디자인',
+                      isVertical: isWide,
+                      onExpand: () =>
+                          setState(() => _isDesignCollapsed = false),
+                    )
+                  else
+                    Expanded(
+                      flex: 4,
+                      child: _DesignPanel(
+                        style: _style,
+                        isExporting: _isExporting,
+                        swatches: _swatches,
+                        textSwatches: _textSwatches,
+                        previewItem: previewItem,
+                        onStyleChanged: _updateStyle,
+                        onExportPressed: _exportPresentation,
+                        onCollapse: () =>
+                            setState(() => _isDesignCollapsed = true),
+                      ),
                     ),
-                  ),
                 ],
               );
             },
@@ -1053,6 +1202,7 @@ class _PresentationControlBar extends StatelessWidget {
     required this.currentSlideIndex,
     required this.totalSlides,
     required this.currentSlideTitle,
+    required this.slideJumpBuffer,
     required this.onOpen,
     required this.onClose,
     required this.onPrev,
@@ -1064,6 +1214,7 @@ class _PresentationControlBar extends StatelessWidget {
   final int currentSlideIndex;
   final int totalSlides;
   final String? currentSlideTitle;
+  final String slideJumpBuffer;
   final VoidCallback onOpen;
   final VoidCallback onClose;
   final VoidCallback onPrev;
@@ -1126,14 +1277,24 @@ class _PresentationControlBar extends StatelessWidget {
                 color: cs.surface,
                 borderRadius: BorderRadius.circular(6),
               ),
-              child: Text(
-                '${currentSlideIndex + 1} / $totalSlides',
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                  fontFeatures: [FontFeature.tabularFigures()],
-                ),
-              ),
+              child: slideJumpBuffer.isNotEmpty
+                  ? Text(
+                      '→ $slideJumpBuffer',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: cs.primary,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    )
+                  : Text(
+                      '${currentSlideIndex + 1} / $totalSlides',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        fontFeatures: [FontFeature.tabularFigures()],
+                      ),
+                    ),
             ),
             IconButton(
               icon: const Icon(Icons.arrow_forward_ios_rounded, size: 16),
@@ -1176,19 +1337,52 @@ class _ResizableWorkArea extends StatelessWidget {
     required this.onRatioChanged,
     required this.stagingPanel,
     required this.searchPanel,
+    required this.isSearchCollapsed,
+    required this.isStagingCollapsed,
   });
 
   final double stagingRatio;
   final ValueChanged<double> onRatioChanged;
   final Widget stagingPanel;
   final Widget searchPanel;
+  final bool isSearchCollapsed;
+  final bool isStagingCollapsed;
 
   static const double _dividerHeight = 18;
   static const double _minPanelHeight = 140;
+  static const double _collapsedSearchHeight = 48;
+  static const double _collapsedStagingHeight = 48;
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+
+    if (isStagingCollapsed && isSearchCollapsed) {
+      return Column(
+        children: [
+          SizedBox(height: _collapsedStagingHeight, child: stagingPanel),
+          Expanded(child: searchPanel),
+        ],
+      );
+    }
+
+    if (isStagingCollapsed) {
+      return Column(
+        children: [
+          SizedBox(height: _collapsedStagingHeight, child: stagingPanel),
+          Expanded(child: searchPanel),
+        ],
+      );
+    }
+
+    if (isSearchCollapsed) {
+      return Column(
+        children: [
+          Expanded(child: stagingPanel),
+          SizedBox(height: _collapsedSearchHeight, child: searchPanel),
+        ],
+      );
+    }
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -1257,6 +1451,210 @@ class _PanelResizeHandle extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ── PresentingLayout ──────────────────────────────────────────────────────
+
+class _PresentingLayout extends StatelessWidget {
+  const _PresentingLayout({
+    required this.presentationRatio,
+    required this.onPresentationRatioChanged,
+    required this.isSlideOrderCollapsed,
+    required this.isSlideOrderMaximized,
+    required this.presentationPanel,
+    required this.collapsedSlideStrip,
+    required this.workArea,
+  });
+
+  final double presentationRatio;
+  final ValueChanged<double> onPresentationRatioChanged;
+  final bool isSlideOrderCollapsed;
+  final bool isSlideOrderMaximized;
+  final Widget presentationPanel;
+  final Widget collapsedSlideStrip;
+  final Widget workArea;
+
+  static const double _dividerHeight = 18;
+  static const double _collapsedHeight = 40;
+  static const double _minPresentationHeight = 100;
+  static const double _minWorkAreaHeight = 120;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
+    if (isSlideOrderMaximized) {
+      return Expanded(child: presentationPanel);
+    }
+
+    if (isSlideOrderCollapsed) {
+      return Column(
+        children: [
+          SizedBox(height: _collapsedHeight, child: collapsedSlideStrip),
+          const SizedBox(height: 10),
+          Expanded(child: workArea),
+        ],
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final available = (constraints.maxHeight - _dividerHeight)
+            .clamp(0.0, double.infinity);
+        final minRatio = available <= 0
+            ? 0.2
+            : (_minPresentationHeight / available).clamp(0.1, 0.8);
+        final maxRatio = available <= 0
+            ? 0.8
+            : (1 - _minWorkAreaHeight / available).clamp(0.2, 0.9);
+        final ratio = presentationRatio.clamp(minRatio, maxRatio);
+        final presentH = available * ratio;
+        final workH = available - presentH;
+
+        return Column(
+          children: [
+            SizedBox(height: presentH, child: presentationPanel),
+            _PanelResizeHandle(
+              height: _dividerHeight,
+              color: cs.outlineVariant,
+              onDrag: (delta) {
+                if (available <= 0) return;
+                final next =
+                    (ratio + delta / available).clamp(minRatio, maxRatio);
+                onPresentationRatioChanged(next);
+              },
+            ),
+            SizedBox(height: workH, child: workArea),
+          ],
+        );
+      },
+    );
+  }
+}
+
+// ── CollapsedSlideOrderStrip ──────────────────────────────────────────────
+
+class _CollapsedSlideOrderStrip extends StatelessWidget {
+  const _CollapsedSlideOrderStrip({
+    required this.currentIndex,
+    required this.totalSlides,
+    required this.onExpand,
+  });
+
+  final int currentIndex;
+  final int totalSlides;
+  final VoidCallback onExpand;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      height: 40,
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: Row(
+        children: [
+          Icon(Icons.view_carousel_outlined, size: 16, color: cs.onSurfaceVariant),
+          const SizedBox(width: 8),
+          Text(
+            '슬라이드 순서',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: cs.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            '${ currentIndex + 1} / $totalSlides',
+            style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
+          ),
+          const Spacer(),
+          IconButton(
+            icon: const Icon(Icons.expand_more_rounded),
+            iconSize: 18,
+            tooltip: '슬라이드 순서 펼치기',
+            color: cs.onSurfaceVariant,
+            visualDensity: VisualDensity.compact,
+            onPressed: onExpand,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── CollapsedPanelStrip ───────────────────────────────────────────────────
+
+class _CollapsedPanelStrip extends StatelessWidget {
+  const _CollapsedPanelStrip({
+    required this.label,
+    required this.isVertical,
+    required this.onExpand,
+  });
+
+  final String label;
+  final bool isVertical;
+  final VoidCallback onExpand;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final content = isVertical
+        ? Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.chevron_left_rounded),
+                tooltip: '$label 펼치기',
+                color: cs.onSurfaceVariant,
+                onPressed: onExpand,
+              ),
+              const SizedBox(height: 8),
+              RotatedBox(
+                quarterTurns: 1,
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: cs.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ],
+          )
+        : Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.expand_more_rounded),
+                tooltip: '$label 펼치기',
+                color: cs.onSurfaceVariant,
+                onPressed: onExpand,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: cs.onSurfaceVariant,
+                ),
+              ),
+            ],
+          );
+
+    return Card(
+      child: SizedBox(
+        width: isVertical ? 48 : double.infinity,
+        child: content,
       ),
     );
   }
@@ -1438,6 +1836,8 @@ class _StagingPanel extends StatelessWidget {
     required this.onReorder,
     required this.onRemove,
     required this.onSelect,
+    required this.isCollapsed,
+    required this.onToggleCollapsed,
   });
 
   final List<({int uid, StagingItem item})> stagingItems;
@@ -1445,9 +1845,43 @@ class _StagingPanel extends StatelessWidget {
   final void Function(int oldIndex, int newIndex) onReorder;
   final void Function(int uid) onRemove;
   final ValueChanged<int> onSelect;
+  final bool isCollapsed;
+  final VoidCallback onToggleCollapsed;
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
+    if (isCollapsed) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  '선택한 순서',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+                ),
+              ),
+              Text(
+                '${stagingItems.length}개',
+                style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
+              ),
+              IconButton(
+                icon: const Icon(Icons.expand_more_rounded),
+                iconSize: 18,
+                tooltip: '선택한 순서 펼치기',
+                color: cs.onSurfaceVariant,
+                visualDensity: VisualDensity.compact,
+                onPressed: onToggleCollapsed,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(20),
@@ -1463,6 +1897,15 @@ class _StagingPanel extends StatelessWidget {
                   ),
                 ),
                 Text('${stagingItems.length}개'),
+                const SizedBox(width: 4),
+                IconButton(
+                  icon: const Icon(Icons.expand_less_rounded),
+                  iconSize: 18,
+                  tooltip: '선택한 순서 접기',
+                  color: cs.onSurfaceVariant,
+                  visualDensity: VisualDensity.compact,
+                  onPressed: onToggleCollapsed,
+                ),
               ],
             ),
             const SizedBox(height: 12),
@@ -1588,6 +2031,8 @@ class _SearchAndBiblePanel extends StatefulWidget {
     required this.bibleVerseCount,
     required this.bibleDataRevision,
     required this.onAddBibleItem,
+    required this.isCollapsed,
+    required this.onToggleCollapsed,
   });
 
   final TextEditingController searchController;
@@ -1602,6 +2047,8 @@ class _SearchAndBiblePanel extends StatefulWidget {
   final int bibleVerseCount;
   final int bibleDataRevision;
   final void Function(BibleStagingItem) onAddBibleItem;
+  final bool isCollapsed;
+  final VoidCallback onToggleCollapsed;
 
   @override
   State<_SearchAndBiblePanel> createState() => _SearchAndBiblePanelState();
@@ -1625,14 +2072,40 @@ class _SearchAndBiblePanelState extends State<_SearchAndBiblePanel>
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final tabBar = TabBar(
+      controller: _tabController,
+      tabs: const [Tab(text: '찬양 검색'), Tab(text: '성경 검색')],
+    );
+
+    if (widget.isCollapsed) {
+      return Card(
+        child: Row(
+          children: [
+            Expanded(child: tabBar),
+            IconButton(
+              icon: const Icon(Icons.expand_less_rounded),
+              tooltip: '검색 패널 펼치기',
+              color: cs.onSurfaceVariant,
+              onPressed: widget.onToggleCollapsed,
+            ),
+          ],
+        ),
+      );
+    }
+
     return Card(
       child: Column(
         children: [
-          TabBar(
-            controller: _tabController,
-            tabs: const [
-              Tab(text: '찬양 검색'),
-              Tab(text: '성경 검색'),
+          Row(
+            children: [
+              Expanded(child: tabBar),
+              IconButton(
+                icon: const Icon(Icons.expand_more_rounded),
+                tooltip: '검색 패널 접기',
+                color: cs.onSurfaceVariant,
+                onPressed: widget.onToggleCollapsed,
+              ),
             ],
           ),
           Expanded(
@@ -2359,6 +2832,7 @@ class _DesignPanel extends StatelessWidget {
     required this.previewItem,
     required this.onStyleChanged,
     required this.onExportPressed,
+    required this.onCollapse,
   });
 
   final ExportStyle style;
@@ -2368,6 +2842,7 @@ class _DesignPanel extends StatelessWidget {
   final StagingItem? previewItem;
   final ValueChanged<ExportStyle> onStyleChanged;
   final VoidCallback onExportPressed;
+  final VoidCallback onCollapse;
 
   static final TextInputFormatter _hexInputFormatter =
       FilteringTextInputFormatter.allow(RegExp(r'[0-9a-fA-F#]'));
@@ -2528,15 +3003,28 @@ class _DesignPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'PPTX 디자인',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'PPTX 디자인',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.chevron_right_rounded),
+                  tooltip: '디자인 패널 접기',
+                  color: cs.onSurfaceVariant,
+                  onPressed: onCollapse,
+                ),
+              ],
             ),
             const SizedBox(height: 12),
             SizedBox(
@@ -3401,6 +3889,9 @@ class _PresentationControllerPanel extends StatefulWidget {
     required this.style,
     required this.onSlideSelected,
     required this.onSlideEdit,
+    required this.onCollapse,
+    required this.isMaximized,
+    required this.onToggleMaximized,
   });
 
   final List<_SlideInfo> slides;
@@ -3408,6 +3899,9 @@ class _PresentationControllerPanel extends StatefulWidget {
   final ExportStyle style;
   final ValueChanged<int> onSlideSelected;
   final ValueChanged<int> onSlideEdit;
+  final VoidCallback onCollapse;
+  final bool isMaximized;
+  final VoidCallback onToggleMaximized;
 
   @override
   State<_PresentationControllerPanel> createState() =>
@@ -3425,7 +3919,8 @@ class _PresentationControllerPanelState
   @override
   void didUpdateWidget(_PresentationControllerPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.currentIndex != widget.currentIndex) {
+    if (oldWidget.currentIndex != widget.currentIndex &&
+        !widget.isMaximized) {
       _scrollToCurrentItem();
     }
   }
@@ -3449,6 +3944,104 @@ class _PresentationControllerPanelState
     super.dispose();
   }
 
+  SlidePageData _pageDataFor(int i) {
+    final info = widget.slides[i];
+    return SlidePageData(
+      mainText: info.mainText,
+      englishText: info.englishText,
+      title: info.title,
+      isBible: info.isBible,
+      pageIndex: i,
+      totalPages: widget.slides.length,
+      style: widget.style,
+    );
+  }
+
+  Widget _buildHorizontalList() {
+    return ListView.builder(
+      controller: _scrollController,
+      scrollDirection: Axis.horizontal,
+      padding: EdgeInsets.all(_padding),
+      itemCount: widget.slides.length,
+      itemBuilder: (context, i) => SizedBox(
+        width: _thumbnailWidth,
+        child: Padding(
+          padding: EdgeInsets.only(
+            right: i < widget.slides.length - 1 ? _itemSpacing : 0,
+          ),
+          child: _SlideThumbnail(
+            data: _pageDataFor(i),
+            isSelected: i == widget.currentIndex,
+            index: i,
+            onTap: () => widget.onSlideSelected(i),
+            onEdit: () => widget.onSlideEdit(i),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGrid() {
+    const aspectRatio = 13.333 / 7.5;
+    const labelH = 22.0;
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final W = (constraints.maxWidth - _padding * 2)
+            .clamp(1.0, double.infinity);
+        final H = (constraints.maxHeight - _padding * 2)
+            .clamp(1.0, double.infinity);
+        final n = widget.slides.length;
+
+        // 한 화면에 들어오는 최소 열 수 탐색 (더 적은 열 = 더 큰 썸네일)
+        int cols = 1;
+        bool fitsVertically = false;
+        for (int c = 1; c <= n; c++) {
+          final thumbW = (W - (c - 1) * _itemSpacing) / c;
+          final cellH = thumbW / aspectRatio + labelH;
+          final rows = (n / c).ceil();
+          final totalH = rows * cellH + (rows - 1) * _itemSpacing;
+          if (totalH <= H) {
+            cols = c;
+            fitsVertically = true;
+            break;
+          }
+        }
+        if (!fitsVertically) {
+          // 세로 스크롤: 썸네일 ~160px 기준
+          cols = ((W + _itemSpacing) / (160.0 + _itemSpacing))
+              .floor()
+              .clamp(2, n);
+        }
+
+        final thumbW = (W - (cols - 1) * _itemSpacing) / cols;
+        final cellH = thumbW / aspectRatio + labelH;
+        final childAspectRatio = thumbW / cellH;
+
+        return GridView.builder(
+          physics: fitsVertically
+              ? const NeverScrollableScrollPhysics()
+              : const ClampingScrollPhysics(),
+          padding: EdgeInsets.all(_padding),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: cols,
+            mainAxisSpacing: _itemSpacing,
+            crossAxisSpacing: _itemSpacing,
+            childAspectRatio: childAspectRatio,
+          ),
+          itemCount: n,
+          itemBuilder: (context, i) => _SlideThumbnail(
+            data: _pageDataFor(i),
+            isSelected: i == widget.currentIndex,
+            index: i,
+            onTap: () => widget.onSlideSelected(i),
+            onEdit: () => widget.onSlideEdit(i),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -3457,38 +4050,57 @@ class _PresentationControllerPanelState
         color: cs.surfaceContainerLow,
         borderRadius: BorderRadius.circular(8),
       ),
-      child: ListView.builder(
-        controller: _scrollController,
-        scrollDirection: Axis.horizontal,
-        padding: EdgeInsets.all(_padding),
-        itemCount: widget.slides.length,
-        itemBuilder: (context, i) {
-          final info = widget.slides[i];
-          final pageData = SlidePageData(
-            mainText: info.mainText,
-            englishText: info.englishText,
-            title: info.title,
-            isBible: info.isBible,
-            pageIndex: i,
-            totalPages: widget.slides.length,
-            style: widget.style,
-          );
-          return SizedBox(
-            width: _thumbnailWidth,
-            child: Padding(
-              padding: EdgeInsets.only(
-                right: i < widget.slides.length - 1 ? _itemSpacing : 0,
-              ),
-              child: _SlideThumbnail(
-                data: pageData,
-                isSelected: i == widget.currentIndex,
-                index: i,
-                onTap: () => widget.onSlideSelected(i),
-                onEdit: () => widget.onSlideEdit(i),
-              ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 4, 0),
+            child: Row(
+              children: [
+                Text(
+                  '슬라이드 순서',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: cs.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  '${widget.currentIndex + 1} / ${widget.slides.length}',
+                  style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+                ),
+                const Spacer(),
+                IconButton(
+                  icon: Icon(
+                    widget.isMaximized
+                        ? Icons.fullscreen_exit_rounded
+                        : Icons.fullscreen_rounded,
+                  ),
+                  iconSize: 18,
+                  tooltip: widget.isMaximized ? '원래 크기로' : '최대화',
+                  color: cs.onSurfaceVariant,
+                  visualDensity: VisualDensity.compact,
+                  onPressed: widget.onToggleMaximized,
+                ),
+                if (!widget.isMaximized)
+                  IconButton(
+                    icon: const Icon(Icons.expand_less_rounded),
+                    iconSize: 18,
+                    tooltip: '슬라이드 순서 접기',
+                    color: cs.onSurfaceVariant,
+                    visualDensity: VisualDensity.compact,
+                    onPressed: widget.onCollapse,
+                  ),
+              ],
             ),
-          );
-        },
+          ),
+          Expanded(
+            child: widget.isMaximized
+                ? _buildGrid()
+                : _buildHorizontalList(),
+          ),
+        ],
       ),
     );
   }
