@@ -377,6 +377,13 @@ LRESULT CALLBACK PresentationChannel::WndProc(
     case WM_ERASEBKGND:
       return 1;  // handled in WM_PAINT
 
+    case WM_KEYDOWN:
+      if (wp == VK_ESCAPE) {
+        SendMessage(hwnd, WM_CLOSE, 0, 0);
+        return 0;
+      }
+      break;
+
     case WM_CLOSE:
       if (s_) {
         if (s_->main_) s_->main_->InvokeMethod("presentationClosed", nullptr);
