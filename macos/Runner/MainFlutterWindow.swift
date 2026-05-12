@@ -11,13 +11,12 @@ class PresentationWindowController: NSWindowController {
   convenience init() {
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 1280, height: 720),
-      styleMask: [.borderless],
+      styleMask: [.titled, .resizable],
       backing: .buffered,
       defer: false
     )
     window.isReleasedWhenClosed = false
     window.backgroundColor = .black
-    window.level = .screenSaver
     window.collectionBehavior = [.fullScreenAuxiliary]
     self.init(window: window)
 
@@ -29,8 +28,22 @@ class PresentationWindowController: NSWindowController {
 
   func show(on screen: NSScreen? = nil) {
     guard let window = self.window else { return }
-    let targetScreen = screen ?? NSScreen.main ?? NSScreen.screens[0]
-    window.setFrame(targetScreen.frame, display: true)
+    if let screen = screen {
+      // 보조 모니터: 전체화면
+      window.styleMask = [.borderless]
+      window.level = .screenSaver
+      window.setFrame(screen.frame, display: true)
+    } else {
+      // 기본 모니터만 있을 때: 1280x720 중앙 창
+      window.styleMask = [.titled, .resizable]
+      window.level = .normal
+      let mainScreen = NSScreen.main ?? NSScreen.screens[0]
+      let sw = mainScreen.visibleFrame.width
+      let sh = mainScreen.visibleFrame.height
+      let x = mainScreen.visibleFrame.minX + (sw - 1280) / 2
+      let y = mainScreen.visibleFrame.minY + (sh - 720) / 2
+      window.setFrame(NSRect(x: x, y: y, width: 1280, height: 720), display: true)
+    }
     window.makeKeyAndOrderFront(nil)
 
     keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
