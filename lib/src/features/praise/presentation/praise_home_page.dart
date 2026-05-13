@@ -3781,7 +3781,9 @@ class _SongEditDialogState extends State<_SongEditDialog> {
   }
 
   String _normalizeLyrics(String raw) {
-    final unified = raw.replaceAll(RegExp(r'[ \t]*###[ \t]*'), '\n\n');
+    final unified = raw
+        .replaceAll(RegExp(r'[ \t]*###[ \t]*'), '\n\n')
+        .replaceAll(RegExp(r'[ \t]*====[ \t]*'), '\n\n');
     return unified
         .split(RegExp(r'\n[ \t]*\n+'))
         .map((page) => page.trim())
@@ -3840,7 +3842,7 @@ class _SongEditDialogState extends State<_SongEditDialog> {
                 textAlignVertical: TextAlignVertical.top,
                 decoration: const InputDecoration(
                   labelText: '한글 가사',
-                  hintText: '페이지 구분: 빈 줄 (또는 ###)',
+                  hintText: '페이지 구분: 빈 줄 (또는 ### / ====)',
                   border: OutlineInputBorder(),
                   alignLabelWithHint: true,
                 ),
@@ -3852,7 +3854,7 @@ class _SongEditDialogState extends State<_SongEditDialog> {
                 textAlignVertical: TextAlignVertical.top,
                 decoration: const InputDecoration(
                   labelText: '영어 가사',
-                  hintText: '페이지 구분: 빈 줄 (또는 ###)',
+                  hintText: '페이지 구분: 빈 줄 (또는 ### / ====)',
                   border: OutlineInputBorder(),
                   alignLabelWithHint: true,
                 ),
