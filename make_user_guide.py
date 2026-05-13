@@ -11,6 +11,29 @@ from docx.oxml import OxmlElement
 from PIL import Image, ImageDraw, ImageFont
 import copy
 
+# ── 폰트 (Pretendard — 한글 지원) ────────────────────────────────────────────
+_FONT_DIR = '/home/user/make_ppt/assets/fonts'
+_BOLD_PATH = f'{_FONT_DIR}/Pretendard-Bold.ttf'
+_REG_PATH  = f'{_FONT_DIR}/Pretendard-Regular.ttf'
+
+def _font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
+    path = _BOLD_PATH if bold else _REG_PATH
+    return ImageFont.truetype(path, size)
+
+# 자주 쓰는 크기 미리 로드
+_F10  = _font(10)
+_F11  = _font(11)
+_F12  = _font(12)
+_F13  = _font(13)
+_F14  = _font(14)
+_F16  = _font(16)
+_F18  = _font(18)
+_F10B = _font(10, bold=True)
+_F12B = _font(12, bold=True)
+_F14B = _font(14, bold=True)
+_F16B = _font(16, bold=True)
+_F18B = _font(18, bold=True)
+
 
 # ── 색상 팔레트 ──────────────────────────────────────────────────────────────
 DARK_BG      = RGBColor(0x14, 0x36, 0x42)   # 헤더 다크 그린
@@ -88,193 +111,180 @@ def set_para_shading(para, hex_color: str):
 
 # ── 모의 UI 이미지 생성 ──────────────────────────────────────────────────────
 
-def pil_to_docx_image(doc: Document, img: Image.Image,
-                       width_cm=15) -> io.BytesIO:
-    buf = io.BytesIO()
-    img.save(buf, format='PNG')
-    buf.seek(0)
-    return buf
-
-
 def make_main_ui_image() -> Image.Image:
     """앱 메인 화면 모의 UI 이미지."""
-    W, H = 900, 560
+    W, H = 1000, 620
     img = Image.new('RGB', (W, H), (245, 245, 248))
     d = ImageDraw.Draw(img)
 
-    # ── 상단 헤더 바 ──
-    d.rectangle([0, 0, W, 54], fill=(20, 54, 66))
-    # 그라디언트 효과 (단순 직사각형으로 표현)
-    for i in range(54):
-        ratio = i / 54
+    fB = _font(15, bold=True)
+    fR = _font(13)
+    fS = _font(11)
+
+    # ── 상단 헤더 바 (그라디언트) ──
+    for i in range(60):
+        ratio = i / 60
         r = int(20 + (15 - 20) * ratio)
         g = int(54 + (139 - 54) * ratio)
         b = int(66 + (141 - 66) * ratio)
         d.line([(0, i), (W, i)], fill=(r, g, b))
 
-    d.text((16, 16), "예배 슬라이드 보관함", fill=(255, 255, 255),
-           font=ImageFont.load_default())
-    d.rounded_rectangle([150, 14, 205, 36], radius=4,
+    d.text((16, 16), "예배 슬라이드 보관함", fill=(255, 255, 255), font=fB)
+    d.rounded_rectangle([260, 14, 330, 42], radius=4,
                          fill=(255, 255, 255, 46))
-    d.text((157, 19), "저장 42", fill=(255, 255, 255),
-           font=ImageFont.load_default())
-    # 찬양폴더 버튼
-    d.rounded_rectangle([650, 12, 775, 38], radius=5,
+    d.text((270, 20), "저장 42", fill=(255, 255, 255), font=fR)
+
+    d.rounded_rectangle([700, 12, 845, 44], radius=5,
                          fill=(255, 255, 255, 56))
-    d.text((662, 19), "찬양폴더 선택", fill=(255, 255, 255),
-           font=ImageFont.load_default())
-    # 성경 버튼
-    d.rounded_rectangle([785, 12, 885, 38], radius=5,
+    d.text((714, 20), "찬양폴더 선택", fill=(255, 255, 255), font=fR)
+
+    d.rounded_rectangle([855, 12, 990, 44], radius=5,
                          fill=(255, 255, 255, 56))
-    d.text((797, 19), "성경 불러오기", fill=(255, 255, 255),
-           font=ImageFont.load_default())
+    d.text((866, 20), "성경 불러오기", fill=(255, 255, 255), font=fR)
 
     # ── 발표 컨트롤 바 ──
-    d.rounded_rectangle([0, 58, W, 92], radius=6, fill=(230, 230, 235))
-    d.text((16, 68), "발표 화면", fill=(80, 80, 90),
-           font=ImageFont.load_default())
-    d.rounded_rectangle([W - 120, 63, W - 16, 87], radius=5,
-                         fill=(70, 130, 180))
-    d.text((W - 108, 69), "▶ 발표 시작", fill=(255, 255, 255),
-           font=ImageFont.load_default())
+    d.rounded_rectangle([4, 66, W - 4, 104], radius=6, fill=(228, 232, 238))
+    d.text((18, 78), "발표 화면", fill=(70, 75, 90), font=fR)
+    d.rounded_rectangle([W - 140, 72, W - 10, 98], radius=5,
+                         fill=(65, 120, 175))
+    d.text((W - 128, 78), "▶  발표 시작", fill=(255, 255, 255), font=fR)
 
     # ── 왼쪽 패널 (선택한 순서) ──
-    d.rounded_rectangle([0, 96, 560, 240], radius=8, fill=(255, 255, 255),
-                         outline=(220, 220, 220))
-    d.text((16, 106), "선택한 순서  3개", fill=(30, 30, 30),
-           font=ImageFont.load_default())
-    d.line([(16, 122), (544, 122)], fill=(230, 230, 230))
+    d.rounded_rectangle([4, 110, 610, 280], radius=8, fill=(255, 255, 255),
+                         outline=(215, 215, 218))
+    d.text((16, 120), "선택한 순서  3개", fill=(25, 25, 25), font=fB)
+    d.line([(16, 142), (598, 142)], fill=(225, 225, 228))
+
     items = [
-        ("1", "주님 한 분만으로", "주님 한 분만으로 내게는 족해"),
-        ("2", "주의 이름 높이세", "온 땅이여 주께 소리 질러"),
-        ("3", "성경  로마서 8:28", "우리가 알거니와 하나님을 사랑하는"),
+        ("1", "주님 한 분만으로", "주님 한 분만으로 내게는 족해", False),
+        ("2", "주의 이름 높이세", "온 땅이여 주께 소리 질러", False),
+        ("3", "로마서 8:28", "우리가 알거니와 하나님을 사랑하는", True),
     ]
-    for i, (num, title, sub) in enumerate(items):
-        y = 128 + i * 37
+    for i, (num, title, sub, is_bible) in enumerate(items):
+        y = 148 + i * 43
         if i == 0:
-            d.rectangle([1, y - 2, 558, y + 33], fill=(240, 247, 255))
-        d.text((18, y + 8), num, fill=(40, 40, 40),
-               font=ImageFont.load_default())
-        if "성경" in title:
-            d.rounded_rectangle([36, y + 6, 68, y + 24], radius=3,
+            d.rectangle([5, y, 608, y + 40], fill=(237, 246, 255))
+        d.text((16, y + 10), num, fill=(50, 50, 50), font=fR)
+        if is_bible:
+            d.rounded_rectangle([40, y + 8, 78, y + 28], radius=3,
                                  fill=(187, 222, 251))
-            d.text((39, y + 10), "성경", fill=(25, 118, 210),
-                   font=ImageFont.load_default())
-            d.text((74, y + 8), title.replace("성경  ", ""), fill=(40, 40, 40),
-                   font=ImageFont.load_default())
+            d.text((44, y + 11), "성경", fill=(21, 101, 192), font=fS)
+            d.text((84, y + 10), title, fill=(35, 35, 35), font=fR)
         else:
-            d.text((36, y + 8), title, fill=(40, 40, 40),
-                   font=ImageFont.load_default())
-        d.text((36, y + 22), sub, fill=(150, 150, 150),
-               font=ImageFont.load_default())
+            d.text((40, y + 10), title, fill=(35, 35, 35), font=fR)
+        d.text((40, y + 26), sub, fill=(150, 150, 155), font=fS)
+        d.text((570, y + 10), "✕", fill=(180, 180, 185), font=fR)
+        d.line([(6, y + 41), (607, y + 41)], fill=(235, 235, 238))
 
     # ── 왼쪽 패널 (검색) ──
-    d.rounded_rectangle([0, 244, 560, H - 4], radius=8, fill=(255, 255, 255),
-                         outline=(220, 220, 220))
-    # 탭
-    d.text((16, 254), "찬양 검색", fill=(30, 30, 30),
-           font=ImageFont.load_default())
-    d.line([(16, 270), (80, 270)], fill=(15, 139, 141), width=2)
-    d.text((110, 254), "성경 본문", fill=(130, 130, 130),
-           font=ImageFont.load_default())
-    # 검색창
-    d.rounded_rectangle([8, 278, 552, 304], radius=5,
-                         outline=(180, 180, 180), fill=(252, 252, 252))
-    d.text((18, 285), "곡명 또는 가사로 검색…", fill=(180, 180, 180),
-           font=ImageFont.load_default())
-    # 곡 목록
-    songs = ["나는 예배자입니다", "이 땅의 모든 것", "주님 한 분만으로",
-             "주의 이름 높이세", "찬양하라 내 영혼아"]
-    for i, s in enumerate(songs):
-        y = 312 + i * 38
-        is_sel = s in ["주님 한 분만으로", "주의 이름 높이세"]
-        d.rectangle([1, y, 558, y + 34],
-                     fill=(235, 248, 248) if is_sel else (255, 255, 255))
-        d.text((18, y + 10), ("✓ " if is_sel else "  ") + s,
-               fill=(20, 90, 100) if is_sel else (50, 50, 50),
-               font=ImageFont.load_default())
+    d.rounded_rectangle([4, 286, 610, H - 4], radius=8, fill=(255, 255, 255),
+                         outline=(215, 215, 218))
+    d.text((16, 296), "찬양 검색", fill=(20, 20, 20), font=fB)
+    d.line([(16, 316), (105, 316)], fill=(15, 139, 141), width=2)
+    d.text((126, 296), "성경 본문", fill=(140, 140, 145), font=fR)
+
+    d.rounded_rectangle([10, 326, 598, 356], radius=5,
+                         outline=(185, 185, 190), fill=(252, 252, 252))
+    d.text((20, 334), "곡명 또는 가사로 검색…", fill=(185, 185, 190), font=fR)
+
+    songs = [
+        ("나는 예배자입니다", False),
+        ("이 땅의 모든 것", False),
+        ("주님 한 분만으로", True),
+        ("주의 이름 높이세", True),
+        ("찬양하라 내 영혼아", False),
+    ]
+    for i, (s, is_sel) in enumerate(songs):
+        y = 362 + i * 44
+        bg = (232, 247, 247) if is_sel else (255, 255, 255)
+        d.rectangle([5, y, 608, y + 40], fill=bg)
+        prefix = "✓  " if is_sel else "    "
+        tc = (18, 88, 100) if is_sel else (50, 50, 55)
+        d.text((18, y + 12), prefix + s, fill=tc, font=fR)
+        d.line([(6, y + 40), (607, y + 40)], fill=(238, 238, 240))
 
     # ── 오른쪽 패널 (디자인) ──
-    d.rounded_rectangle([568, 96, W, H - 4], radius=8, fill=(255, 255, 255),
-                         outline=(220, 220, 220))
-    d.text((582, 106), "PPTX 디자인", fill=(30, 30, 30),
-           font=ImageFont.load_default())
-    d.line([(582, 122), (888, 122)], fill=(220, 220, 220))
+    d.rounded_rectangle([620, 110, W - 4, H - 4], radius=8,
+                         fill=(255, 255, 255), outline=(215, 215, 218))
+    d.text((634, 120), "PPTX 디자인", fill=(25, 25, 25), font=fB)
+    d.line([(634, 142), (988, 142)], fill=(220, 220, 222))
 
     # 미리보기 슬라이드
-    d.rounded_rectangle([580, 130, 888, 290], radius=4, fill=(27, 27, 27))
-    d.text((620, 185), "주님 한 분만으로", fill=(255, 255, 255),
-           font=ImageFont.load_default())
-    d.text((620, 205), "Enough for Me", fill=(255, 241, 118),
-           font=ImageFont.load_default())
+    d.rounded_rectangle([630, 150, 990, 320], radius=5, fill=(27, 27, 27))
+    d.text((690, 215), "주님 한 분만으로", fill=(255, 255, 255),
+           font=_font(18, bold=True))
+    d.text((690, 244), "Only You, Lord", fill=(255, 241, 118), font=_font(14))
+    d.text((634, 324), "▲ 첫 번째 곡 · 첫 페이지 실시간 미리보기",
+           fill=(130, 130, 135), font=fS)
 
     # 스타일 옵션
     options = [
-        ("배경색", "■ 어두운 검정"),
-        ("글자색", "■ 흰색"),
+        ("배경색",    "■  #1B1B1B"),
+        ("글자색",    "■  #FFFFFF"),
         ("글자 크기", "30 pt"),
         ("글자 위치", "중단  ▾"),
-        ("영어 포함", "✓ 켜짐"),
+        ("영어 포함", "✓  켜짐"),
+        ("곡 제목",   "꺼짐"),
     ]
     for i, (label, val) in enumerate(options):
-        y = 298 + i * 28
-        d.text((582, y), label, fill=(100, 100, 100),
-               font=ImageFont.load_default())
-        d.text((690, y), val, fill=(40, 40, 40),
-               font=ImageFont.load_default())
+        y = 346 + i * 30
+        d.text((634, y), label, fill=(105, 105, 110), font=fR)
+        d.text((760, y), val, fill=(35, 35, 40), font=fR)
 
-    # PPTX 저장 버튼
-    d.rounded_rectangle([580, 460, 888, 490], radius=6,
-                         fill=(15, 139, 141))
-    d.text((700, 468), "PPTX 저장", fill=(255, 255, 255),
-           font=ImageFont.load_default())
+    d.rounded_rectangle([630, 540, 990, 574], radius=6, fill=(15, 139, 141))
+    d.text((768, 549), "PPTX 저장", fill=(255, 255, 255), font=fB)
 
     return img
 
 
 def make_import_image() -> Image.Image:
     """찬양 가져오기 흐름 다이어그램."""
-    W, H = 800, 220
-    img = Image.new('RGB', (W, H), (245, 248, 250))
+    W, H = 900, 200
+    img = Image.new('RGB', (W, H), (242, 246, 250))
     d = ImageDraw.Draw(img)
 
+    fB = _font(14, bold=True)
+    fR = _font(12)
+
     steps = [
-        ("① 찬양폴더 선택\n버튼 클릭", (20, 40, 180, 160)),
-        ("② 폴더 탐색\n.pptx/.ppt 파일 발견", (210, 40, 380, 160)),
-        ("③ 가사 추출\n한/영 자동 분리", (400, 40, 570, 160)),
-        ("④ DB 저장 완료\n검색 가능", (590, 40, 760, 160)),
+        ("① 찬양폴더 선택", "버튼 클릭"),
+        ("② 폴더 재귀 탐색", ".pptx / .ppt 발견"),
+        ("③ 가사 추출", "한/영 자동 분리"),
+        ("④ DB 저장 완료", "검색 가능"),
     ]
-    colors = [(20, 54, 66), (15, 100, 110), (15, 139, 141), (16, 160, 100)]
+    colors = [(20, 54, 66), (15, 95, 110), (15, 139, 141), (14, 155, 100)]
+    box_w = 190
 
-    for (text, box), color in zip(steps, colors):
-        x0, y0, x1, y1 = box
-        d.rounded_rectangle([x0, y0, x1, y1], radius=10, fill=color)
-        lines = text.split('\n')
-        d.text((x0 + 10, y0 + 30), lines[0], fill=(255, 255, 255),
-               font=ImageFont.load_default())
-        d.text((x0 + 10, y0 + 50), lines[1], fill=(200, 235, 235),
-               font=ImageFont.load_default())
-        if x1 < 780:
-            d.polygon([(x1 + 2, 95), (x1 + 18, 105), (x1 + 2, 115)],
-                       fill=(100, 150, 155))
+    for i, ((line1, line2), color) in enumerate(zip(steps, colors)):
+        x0 = 20 + i * (box_w + 24)
+        x1 = x0 + box_w
+        d.rounded_rectangle([x0, 20, x1, 155], radius=10, fill=color)
+        d.text((x0 + 12, 55), line1, fill=(255, 255, 255), font=fB)
+        d.text((x0 + 12, 80), line2, fill=(195, 230, 230), font=fR)
+        if i < 3:
+            mx = x1 + 12
+            d.polygon([(mx, 82), (mx + 14, 92), (mx, 102)],
+                       fill=(100, 148, 155))
 
-    d.text((280, 185), "중복 곡은 자동으로 건너뜁니다",
-           fill=(100, 120, 130), font=ImageFont.load_default())
+    d.text((310, 170), "중복 곡은 자동으로 건너뜁니다",
+           fill=(100, 118, 128), font=fR)
 
     return img
 
 
 def make_staging_image() -> Image.Image:
     """선택한 순서(스테이징) 패널 이미지."""
-    W, H = 500, 280
+    W, H = 560, 310
     img = Image.new('RGB', (W, H), (255, 255, 255))
     d = ImageDraw.Draw(img)
 
-    # 패널 헤더
-    d.rectangle([0, 0, W, 36], fill=(245, 245, 248))
-    d.text((16, 10), "선택한 순서  3개", fill=(30, 30, 30),
-           font=ImageFont.load_default())
-    d.line([(0, 36), (W, 36)], fill=(220, 220, 220))
+    fB = _font(14, bold=True)
+    fR = _font(13)
+    fS = _font(11)
+
+    d.rectangle([0, 0, W, 44], fill=(244, 244, 247))
+    d.text((16, 12), "선택한 순서  3개", fill=(25, 25, 30), font=fB)
+    d.line([(0, 44), (W, 44)], fill=(218, 218, 222))
 
     rows = [
         ("1", "주님 한 분만으로", "주님 한 분만으로 내게는 족해", False),
@@ -282,152 +292,144 @@ def make_staging_image() -> Image.Image:
         ("3", "로마서 8:28", "우리가 알거니와", True),
     ]
     for i, (num, title, sub, is_bible) in enumerate(rows):
-        y = 44 + i * 72
+        y = 50 + i * 78
         if i == 0:
-            d.rectangle([0, y - 2, W, y + 64], fill=(240, 247, 255))
-        d.text((12, y + 16), num, fill=(60, 60, 60),
-               font=ImageFont.load_default())
+            d.rectangle([0, y, W, y + 72], fill=(238, 246, 255))
+        d.text((14, y + 22), num, fill=(60, 60, 65), font=fR)
         if is_bible:
-            d.rounded_rectangle([34, y + 12, 70, y + 28], radius=3,
+            d.rounded_rectangle([38, y + 18, 82, y + 38], radius=3,
                                  fill=(187, 222, 251))
-            d.text((38, y + 16), "성경", fill=(21, 101, 192),
-                   font=ImageFont.load_default())
-            d.text((78, y + 16), title, fill=(40, 40, 40),
-                   font=ImageFont.load_default())
+            d.text((43, y + 21), "성경", fill=(21, 101, 192), font=fS)
+            d.text((90, y + 20), title, fill=(35, 35, 40), font=fR)
         else:
-            d.text((34, y + 16), title, fill=(40, 40, 40),
-                   font=ImageFont.load_default())
-        d.text((34, y + 34), sub, fill=(150, 150, 150),
-               font=ImageFont.load_default())
-        d.text((W - 50, y + 16), "✕  ⠿", fill=(170, 170, 170),
-               font=ImageFont.load_default())
-        d.line([(0, y + 66), (W, y + 66)], fill=(235, 235, 235))
+            d.text((38, y + 20), title, fill=(35, 35, 40), font=fR)
+        d.text((38, y + 42), sub, fill=(155, 155, 160), font=fS)
+        d.text((W - 55, y + 20), "✕   ⠿", fill=(175, 175, 180), font=fR)
+        d.line([(0, y + 72), (W, y + 72)], fill=(232, 232, 236))
 
-    d.text((16, 254), "드래그(⠿)로 순서 변경  |  ✕ 로 제거",
-           fill=(160, 160, 160), font=ImageFont.load_default())
+    d.text((16, 288), "드래그 핸들(⠿)로 순서 변경  |  ✕ 버튼으로 제거",
+           fill=(160, 160, 165), font=fS)
 
     return img
 
 
 def make_design_panel_image() -> Image.Image:
     """디자인 패널 이미지."""
-    W, H = 550, 420
+    W, H = 580, 480
     img = Image.new('RGB', (W, H), (255, 255, 255))
     d = ImageDraw.Draw(img)
 
-    d.rectangle([0, 0, W, 36], fill=(245, 245, 248))
-    d.text((16, 10), "PPTX 디자인  (접기 ›)", fill=(30, 30, 30),
-           font=ImageFont.load_default())
-    d.line([(0, 36), (W, 36)], fill=(220, 220, 220))
+    fB = _font(14, bold=True)
+    fR = _font(13)
+    fS = _font(11)
+
+    d.rectangle([0, 0, W, 44], fill=(244, 244, 247))
+    d.text((16, 12), "PPTX 디자인", fill=(25, 25, 30), font=fB)
+    d.line([(0, 44), (W, 44)], fill=(218, 218, 222))
 
     # 미리보기 슬라이드
-    d.rounded_rectangle([16, 48, W - 16, 200], radius=6, fill=(27, 27, 27))
-    d.text((80, 100), "주님 한 분만으로", fill=(255, 255, 255),
-           font=ImageFont.load_default())
-    d.text((80, 118), "Only You, Lord", fill=(255, 241, 118),
-           font=ImageFont.load_default())
-    d.text((16, 204), "▲ 선택된 첫 번째 곡 첫 페이지 실시간 미리보기",
-           fill=(120, 120, 120), font=ImageFont.load_default())
+    d.rounded_rectangle([16, 54, W - 16, 230], radius=6, fill=(27, 27, 27))
+    d.text((90, 118), "주님 한 분만으로", fill=(255, 255, 255),
+           font=_font(20, bold=True))
+    d.text((90, 150), "Only You, Lord", fill=(255, 241, 118), font=_font(15))
+    d.text((16, 236), "▲ 선택된 첫 번째 곡 · 첫 페이지 실시간 미리보기",
+           fill=(125, 125, 130), font=fS)
 
     # 옵션 행
     rows = [
-        ("찬양 글자 크기", "   30  pt    [−] [+]"),
-        ("성경 글자 크기", "   30  pt    [−] [+]"),
-        ("배경색", "  ■ #1B1B1B  ▾  "),
-        ("찬양 글자색", "  ■ #FFFFFF  ▾  "),
-        ("성경 글자색", "  ■ #FFFFFF  ▾  "),
-        ("영어 가사 포함", "  [●] 켜짐"),
-        ("곡 제목 표시", "  [ ] 꺼짐"),
-        ("글자 정렬", "  [좌] [●중] [우]"),
-        ("글자 위치", "  [상] [●중] [하]"),
+        ("찬양 글자 크기",  "30 pt  [−] [+]"),
+        ("성경 글자 크기",  "30 pt  [−] [+]"),
+        ("배경색",         "■  #1B1B1B  ▾"),
+        ("찬양 글자색",    "■  #FFFFFF  ▾"),
+        ("성경 글자색",    "■  #FFFFFF  ▾"),
+        ("영어 가사 포함", "● 켜짐"),
+        ("곡 제목 표시",   "꺼짐"),
+        ("글자 정렬",      "[좌] [●중] [우]"),
+        ("글자 위치",      "[상] [●중] [하]"),
     ]
     for i, (label, val) in enumerate(rows):
-        y = 228 + i * 18
-        d.text((16, y), label, fill=(80, 80, 80),
-               font=ImageFont.load_default())
-        d.text((200, y), val, fill=(30, 30, 30),
-               font=ImageFont.load_default())
+        y = 260 + i * 22
+        d.text((16, y), label, fill=(90, 90, 96), font=fR)
+        d.text((210, y), val, fill=(32, 32, 38), font=fR)
 
-    d.rounded_rectangle([16, 390, W - 16, 412], radius=6,
-                         fill=(15, 139, 141))
-    d.text((210, 397), "PPTX 저장", fill=(255, 255, 255),
-           font=ImageFont.load_default())
+    d.rounded_rectangle([16, 456, W - 16, 486], radius=7, fill=(15, 139, 141))
+    d.text((240, 462), "PPTX 저장", fill=(255, 255, 255), font=fB)
 
     return img
 
 
 def make_presentation_image() -> Image.Image:
     """발표 모드 컨트롤 이미지."""
-    W, H = 800, 200
-    img = Image.new('RGB', (W, H), (245, 248, 250))
+    W, H = 920, 230
+    img = Image.new('RGB', (W, H), (242, 246, 250))
     d = ImageDraw.Draw(img)
 
+    fB = _font(14, bold=True)
+    fR = _font(13)
+    fS = _font(11)
+
     # 컨트롤 바
-    d.rounded_rectangle([10, 10, W - 10, 60], radius=8,
-                         fill=(200, 230, 232))
-    d.text((24, 26), "■ 발표 중  |  주님 한 분만으로", fill=(10, 60, 70),
-           font=ImageFont.load_default())
-    d.text((500, 26), "◀", fill=(10, 60, 70),
-           font=ImageFont.load_default())
-    d.rounded_rectangle([530, 20, 610, 46], radius=5,
-                         fill=(255, 255, 255))
-    d.text((548, 27), "3 / 12", fill=(30, 30, 30),
-           font=ImageFont.load_default())
-    d.text((626, 26), "▶", fill=(10, 60, 70),
-           font=ImageFont.load_default())
-    d.rounded_rectangle([680, 20, 770, 46], radius=5,
-                         fill=(229, 115, 115))
-    d.text((702, 26), "■ 종료", fill=(255, 255, 255),
-           font=ImageFont.load_default())
+    d.rounded_rectangle([10, 8, W - 10, 64], radius=8, fill=(196, 228, 232))
+    d.text((24, 24), "■  발표 중  |  주님 한 분만으로", fill=(8, 55, 65), font=fB)
+    d.text((560, 24), "◀", fill=(8, 55, 65), font=fB)
+    d.rounded_rectangle([600, 18, 700, 52], radius=5, fill=(255, 255, 255))
+    d.text((626, 26), "3 / 12", fill=(30, 30, 35), font=fB)
+    d.text((720, 24), "▶", fill=(8, 55, 65), font=fB)
+    d.rounded_rectangle([780, 18, 900, 52], radius=5, fill=(228, 100, 100))
+    d.text((808, 26), "■  종료", fill=(255, 255, 255), font=fB)
 
-    # 슬라이드 목록
-    slide_names = ["1. 주님 한 분만으로", "2. 주님 한 분만으로",
-                   "3. 주님 한 분만으로", "4. 주의 이름 높이세",
-                   "5. 로마서 8:28"]
+    # 슬라이드 썸네일 목록
+    slide_names = [
+        "1. 주님 한 분만으로",
+        "2. 주님 한 분만으로",
+        "3. 주님 한 분만으로",
+        "4. 주의 이름 높이세",
+        "5. 로마서 8:28",
+    ]
     for i, name in enumerate(slide_names):
-        x = 14 + i * 154
-        color = (15, 139, 141) if i == 2 else (200, 210, 215)
-        d.rounded_rectangle([x, 74, x + 148, 160], radius=6, fill=color)
-        d.text((x + 8, 108), name[:18], fill=(255, 255, 255) if i == 2 else (80, 90, 95),
-               font=ImageFont.load_default())
+        x = 10 + i * 178
+        color = (15, 139, 141) if i == 2 else (196, 208, 215)
+        tc = (255, 255, 255) if i == 2 else (75, 88, 95)
+        d.rounded_rectangle([x, 74, x + 166, 180], radius=6, fill=color)
+        d.text((x + 10, 116), name, fill=tc, font=fS)
 
-    d.text((20, 172),
-           "키보드: ← → (이전/다음)  |  숫자+Enter (슬라이드 번호 이동)  |  ESC (발표 종료)",
-           fill=(100, 120, 130), font=ImageFont.load_default())
+    d.text((18, 196),
+           "키보드:  ← →  이전/다음  |  숫자 + Enter  슬라이드 번호로 이동  |  ESC  발표 종료",
+           fill=(100, 118, 128), font=fS)
 
     return img
 
 
 def make_bible_image() -> Image.Image:
     """성경 본문 추가 패널 이미지."""
-    W, H = 560, 300
+    W, H = 620, 340
     img = Image.new('RGB', (W, H), (255, 255, 255))
     d = ImageDraw.Draw(img)
 
-    d.rectangle([0, 0, W, 36], fill=(245, 245, 248))
-    d.text((16, 10), "성경 본문  (탭 전환)", fill=(30, 30, 30),
-           font=ImageFont.load_default())
+    fB = _font(14, bold=True)
+    fR = _font(13)
+    fS = _font(11)
+
+    d.rectangle([0, 0, W, 44], fill=(244, 244, 247))
+    d.text((16, 12), "성경 본문", fill=(25, 25, 30), font=fB)
+    d.line([(0, 44), (W, 44)], fill=(218, 218, 222))
 
     # 탭
-    d.text((16, 50), "찬양 검색", fill=(150, 150, 150),
-           font=ImageFont.load_default())
-    d.text((120, 50), "성경 본문", fill=(15, 139, 141),
-           font=ImageFont.load_default())
-    d.line([(120, 64), (200, 64)], fill=(15, 139, 141), width=2)
+    d.text((16, 58), "찬양 검색", fill=(155, 155, 160), font=fR)
+    d.text((140, 58), "성경 본문", fill=(15, 139, 141), font=fB)
+    d.line([(140, 76), (240, 76)], fill=(15, 139, 141), width=2)
 
-    # 선택 UI
+    # 드롭다운 선택
     labels = ["버전", "책", "장"]
     vals = ["개역개정  ▾", "로마서  ▾", "8장  ▾"]
     for i, (lbl, val) in enumerate(zip(labels, vals)):
-        x = 16 + i * 175
-        d.text((x, 80), lbl, fill=(100, 100, 100),
-               font=ImageFont.load_default())
-        d.rounded_rectangle([x, 96, x + 158, 118], radius=4,
-                             outline=(180, 180, 180), fill=(252, 252, 252))
-        d.text((x + 8, 101), val, fill=(40, 40, 40),
-               font=ImageFont.load_default())
+        x = 16 + i * 196
+        d.text((x, 90), lbl, fill=(105, 105, 110), font=fR)
+        d.rounded_rectangle([x, 110, x + 180, 138], radius=4,
+                             outline=(185, 185, 190), fill=(251, 251, 253))
+        d.text((x + 10, 117), val, fill=(38, 38, 44), font=fR)
 
-    d.line([(16, 130), (W - 16, 130)], fill=(230, 230, 230))
+    d.line([(16, 152), (W - 16, 152)], fill=(228, 228, 232))
 
     # 절 목록
     verses = [
@@ -436,25 +438,25 @@ def make_bible_image() -> Image.Image:
         ("30절", "또 미리 정하신 그들을 또한 부르시고…"),
     ]
     for i, (v, text) in enumerate(verses):
-        y = 140 + i * 40
-        d.text((16, y + 8), v, fill=(15, 100, 115),
-               font=ImageFont.load_default())
-        d.text((70, y + 8), text[:40] + "…", fill=(50, 50, 50),
-               font=ImageFont.load_default())
-        d.rounded_rectangle([W - 80, y + 4, W - 16, y + 30], radius=4,
+        y = 160 + i * 52
+        d.text((16, y + 14), v, fill=(12, 98, 115), font=fB)
+        d.text((80, y + 14), text, fill=(48, 48, 54), font=fR)
+        d.rounded_rectangle([W - 100, y + 8, W - 14, y + 42], radius=5,
                              fill=(15, 139, 141))
-        d.text((W - 68, y + 10), "+ 추가", fill=(255, 255, 255),
-               font=ImageFont.load_default())
-        d.line([(16, y + 38), (W - 16, y + 38)], fill=(240, 240, 240))
+        d.text((W - 88, y + 16), "+ 추가", fill=(255, 255, 255), font=fR)
+        d.line([(16, y + 50), (W - 16, y + 50)], fill=(238, 238, 242))
 
     return img
 
 
 def make_export_flow_image() -> Image.Image:
     """PPTX 내보내기 흐름 이미지."""
-    W, H = 750, 140
-    img = Image.new('RGB', (W, H), (248, 250, 252))
+    W, H = 900, 160
+    img = Image.new('RGB', (W, H), (244, 248, 252))
     d = ImageDraw.Draw(img)
+
+    fB = _font(14, bold=True)
+    fR = _font(12)
 
     steps = [
         ("① 곡/성경 선택", "스테이징에 항목 추가"),
@@ -462,18 +464,19 @@ def make_export_flow_image() -> Image.Image:
         ("③ PPTX 저장 클릭", "저장 위치 선택"),
         ("④ 완료", "worship_slides.pptx 생성"),
     ]
-    cols = [(20, 54, 66), (15, 100, 120), (15, 139, 141), (10, 160, 100)]
+    cols = [(20, 54, 66), (15, 96, 118), (15, 139, 141), (12, 155, 100)]
+    box_w = 200
 
-    for i, ((title, sub), col) in enumerate(zip(steps, cols)):
-        x = 16 + i * 185
-        d.rounded_rectangle([x, 20, x + 168, 110], radius=8, fill=col)
-        d.text((x + 10, 40), title, fill=(255, 255, 255),
-               font=ImageFont.load_default())
-        d.text((x + 10, 60), sub, fill=(180, 220, 220),
-               font=ImageFont.load_default())
+    for i, ((line1, line2), col) in enumerate(zip(steps, cols)):
+        x0 = 16 + i * (box_w + 20)
+        x1 = x0 + box_w
+        d.rounded_rectangle([x0, 12, x1, 130], radius=9, fill=col)
+        d.text((x0 + 12, 40), line1, fill=(255, 255, 255), font=fB)
+        d.text((x0 + 12, 68), line2, fill=(185, 225, 225), font=fR)
         if i < 3:
-            d.polygon([(x + 178, 60), (x + 192, 70), (x + 178, 80)],
-                       fill=(100, 150, 155))
+            mx = x1 + 10
+            d.polygon([(mx, 66), (mx + 14, 76), (mx, 86)],
+                       fill=(98, 148, 155))
 
     return img
 
