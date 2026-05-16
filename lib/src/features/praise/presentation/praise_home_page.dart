@@ -9,6 +9,7 @@ import 'package:path/path.dart' as p;
 import '../../../features/bible/data/bible_repository.dart';
 import '../../../features/bible/domain/bible_verse.dart';
 import '../../../features/update/update_service.dart';
+import '../data/app_logger.dart';
 import '../data/export_style_store.dart';
 import '../data/praise_repository.dart';
 import '../data/python_bridge.dart';
@@ -658,7 +659,8 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
       if (result.libreofficeMissing && mounted) {
         await _showLibreofficeDialog();
       }
-    } catch (error) {
+    } catch (error, stack) {
+      await AppLogger.instance.error('찬양 폴더 가져오기 실패', error, stack);
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
@@ -711,7 +713,8 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('$version 성경 $count절을 저장했습니다.')));
-    } catch (e) {
+    } catch (e, stack) {
+      await AppLogger.instance.error('성경 불러오기 실패', e, stack);
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
@@ -786,7 +789,8 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('PPTX 저장 완료: $savedPath')));
-    } catch (error) {
+    } catch (error, stack) {
+      await AppLogger.instance.error('PPTX 내보내기 실패', error, stack);
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
@@ -1087,6 +1091,33 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     );
   }
 
+  // ── 로그 추출 ────────────────────────────────────────────────────────
+
+  Future<void> _showExtractLogsDialog() async {
+    final logs = await AppLogger.instance.readLogs();
+    final logPath = await AppLogger.instance.logFilePath();
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => _LogViewerDialog(
+        logs: logs,
+        logFilePath: logPath,
+        onOpenFolder: logPath != null
+            ? () {
+                final dir = File(logPath).parent.path;
+                if (Platform.isMacOS) {
+                  Process.run('open', [dir]);
+                } else if (Platform.isWindows) {
+                  Process.run('explorer', [dir]);
+                } else {
+                  Process.run('xdg-open', [dir]);
+                }
+              }
+            : null,
+      ),
+    );
+  }
+
   // ── 빌드 ────────────────────────────────────────────────────────────
 
   @override
@@ -1146,6 +1177,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                             importStatusText: _importStatusText,
                             onImportPressed: _pickAndImportFolder,
                             onBibleImportPressed: _pickAndImportBible,
+                            onExtractLogsPressed: _showExtractLogsDialog,
                             isCheckingUpdate: _isCheckingUpdate,
                             hasUpdate: _pendingUpdate != null,
                             onCheckUpdate: _checkForUpdates,
@@ -1814,6 +1846,7 @@ class _TopBar extends StatelessWidget {
     required this.importStatusText,
     required this.onImportPressed,
     required this.onBibleImportPressed,
+    required this.onExtractLogsPressed,
     required this.isCheckingUpdate,
     required this.hasUpdate,
     required this.onCheckUpdate,
@@ -1829,6 +1862,7 @@ class _TopBar extends StatelessWidget {
   final String? importStatusText;
   final VoidCallback onImportPressed;
   final VoidCallback onBibleImportPressed;
+  final VoidCallback onExtractLogsPressed;
   final bool isCheckingUpdate;
   final bool hasUpdate;
   final VoidCallback onCheckUpdate;
@@ -1960,6 +1994,18 @@ class _TopBar extends StatelessWidget {
                   )
                 : const Icon(Icons.menu_book_rounded, size: 16),
             label: Text(isBibleImporting ? '저장 중' : '성경 불러오기'),
+          ),
+          const SizedBox(width: 4),
+          Tooltip(
+            message: '저장된 로그 추출',
+            child: IconButton(
+              onPressed: onExtractLogsPressed,
+              icon: const Icon(
+                Icons.description_outlined,
+                size: 18,
+                color: Colors.white70,
+              ),
+            ),
           ),
         ],
       ),
@@ -4569,6 +4615,77 @@ class _ContiListDialogState extends State<_ContiListDialog> {
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('취소'),
+        ),
+      ],
+    );
+  }
+}
+
+// ── LogViewerDialog ───────────────────────────────────────────────────────
+
+class _LogViewerDialog extends StatelessWidget {
+  const _LogViewerDialog({
+    required this.logs,
+    required this.logFilePath,
+    required this.onOpenFolder,
+  });
+
+  final String logs;
+  final String? logFilePath;
+  final VoidCallback? onOpenFolder;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('저장된 로그'),
+      content: SizedBox(
+        width: 640,
+        height: 420,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (logFilePath != null)
+              Text(
+                logFilePath!,
+                style: const TextStyle(fontSize: 11, color: Colors.grey),
+                overflow: TextOverflow.ellipsis,
+              ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: Container(
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E1E1E),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                padding: const EdgeInsets.all(12),
+                child: SingleChildScrollView(
+                  child: SelectableText(
+                    logs,
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                      color: Colors.white70,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        if (onOpenFolder != null)
+          TextButton.icon(
+            onPressed: () {
+              onOpenFolder!();
+              Navigator.of(context).pop();
+            },
+            icon: const Icon(Icons.folder_open_rounded, size: 16),
+            label: const Text('로그 폴더 열기'),
+          ),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('닫기'),
         ),
       ],
     );
