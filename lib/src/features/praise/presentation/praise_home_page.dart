@@ -361,15 +361,15 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     );
     if (result == null || !mounted) return;
     final (newMain, newEnglish) = result;
-    _applySlideEdit(info, newMain, newEnglish, slideIndex);
+    await _applySlideEdit(info, newMain, newEnglish, slideIndex);
   }
 
-  void _applySlideEdit(
+  Future<void> _applySlideEdit(
     _SlideInfo info,
     String newMain,
     String newEnglish,
     int slideIndex,
-  ) {
+  ) async {
     final stagingIndex =
         _stagingItems.indexWhere((e) => e.uid == info.stagingUid);
     if (stagingIndex == -1) return;
@@ -378,6 +378,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     final item = entry.item;
 
     StagingItem newItem;
+    PraiseSong? updatedSong;
     if (item is SongStagingItem) {
       final song = item.song;
       final pairs = List.of(song.pairedPages);
@@ -386,15 +387,15 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
         pairs[info.pageIndexInItem] = (korean: newMain, english: newEnglish);
       }
 
-      newItem = SongStagingItem(
-        PraiseSong(
-          id: song.id,
-          fileName: song.fileName,
-          title: song.title,
-          lyrics: pairs.map((p) => p.korean).join('###'),
-          englishLyrics: pairs.map((p) => p.english).join('###'),
-        ),
+      final newSong = PraiseSong(
+        id: song.id,
+        fileName: song.fileName,
+        title: song.title,
+        lyrics: pairs.map((p) => p.korean).join('###'),
+        englishLyrics: pairs.map((p) => p.english).join('###'),
       );
+      newItem = SongStagingItem(newSong);
+      updatedSong = newSong;
     } else if (item is BibleStagingItem) {
       newItem = BibleStagingItem(reference: item.reference, text: newMain);
     } else {
@@ -404,6 +405,20 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     setState(() {
       _stagingItems[stagingIndex] = (uid: entry.uid, item: newItem);
     });
+
+    if (updatedSong != null) {
+      await _repository.updateSong(updatedSong);
+      if (mounted) {
+        setState(() {
+          final idx = _songs.indexWhere((s) => s.id == updatedSong!.id);
+          if (idx != -1) {
+            final newList = List.of(_songs);
+            newList[idx] = updatedSong!;
+            _songs = newList;
+          }
+        });
+      }
+    }
 
     if (_currentSlideIndex == slideIndex) {
       _sendCurrentSlide();
