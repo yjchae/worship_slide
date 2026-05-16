@@ -212,14 +212,13 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
       final item = entry.item;
       if (item is SongStagingItem) {
         final song = item.song;
-        final pages = song.pages;
-        final englishPages = song.englishPages;
-        for (var i = 0; i < pages.length; i++) {
+        final pairs = song.pairedPages;
+        for (var i = 0; i < pairs.length; i++) {
           slides.add(
             _SlideInfo(
               stagingUid: entry.uid,
-              mainText: pages[i],
-              englishText: i < englishPages.length ? englishPages[i] : '',
+              mainText: pairs[i].korean,
+              englishText: pairs[i].english,
               title: song.title,
               isBible: false,
               pageIndexInItem: i,
@@ -381,25 +380,19 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     StagingItem newItem;
     if (item is SongStagingItem) {
       final song = item.song;
-      final pages = List<String>.from(song.pages);
-      final englishPages = List<String>.from(song.englishPages);
+      final pairs = List.of(song.pairedPages);
 
-      if (info.pageIndexInItem < pages.length) {
-        pages[info.pageIndexInItem] = newMain;
+      if (info.pageIndexInItem < pairs.length) {
+        pairs[info.pageIndexInItem] = (korean: newMain, english: newEnglish);
       }
-      // 영어 페이지 길이를 한국어 페이지에 맞춰 패딩
-      while (englishPages.length < pages.length) {
-        englishPages.add('');
-      }
-      englishPages[info.pageIndexInItem] = newEnglish;
 
       newItem = SongStagingItem(
         PraiseSong(
           id: song.id,
           fileName: song.fileName,
           title: song.title,
-          lyrics: pages.join('###'),
-          englishLyrics: englishPages.join('###'),
+          lyrics: pairs.map((p) => p.korean).join('###'),
+          englishLyrics: pairs.map((p) => p.english).join('###'),
         ),
       );
     } else if (item is BibleStagingItem) {

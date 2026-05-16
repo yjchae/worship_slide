@@ -13,17 +13,26 @@ class PraiseSong {
   final String lyrics;
   final String englishLyrics;
 
-  List<String> get pages => lyrics
-      .split('###')
-      .map((page) => page.trim())
-      .where((page) => page.isNotEmpty)
-      .toList();
+  // Korean/English 페이지를 함께 처리해 인덱스 정합성 보장.
+  // 둘 다 비어있는 페이지만 제외하고, 한쪽만 비어있는 경우는 유지한다.
+  List<({String korean, String english})> get pairedPages {
+    final ks = lyrics.split('###').map((p) => p.trim()).toList();
+    final es = englishLyrics.split('###').map((p) => p.trim()).toList();
+    final len = ks.length > es.length ? ks.length : es.length;
+    final result = <({String korean, String english})>[];
+    for (var i = 0; i < len; i++) {
+      final k = i < ks.length ? ks[i] : '';
+      final e = i < es.length ? es[i] : '';
+      if (k.isNotEmpty || e.isNotEmpty) {
+        result.add((korean: k, english: e));
+      }
+    }
+    return result;
+  }
 
-  List<String> get englishPages => englishLyrics
-      .split('###')
-      .map((page) => page.trim())
-      .where((page) => page.isNotEmpty)
-      .toList();
+  List<String> get pages => pairedPages.map((p) => p.korean).toList();
+
+  List<String> get englishPages => pairedPages.map((p) => p.english).toList();
 
   Map<String, Object?> toMap() {
     return {
