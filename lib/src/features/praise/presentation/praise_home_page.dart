@@ -12,6 +12,8 @@ import '../../../features/update/update_service.dart';
 import '../data/export_style_store.dart';
 import '../data/praise_repository.dart';
 import '../data/python_bridge.dart';
+import '../data/worship_conti_repository.dart';
+import '../domain/worship_conti.dart';
 import '../domain/export_style.dart';
 import '../domain/praise_song.dart';
 import '../domain/staging_item.dart';
@@ -83,6 +85,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
   final PythonBridge _pythonBridge = PythonBridge();
   final ExportStyleStore _styleStore = ExportStyleStore();
   final BibleRepository _bibleRepository = BibleRepository();
+  final WorshipContiRepository _contiRepository = WorshipContiRepository();
   final TextEditingController _searchController = TextEditingController();
   final UpdateService _updateService = UpdateService();
 
@@ -813,6 +816,131 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     );
   }
 
+  // ── 예배 콘티 저장/불러오기 ──────────────────────────────────────────
+
+  Future<void> _saveConti() async {
+    if (_stagingItems.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('저장할 항목이 없습니다. 찬양이나 성경 본문을 먼저 선택해 주세요.')),
+      );
+      return;
+    }
+
+    final now = DateTime.now();
+    final defaultName =
+        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} 예배';
+    final controller = TextEditingController(text: defaultName);
+
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('예배 콘티 저장'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: '콘티 이름',
+            border: OutlineInputBorder(),
+          ),
+          onSubmitted: (_) =>
+              Navigator.of(ctx).pop(controller.text.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
+            child: const Text('저장'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+
+    if (name == null || name.isEmpty || !mounted) return;
+
+    await _contiRepository.saveConti(name, _stagingItems);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('"$name" 콘티를 저장했습니다.')),
+    );
+  }
+
+  Future<void> _loadContiDialog() async {
+    final contis = await _contiRepository.listContis();
+    if (!mounted) return;
+
+    if (contis.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('저장된 예배 콘티가 없습니다.')),
+      );
+      return;
+    }
+
+    final selected = await showDialog<WorshipConti>(
+      context: context,
+      builder: (ctx) => _ContiListDialog(
+        contis: contis,
+        onDelete: (conti) async {
+          await _contiRepository.deleteConti(conti.id);
+        },
+      ),
+    );
+    if (selected == null || !mounted) return;
+
+    if (_stagingItems.isNotEmpty) {
+      final replace = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('현재 콘티 교체'),
+          content: Text(
+            '현재 선택된 ${_stagingItems.length}개 항목을 지우고 "${selected.name}" 콘티를 불러올까요?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('취소'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('교체'),
+            ),
+          ],
+        ),
+      );
+      if (replace != true || !mounted) return;
+    }
+
+    final result = await _contiRepository.loadConti(selected.id, _nextUid);
+    if (!mounted) return;
+
+    setState(() {
+      _stagingItems
+        ..clear()
+        ..addAll(result.items);
+      _nextUid += result.items.length;
+      _previewStagingUid = result.items.isEmpty ? null : result.items.first.uid;
+      _currentSlideIndex = 0;
+    });
+
+    if (result.missingCount > 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '"${selected.name}" 불러오기 완료'
+            ' (${result.missingCount}개 항목은 DB에서 삭제되어 제외됨)',
+          ),
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('"${selected.name}" 콘티를 불러왔습니다.')),
+      );
+    }
+  }
+
   // ── 곡 관리 ──────────────────────────────────────────────────────────
 
   Future<void> _clearAllSongs() async {
@@ -1079,6 +1207,8 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                                           () => _isStagingCollapsed =
                                               !_isStagingCollapsed,
                                         ),
+                                        onSaveConti: _saveConti,
+                                        onLoadConti: _loadContiDialog,
                                         onSelect: (uid) {
                                           setState(() {
                                             _previewStagingUid = uid;
@@ -1126,6 +1256,8 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                                         () => _isStagingCollapsed =
                                             !_isStagingCollapsed,
                                       ),
+                                      onSaveConti: _saveConti,
+                                      onLoadConti: _loadContiDialog,
                                       onSelect: (uid) {
                                         setState(() {
                                           _previewStagingUid = uid;
@@ -1838,6 +1970,8 @@ class _StagingPanel extends StatelessWidget {
     required this.onSelect,
     required this.isCollapsed,
     required this.onToggleCollapsed,
+    required this.onSaveConti,
+    required this.onLoadConti,
   });
 
   final List<({int uid, StagingItem item})> stagingItems;
@@ -1847,6 +1981,8 @@ class _StagingPanel extends StatelessWidget {
   final ValueChanged<int> onSelect;
   final bool isCollapsed;
   final VoidCallback onToggleCollapsed;
+  final VoidCallback onSaveConti;
+  final VoidCallback onLoadConti;
 
   @override
   Widget build(BuildContext context) {
@@ -1860,7 +1996,7 @@ class _StagingPanel extends StatelessWidget {
             children: [
               const Expanded(
                 child: Text(
-                  '선택한 순서',
+                  '예배 콘티',
                   style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
                 ),
               ),
@@ -1871,7 +2007,7 @@ class _StagingPanel extends StatelessWidget {
               IconButton(
                 icon: const Icon(Icons.expand_more_rounded),
                 iconSize: 18,
-                tooltip: '선택한 순서 펼치기',
+                tooltip: '예배 콘티 펼치기',
                 color: cs.onSurfaceVariant,
                 visualDensity: VisualDensity.compact,
                 onPressed: onToggleCollapsed,
@@ -1890,18 +2026,34 @@ class _StagingPanel extends StatelessWidget {
           children: [
             Row(
               children: [
-                const Expanded(
-                  child: Text(
-                    '선택한 순서',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-                  ),
+                const Text(
+                  '예배 콘티',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
                 ),
-                Text('${stagingItems.length}개'),
+                const Spacer(),
+                Text(
+                  '${stagingItems.length}개',
+                  style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
+                ),
                 const SizedBox(width: 4),
+                IconButton(
+                  icon: const Icon(Icons.save_outlined, size: 18),
+                  tooltip: '콘티 저장',
+                  color: cs.onSurfaceVariant,
+                  visualDensity: VisualDensity.compact,
+                  onPressed: onSaveConti,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.folder_open_outlined, size: 18),
+                  tooltip: '콘티 불러오기',
+                  color: cs.onSurfaceVariant,
+                  visualDensity: VisualDensity.compact,
+                  onPressed: onLoadConti,
+                ),
                 IconButton(
                   icon: const Icon(Icons.expand_less_rounded),
                   iconSize: 18,
-                  tooltip: '선택한 순서 접기',
+                  tooltip: '예배 콘티 접기',
                   color: cs.onSurfaceVariant,
                   visualDensity: VisualDensity.compact,
                   onPressed: onToggleCollapsed,
@@ -4302,6 +4454,113 @@ class _SlideQuickEditDialogState extends State<_SlideQuickEditDialog> {
           onPressed: () =>
               Navigator.pop(context, (_mainCtrl.text, _englishCtrl.text)),
           child: const Text('적용'),
+        ),
+      ],
+    );
+  }
+}
+
+// ── ContiListDialog ───────────────────────────────────────────────────────
+
+class _ContiListDialog extends StatefulWidget {
+  const _ContiListDialog({
+    required this.contis,
+    required this.onDelete,
+  });
+
+  final List<WorshipConti> contis;
+  final Future<void> Function(WorshipConti) onDelete;
+
+  @override
+  State<_ContiListDialog> createState() => _ContiListDialogState();
+}
+
+class _ContiListDialogState extends State<_ContiListDialog> {
+  late final List<WorshipConti> _contis;
+
+  @override
+  void initState() {
+    super.initState();
+    _contis = List.of(widget.contis);
+  }
+
+  String _formatDate(DateTime dt) {
+    return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-'
+        '${dt.day.toString().padLeft(2, '0')} '
+        '${dt.hour.toString().padLeft(2, '0')}:'
+        '${dt.minute.toString().padLeft(2, '0')}';
+  }
+
+  Future<void> _delete(WorshipConti conti) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('콘티 삭제'),
+        content: Text('"${conti.name}"을(를) 삭제할까요?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('삭제'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await widget.onDelete(conti);
+    if (!mounted) return;
+    setState(() => _contis.removeWhere((c) => c.id == conti.id));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('예배 콘티 불러오기'),
+      contentPadding: const EdgeInsets.fromLTRB(0, 16, 0, 0),
+      content: SizedBox(
+        width: 420,
+        child: _contis.isEmpty
+            ? const Padding(
+                padding: EdgeInsets.all(24),
+                child: Text(
+                  '저장된 콘티가 없습니다.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.grey),
+                ),
+              )
+            : ListView.separated(
+                shrinkWrap: true,
+                itemCount: _contis.length,
+                separatorBuilder: (_, __) => const Divider(height: 1),
+                itemBuilder: (ctx, i) {
+                  final conti = _contis[i];
+                  return ListTile(
+                    title: Text(
+                      conti.name,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: Text(
+                      '${_formatDate(conti.createdAt)}  ·  ${conti.itemCount}개',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                    trailing: IconButton(
+                      icon: const Icon(Icons.delete_outline_rounded, size: 20),
+                      tooltip: '삭제',
+                      color: Colors.red.shade300,
+                      onPressed: () => _delete(conti),
+                    ),
+                    onTap: () => Navigator.of(context).pop(conti),
+                  );
+                },
+              ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('취소'),
         ),
       ],
     );

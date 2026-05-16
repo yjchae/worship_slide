@@ -26,7 +26,7 @@ class PraiseDatabase {
     final dbPath = p.join(_dbDirectory, 'worship_slides.db');
     _database = await openDatabase(
       dbPath,
-      version: 4,
+      version: 5,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE praise_songs (
@@ -56,6 +56,24 @@ class PraiseDatabase {
         await db.execute(
           'CREATE INDEX idx_bible_ch ON bible_verses(bible_version, book_name, chapter)',
         );
+        await db.execute('''
+          CREATE TABLE worship_contis (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            name       TEXT    NOT NULL,
+            created_at INTEGER NOT NULL
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE worship_conti_items (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            conti_id        INTEGER NOT NULL REFERENCES worship_contis(id) ON DELETE CASCADE,
+            position        INTEGER NOT NULL,
+            item_type       TEXT    NOT NULL,
+            song_id         INTEGER,
+            bible_reference TEXT,
+            bible_text      TEXT
+          )
+        ''');
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -96,6 +114,26 @@ class PraiseDatabase {
           await db.execute(
             'CREATE INDEX IF NOT EXISTS idx_bible_ch ON bible_verses(bible_version, book_name, chapter)',
           );
+        }
+        if (oldVersion < 5) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS worship_contis (
+              id         INTEGER PRIMARY KEY AUTOINCREMENT,
+              name       TEXT    NOT NULL,
+              created_at INTEGER NOT NULL
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS worship_conti_items (
+              id              INTEGER PRIMARY KEY AUTOINCREMENT,
+              conti_id        INTEGER NOT NULL REFERENCES worship_contis(id) ON DELETE CASCADE,
+              position        INTEGER NOT NULL,
+              item_type       TEXT    NOT NULL,
+              song_id         INTEGER,
+              bible_reference TEXT,
+              bible_text      TEXT
+            )
+          ''');
         }
       },
     );
