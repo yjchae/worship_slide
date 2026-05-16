@@ -4117,10 +4117,22 @@ class _PresentationControllerPanel extends StatefulWidget {
 class _PresentationControllerPanelState
     extends State<_PresentationControllerPanel> {
   final _scrollController = ScrollController();
+  final _gridScrollController = ScrollController();
 
-  static const double _thumbnailWidth = 210;
+  double _zoomLevel = 1.0;
+  static const double _baseThumbW = 210.0;
   static const double _itemSpacing = 8;
   static const double _padding = 10;
+  static const double _minZoom = 0.35;
+  static const double _maxZoom = 3.0;
+
+  double get _thumbW => (_baseThumbW * _zoomLevel).clamp(70.0, 700.0);
+
+  void _changeZoom(double delta) {
+    setState(() {
+      _zoomLevel = (_zoomLevel + delta).clamp(_minZoom, _maxZoom);
+    });
+  }
 
   @override
   void didUpdateWidget(_PresentationControllerPanel oldWidget) {
@@ -4133,10 +4145,11 @@ class _PresentationControllerPanelState
 
   void _scrollToCurrentItem() {
     if (!_scrollController.hasClients) return;
+    final tw = _thumbW;
     final targetOffset =
-        widget.currentIndex * (_thumbnailWidth + _itemSpacing) + _padding;
+        widget.currentIndex * (tw + _itemSpacing) + _padding;
     final viewportWidth = _scrollController.position.viewportDimension;
-    final centeredOffset = targetOffset - (viewportWidth - _thumbnailWidth) / 2;
+    final centeredOffset = targetOffset - (viewportWidth - tw) / 2;
     _scrollController.animateTo(
       centeredOffset.clamp(0.0, _scrollController.position.maxScrollExtent),
       duration: const Duration(milliseconds: 300),
@@ -4147,6 +4160,7 @@ class _PresentationControllerPanelState
   @override
   void dispose() {
     _scrollController.dispose();
+    _gridScrollController.dispose();
     super.dispose();
   }
 
@@ -4164,23 +4178,36 @@ class _PresentationControllerPanelState
   }
 
   Widget _buildHorizontalList() {
-    return ListView.builder(
-      controller: _scrollController,
-      scrollDirection: Axis.horizontal,
-      padding: EdgeInsets.all(_padding),
-      itemCount: widget.slides.length,
-      itemBuilder: (context, i) => SizedBox(
-        width: _thumbnailWidth,
-        child: Padding(
-          padding: EdgeInsets.only(
-            right: i < widget.slides.length - 1 ? _itemSpacing : 0,
-          ),
-          child: _SlideThumbnail(
-            data: _pageDataFor(i),
-            isSelected: i == widget.currentIndex,
-            index: i,
-            onTap: () => widget.onSlideSelected(i),
-            onEdit: () => widget.onSlideEdit(i),
+    final tw = _thumbW;
+    return Listener(
+      onPointerSignal: (event) {
+        if (event is PointerScrollEvent &&
+            (HardwareKeyboard.instance.isControlPressed ||
+                HardwareKeyboard.instance.isMetaPressed)) {
+          setState(() {
+            _zoomLevel = (_zoomLevel - event.scrollDelta.dy * 0.004)
+                .clamp(_minZoom, _maxZoom);
+          });
+        }
+      },
+      child: ListView.builder(
+        controller: _scrollController,
+        scrollDirection: Axis.horizontal,
+        padding: EdgeInsets.all(_padding),
+        itemCount: widget.slides.length,
+        itemBuilder: (context, i) => SizedBox(
+          width: tw,
+          child: Padding(
+            padding: EdgeInsets.only(
+              right: i < widget.slides.length - 1 ? _itemSpacing : 0,
+            ),
+            child: _SlideThumbnail(
+              data: _pageDataFor(i),
+              isSelected: i == widget.currentIndex,
+              index: i,
+              onTap: () => widget.onSlideSelected(i),
+              onEdit: () => widget.onSlideEdit(i),
+            ),
           ),
         ),
       ),
@@ -4191,60 +4218,52 @@ class _PresentationControllerPanelState
     const aspectRatio = 13.333 / 7.5;
     const labelH = 22.0;
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final W = (constraints.maxWidth - _padding * 2)
-            .clamp(1.0, double.infinity);
-        final H = (constraints.maxHeight - _padding * 2)
-            .clamp(1.0, double.infinity);
-        final n = widget.slides.length;
-
-        // 한 화면에 들어오는 최소 열 수 탐색 (더 적은 열 = 더 큰 썸네일)
-        int cols = 1;
-        bool fitsVertically = false;
-        for (int c = 1; c <= n; c++) {
-          final thumbW = (W - (c - 1) * _itemSpacing) / c;
-          final cellH = thumbW / aspectRatio + labelH;
-          final rows = (n / c).ceil();
-          final totalH = rows * cellH + (rows - 1) * _itemSpacing;
-          if (totalH <= H) {
-            cols = c;
-            fitsVertically = true;
-            break;
-          }
+    return Listener(
+      onPointerSignal: (event) {
+        if (event is PointerScrollEvent &&
+            (HardwareKeyboard.instance.isControlPressed ||
+                HardwareKeyboard.instance.isMetaPressed)) {
+          setState(() {
+            _zoomLevel = (_zoomLevel - event.scrollDelta.dy * 0.004)
+                .clamp(_minZoom, _maxZoom);
+          });
         }
-        if (!fitsVertically) {
-          // 세로 스크롤: 썸네일 ~160px 기준
-          cols = ((W + _itemSpacing) / (160.0 + _itemSpacing))
-              .floor()
-              .clamp(2, n);
-        }
-
-        final thumbW = (W - (cols - 1) * _itemSpacing) / cols;
-        final cellH = thumbW / aspectRatio + labelH;
-        final childAspectRatio = thumbW / cellH;
-
-        return GridView.builder(
-          physics: fitsVertically
-              ? const NeverScrollableScrollPhysics()
-              : const ClampingScrollPhysics(),
-          padding: EdgeInsets.all(_padding),
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: cols,
-            mainAxisSpacing: _itemSpacing,
-            crossAxisSpacing: _itemSpacing,
-            childAspectRatio: childAspectRatio,
-          ),
-          itemCount: n,
-          itemBuilder: (context, i) => _SlideThumbnail(
-            data: _pageDataFor(i),
-            isSelected: i == widget.currentIndex,
-            index: i,
-            onTap: () => widget.onSlideSelected(i),
-            onEdit: () => widget.onSlideEdit(i),
-          ),
-        );
       },
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final W = (constraints.maxWidth - _padding * 2)
+              .clamp(1.0, double.infinity);
+          final n = widget.slides.length.clamp(1, 9999);
+
+          final targetThumbW = _thumbW;
+          final cols = ((W + _itemSpacing) / (targetThumbW + _itemSpacing))
+              .floor()
+              .clamp(1, n);
+          final actualThumbW = (W - (cols - 1) * _itemSpacing) / cols;
+          final cellH = actualThumbW / aspectRatio + labelH;
+          final childAspectRatio = (actualThumbW / cellH).clamp(0.1, 100.0);
+
+          return GridView.builder(
+            controller: _gridScrollController,
+            physics: const ClampingScrollPhysics(),
+            padding: EdgeInsets.all(_padding),
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: cols,
+              mainAxisSpacing: _itemSpacing,
+              crossAxisSpacing: _itemSpacing,
+              childAspectRatio: childAspectRatio,
+            ),
+            itemCount: n,
+            itemBuilder: (context, i) => _SlideThumbnail(
+              data: _pageDataFor(i),
+              isSelected: i == widget.currentIndex,
+              index: i,
+              onTap: () => widget.onSlideSelected(i),
+              onEdit: () => widget.onSlideEdit(i),
+            ),
+          );
+        },
+      ),
     );
   }
 
@@ -4277,6 +4296,37 @@ class _PresentationControllerPanelState
                   style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
                 ),
                 const Spacer(),
+                IconButton(
+                  icon: const Icon(Icons.remove_rounded),
+                  iconSize: 16,
+                  tooltip: '축소 (⌘ + 스크롤)',
+                  color: cs.onSurfaceVariant,
+                  visualDensity: VisualDensity.compact,
+                  onPressed: _zoomLevel > _minZoom
+                      ? () => _changeZoom(-0.2)
+                      : null,
+                ),
+                SizedBox(
+                  width: 40,
+                  child: Text(
+                    '${(_zoomLevel * 100).round()}%',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: cs.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.add_rounded),
+                  iconSize: 16,
+                  tooltip: '확대 (⌘ + 스크롤)',
+                  color: cs.onSurfaceVariant,
+                  visualDensity: VisualDensity.compact,
+                  onPressed: _zoomLevel < _maxZoom
+                      ? () => _changeZoom(0.2)
+                      : null,
+                ),
                 IconButton(
                   icon: Icon(
                     widget.isMaximized
