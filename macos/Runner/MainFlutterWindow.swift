@@ -229,7 +229,7 @@ class MainFlutterWindow: NSWindow {
     let windowFrame = self.frame
     self.contentViewController = flutterViewController
     self.setFrame(windowFrame, display: true)
-    self.minSize = NSSize(width: 1360, height: 900)
+    self.minSize = NSSize(width: 780, height: 560)
     if self.frame.size.width < self.minSize.width || self.frame.size.height < self.minSize.height {
       self.setContentSize(self.minSize)
       self.center()

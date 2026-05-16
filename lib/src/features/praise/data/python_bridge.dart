@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import '../domain/export_style.dart';
 import '../domain/praise_song.dart';
 import '../domain/staging_item.dart';
+import 'app_logger.dart';
 
 class ImportFailure {
   const ImportFailure({
@@ -103,19 +104,21 @@ class PythonBridge {
   Future<ProcessResult> _runTool(List<String> arguments) async {
     final binary = _compiledBinaryPath;
     if (binary == null) {
-      throw Exception(
-        'ppt_tool 실행 파일을 찾을 수 없습니다. '
-        '현재 위치: ${Directory.current.path}, 실행 파일: ${Platform.resolvedExecutable}',
-      );
+      final msg = 'ppt_tool 실행 파일을 찾을 수 없습니다. '
+          '현재 위치: ${Directory.current.path}, 실행 파일: ${Platform.resolvedExecutable}';
+      await AppLogger.instance.error(msg);
+      throw Exception(msg);
     }
 
     final result = await Process.run(binary, arguments, runInShell: false);
     if (result.exitCode != 0) {
-      throw Exception(
-        (result.stderr as String).trim().isEmpty
-            ? 'ppt_tool 실행 실패.'
-            : (result.stderr as String).trim(),
+      final stderr = (result.stderr as String).trim();
+      final msg = stderr.isEmpty ? 'ppt_tool 실행 실패.' : stderr;
+      await AppLogger.instance.error(
+        'ppt_tool 오류 (cmd: ${arguments.first})',
+        msg,
       );
+      throw Exception(msg);
     }
     return result;
   }
