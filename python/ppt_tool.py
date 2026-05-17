@@ -20,6 +20,26 @@ from pptx.util import Inches, Pt
 PPT_CONVERT_CHUNK_SIZE = 40
 PPT_CONVERT_PARALLELISM = 3
 
+_PAGE_SEP_RE = re.compile(r'\n[ \t]*\n')
+
+
+def _encode_pages(pages):
+    """페이지 목록 → \\n\\n 구분 저장 형식."""
+    i = len(pages)
+    while i > 0 and not pages[i - 1]:
+        i -= 1
+    return '\n\n'.join(pages[:i])
+
+
+def _decode_pages(text):
+    """\\n\\n 구분 저장 형식 → 페이지 목록."""
+    if not text:
+        return []
+    pages = [p.strip() for p in _PAGE_SEP_RE.split(text)]
+    while pages and not pages[-1]:
+        pages.pop()
+    return pages
+
 _PRETENDARD_FONTS = ["Pretendard-Bold.ttf", "Pretendard-Regular.ttf"]
 
 
@@ -277,17 +297,20 @@ def process_presentation_file(file_path, presentation_path):
         title_texts = _find_title_texts(prs)
         korean_pages = []
         english_pages = []
-
         for slide in prs.slides:
             page = slide_lyrics(slide, title_texts=title_texts)
             if not page:
+                korean_pages.append("")
+                english_pages.append("")
                 continue
             korean_page, english_page = split_bilingual_page(page)
-            if korean_page:
-                korean_pages.append(korean_page)
-            else:
-                korean_pages.append("")
+            korean_pages.append(korean_page)
             english_pages.append(english_page)
+
+        # 끝에 남은 빈 페이지 제거
+        while korean_pages and not korean_pages[-1] and not english_pages[-1]:
+            korean_pages.pop()
+            english_pages.pop()
 
         if not any(page for page in korean_pages + english_pages):
             return {"status": "skipped", "path": str(file_path)}
@@ -297,8 +320,8 @@ def process_presentation_file(file_path, presentation_path):
             "song": {
                 "file_name": file_path.name,
                 "title": normalize_title(file_path),
-                "lyrics": "\n###\n".join(korean_pages),
-                "english_lyrics": "\n###\n".join(english_pages),
+                "lyrics": _encode_pages(korean_pages),
+                "english_lyrics": _encode_pages(english_pages),
             },
             "path": str(file_path),
         }
@@ -614,8 +637,8 @@ def add_song_slides(prs, song, style):
     lyrics_box_left, lyrics_box_width, lyrics_align = _lyrics_text_layout(
         lyrics_text_align_str
     )
-    korean_pages = [part.strip() for part in song["lyrics"].split("###")]
-    english_pages = [part.strip() for part in song.get("english_lyrics", "").split("###")]
+    korean_pages = _decode_pages(song["lyrics"])
+    english_pages = _decode_pages(song.get("english_lyrics", ""))
     page_count = max(len(korean_pages), len(english_pages))
 
     for index in range(page_count):

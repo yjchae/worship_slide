@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../domain/export_style.dart';
@@ -35,8 +37,13 @@ class SlideRenderView extends StatelessWidget {
         ? style.bibleTitleVerticalPosition
         : style.titleVerticalPosition;
     final bodyFontSize = isBible ? style.bibleFontSize : style.fontSize;
-    final bodyBoxTop = isBible ? style.bibleTextBoxTop : style.textBoxTop;
-    final bodyBoxHeight = _slideH - bodyBoxTop - _lyricsBoxBottom;
+    final bodyBoxTop = (isBible ? style.bibleTextBoxTop : style.textBoxTop)
+        .clamp(0.0, _slideH - _lyricsBoxBottom)
+        .toDouble();
+    final bodyBoxHeight = math.max(
+      0.01,
+      _slideH - bodyBoxTop - _lyricsBoxBottom,
+    );
     final showTitle = isBible ? style.showBibleTitle : style.showSongTitle;
     final titleFontSize =
         isBible ? style.bibleTitleFontSize : style.titleFontSize;
@@ -62,6 +69,9 @@ class SlideRenderView extends StatelessWidget {
       builder: (context, constraints) {
         final w = constraints.maxWidth;
         final h = constraints.maxHeight;
+        if (!w.isFinite || !h.isFinite || w <= 0 || h <= 0) {
+          return const SizedBox.shrink();
+        }
         final fontScale = h / (_slideH * 72);
 
         final double titleBoxW;
@@ -90,14 +100,13 @@ class SlideRenderView extends StatelessWidget {
         return Container(
           color: style.backgroundColor,
           child: Stack(
+            clipBehavior: Clip.hardEdge,
             children: [
-              Padding(
-                padding: EdgeInsets.only(
-                  left: w * _lyricsBoxL / _slideW,
-                  top: h * bodyBoxTop / _slideH,
-                  right: w * (1 - (_lyricsBoxL + _lyricsBoxW) / _slideW),
-                  bottom: h * (1 - (bodyBoxTop + bodyBoxHeight) / _slideH),
-                ),
+              Positioned(
+                left: w * _lyricsBoxL / _slideW,
+                top: h * bodyBoxTop / _slideH,
+                width: w * _lyricsBoxW / _slideW,
+                height: h * bodyBoxHeight / _slideH,
                 child: Align(
                   alignment: bodyAlignment,
                   child: FittedBox(

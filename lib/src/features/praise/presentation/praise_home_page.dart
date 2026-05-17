@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
@@ -286,10 +287,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     }
     try {
       final pageData = _buildSlidePageData(_currentSlideIndex);
-      await _presentationChannel.invokeMethod(
-        'openWindow',
-        pageData.toJson(),
-      );
+      await _presentationChannel.invokeMethod('openWindow', pageData.toJson());
       if (!mounted) return;
       setState(() => _isPresentationOpen = true);
     } catch (e) {
@@ -317,10 +315,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     if (!_isPresentationOpen) return;
     try {
       final pageData = _buildSlidePageData(_currentSlideIndex);
-      await _presentationChannel.invokeMethod(
-        'updatePage',
-        pageData.toJson(),
-      );
+      await _presentationChannel.invokeMethod('updatePage', pageData.toJson());
     } catch (_) {
       if (mounted) setState(() => _isPresentationOpen = false);
     }
@@ -371,8 +366,9 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     String newEnglish,
     int slideIndex,
   ) async {
-    final stagingIndex =
-        _stagingItems.indexWhere((e) => e.uid == info.stagingUid);
+    final stagingIndex = _stagingItems.indexWhere(
+      (e) => e.uid == info.stagingUid,
+    );
     if (stagingIndex == -1) return;
 
     final entry = _stagingItems[stagingIndex];
@@ -392,8 +388,8 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
         id: song.id,
         fileName: song.fileName,
         title: song.title,
-        lyrics: pairs.map((p) => p.korean).join('###'),
-        englishLyrics: pairs.map((p) => p.english).join('###'),
+        lyrics: encodePages(pairs.map((p) => p.korean)),
+        englishLyrics: encodePages(pairs.map((p) => p.english)),
       );
       newItem = SongStagingItem(newSong);
       updatedSong = newSong;
@@ -437,16 +433,26 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
   }
 
   static final _digitKeys = <LogicalKeyboardKey, String>{
-    LogicalKeyboardKey.digit0: '0', LogicalKeyboardKey.digit1: '1',
-    LogicalKeyboardKey.digit2: '2', LogicalKeyboardKey.digit3: '3',
-    LogicalKeyboardKey.digit4: '4', LogicalKeyboardKey.digit5: '5',
-    LogicalKeyboardKey.digit6: '6', LogicalKeyboardKey.digit7: '7',
-    LogicalKeyboardKey.digit8: '8', LogicalKeyboardKey.digit9: '9',
-    LogicalKeyboardKey.numpad0: '0', LogicalKeyboardKey.numpad1: '1',
-    LogicalKeyboardKey.numpad2: '2', LogicalKeyboardKey.numpad3: '3',
-    LogicalKeyboardKey.numpad4: '4', LogicalKeyboardKey.numpad5: '5',
-    LogicalKeyboardKey.numpad6: '6', LogicalKeyboardKey.numpad7: '7',
-    LogicalKeyboardKey.numpad8: '8', LogicalKeyboardKey.numpad9: '9',
+    LogicalKeyboardKey.digit0: '0',
+    LogicalKeyboardKey.digit1: '1',
+    LogicalKeyboardKey.digit2: '2',
+    LogicalKeyboardKey.digit3: '3',
+    LogicalKeyboardKey.digit4: '4',
+    LogicalKeyboardKey.digit5: '5',
+    LogicalKeyboardKey.digit6: '6',
+    LogicalKeyboardKey.digit7: '7',
+    LogicalKeyboardKey.digit8: '8',
+    LogicalKeyboardKey.digit9: '9',
+    LogicalKeyboardKey.numpad0: '0',
+    LogicalKeyboardKey.numpad1: '1',
+    LogicalKeyboardKey.numpad2: '2',
+    LogicalKeyboardKey.numpad3: '3',
+    LogicalKeyboardKey.numpad4: '4',
+    LogicalKeyboardKey.numpad5: '5',
+    LogicalKeyboardKey.numpad6: '6',
+    LogicalKeyboardKey.numpad7: '7',
+    LogicalKeyboardKey.numpad8: '8',
+    LogicalKeyboardKey.numpad9: '9',
   };
 
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
@@ -854,8 +860,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
             labelText: '콘티 이름',
             border: OutlineInputBorder(),
           ),
-          onSubmitted: (_) =>
-              Navigator.of(ctx).pop(controller.text.trim()),
+          onSubmitted: (_) => Navigator.of(ctx).pop(controller.text.trim()),
         ),
         actions: [
           TextButton(
@@ -875,9 +880,9 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
 
     await _contiRepository.saveConti(name, _stagingItems);
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('"$name" 콘티를 저장했습니다.')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('"$name" 콘티를 저장했습니다.')));
   }
 
   Future<void> _loadContiDialog() async {
@@ -885,9 +890,9 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     if (!mounted) return;
 
     if (contis.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('저장된 예배 콘티가 없습니다.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('저장된 예배 콘티가 없습니다.')));
       return;
     }
 
@@ -947,9 +952,9 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
         ),
       );
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('"${selected.name}" 콘티를 불러왔습니다.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('"${selected.name}" 콘티를 불러왔습니다.')));
     }
   }
 
@@ -1048,8 +1053,34 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
       await _repository.insertSong(result);
     } else {
       await _repository.updateSong(result);
+      _replaceStagedSong(result);
     }
     await _loadSongs();
+  }
+
+  void _replaceStagedSong(PraiseSong updatedSong) {
+    final updatedId = updatedSong.id;
+    if (updatedId == null) return;
+    var replaced = false;
+    setState(() {
+      for (var i = 0; i < _stagingItems.length; i++) {
+        final entry = _stagingItems[i];
+        final item = entry.item;
+        if (item is SongStagingItem && item.song.id == updatedId) {
+          _stagingItems[i] = (
+            uid: entry.uid,
+            item: SongStagingItem(updatedSong),
+          );
+          replaced = true;
+        }
+      }
+      if (replaced) {
+        _clampCurrentSlideIndex();
+      }
+    });
+    if (replaced) {
+      _sendCurrentSlide();
+    }
   }
 
   void _openUrl(String url) {
@@ -1203,8 +1234,10 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                                     onPresentationRatioChanged: (v) => setState(
                                       () => _presentationPanelRatio = v,
                                     ),
-                                    isSlideOrderCollapsed: _isSlideOrderCollapsed,
-                                    isSlideOrderMaximized: _isSlideOrderMaximized,
+                                    isSlideOrderCollapsed:
+                                        _isSlideOrderCollapsed,
+                                    isSlideOrderMaximized:
+                                        _isSlideOrderMaximized,
                                     presentationPanel:
                                         _PresentationControllerPanel(
                                           slides: slides,
@@ -1331,37 +1364,37 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                         ],
                       ),
                     ),
-                  SizedBox(width: isWide ? 20 : 0, height: isWide ? 0 : 20),
-                  if (_isDesignCollapsed)
-                    _CollapsedPanelStrip(
-                      label: 'PPTX 디자인',
-                      isVertical: isWide,
-                      onExpand: () =>
-                          setState(() => _isDesignCollapsed = false),
-                    )
-                  else
-                    Expanded(
-                      flex: 4,
-                      child: _DesignPanel(
-                        style: _style,
-                        isExporting: _isExporting,
-                        swatches: _swatches,
-                        textSwatches: _textSwatches,
-                        previewItem: previewItem,
-                        onStyleChanged: _updateStyle,
-                        onExportPressed: _exportPresentation,
-                        onCollapse: () =>
-                            setState(() => _isDesignCollapsed = true),
+                    SizedBox(width: isWide ? 20 : 0, height: isWide ? 0 : 20),
+                    if (_isDesignCollapsed)
+                      _CollapsedPanelStrip(
+                        label: 'PPTX 디자인',
+                        isVertical: isWide,
+                        onExpand: () =>
+                            setState(() => _isDesignCollapsed = false),
+                      )
+                    else
+                      Expanded(
+                        flex: 4,
+                        child: _DesignPanel(
+                          style: _style,
+                          isExporting: _isExporting,
+                          swatches: _swatches,
+                          textSwatches: _textSwatches,
+                          previewItem: previewItem,
+                          onStyleChanged: _updateStyle,
+                          onExportPressed: _exportPresentation,
+                          onCollapse: () =>
+                              setState(() => _isDesignCollapsed = true),
+                        ),
                       ),
-                    ),
-                ],
-              );
-            },
+                  ],
+                );
+              },
+            ),
           ),
         ),
-      ),
-    ),   // Scaffold
-  );     // Focus
+      ), // Scaffold
+    ); // Focus
   }
 }
 
@@ -1410,7 +1443,9 @@ class _PresentationControlBar extends StatelessWidget {
           Icon(
             Icons.tv_rounded,
             size: 18,
-            color: isPresentationOpen ? cs.onPrimaryContainer : cs.onSurfaceVariant,
+            color: isPresentationOpen
+                ? cs.onPrimaryContainer
+                : cs.onSurfaceVariant,
           ),
           const SizedBox(width: 8),
           if (isPresentationOpen && currentSlideTitle != null) ...[
@@ -1561,11 +1596,16 @@ class _ResizableWorkArea extends StatelessWidget {
         final availableHeight = (constraints.maxHeight - _dividerHeight)
             .clamp(0.0, double.infinity)
             .toDouble();
-        final minRatio = availableHeight <= 0
-            ? 0.2
-            : (_minPanelHeight / availableHeight).clamp(0.12, 0.82);
-        final maxRatio = 1 - minRatio;
-        final ratio = stagingRatio.clamp(minRatio, maxRatio);
+        final ratio = clampSplitRatioForLayout(
+          ratio: stagingRatio,
+          available: availableHeight,
+          firstMin: _minPanelHeight,
+          secondMin: _minPanelHeight,
+          minRatioMin: 0.12,
+          minRatioMax: 0.5,
+          maxRatioMin: 0.5,
+          maxRatioMax: 0.88,
+        );
         final stagingHeight = availableHeight * ratio;
         final searchHeight = availableHeight - stagingHeight;
 
@@ -1577,9 +1617,15 @@ class _ResizableWorkArea extends StatelessWidget {
               color: colorScheme.outlineVariant,
               onDrag: (delta) {
                 if (availableHeight <= 0) return;
-                final nextRatio = (ratio + delta / availableHeight).clamp(
-                  minRatio,
-                  maxRatio,
+                final nextRatio = clampSplitRatioForLayout(
+                  ratio: ratio + delta / availableHeight,
+                  available: availableHeight,
+                  firstMin: _minPanelHeight,
+                  secondMin: _minPanelHeight,
+                  minRatioMin: 0.12,
+                  minRatioMax: 0.5,
+                  maxRatioMin: 0.5,
+                  maxRatioMax: 0.88,
                 );
                 onRatioChanged(nextRatio);
               },
@@ -1626,6 +1672,28 @@ class _PanelResizeHandle extends StatelessWidget {
       ),
     );
   }
+}
+
+@visibleForTesting
+double clampSplitRatioForLayout({
+  required double ratio,
+  required double available,
+  required double firstMin,
+  required double secondMin,
+  required double minRatioMin,
+  required double minRatioMax,
+  required double maxRatioMin,
+  required double maxRatioMax,
+}) {
+  if (available <= 0) return ratio.clamp(0.0, 1.0).toDouble();
+  final hasRoomForMinimums = available >= firstMin + secondMin;
+  final minRatio = !hasRoomForMinimums
+      ? 0.0
+      : (firstMin / available).clamp(minRatioMin, minRatioMax);
+  final maxRatio = !hasRoomForMinimums
+      ? 1.0
+      : (1 - secondMin / available).clamp(maxRatioMin, maxRatioMax);
+  return ratio.clamp(minRatio, maxRatio).toDouble();
 }
 
 // ── PresentingLayout ──────────────────────────────────────────────────────
@@ -1675,14 +1743,18 @@ class _PresentingLayout extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final available = (constraints.maxHeight - _dividerHeight)
-            .clamp(0.0, double.infinity);
-        final minRatio = available <= 0
-            ? 0.2
-            : (_minPresentationHeight / available).clamp(0.1, 0.8);
-        final maxRatio = available <= 0
-            ? 0.8
-            : (1 - _minWorkAreaHeight / available).clamp(0.2, 0.9);
-        final ratio = presentationRatio.clamp(minRatio, maxRatio);
+            .clamp(0.0, double.infinity)
+            .toDouble();
+        final ratio = clampSplitRatioForLayout(
+          ratio: presentationRatio,
+          available: available,
+          firstMin: _minPresentationHeight,
+          secondMin: _minWorkAreaHeight,
+          minRatioMin: 0.1,
+          minRatioMax: 0.8,
+          maxRatioMin: 0.2,
+          maxRatioMax: 0.9,
+        );
         final presentH = available * ratio;
         final workH = available - presentH;
 
@@ -1694,8 +1766,16 @@ class _PresentingLayout extends StatelessWidget {
               color: cs.outlineVariant,
               onDrag: (delta) {
                 if (available <= 0) return;
-                final next =
-                    (ratio + delta / available).clamp(minRatio, maxRatio);
+                final next = clampSplitRatioForLayout(
+                  ratio: ratio + delta / available,
+                  available: available,
+                  firstMin: _minPresentationHeight,
+                  secondMin: _minWorkAreaHeight,
+                  minRatioMin: 0.1,
+                  minRatioMax: 0.8,
+                  maxRatioMin: 0.2,
+                  maxRatioMax: 0.9,
+                );
                 onPresentationRatioChanged(next);
               },
             ),
@@ -1732,7 +1812,11 @@ class _CollapsedSlideOrderStrip extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 12),
       child: Row(
         children: [
-          Icon(Icons.view_carousel_outlined, size: 16, color: cs.onSurfaceVariant),
+          Icon(
+            Icons.view_carousel_outlined,
+            size: 16,
+            color: cs.onSurfaceVariant,
+          ),
           const SizedBox(width: 8),
           Text(
             '슬라이드 순서',
@@ -1744,7 +1828,7 @@ class _CollapsedSlideOrderStrip extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           Text(
-            '${ currentIndex + 1} / $totalSlides',
+            '${currentIndex + 1} / $totalSlides',
             style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
           ),
           const Spacer(),
@@ -1824,10 +1908,7 @@ class _CollapsedPanelStrip extends StatelessWidget {
           );
 
     return Card(
-      child: SizedBox(
-        width: isVertical ? 48 : double.infinity,
-        child: content,
-      ),
+      child: SizedBox(width: isVertical ? 48 : double.infinity, child: content),
     );
   }
 }
@@ -1953,8 +2034,11 @@ class _TopBar extends StatelessWidget {
                           color: Colors.white54,
                         ),
                       )
-                    : const Icon(Icons.refresh_rounded,
-                        size: 18, color: Colors.white54),
+                    : const Icon(
+                        Icons.refresh_rounded,
+                        size: 18,
+                        color: Colors.white54,
+                      ),
               ),
             ),
           const SizedBox(width: 4),
@@ -2281,7 +2365,10 @@ class _SearchAndBiblePanelState extends State<_SearchAndBiblePanel>
     final cs = Theme.of(context).colorScheme;
     final tabBar = TabBar(
       controller: _tabController,
-      tabs: const [Tab(text: '찬양 검색'), Tab(text: '성경 검색')],
+      tabs: const [
+        Tab(text: '찬양 검색'),
+        Tab(text: '성경 검색'),
+      ],
     );
 
     if (widget.isCollapsed) {
@@ -3211,92 +3298,108 @@ class _DesignPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final showPreview = constraints.maxHeight >= 320;
+          final previewMaxHeight = constraints.maxHeight < 520 ? 118.0 : 180.0;
+
+          return Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Expanded(
-                  child: Text(
-                    'PPTX 디자인',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        'PPTX 디자인',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.chevron_right_rounded),
+                      tooltip: '디자인 패널 접기',
+                      color: cs.onSurfaceVariant,
+                      onPressed: onCollapse,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: isExporting ? null : onExportPressed,
+                    icon: isExporting
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.slideshow_rounded),
+                    label: Text(isExporting ? '생성 중' : '선택한 항목으로 PPTX 저장'),
                   ),
                 ),
-                IconButton(
-                  icon: const Icon(Icons.chevron_right_rounded),
-                  tooltip: '디자인 패널 접기',
-                  color: cs.onSurfaceVariant,
-                  onPressed: onCollapse,
+                if (showPreview) ...[
+                  const SizedBox(height: 16),
+                  ConstrainedBox(
+                    constraints: BoxConstraints(maxHeight: previewMaxHeight),
+                    child: _PreviewBox(style: style, previewItem: previewItem),
+                  ),
+                  const SizedBox(height: 12),
+                ] else
+                  const SizedBox(height: 12),
+                Expanded(
+                  child: SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _controlSection(
+                          children: [
+                            _colorPicker(
+                              context: context,
+                              title: '배경 색상',
+                              selectedColor: style.backgroundColor,
+                              colors: swatches,
+                              onSelected: (color) => onStyleChanged(
+                                style.copyWith(backgroundColor: color),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+                        _StyleTabControls(
+                          style: style,
+                          previewItem: previewItem,
+                          textSwatches: textSwatches,
+                          colorPicker:
+                              ({
+                                required title,
+                                required selectedColor,
+                                required colors,
+                                required onSelected,
+                              }) => _colorPicker(
+                                context: context,
+                                title: title,
+                                selectedColor: selectedColor,
+                                colors: colors,
+                                onSelected: onSelected,
+                              ),
+                          verticalPicker: _verticalPicker,
+                          horizontalPicker: _horizontalPicker,
+                          onStyleChanged: onStyleChanged,
+                        ),
+                        const SizedBox(height: 16),
+                      ],
+                    ),
+                  ),
                 ),
               ],
             ),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: isExporting ? null : onExportPressed,
-                icon: isExporting
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.slideshow_rounded),
-                label: Text(isExporting ? '생성 중' : '선택한 항목으로 PPTX 저장'),
-              ),
-            ),
-            const SizedBox(height: 16),
-            _PreviewBox(style: style, previewItem: previewItem),
-            const SizedBox(height: 12),
-            Expanded(
-              child: SingleChildScrollView(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _controlSection(
-                      children: [
-                        _colorPicker(
-                          context: context,
-                          title: '배경 색상',
-                          selectedColor: style.backgroundColor,
-                          colors: swatches,
-                          onSelected: (color) => onStyleChanged(
-                            style.copyWith(backgroundColor: color),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    _StyleTabControls(
-                      style: style,
-                      previewItem: previewItem,
-                      textSwatches: textSwatches,
-                      colorPicker:
-                          ({
-                            required title,
-                            required selectedColor,
-                            required colors,
-                            required onSelected,
-                          }) => _colorPicker(
-                            context: context,
-                            title: title,
-                            selectedColor: selectedColor,
-                            colors: colors,
-                            onSelected: onSelected,
-                          ),
-                      verticalPicker: _verticalPicker,
-                      horizontalPicker: _horizontalPicker,
-                      onStyleChanged: onStyleChanged,
-                    ),
-                    const SizedBox(height: 16),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }
@@ -3839,8 +3942,9 @@ class _PreviewBox extends StatelessWidget {
     switch (previewItem) {
       case SongStagingItem(:final song):
         sampleText = song.pages.isEmpty ? song.title : song.pages.first;
-        sampleEnglishText =
-            song.englishPages.isEmpty ? '' : song.englishPages.first;
+        sampleEnglishText = song.englishPages.isEmpty
+            ? ''
+            : song.englishPages.first;
         titleText = song.title;
         isBible = false;
       case BibleStagingItem(:final text, :final reference):
@@ -3961,6 +4065,37 @@ class _SongEditDialog extends StatefulWidget {
   State<_SongEditDialog> createState() => _SongEditDialogState();
 }
 
+// 저장 형식이 편집 형식과 동일하므로 변환 불필요.
+@visibleForTesting
+String lyricsToEditText(String stored) => stored;
+
+// 편집 텍스트 → 저장 형식 정규화.
+// 규칙: 빈 줄 1개(\n\n) = 페이지 구분, 빈 줄 N개 = 빈 페이지 N-1장.
+// ### 은 하위 호환 페이지 구분자로 허용.
+@visibleForTesting
+String normalizeEditableLyrics(String raw) {
+  var text = raw.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+  // ### → \n\n (주변 줄바꿈 포함 소비)
+  text = text.replaceAll(RegExp(r'\n?[ \t]*###[ \t]*\n?'), '\n\n');
+  // 분리 → 각 페이지 trim → 후행 빈 페이지 제거 → 재결합
+  final pages = text
+      .split(RegExp(r'\n[ \t]*\n'))
+      .map((p) => p.trim())
+      .toList();
+  while (pages.isNotEmpty && pages.last.isEmpty) {
+    pages.removeLast();
+  }
+  return pages.join('\n\n');
+}
+
+// 페이지 목록 → 저장 형식 인코딩.
+@visibleForTesting
+String encodePages(Iterable<String> pages) {
+  final list = pages.toList();
+  while (list.isNotEmpty && list.last.isEmpty) list.removeLast();
+  return list.join('\n\n');
+}
+
 class _SongEditDialogState extends State<_SongEditDialog> {
   late final TextEditingController _titleController;
   late final TextEditingController _lyricsController;
@@ -3987,16 +4122,10 @@ class _SongEditDialogState extends State<_SongEditDialog> {
   }
 
   String _normalizeLyrics(String raw) {
-    final unified = raw.replaceAll(RegExp(r'[ \t]*###[ \t]*'), '\n\n');
-    return unified
-        .split(RegExp(r'\n[ \t]*\n+'))
-        .map((page) => page.trim())
-        .where((page) => page.isNotEmpty)
-        .join('\n###\n');
+    return normalizeEditableLyrics(raw);
   }
 
-  static String _toEditText(String stored) =>
-      stored.replaceAll('\n###\n', '\n\n');
+  static String _toEditText(String stored) => lyricsToEditText(stored);
 
   void _save() {
     final title = _titleController.text.trim();
@@ -4046,7 +4175,7 @@ class _SongEditDialogState extends State<_SongEditDialog> {
                 textAlignVertical: TextAlignVertical.top,
                 decoration: const InputDecoration(
                   labelText: '한글 가사',
-                  hintText: '페이지 구분: 빈 줄 (또는 ###)',
+                  hintText: '페이지 구분: 빈 줄',
                   border: OutlineInputBorder(),
                   alignLabelWithHint: true,
                 ),
@@ -4058,7 +4187,7 @@ class _SongEditDialogState extends State<_SongEditDialog> {
                 textAlignVertical: TextAlignVertical.top,
                 decoration: const InputDecoration(
                   labelText: '영어 가사',
-                  hintText: '페이지 구분: 빈 줄 (또는 ###)',
+                  hintText: '페이지 구분: 빈 줄',
                   border: OutlineInputBorder(),
                   alignLabelWithHint: true,
                 ),
@@ -4137,8 +4266,7 @@ class _PresentationControllerPanelState
   @override
   void didUpdateWidget(_PresentationControllerPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.currentIndex != widget.currentIndex &&
-        !widget.isMaximized) {
+    if (oldWidget.currentIndex != widget.currentIndex && !widget.isMaximized) {
       _scrollToCurrentItem();
     }
   }
@@ -4146,8 +4274,7 @@ class _PresentationControllerPanelState
   void _scrollToCurrentItem() {
     if (!_scrollController.hasClients) return;
     final tw = _thumbW;
-    final targetOffset =
-        widget.currentIndex * (tw + _itemSpacing) + _padding;
+    final targetOffset = widget.currentIndex * (tw + _itemSpacing) + _padding;
     final viewportWidth = _scrollController.position.viewportDimension;
     final centeredOffset = targetOffset - (viewportWidth - tw) / 2;
     _scrollController.animateTo(
@@ -4185,8 +4312,10 @@ class _PresentationControllerPanelState
             (HardwareKeyboard.instance.isControlPressed ||
                 HardwareKeyboard.instance.isMetaPressed)) {
           setState(() {
-            _zoomLevel = (_zoomLevel - event.scrollDelta.dy * 0.004)
-                .clamp(_minZoom, _maxZoom);
+            _zoomLevel = (_zoomLevel - event.scrollDelta.dy * 0.004).clamp(
+              _minZoom,
+              _maxZoom,
+            );
           });
         }
       },
@@ -4224,15 +4353,19 @@ class _PresentationControllerPanelState
             (HardwareKeyboard.instance.isControlPressed ||
                 HardwareKeyboard.instance.isMetaPressed)) {
           setState(() {
-            _zoomLevel = (_zoomLevel - event.scrollDelta.dy * 0.004)
-                .clamp(_minZoom, _maxZoom);
+            _zoomLevel = (_zoomLevel - event.scrollDelta.dy * 0.004).clamp(
+              _minZoom,
+              _maxZoom,
+            );
           });
         }
       },
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final W = (constraints.maxWidth - _padding * 2)
-              .clamp(1.0, double.infinity);
+          final W = (constraints.maxWidth - _padding * 2).clamp(
+            1.0,
+            double.infinity,
+          );
           final n = widget.slides.length.clamp(1, 9999);
 
           final targetThumbW = _thumbW;
@@ -4311,10 +4444,7 @@ class _PresentationControllerPanelState
                   child: Text(
                     '${(_zoomLevel * 100).round()}%',
                     textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: cs.onSurfaceVariant,
-                    ),
+                    style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
                   ),
                 ),
                 IconButton(
@@ -4352,9 +4482,7 @@ class _PresentationControllerPanelState
             ),
           ),
           Expanded(
-            child: widget.isMaximized
-                ? _buildGrid()
-                : _buildHorizontalList(),
+            child: widget.isMaximized ? _buildGrid() : _buildHorizontalList(),
           ),
         ],
       ),
@@ -4465,8 +4593,9 @@ class _SlideThumbnailState extends State<_SlideThumbnail> {
               style: TextStyle(
                 fontSize: 11,
                 color: widget.isSelected ? cs.primary : cs.onSurfaceVariant,
-                fontWeight:
-                    widget.isSelected ? FontWeight.w700 : FontWeight.normal,
+                fontWeight: widget.isSelected
+                    ? FontWeight.w700
+                    : FontWeight.normal,
               ),
             ),
           ],
@@ -4567,10 +4696,7 @@ class _SlideQuickEditDialogState extends State<_SlideQuickEditDialog> {
 // ── ContiListDialog ───────────────────────────────────────────────────────
 
 class _ContiListDialog extends StatefulWidget {
-  const _ContiListDialog({
-    required this.contis,
-    required this.onDelete,
-  });
+  const _ContiListDialog({required this.contis, required this.onDelete});
 
   final List<WorshipConti> contis;
   final Future<void> Function(WorshipConti) onDelete;
@@ -4638,7 +4764,7 @@ class _ContiListDialogState extends State<_ContiListDialog> {
             : ListView.separated(
                 shrinkWrap: true,
                 itemCount: _contis.length,
-                separatorBuilder: (_, __) => const Divider(height: 1),
+                separatorBuilder: (_, _) => const Divider(height: 1),
                 itemBuilder: (ctx, i) {
                   final conti = _contis[i];
                   return ListTile(

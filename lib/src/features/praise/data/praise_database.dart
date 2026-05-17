@@ -26,7 +26,7 @@ class PraiseDatabase {
     final dbPath = p.join(_dbDirectory, 'worship_slides.db');
     _database = await openDatabase(
       dbPath,
-      version: 5,
+      version: 6,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE praise_songs (
@@ -135,8 +135,37 @@ class PraiseDatabase {
             )
           ''');
         }
+        if (oldVersion < 6) {
+          // \n###\n 구분자 → \n\n 형식으로 일괄 변환
+          final songs = await db.query(
+            'praise_songs',
+            columns: ['id', 'lyrics', 'english_lyrics'],
+          );
+          for (final row in songs) {
+            final id = row['id'] as int;
+            await db.update(
+              'praise_songs',
+              {
+                'lyrics': _migratePageFormat(row['lyrics'] as String? ?? ''),
+                'english_lyrics': _migratePageFormat(
+                  row['english_lyrics'] as String? ?? '',
+                ),
+              },
+              where: 'id = ?',
+              whereArgs: [id],
+            );
+          }
+        }
       },
     );
     return _database!;
   }
+}
+
+// \n###\n 구분자를 \n\n 형식으로 변환 (버전 6 마이그레이션용).
+String _migratePageFormat(String stored) {
+  if (!stored.contains('###')) return stored;
+  final pages = stored.split('###').map((p) => p.trim()).toList();
+  while (pages.isNotEmpty && pages.last.isEmpty) pages.removeLast();
+  return pages.join('\n\n');
 }

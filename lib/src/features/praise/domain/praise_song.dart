@@ -13,19 +13,31 @@ class PraiseSong {
   final String lyrics;
   final String englishLyrics;
 
-  // Korean/English 페이지를 함께 처리해 인덱스 정합성 보장.
-  // 둘 다 비어있는 페이지만 제외하고, 한쪽만 비어있는 경우는 유지한다.
+  // 페이지 구분자: \n\n (빈 줄 1개).
+  // 앞쪽 \n\n = 빈 페이지. 예) '\n\n\n\n가사' → ['', '', '가사'].
+  static List<String> _parsePages(String text) {
+    if (text.isEmpty) return [];
+    final pages = text
+        .split(RegExp(r'\n[ \t]*\n'))
+        .map((p) => p.trim())
+        .toList();
+    return pages;
+  }
+
   List<({String korean, String english})> get pairedPages {
-    final ks = lyrics.split('###').map((p) => p.trim()).toList();
-    final es = englishLyrics.split('###').map((p) => p.trim()).toList();
+    final ks = _parsePages(lyrics);
+    final es = _parsePages(englishLyrics);
     final len = ks.length > es.length ? ks.length : es.length;
     final result = <({String korean, String english})>[];
     for (var i = 0; i < len; i++) {
       final k = i < ks.length ? ks[i] : '';
       final e = i < es.length ? es[i] : '';
-      if (k.isNotEmpty || e.isNotEmpty) {
-        result.add((korean: k, english: e));
-      }
+      result.add((korean: k, english: e));
+    }
+    while (result.isNotEmpty) {
+      final last = result.last;
+      if (last.korean.isNotEmpty || last.english.isNotEmpty) break;
+      result.removeLast();
     }
     return result;
   }
