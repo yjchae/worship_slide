@@ -30,3 +30,13 @@ class BibleStagingItem extends StagingItem {
   String get previewText =>
       text.length > 60 ? '${text.substring(0, 60)}…' : text;
 }
+
+class BlankStagingItem extends StagingItem {
+  const BlankStagingItem();
+
+  @override
+  String get displayTitle => '[ 빈 페이지 ]';
+
+  @override
+  String get previewText => '';
+}

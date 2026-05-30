@@ -715,9 +715,14 @@ def export_presentation(payload_json):
     prs.slide_height = Inches(7.5)
 
     for index, song in enumerate(songs):
-        add_song_slides(prs, song, style)
-        if index < len(songs) - 1:
+        if song.get("type") == "blank":
             _add_blank_slide(prs, style)
+        else:
+            add_song_slides(prs, song, style)
+            is_last = index == len(songs) - 1
+            next_is_blank = not is_last and songs[index + 1].get("type") == "blank"
+            if not is_last and not next_is_blank:
+                _add_blank_slide(prs, style)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     prs.save(str(output_path))

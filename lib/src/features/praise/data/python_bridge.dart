@@ -90,6 +90,12 @@ class PythonBridge {
             'lyrics': text,
             'english_lyrics': '',
           },
+          BlankStagingItem() => {
+            'type': 'blank',
+            'title': '',
+            'lyrics': '',
+            'english_lyrics': '',
+          },
         };
       }).toList(),
       'style': style.toJson(),
