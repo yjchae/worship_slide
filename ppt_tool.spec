@@ -5,7 +5,7 @@ a = Analysis(
     ['python/ppt_tool.py'],
     pathex=[],
     binaries=[],
-    datas=[('assets/fonts/Pretendard-Bold.ttf', 'fonts'), ('assets/fonts/Pretendard-Regular.ttf', 'fonts')],
+    datas=[('assets/fonts', 'fonts')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

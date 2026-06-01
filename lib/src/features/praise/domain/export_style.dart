@@ -59,6 +59,8 @@ class ExportStyle {
     required this.titleVerticalPosition,
     required this.bibleTitleHorizontalPosition,
     required this.bibleTitleVerticalPosition,
+    this.fontFamily = 'Pretendard',
+    this.backgroundImagePath,
   });
 
   final double fontSize;
@@ -84,6 +86,8 @@ class ExportStyle {
   final VerticalTextPosition titleVerticalPosition;
   final HorizontalPosition bibleTitleHorizontalPosition;
   final VerticalTextPosition bibleTitleVerticalPosition;
+  final String fontFamily;
+  final String? backgroundImagePath;
 
   Map<String, dynamic> toJson() {
     return {
@@ -110,6 +114,8 @@ class ExportStyle {
       'title_vertical_position': titleVerticalPosition.name,
       'bible_title_horizontal_position': bibleTitleHorizontalPosition.name,
       'bible_title_vertical_position': bibleTitleVerticalPosition.name,
+      'font_family': fontFamily,
+      'background_image_path': backgroundImagePath,
     };
   }
 
@@ -173,6 +179,8 @@ class ExportStyle {
       bibleTitleVerticalPosition: parseVertical(
         json['bible_title_vertical_position'] as String?,
       ),
+      fontFamily: (json['font_family'] as String?) ?? 'Pretendard',
+      backgroundImagePath: json['background_image_path'] as String?,
     );
   }
 
@@ -200,6 +208,8 @@ class ExportStyle {
     VerticalTextPosition? titleVerticalPosition,
     HorizontalPosition? bibleTitleHorizontalPosition,
     VerticalTextPosition? bibleTitleVerticalPosition,
+    String? fontFamily,
+    Object? backgroundImagePath = _sentinel,
   }) {
     return ExportStyle(
       fontSize: fontSize ?? this.fontSize,
@@ -229,6 +239,12 @@ class ExportStyle {
           bibleTitleHorizontalPosition ?? this.bibleTitleHorizontalPosition,
       bibleTitleVerticalPosition:
           bibleTitleVerticalPosition ?? this.bibleTitleVerticalPosition,
+      fontFamily: fontFamily ?? this.fontFamily,
+      backgroundImagePath: identical(backgroundImagePath, _sentinel)
+          ? this.backgroundImagePath
+          : backgroundImagePath as String?,
     );
   }
+
+  static const Object _sentinel = Object();
 }

@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -97,11 +98,24 @@ class SlideRenderView extends StatelessWidget {
           VerticalTextPosition.bottom => _slideH - _titlePad - _titleBoxH,
         };
 
+        final bgImagePath = style.backgroundImagePath;
+        final bgImageFile =
+            bgImagePath != null ? File(bgImagePath) : null;
+        final hasImage =
+            bgImageFile != null && bgImageFile.existsSync();
+
         return Container(
           color: style.backgroundColor,
           child: Stack(
             clipBehavior: Clip.hardEdge,
             children: [
+              if (hasImage)
+                Positioned.fill(
+                  child: Image.file(
+                    bgImageFile!,
+                    fit: BoxFit.cover,
+                  ),
+                ),
               Positioned(
                 left: w * _lyricsBoxL / _slideW,
                 top: h * bodyBoxTop / _slideH,
@@ -125,6 +139,7 @@ class SlideRenderView extends StatelessWidget {
                                 style: TextStyle(
                                   color: bodyTextColor,
                                   fontSize: bodyFontSize * fontScale,
+                                  fontFamily: style.fontFamily,
                                   fontWeight: FontWeight.w700,
                                   height: 1.25,
                                 ),
@@ -136,6 +151,7 @@ class SlideRenderView extends StatelessWidget {
                                   style: TextStyle(
                                     color: style.englishTextColor,
                                     fontSize: style.fontSize * 0.8 * fontScale,
+                                    fontFamily: style.fontFamily,
                                     fontWeight: FontWeight.w700,
                                     height: 1.3,
                                   ),
@@ -162,6 +178,7 @@ class SlideRenderView extends StatelessWidget {
                     style: TextStyle(
                       color: titleTextColor,
                       fontSize: titleFontSize * fontScale,
+                      fontFamily: style.fontFamily,
                     ),
                   ),
                 ),

@@ -101,6 +101,8 @@ class ExportStyleStore {
                 json['title_vertical_position']),
         orElse: () => VerticalTextPosition.bottom,
       ),
+      fontFamily: (json['font_family'] as String?) ?? 'Pretendard',
+      backgroundImagePath: json['background_image_path'] as String?,
     );
   }
 

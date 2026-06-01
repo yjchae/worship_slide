@@ -21,6 +21,7 @@ class PresentationWindowController: NSWindowController {
     self.init(window: window)
 
     let config = WKWebViewConfiguration()
+    config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
     webView = WKWebView(frame: window.contentView!.bounds, configuration: config)
     webView.autoresizingMask = [.width, .height]
     window.contentView!.addSubview(webView)
@@ -96,6 +97,36 @@ class PresentationWindowController: NSWindowController {
   // Flutter _PreviewBox 좌표계: slideH=7.5, fontScale = h/(slideH*72) = h/540
   // CSS: font-size: calc(N / 540 * 100vh)
 
+  private func fontFaceCSS(family: String) -> String {
+    let map: [String: [String]] = [
+      "Pretendard":    ["Pretendard-Regular.ttf", "Pretendard-Bold.ttf"],
+      "NanumGothic":   ["NanumGothic-Regular.ttf", "NanumGothic-Bold.ttf"],
+      "NanumMyeongjo": ["NanumMyeongjo-Regular.ttf", "NanumMyeongjo-Bold.ttf"],
+    ]
+    guard let files = map[family],
+          let resourceURL = Bundle.main.resourceURL else { return "" }
+    let fontsURL = resourceURL
+      .appendingPathComponent("flutter_assets")
+      .appendingPathComponent("assets")
+      .appendingPathComponent("fonts")
+    var css = ""
+    let weights = [400, 700]
+    for (i, file) in files.enumerated() {
+      let fileURL = fontsURL.appendingPathComponent(file)
+      css += "@font-face{font-family:'\(family)';src:url('\(fileURL.absoluteString)');font-weight:\(weights[i]);}\n"
+    }
+    return css
+  }
+
+  private func backgroundImageCSS(path: String?) -> String {
+    guard let path = path, !path.isEmpty,
+          let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return "" }
+    let ext = (path as NSString).pathExtension.lowercased()
+    let mime = ext == "png" ? "image/png" : "image/jpeg"
+    let b64 = data.base64EncodedString()
+    return "background-image:url('data:\(mime);base64,\(b64)');background-size:cover;background-position:center;"
+  }
+
   private func buildHTML(data: [String: Any]) -> String {
     let mainText = escapeHtml((data["main_text"] as? String) ?? "")
     let englishText = escapeHtml((data["english_text"] as? String) ?? "")
@@ -104,6 +135,8 @@ class PresentationWindowController: NSWindowController {
     let style = (data["style"] as? [String: Any]) ?? [:]
 
     let bgColor = style["background_color"] as? String ?? "#1b1b1b"
+    let fontFamily = style["font_family"] as? String ?? "Pretendard"
+    let bgImageCSS = backgroundImageCSS(path: style["background_image_path"] as? String)
 
     let fontSize = isBible
       ? ((style["bible_font_size"] as? Double) ?? 30)
@@ -193,9 +226,10 @@ class PresentationWindowController: NSWindowController {
     return """
     <!DOCTYPE html><html><head><meta charset="utf-8">
     <style>
+      \(fontFaceCSS(family: fontFamily))
       *{margin:0;padding:0;box-sizing:border-box;}
       body{width:100vw;height:100vh;background:\(bgColor);position:relative;
-           overflow:hidden;font-family:-apple-system,'Apple SD Gothic Neo','Noto Sans KR',sans-serif;}
+           overflow:hidden;font-family:'\(fontFamily)',sans-serif;\(bgImageCSS)}
       .body-box{position:absolute;left:5%;width:90%;
         top:\(String(format:"%.4f",bodyBoxTopPct))%;
         height:\(String(format:"%.4f",bodyBoxHeightPct))%;

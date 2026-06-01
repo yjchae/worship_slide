@@ -3497,6 +3497,18 @@ class _DesignPanel extends StatelessWidget {
                                 style.copyWith(backgroundColor: color),
                               ),
                             ),
+                            _BackgroundImagePicker(
+                              imagePath: style.backgroundImagePath,
+                              onChanged: (path) => onStyleChanged(
+                                style.copyWith(backgroundImagePath: path),
+                              ),
+                            ),
+                            _FontFamilyPicker(
+                              selected: style.fontFamily,
+                              onChanged: (family) => onStyleChanged(
+                                style.copyWith(fontFamily: family),
+                              ),
+                            ),
                           ],
                         ),
                         const SizedBox(height: 16),
@@ -5000,6 +5012,151 @@ class _LogViewerDialog extends StatelessWidget {
           child: const Text('닫기'),
         ),
       ],
+    );
+  }
+}
+
+// ── _FontFamilyPicker ─────────────────────────────────────────────────────
+
+class _FontFamilyPicker extends StatelessWidget {
+  const _FontFamilyPicker({
+    required this.selected,
+    required this.onChanged,
+  });
+
+  final String selected;
+  final ValueChanged<String> onChanged;
+
+  static const _fonts = [
+    ('Pretendard', 'Pretendard'),
+    ('NanumGothic', '나눔고딕'),
+    ('NanumMyeongjo', '나눔명조'),
+  ];
+
+  String get _displayName =>
+      _fonts.firstWhere((f) => f.$1 == selected, orElse: () => _fonts.first).$2;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return PopupMenuButton<String>(
+      offset: const Offset(0, 4),
+      onSelected: onChanged,
+      itemBuilder: (_) => _fonts
+          .map(
+            (f) => PopupMenuItem(
+              value: f.$1,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      f.$2,
+                      style: TextStyle(fontFamily: f.$1),
+                    ),
+                  ),
+                  if (f.$1 == selected)
+                    Icon(Icons.check_rounded, size: 16, color: cs.primary),
+                ],
+              ),
+            ),
+          )
+          .toList(),
+      child: OutlinedButton(
+        style: OutlinedButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+        onPressed: null,
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                '폰트',
+                style: TextStyle(color: cs.onSurface),
+              ),
+            ),
+            Text(
+              _displayName,
+              style: TextStyle(
+                fontFamily: selected,
+                color: cs.primary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(width: 4),
+            Icon(Icons.expand_more_rounded, size: 16, color: cs.onSurfaceVariant),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── _BackgroundImagePicker ────────────────────────────────────────────────
+
+class _BackgroundImagePicker extends StatelessWidget {
+  const _BackgroundImagePicker({
+    required this.imagePath,
+    required this.onChanged,
+  });
+
+  final String? imagePath;
+  final ValueChanged<String?> onChanged;
+
+  Future<void> _pick() async {
+    await FilePicker.skipEntitlementsChecks();
+    final result = await FilePicker.pickFiles(
+      type: FileType.image,
+      allowMultiple: false,
+    );
+    if (result != null && result.files.single.path != null) {
+      onChanged(result.files.single.path);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final hasImage = imagePath != null;
+    final fileName = hasImage ? p.basename(imagePath!) : null;
+
+    return OutlinedButton(
+      style: OutlinedButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ),
+      onPressed: _pick,
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              '배경 이미지',
+              style: TextStyle(color: cs.onSurface),
+            ),
+          ),
+          if (hasImage) ...[
+            Flexible(
+              child: Text(
+                fileName!,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: cs.primary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            const SizedBox(width: 4),
+            GestureDetector(
+              onTap: () => onChanged(null),
+              child: Icon(Icons.close_rounded, size: 16, color: cs.onSurfaceVariant),
+            ),
+          ] else
+            Text(
+              '없음',
+              style: TextStyle(color: cs.onSurfaceVariant),
+            ),
+        ],
+      ),
     );
   }
 }

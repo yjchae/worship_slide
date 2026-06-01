@@ -35,12 +35,17 @@ def _decode_pages(text):
     """\\n\\n 구분 저장 형식 → 페이지 목록."""
     if not text:
         return []
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
     pages = [p.strip() for p in _PAGE_SEP_RE.split(text)]
     while pages and not pages[-1]:
         pages.pop()
     return pages
 
-_PRETENDARD_FONTS = ["Pretendard-Bold.ttf", "Pretendard-Regular.ttf"]
+_FONT_FILES = {
+    "Pretendard":    ["Pretendard-Regular.ttf", "Pretendard-Bold.ttf"],
+    "NanumGothic":   ["NanumGothic-Regular.ttf", "NanumGothic-Bold.ttf"],
+    "NanumMyeongjo": ["NanumMyeongjo-Regular.ttf", "NanumMyeongjo-Bold.ttf"],
+}
 
 
 def _get_font_path(filename):
@@ -50,7 +55,7 @@ def _get_font_path(filename):
     return os.path.join(script_dir, "..", "assets", "fonts", filename)
 
 
-def _ensure_pretendard_installed():
+def _ensure_fonts_installed(font_family="Pretendard"):
     import platform
     system = platform.system()
     if system == "Windows":
@@ -61,7 +66,7 @@ def _ensure_pretendard_installed():
     else:
         fonts_dir = os.path.expanduser("~/Library/Fonts")
     os.makedirs(fonts_dir, exist_ok=True)
-    for filename in _PRETENDARD_FONTS:
+    for filename in _FONT_FILES.get(font_family, _FONT_FILES["Pretendard"]):
         dest = os.path.join(fonts_dir, filename)
         if not os.path.exists(dest):
             src = _get_font_path(filename)
@@ -501,9 +506,6 @@ _TEXT_ALIGN_MAP = {
     "center": PP_ALIGN.CENTER,
     "right": PP_ALIGN.RIGHT,
 }
-_FONT_NAME = "Pretendard"
-
-
 def _lyrics_text_layout(horizontal_position):
     text_align = _TEXT_ALIGN_MAP.get(horizontal_position, PP_ALIGN.CENTER)
     return _LYRICS_BOX_LEFT, _LYRICS_BOX_WIDTH, text_align
@@ -518,7 +520,7 @@ def _lyrics_box_vertical_layout(style, is_bible):
     return top, _SLIDE_H - top - _LYRICS_BOX_BOTTOM
 
 
-def _add_title_textbox(slide, song_title, style, is_bible=False):
+def _add_title_textbox(slide, song_title, style, is_bible=False, font_name="Pretendard"):
     title_font_size = Pt(style.get(
         "bible_title_font_size" if is_bible else "title_font_size",
         style.get("title_font_size", 14),
@@ -566,7 +568,7 @@ def _add_title_textbox(slide, song_title, style, is_bible=False):
     para.alignment = text_align
     run = para.add_run()
     run.text = _normalize_ppt_text(song_title)
-    _set_run_font(run)
+    _set_run_font(run, font_name)
     run.font.size = title_font_size
     run.font.color.rgb = title_color
 
@@ -575,21 +577,21 @@ def _normalize_ppt_text(text):
     return unicodedata.normalize("NFC", text or "")
 
 
-def _set_run_font(run):
-    run.font.name = _FONT_NAME
+def _set_run_font(run, font_name="Pretendard"):
+    run.font.name = font_name
     rpr = run._r.get_or_add_rPr()
     for tag in ("a:latin", "a:ea", "a:cs"):
         font = rpr.find(qn(tag))
         if font is None:
             font = OxmlElement(tag)
             rpr.append(font)
-        font.set("typeface", _FONT_NAME)
+        font.set("typeface", font_name)
 
 
-def _add_text_run(paragraph, text, font_size, color):
+def _add_text_run(paragraph, text, font_size, color, font_name="Pretendard"):
     run = paragraph.add_run()
     run.text = _normalize_ppt_text(text)
-    _set_run_font(run)
+    _set_run_font(run, font_name)
     run.font.size = font_size
     run.font.bold = True
     run.font.color.rgb = color
@@ -602,7 +604,7 @@ def _format_bible_paragraph(paragraph, text_align, font_size):
     paragraph.first_line_indent = Pt(-hanging_width)
 
 
-def _add_bible_page_text(frame, page, text_align, font_size, text_color):
+def _add_bible_page_text(frame, page, text_align, font_size, text_color, font_name="Pretendard"):
     lines = [line.strip() for line in page.splitlines() if line.strip()]
     if not lines:
         return
@@ -610,12 +612,46 @@ def _add_bible_page_text(frame, page, text_align, font_size, text_color):
     for index, line in enumerate(lines):
         paragraph = frame.paragraphs[0] if index == 0 else frame.add_paragraph()
         _format_bible_paragraph(paragraph, text_align, font_size)
-        _add_text_run(paragraph, line, font_size, text_color)
+        _add_text_run(paragraph, line, font_size, text_color, font_name)
+
+
+def _apply_slide_background(slide, style):
+    bg_image_path = style.get("background_image_path")
+    if bg_image_path and os.path.isfile(bg_image_path):
+        try:
+            slide_part = slide.part
+            _, rId = slide_part.get_or_add_image_part(bg_image_path)
+            bg = slide._element.find(qn('p:bg'))
+            if bg is None:
+                from lxml import etree
+                sp_tree = slide.shapes._spTree
+                idx = list(slide._element).index(sp_tree)
+                bg = OxmlElement('p:bg')
+                slide._element.insert(idx, bg)
+            bgPr = bg.find(qn('p:bgPr'))
+            if bgPr is None:
+                bgPr = OxmlElement('p:bgPr')
+                bg.append(bgPr)
+            bgPr.clear()
+            blipFill = OxmlElement('a:blipFill')
+            blip = OxmlElement('a:blip')
+            blip.set('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed', rId)
+            blipFill.append(blip)
+            stretch = OxmlElement('a:stretch')
+            stretch.append(OxmlElement('a:fillRect'))
+            blipFill.append(stretch)
+            bgPr.append(blipFill)
+            return
+        except Exception:
+            pass
+    # fallback: solid color
+    slide.background.fill.solid()
+    slide.background.fill.fore_color.rgb = parse_hex_color(style["background_color"])
 
 
 def add_song_slides(prs, song, style):
     is_bible = song.get("type") == "bible"
-    bg_color = parse_hex_color(style["background_color"])
+    font_name = style.get("font_family", "Pretendard")
     text_color_key = "bible_text_color" if is_bible else "text_color"
     text_color = parse_hex_color(style.get(text_color_key, style["text_color"]))
     font_size = Pt(style.get(
@@ -649,8 +685,7 @@ def add_song_slides(prs, song, style):
             continue
 
         slide = prs.slides.add_slide(prs.slide_layouts[6])
-        slide.background.fill.solid()
-        slide.background.fill.fore_color.rgb = bg_color
+        _apply_slide_background(slide, style)
         lyrics_box_top, lyrics_box_height = _lyrics_box_vertical_layout(
             style, is_bible
         )
@@ -669,11 +704,11 @@ def add_song_slides(prs, song, style):
         }[position]
 
         if is_bible:
-            _add_bible_page_text(frame, page, lyrics_align, font_size, text_color)
+            _add_bible_page_text(frame, page, lyrics_align, font_size, text_color, font_name)
         else:
             paragraph = frame.paragraphs[0]
             paragraph.alignment = lyrics_align
-            _add_text_run(paragraph, page, font_size, text_color)
+            _add_text_run(paragraph, page, font_size, text_color, font_name)
 
         if include_english_lyrics and english_page:
             english_paragraph = frame.add_paragraph()
@@ -683,27 +718,26 @@ def add_song_slides(prs, song, style):
                 english_page,
                 Pt(style["font_size"] * 0.8),
                 english_color,
+                font_name,
             )
 
         if show_song_title:
-            _add_title_textbox(slide, song.get("title", ""), style, is_bible=is_bible)
+            _add_title_textbox(slide, song.get("title", ""), style, is_bible=is_bible, font_name=font_name)
 
 
 def _add_blank_slide(prs, style):
-    bg_color = parse_hex_color(style["background_color"])
     slide = prs.slides.add_slide(prs.slide_layouts[6])
-    slide.background.fill.solid()
-    slide.background.fill.fore_color.rgb = bg_color
+    _apply_slide_background(slide, style)
 
 
 def export_presentation(payload_json):
-    _ensure_pretendard_installed()
     payload = json.loads(payload_json)
     output_path = Path(payload["output_path"])
     if output_path.suffix.lower() != ".pptx":
         output_path = output_path.with_suffix(".pptx")
     songs = payload["songs"]
     style = payload["style"]
+    _ensure_fonts_installed(style.get("font_family", "Pretendard"))
 
     prs = Presentation()
     if len(prs.slides) == 0:
