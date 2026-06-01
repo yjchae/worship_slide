@@ -1,6 +1,7 @@
 import 'praise_song.dart';
 
 sealed class StagingItem {
+  const StagingItem();
   String get displayTitle;
   String get previewText;
 }

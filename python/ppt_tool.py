@@ -154,7 +154,8 @@ def slide_lyrics(slide, title_texts=None):
 
 def normalize_title(path):
     # macOS HFS+는 파일명을 NFD로 저장하므로 NFC로 변환해야 한글이 정상 표시됨
-    return unicodedata.normalize('NFC', path.stem.strip())
+    title = unicodedata.normalize('NFC', path.stem.strip())
+    return re.sub(r'\s*\(\s*와이드 스크린\s*\)\s*', '', title, flags=re.IGNORECASE).strip()
 
 
 def is_english_line(line):

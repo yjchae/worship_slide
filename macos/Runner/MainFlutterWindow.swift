@@ -63,10 +63,33 @@ class PresentationWindowController: NSWindowController {
     }
   }
 
+  private var _isBlackout = false
+  private var _lastData: [String: Any]? = nil
+
   // data: Dart의 SlidePageData.toJson() 결과 ([String:Any])
   func updatePage(data: [String: Any]) {
+    _lastData = data
+    if _isBlackout { return }
     let html = buildHTML(data: data)
     webView.loadHTMLString(html, baseURL: nil)
+  }
+
+  func toggleBlackout() {
+    _isBlackout = !_isBlackout
+    if _isBlackout {
+      let style = (_lastData?["style"] as? [String: Any]) ?? [:]
+      let bgColor = style["background_color"] as? String ?? "#1b1b1b"
+      let html = """
+      <!DOCTYPE html><html><head><meta charset="utf-8">
+      <style>*{margin:0;padding:0;}body{width:100vw;height:100vh;background:\(bgColor);}</style>
+      </head><body></body></html>
+      """
+      webView.loadHTMLString(html, baseURL: nil)
+    } else {
+      if let d = _lastData {
+        webView.loadHTMLString(buildHTML(data: d), baseURL: nil)
+      }
+    }
   }
 
   // ── HTML 슬라이드 렌더링 ────────────────────────────────────────────────
@@ -294,6 +317,10 @@ class MainFlutterWindow: NSWindow {
 
       case "updatePage":
         if let d = data { self.presentationController?.updatePage(data: d) }
+        result(nil)
+
+      case "blackout":
+        self.presentationController?.toggleBlackout()
         result(nil)
 
       case "closeWindow":

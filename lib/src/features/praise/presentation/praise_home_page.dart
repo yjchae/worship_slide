@@ -126,6 +126,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
   // 발표 모드
   int _currentSlideIndex = 0;
   bool _isPresentationOpen = false;
+  bool _isBlackout = false;
 
   final List<Color> _swatches = const [
     Color(0xFF1B1B1B),
@@ -349,10 +350,19 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     if (mounted) {
       setState(() {
         _isPresentationOpen = false;
+        _isBlackout = false;
         _isSlideOrderCollapsed = false;
         _isSlideOrderMaximized = false;
       });
     }
+  }
+
+  Future<void> _toggleBlackout() async {
+    if (!_isPresentationOpen) return;
+    try {
+      await _presentationChannel.invokeMethod('blackout');
+      if (mounted) setState(() => _isBlackout = !_isBlackout);
+    } catch (_) {}
   }
 
   Future<void> _sendCurrentSlide() async {
@@ -542,6 +552,10 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     if (key == LogicalKeyboardKey.arrowLeft ||
         key == LogicalKeyboardKey.arrowUp) {
       _prevSlide();
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.keyB) {
+      _toggleBlackout();
       return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
@@ -1273,6 +1287,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                           _PresentationControlBar(
                             slidesReady: slides.isNotEmpty,
                             isPresentationOpen: _isPresentationOpen,
+                            isBlackout: _isBlackout,
                             currentSlideIndex: _currentSlideIndex,
                             totalSlides: slides.length,
                             currentSlideTitle: currentSlideTitle,
@@ -1281,6 +1296,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                             onClose: _closePresentation,
                             onPrev: _prevSlide,
                             onNext: _nextSlide,
+                            onBlackout: _toggleBlackout,
                           ),
                           const SizedBox(height: 10),
                           Expanded(
@@ -1462,6 +1478,7 @@ class _PresentationControlBar extends StatelessWidget {
   const _PresentationControlBar({
     required this.slidesReady,
     required this.isPresentationOpen,
+    required this.isBlackout,
     required this.currentSlideIndex,
     required this.totalSlides,
     required this.currentSlideTitle,
@@ -1470,10 +1487,12 @@ class _PresentationControlBar extends StatelessWidget {
     required this.onClose,
     required this.onPrev,
     required this.onNext,
+    required this.onBlackout,
   });
 
   final bool slidesReady;
   final bool isPresentationOpen;
+  final bool isBlackout;
   final int currentSlideIndex;
   final int totalSlides;
   final String? currentSlideTitle;
@@ -1482,6 +1501,7 @@ class _PresentationControlBar extends StatelessWidget {
   final VoidCallback onClose;
   final VoidCallback onPrev;
   final VoidCallback onNext;
+  final VoidCallback onBlackout;
 
   @override
   Widget build(BuildContext context) {
@@ -1568,6 +1588,23 @@ class _PresentationControlBar extends StatelessWidget {
               onPressed: currentSlideIndex < totalSlides - 1 ? onNext : null,
             ),
             const SizedBox(width: 4),
+            IconButton(
+              tooltip: isBlackout ? '블랙아웃 해제  B' : '블랙아웃  B',
+              style: IconButton.styleFrom(
+                backgroundColor: isBlackout
+                    ? Colors.white.withValues(alpha: 0.2)
+                    : Colors.transparent,
+                foregroundColor: cs.onPrimaryContainer,
+              ),
+              onPressed: onBlackout,
+              icon: Icon(
+                isBlackout
+                    ? Icons.visibility_off_rounded
+                    : Icons.visibility_off_outlined,
+                size: 18,
+              ),
+            ),
+            const SizedBox(width: 2),
             FilledButton.icon(
               style: FilledButton.styleFrom(
                 backgroundColor: Colors.red.shade400,
@@ -3573,6 +3610,7 @@ class _StyleTabControlsState extends State<_StyleTabControls>
     return switch (item) {
       SongStagingItem() => 0,
       BibleStagingItem() => 1,
+      BlankStagingItem() => null,
       null => null,
     };
   }
@@ -4045,6 +4083,11 @@ class _PreviewBox extends StatelessWidget {
         sampleEnglishText = '';
         titleText = reference;
         isBible = true;
+      case BlankStagingItem():
+        sampleText = '';
+        sampleEnglishText = '';
+        titleText = null;
+        isBible = false;
       case null:
         sampleText = '선택한 항목이 여기에 미리보기로 보입니다.';
         sampleEnglishText = '';

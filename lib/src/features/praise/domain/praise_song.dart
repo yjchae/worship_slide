@@ -56,11 +56,14 @@ class PraiseSong {
     };
   }
 
+  static String _cleanTitle(String title) =>
+      title.replaceAll(RegExp(r'\s*\(\s*와이드 스크린\s*\)\s*', caseSensitive: false), '').trim();
+
   factory PraiseSong.fromMap(Map<String, Object?> map) {
     return PraiseSong(
       id: map['id'] as int?,
       fileName: map['file_name'] as String,
-      title: map['title'] as String,
+      title: _cleanTitle(map['title'] as String),
       lyrics: map['lyrics'] as String,
       englishLyrics: (map['english_lyrics'] as String?) ?? '',
     );
@@ -70,7 +73,7 @@ class PraiseSong {
     return PraiseSong(
       id: null,
       fileName: json['file_name'] as String,
-      title: json['title'] as String,
+      title: _cleanTitle(json['title'] as String),
       lyrics: json['lyrics'] as String,
       englishLyrics: (json['english_lyrics'] as String?) ?? '',
     );
