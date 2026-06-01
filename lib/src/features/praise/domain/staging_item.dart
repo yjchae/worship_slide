@@ -1,6 +1,7 @@
 import 'praise_song.dart';
 
 sealed class StagingItem {
+  const StagingItem();
   String get displayTitle;
   String get previewText;
 }
@@ -29,4 +30,14 @@ class BibleStagingItem extends StagingItem {
   @override
   String get previewText =>
       text.length > 60 ? '${text.substring(0, 60)}…' : text;
+}
+
+class BlankStagingItem extends StagingItem {
+  const BlankStagingItem();
+
+  @override
+  String get displayTitle => '[ 빈 페이지 ]';
+
+  @override
+  String get previewText => '';
 }

@@ -47,6 +47,15 @@ class WorshipContiRepository {
             'bible_reference': item.reference,
             'bible_text': item.text,
           };
+        } else if (item is BlankStagingItem) {
+          row = {
+            'conti_id': contiId,
+            'position': i,
+            'item_type': 'blank',
+            'song_id': null,
+            'bible_reference': null,
+            'bible_text': null,
+          };
         } else {
           continue;
         }
@@ -118,6 +127,8 @@ class WorshipContiRepository {
         final text = row['bible_text'] as String?;
         if (ref == null || text == null) continue;
         result.add((uid: uid++, item: BibleStagingItem(reference: ref, text: text)));
+      } else if (type == 'blank') {
+        result.add((uid: uid++, item: const BlankStagingItem()));
       }
     }
 

@@ -31,7 +31,7 @@ class WorshipContiItem {
   });
 
   final int position;
-  final String itemType; // 'song' | 'bible'
+  final String itemType; // 'song' | 'bible' | 'blank'
   final int? songId;
   final String? bibleReference;
   final String? bibleText;

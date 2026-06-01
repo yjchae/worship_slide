@@ -38,6 +38,7 @@ class _SlideInfo {
     required this.title,
     required this.isBible,
     required this.pageIndexInItem,
+    this.isBlank = false,
   });
   final int stagingUid;
   final String mainText;
@@ -45,6 +46,7 @@ class _SlideInfo {
   final String? title;
   final bool isBible;
   final int pageIndexInItem; // 해당 아이템(곡/성경) 내의 페이지 인덱스
+  final bool isBlank;
 }
 
 class _PraiseHomePageState extends State<PraiseHomePage> {
@@ -124,6 +126,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
   // 발표 모드
   int _currentSlideIndex = 0;
   bool _isPresentationOpen = false;
+  bool _isBlackout = false;
 
   final List<Color> _swatches = const [
     Color(0xFF1B1B1B),
@@ -210,20 +213,49 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
 
   List<_SlideInfo> get _allSlides {
     final slides = <_SlideInfo>[];
-    for (final entry in _stagingItems) {
+    for (var i = 0; i < _stagingItems.length; i++) {
+      final entry = _stagingItems[i];
       final item = entry.item;
-      if (item is SongStagingItem) {
+      final isLast = i == _stagingItems.length - 1;
+      final nextIsBlank = !isLast && _stagingItems[i + 1].item is BlankStagingItem;
+
+      if (item is BlankStagingItem) {
+        slides.add(
+          _SlideInfo(
+            stagingUid: entry.uid,
+            mainText: '',
+            englishText: '',
+            title: null,
+            isBible: false,
+            pageIndexInItem: 0,
+            isBlank: true,
+          ),
+        );
+      } else if (item is SongStagingItem) {
         final song = item.song;
         final pairs = song.pairedPages;
-        for (var i = 0; i < pairs.length; i++) {
+        for (var j = 0; j < pairs.length; j++) {
           slides.add(
             _SlideInfo(
               stagingUid: entry.uid,
-              mainText: pairs[i].korean,
-              englishText: pairs[i].english,
+              mainText: pairs[j].korean,
+              englishText: pairs[j].english,
               title: song.title,
               isBible: false,
-              pageIndexInItem: i,
+              pageIndexInItem: j,
+            ),
+          );
+        }
+        if (!isLast && !nextIsBlank) {
+          slides.add(
+            _SlideInfo(
+              stagingUid: entry.uid,
+              mainText: '',
+              englishText: '',
+              title: null,
+              isBible: false,
+              pageIndexInItem: pairs.length,
+              isBlank: true,
             ),
           );
         }
@@ -238,6 +270,19 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
             pageIndexInItem: 0,
           ),
         );
+        if (!isLast && !nextIsBlank) {
+          slides.add(
+            _SlideInfo(
+              stagingUid: entry.uid,
+              mainText: '',
+              englishText: '',
+              title: null,
+              isBible: false,
+              pageIndexInItem: 1,
+              isBlank: true,
+            ),
+          );
+        }
       }
     }
     return slides;
@@ -305,10 +350,19 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     if (mounted) {
       setState(() {
         _isPresentationOpen = false;
+        _isBlackout = false;
         _isSlideOrderCollapsed = false;
         _isSlideOrderMaximized = false;
       });
     }
+  }
+
+  Future<void> _toggleBlackout() async {
+    if (!_isPresentationOpen) return;
+    try {
+      await _presentationChannel.invokeMethod('blackout');
+      if (mounted) setState(() => _isBlackout = !_isBlackout);
+    } catch (_) {}
   }
 
   Future<void> _sendCurrentSlide() async {
@@ -500,6 +554,10 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
       _prevSlide();
       return KeyEventResult.handled;
     }
+    if (key == LogicalKeyboardKey.keyB) {
+      _toggleBlackout();
+      return KeyEventResult.handled;
+    }
     return KeyEventResult.ignored;
   }
 
@@ -568,6 +626,18 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     setState(() {
       final uid = _nextUid++;
       _stagingItems.add((uid: uid, item: item));
+      _previewStagingUid = uid;
+    });
+  }
+
+  void _addBlankItem() {
+    setState(() {
+      final uid = _nextUid++;
+      final selectedIndex =
+          _stagingItems.indexWhere((e) => e.uid == _previewStagingUid);
+      final insertIndex =
+          selectedIndex >= 0 ? selectedIndex + 1 : _stagingItems.length;
+      _stagingItems.insert(insertIndex, (uid: uid, item: const BlankStagingItem()));
       _previewStagingUid = uid;
     });
   }
@@ -1217,6 +1287,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                           _PresentationControlBar(
                             slidesReady: slides.isNotEmpty,
                             isPresentationOpen: _isPresentationOpen,
+                            isBlackout: _isBlackout,
                             currentSlideIndex: _currentSlideIndex,
                             totalSlides: slides.length,
                             currentSlideTitle: currentSlideTitle,
@@ -1225,6 +1296,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                             onClose: _closePresentation,
                             onPrev: _prevSlide,
                             onNext: _nextSlide,
+                            onBlackout: _toggleBlackout,
                           ),
                           const SizedBox(height: 10),
                           Expanded(
@@ -1282,6 +1354,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                                         ),
                                         onSaveConti: _saveConti,
                                         onLoadConti: _loadContiDialog,
+                                        onAddBlank: _addBlankItem,
                                         onSelect: (uid) {
                                           setState(() {
                                             _previewStagingUid = uid;
@@ -1331,6 +1404,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                                       ),
                                       onSaveConti: _saveConti,
                                       onLoadConti: _loadContiDialog,
+                                      onAddBlank: _addBlankItem,
                                       onSelect: (uid) {
                                         setState(() {
                                           _previewStagingUid = uid;
@@ -1404,6 +1478,7 @@ class _PresentationControlBar extends StatelessWidget {
   const _PresentationControlBar({
     required this.slidesReady,
     required this.isPresentationOpen,
+    required this.isBlackout,
     required this.currentSlideIndex,
     required this.totalSlides,
     required this.currentSlideTitle,
@@ -1412,10 +1487,12 @@ class _PresentationControlBar extends StatelessWidget {
     required this.onClose,
     required this.onPrev,
     required this.onNext,
+    required this.onBlackout,
   });
 
   final bool slidesReady;
   final bool isPresentationOpen;
+  final bool isBlackout;
   final int currentSlideIndex;
   final int totalSlides;
   final String? currentSlideTitle;
@@ -1424,6 +1501,7 @@ class _PresentationControlBar extends StatelessWidget {
   final VoidCallback onClose;
   final VoidCallback onPrev;
   final VoidCallback onNext;
+  final VoidCallback onBlackout;
 
   @override
   Widget build(BuildContext context) {
@@ -1510,6 +1588,23 @@ class _PresentationControlBar extends StatelessWidget {
               onPressed: currentSlideIndex < totalSlides - 1 ? onNext : null,
             ),
             const SizedBox(width: 4),
+            IconButton(
+              tooltip: isBlackout ? '블랙아웃 해제  B' : '블랙아웃  B',
+              style: IconButton.styleFrom(
+                backgroundColor: isBlackout
+                    ? Colors.white.withValues(alpha: 0.2)
+                    : Colors.transparent,
+                foregroundColor: cs.onPrimaryContainer,
+              ),
+              onPressed: onBlackout,
+              icon: Icon(
+                isBlackout
+                    ? Icons.visibility_off_rounded
+                    : Icons.visibility_off_outlined,
+                size: 18,
+              ),
+            ),
+            const SizedBox(width: 2),
             FilledButton.icon(
               style: FilledButton.styleFrom(
                 backgroundColor: Colors.red.shade400,
@@ -2110,6 +2205,7 @@ class _StagingPanel extends StatelessWidget {
     required this.onToggleCollapsed,
     required this.onSaveConti,
     required this.onLoadConti,
+    required this.onAddBlank,
   });
 
   final List<({int uid, StagingItem item})> stagingItems;
@@ -2121,6 +2217,7 @@ class _StagingPanel extends StatelessWidget {
   final VoidCallback onToggleCollapsed;
   final VoidCallback onSaveConti;
   final VoidCallback onLoadConti;
+  final VoidCallback onAddBlank;
 
   @override
   Widget build(BuildContext context) {
@@ -2175,6 +2272,13 @@ class _StagingPanel extends StatelessWidget {
                 ),
                 const SizedBox(width: 4),
                 IconButton(
+                  icon: const Icon(Icons.add_box_outlined, size: 18),
+                  tooltip: '빈 페이지 추가',
+                  color: cs.onSurfaceVariant,
+                  visualDensity: VisualDensity.compact,
+                  onPressed: onAddBlank,
+                ),
+                IconButton(
                   icon: const Icon(Icons.save_outlined, size: 18),
                   tooltip: '콘티 저장',
                   color: cs.onSurfaceVariant,
@@ -2216,6 +2320,7 @@ class _StagingPanel extends StatelessWidget {
                         final entry = stagingItems[index];
                         final item = entry.item;
                         final isBible = item is BibleStagingItem;
+                        final isBlank = item is BlankStagingItem;
                         return ListTile(
                           key: ValueKey(entry.uid),
                           selected: entry.uid == selectedUid,
@@ -2260,23 +2365,48 @@ class _StagingPanel extends StatelessWidget {
                                     ),
                                   ),
                                 ),
+                              if (isBlank)
+                                Container(
+                                  margin: const EdgeInsets.only(right: 6),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 5,
+                                    vertical: 1,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.grey.shade200,
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: Text(
+                                    '빈 페이지',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: Colors.grey.shade600,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
                               Expanded(
                                 child: Text(
-                                  item.displayTitle,
+                                  isBlank ? '' : item.displayTitle,
                                   overflow: TextOverflow.ellipsis,
+                                  style: isBlank
+                                      ? TextStyle(color: Colors.grey.shade500)
+                                      : null,
                                 ),
                               ),
                             ],
                           ),
-                          subtitle: Text(
-                            item.previewText,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 11,
-                              color: Colors.grey,
-                            ),
-                          ),
+                          subtitle: isBlank
+                              ? null
+                              : Text(
+                                  item.previewText,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    color: Colors.grey,
+                                  ),
+                                ),
                           trailing: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
@@ -3480,6 +3610,7 @@ class _StyleTabControlsState extends State<_StyleTabControls>
     return switch (item) {
       SongStagingItem() => 0,
       BibleStagingItem() => 1,
+      BlankStagingItem() => null,
       null => null,
     };
   }
@@ -3952,6 +4083,11 @@ class _PreviewBox extends StatelessWidget {
         sampleEnglishText = '';
         titleText = reference;
         isBible = true;
+      case BlankStagingItem():
+        sampleText = '';
+        sampleEnglishText = '';
+        titleText = null;
+        isBible = false;
       case null:
         sampleText = '선택한 항목이 여기에 미리보기로 보입니다.';
         sampleEnglishText = '';
