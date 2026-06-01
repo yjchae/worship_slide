@@ -24,7 +24,7 @@ class UpdateInfo {
 
 class UpdateService {
   static const _owner = 'yjchae';
-  static const _repo = 'make_ppt';
+  static const _repo = 'make_ppt-releases';
   static const _apiUrl =
       'https://api.github.com/repos/$_owner/$_repo/releases/latest';
 
