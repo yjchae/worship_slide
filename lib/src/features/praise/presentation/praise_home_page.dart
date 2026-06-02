@@ -698,7 +698,6 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
 
   void _onStagingReorder(int oldIndex, int newIndex) {
     setState(() {
-      if (newIndex > oldIndex) newIndex--;
       final entry = _stagingItems.removeAt(oldIndex);
       _stagingItems.insert(newIndex, entry);
       _clampCurrentSlideIndex();
@@ -2380,7 +2379,7 @@ class _StagingPanel extends StatelessWidget {
                   : ReorderableListView.builder(
                       buildDefaultDragHandles: false,
                       itemCount: stagingItems.length,
-                      onReorder: onReorder,
+                      onReorderItem: onReorder,
                       proxyDecorator: (child, index, animation) {
                         return AnimatedBuilder(
                           animation: animation,
