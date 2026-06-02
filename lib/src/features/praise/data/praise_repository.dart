@@ -87,17 +87,31 @@ class PraiseRepository {
     );
   }
 
-  Future<List<PraiseSong>> searchSongs(String query) async {
+  Future<List<PraiseSong>> searchSongs(
+    String query, {
+    bool searchInTitle = true,
+    bool searchInLyrics = true,
+  }) async {
     final db = await _databaseProvider.database;
     final normalized = query.trim();
     final List<Map<String, Object?>> rows;
     if (normalized.isEmpty) {
       rows = await db.query('praise_songs', orderBy: 'title COLLATE NOCASE');
+    } else if (!searchInTitle && !searchInLyrics) {
+      return [];
     } else {
+      final conditions = [
+        if (searchInTitle) 'title LIKE ?',
+        if (searchInLyrics) 'lyrics LIKE ?',
+      ];
+      final args = [
+        if (searchInTitle) '%$normalized%',
+        if (searchInLyrics) '%$normalized%',
+      ];
       rows = await db.query(
         'praise_songs',
-        where: 'title LIKE ? OR lyrics LIKE ?',
-        whereArgs: ['%$normalized%', '%$normalized%'],
+        where: conditions.join(' OR '),
+        whereArgs: args,
         orderBy: 'title COLLATE NOCASE',
       );
     }

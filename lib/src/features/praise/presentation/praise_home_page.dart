@@ -99,6 +99,8 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
   bool _isCheckingUpdate = false;
 
   List<PraiseSong> _songs = const [];
+  bool _searchInTitle = true;
+  bool _searchInLyrics = true;
   final List<({int uid, StagingItem item})> _stagingItems = [];
   int _nextUid = 0;
   int? _previewStagingUid;
@@ -191,7 +193,11 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
 
   Future<void> _loadSongs() async {
     if (_searchController.value.composing != TextRange.empty) return;
-    final songs = await _repository.searchSongs(_searchController.text);
+    final songs = await _repository.searchSongs(
+      _searchController.text,
+      searchInTitle: _searchInTitle,
+      searchInLyrics: _searchInLyrics,
+    );
     final storedCount = await _repository.countSongs();
     if (!mounted) return;
     if (_searchController.value.composing != TextRange.empty) return;
@@ -1301,7 +1307,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                           ),
                           const SizedBox(height: 10),
                           Expanded(
-                            child: _isPresentationOpen
+                            child: slides.isNotEmpty
                                 ? _PresentingLayout(
                                     presentationRatio: _presentationPanelRatio,
                                     onPresentationRatioChanged: (v) => setState(
@@ -1384,6 +1390,16 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                                           () => _isSearchCollapsed =
                                               !_isSearchCollapsed,
                                         ),
+                                        searchInTitle: _searchInTitle,
+                                        searchInLyrics: _searchInLyrics,
+                                        onSearchInTitleChanged: (v) => setState(() {
+                                          _searchInTitle = v;
+                                          _loadSongs();
+                                        }),
+                                        onSearchInLyricsChanged: (v) => setState(() {
+                                          _searchInLyrics = v;
+                                          _loadSongs();
+                                        }),
                                       ),
                                     ),
                                   )
@@ -1434,6 +1450,16 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                                         () => _isSearchCollapsed =
                                             !_isSearchCollapsed,
                                       ),
+                                      searchInTitle: _searchInTitle,
+                                      searchInLyrics: _searchInLyrics,
+                                      onSearchInTitleChanged: (v) => setState(() {
+                                        _searchInTitle = v;
+                                        _loadSongs();
+                                      }),
+                                      onSearchInLyricsChanged: (v) => setState(() {
+                                        _searchInLyrics = v;
+                                        _loadSongs();
+                                      }),
                                     ),
                                   ),
                           ),
@@ -2462,6 +2488,10 @@ class _SearchAndBiblePanel extends StatefulWidget {
     required this.onAddBibleItem,
     required this.isCollapsed,
     required this.onToggleCollapsed,
+    required this.searchInTitle,
+    required this.searchInLyrics,
+    required this.onSearchInTitleChanged,
+    required this.onSearchInLyricsChanged,
   });
 
   final TextEditingController searchController;
@@ -2478,6 +2508,10 @@ class _SearchAndBiblePanel extends StatefulWidget {
   final void Function(BibleStagingItem) onAddBibleItem;
   final bool isCollapsed;
   final VoidCallback onToggleCollapsed;
+  final bool searchInTitle;
+  final bool searchInLyrics;
+  final ValueChanged<bool> onSearchInTitleChanged;
+  final ValueChanged<bool> onSearchInLyricsChanged;
 
   @override
   State<_SearchAndBiblePanel> createState() => _SearchAndBiblePanelState();
@@ -2553,6 +2587,10 @@ class _SearchAndBiblePanelState extends State<_SearchAndBiblePanel>
                   onClearAll: widget.onClearAll,
                   onAddSong: widget.onAddSong,
                   onEditSong: widget.onEditSong,
+                  searchInTitle: widget.searchInTitle,
+                  searchInLyrics: widget.searchInLyrics,
+                  onSearchInTitleChanged: widget.onSearchInTitleChanged,
+                  onSearchInLyricsChanged: widget.onSearchInLyricsChanged,
                 ),
                 _BibleSearchPanel(
                   bibleRepository: widget.bibleRepository,
@@ -2581,6 +2619,10 @@ class _SongSearchContent extends StatelessWidget {
     required this.onClearAll,
     required this.onAddSong,
     required this.onEditSong,
+    required this.searchInTitle,
+    required this.searchInLyrics,
+    required this.onSearchInTitleChanged,
+    required this.onSearchInLyricsChanged,
   });
 
   final TextEditingController controller;
@@ -2591,9 +2633,20 @@ class _SongSearchContent extends StatelessWidget {
   final VoidCallback onClearAll;
   final VoidCallback onAddSong;
   final ValueChanged<PraiseSong> onEditSong;
+  final bool searchInTitle;
+  final bool searchInLyrics;
+  final ValueChanged<bool> onSearchInTitleChanged;
+  final ValueChanged<bool> onSearchInLyricsChanged;
 
   @override
   Widget build(BuildContext context) {
+    final hintText = switch ((searchInTitle, searchInLyrics)) {
+      (true, true) => '제목 또는 가사로 검색',
+      (true, false) => '제목으로 검색',
+      (false, true) => '가사로 검색',
+      _ => '검색',
+    };
+
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -2626,13 +2679,29 @@ class _SongSearchContent extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              _SearchFilterChip(
+                label: '제목',
+                value: searchInTitle,
+                onChanged: onSearchInTitleChanged,
+              ),
+              const SizedBox(width: 6),
+              _SearchFilterChip(
+                label: '가사',
+                value: searchInLyrics,
+                onChanged: onSearchInLyricsChanged,
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
           TextField(
             controller: controller,
-            decoration: const InputDecoration(
-              prefixIcon: Icon(Icons.search_rounded),
-              hintText: '제목 또는 가사로 검색',
-              border: OutlineInputBorder(),
+            decoration: InputDecoration(
+              prefixIcon: const Icon(Icons.search_rounded),
+              hintText: hintText,
+              border: const OutlineInputBorder(),
               isDense: true,
             ),
           ),
@@ -2667,6 +2736,48 @@ class _SongSearchContent extends StatelessWidget {
                   ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ── SearchFilterChip ──────────────────────────────────────────────────────
+
+class _SearchFilterChip extends StatelessWidget {
+  const _SearchFilterChip({
+    required this.label,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String label;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return InkWell(
+      borderRadius: BorderRadius.circular(16),
+      onTap: () => onChanged(!value),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: value ? cs.primaryContainer : cs.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: value ? cs.primary : cs.outline.withValues(alpha: 0.4),
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: value ? cs.onPrimaryContainer : cs.onSurfaceVariant,
+          ),
+        ),
       ),
     );
   }
