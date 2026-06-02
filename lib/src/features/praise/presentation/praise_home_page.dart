@@ -189,6 +189,43 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
       .map((item) => item.song.id)
       .toSet();
 
+  /// 삭제된 슬라이드와 수정된 가사를 반영한 실제 내보내기용 스테이징 아이템 목록.
+  List<({int uid, StagingItem item})> get _effectiveStagingItems {
+    final result = <({int uid, StagingItem item})>[];
+    for (final entry in _stagingItems) {
+      final uid = entry.uid;
+      final item = entry.item;
+      if (item is SongStagingItem) {
+        final song = item.song;
+        final pairs = song.pairedPages;
+        final kept = [
+          for (var j = 0; j < pairs.length; j++)
+            if (!_deletedSlideKeys.contains(_slideKey(uid, j))) pairs[j],
+        ];
+        if (kept.isEmpty) continue;
+        if (kept.length == pairs.length) {
+          result.add(entry);
+        } else {
+          result.add((
+            uid: uid,
+            item: SongStagingItem(PraiseSong(
+              id: song.id,
+              fileName: song.fileName,
+              title: song.title,
+              lyrics: encodePages(kept.map((p) => p.korean)),
+              englishLyrics: encodePages(kept.map((p) => p.english)),
+            )),
+          ));
+        }
+      } else if (item is BibleStagingItem) {
+        if (!_deletedSlideKeys.contains(_slideKey(uid, 0))) result.add(entry);
+      } else if (item is BlankStagingItem) {
+        result.add(entry); // 빈 페이지는 삭제 여부와 무관하게 항상 포함
+      }
+    }
+    return result;
+  }
+
   // ── 데이터 로딩 ──────────────────────────────────────────────────────
 
   Future<void> _loadSongs() async {
@@ -863,7 +900,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     try {
       final savedPath = await _pythonBridge.exportPresentation(
         outputPath: normalizedOutputPath,
-        stagingItems: _stagingItems.map((e) => e.item).toList(),
+        stagingItems: _effectiveStagingItems.map((e) => e.item).toList(),
         style: _style,
       );
       if (!mounted) return;
@@ -953,7 +990,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
 
     if (name == null || name.isEmpty || !mounted) return;
 
-    await _contiRepository.saveConti(name, _stagingItems);
+    await _contiRepository.saveConti(name, _effectiveStagingItems);
     if (!mounted) return;
     ScaffoldMessenger.of(
       context,
@@ -2345,9 +2382,15 @@ class _StagingPanel extends StatelessWidget {
                       itemCount: stagingItems.length,
                       onReorder: onReorder,
                       proxyDecorator: (child, index, animation) {
-                        return Material(
-                          elevation: 4,
-                          color: Colors.transparent,
+                        return AnimatedBuilder(
+                          animation: animation,
+                          builder: (context, child) => Material(
+                            elevation: 4,
+                            shadowColor: Colors.black26,
+                            borderRadius: BorderRadius.circular(4),
+                            color: Theme.of(context).colorScheme.surface,
+                            child: child,
+                          ),
                           child: child,
                         );
                       },
@@ -2356,108 +2399,142 @@ class _StagingPanel extends StatelessWidget {
                         final item = entry.item;
                         final isBible = item is BibleStagingItem;
                         final isBlank = item is BlankStagingItem;
-                        return ListTile(
+                        final cs = Theme.of(context).colorScheme;
+                        final isSelected = entry.uid == selectedUid;
+                        return Material(
                           key: ValueKey(entry.uid),
-                          selected: entry.uid == selectedUid,
-                          selectedTileColor: Theme.of(
-                            context,
-                          ).colorScheme.primary.withValues(alpha: 0.08),
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 4,
-                          ),
-                          onTap: () => onSelect(entry.uid),
-                          leading: SizedBox(
-                            width: 28,
-                            child: Center(
-                              child: Text(
-                                '${index + 1}',
-                                style: const TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w700,
-                                ),
+                          color: isSelected
+                              ? cs.primary.withValues(alpha: 0.08)
+                              : Colors.transparent,
+                          borderRadius: BorderRadius.circular(4),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(4),
+                            onTap: () => onSelect(entry.uid),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 4,
+                                vertical: 6,
+                              ),
+                              child: Row(
+                                children: [
+                                  SizedBox(
+                                    width: 28,
+                                    child: Center(
+                                      child: Text(
+                                        '${index + 1}',
+                                        style: const TextStyle(
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            if (isBible)
+                                              Container(
+                                                margin: const EdgeInsets.only(
+                                                  right: 6,
+                                                ),
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                  horizontal: 5,
+                                                  vertical: 1,
+                                                ),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.blue.shade100,
+                                                  borderRadius:
+                                                      BorderRadius.circular(4),
+                                                ),
+                                                child: Text(
+                                                  '성경',
+                                                  style: TextStyle(
+                                                    fontSize: 11,
+                                                    color: Colors.blue.shade700,
+                                                    fontWeight: FontWeight.w600,
+                                                  ),
+                                                ),
+                                              ),
+                                            if (isBlank)
+                                              Container(
+                                                margin: const EdgeInsets.only(
+                                                  right: 6,
+                                                ),
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                  horizontal: 5,
+                                                  vertical: 1,
+                                                ),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.grey.shade200,
+                                                  borderRadius:
+                                                      BorderRadius.circular(4),
+                                                ),
+                                                child: Text(
+                                                  '빈 페이지',
+                                                  style: TextStyle(
+                                                    fontSize: 11,
+                                                    color: Colors.grey.shade600,
+                                                    fontWeight: FontWeight.w600,
+                                                  ),
+                                                ),
+                                              ),
+                                            Flexible(
+                                              child: Text(
+                                                isBlank
+                                                    ? ''
+                                                    : item.displayTitle,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: isBlank
+                                                    ? TextStyle(
+                                                        color: Colors
+                                                            .grey.shade500,
+                                                      )
+                                                    : null,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        if (!isBlank)
+                                          Text(
+                                            item.previewText,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                              fontSize: 11,
+                                              color: Colors.grey,
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(
+                                      Icons.close_rounded,
+                                      size: 20,
+                                    ),
+                                    tooltip: '제거',
+                                    onPressed: () => onRemove(entry.uid),
+                                  ),
+                                  ReorderableDragStartListener(
+                                    index: index,
+                                    child: const Padding(
+                                      padding: EdgeInsets.all(8),
+                                      child: Icon(
+                                        Icons.drag_handle_rounded,
+                                        color: Colors.grey,
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
-                          ),
-                          title: Row(
-                            children: [
-                              if (isBible)
-                                Container(
-                                  margin: const EdgeInsets.only(right: 6),
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 5,
-                                    vertical: 1,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: Colors.blue.shade100,
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                  child: Text(
-                                    '성경',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      color: Colors.blue.shade700,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ),
-                              if (isBlank)
-                                Container(
-                                  margin: const EdgeInsets.only(right: 6),
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 5,
-                                    vertical: 1,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: Colors.grey.shade200,
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                  child: Text(
-                                    '빈 페이지',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      color: Colors.grey.shade600,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ),
-                              Expanded(
-                                child: Text(
-                                  isBlank ? '' : item.displayTitle,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: isBlank
-                                      ? TextStyle(color: Colors.grey.shade500)
-                                      : null,
-                                ),
-                              ),
-                            ],
-                          ),
-                          subtitle: isBlank
-                              ? null
-                              : Text(
-                                  item.previewText,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontSize: 11,
-                                    color: Colors.grey,
-                                  ),
-                                ),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              IconButton(
-                                icon: const Icon(Icons.close_rounded, size: 20),
-                                tooltip: '제거',
-                                onPressed: () => onRemove(entry.uid),
-                              ),
-                              ReorderableDragStartListener(
-                                index: index,
-                                child: const Icon(
-                                  Icons.drag_handle_rounded,
-                                  color: Colors.grey,
-                                ),
-                              ),
-                            ],
                           ),
                         );
                       },

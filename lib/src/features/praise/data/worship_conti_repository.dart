@@ -37,6 +37,8 @@ class WorshipContiRepository {
             'song_id': item.song.id,
             'bible_reference': null,
             'bible_text': null,
+            'song_lyrics': item.song.lyrics,
+            'song_english_lyrics': item.song.englishLyrics,
           };
         } else if (item is BibleStagingItem) {
           row = {
@@ -117,11 +119,31 @@ class WorshipContiRepository {
       final type = row['item_type'] as String;
       if (type == 'song') {
         final songId = row['song_id'] as int?;
-        if (songId == null || !songMap.containsKey(songId)) {
+        final storedLyrics = row['song_lyrics'] as String?;
+        final storedEnglishLyrics = row['song_english_lyrics'] as String?;
+        PraiseSong? baseSong = songId != null ? songMap[songId] : null;
+        if (baseSong == null && storedLyrics == null) {
           missingCount++;
           continue;
         }
-        result.add((uid: uid++, item: SongStagingItem(songMap[songId]!)));
+        final song = baseSong == null
+            ? PraiseSong(
+                id: songId,
+                fileName: '',
+                title: '',
+                lyrics: storedLyrics!,
+                englishLyrics: storedEnglishLyrics ?? '',
+              )
+            : (storedLyrics != null
+                ? PraiseSong(
+                    id: baseSong.id,
+                    fileName: baseSong.fileName,
+                    title: baseSong.title,
+                    lyrics: storedLyrics,
+                    englishLyrics: storedEnglishLyrics ?? '',
+                  )
+                : baseSong);
+        result.add((uid: uid++, item: SongStagingItem(song)));
       } else if (type == 'bible') {
         final ref = row['bible_reference'] as String?;
         final text = row['bible_text'] as String?;
