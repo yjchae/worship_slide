@@ -2318,6 +2318,13 @@ class _StagingPanel extends StatelessWidget {
                       buildDefaultDragHandles: false,
                       itemCount: stagingItems.length,
                       onReorder: onReorder,
+                      proxyDecorator: (child, index, animation) {
+                        return Material(
+                          elevation: 4,
+                          color: Colors.transparent,
+                          child: child,
+                        );
+                      },
                       itemBuilder: (context, index) {
                         final entry = stagingItems[index];
                         final item = entry.item;
