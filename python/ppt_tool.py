@@ -757,7 +757,10 @@ def export_presentation(payload_json):
             is_last = index == len(songs) - 1
             next_is_blank = not is_last and songs[index + 1].get("type") == "blank"
             if not is_last and not next_is_blank:
-                _add_blank_slide(prs, style)
+                next_type = songs[index + 1].get("type")
+                # 말씀 다음 말씀이면 빈 슬라이드 삽입 안 함
+                if not (song.get("type") == "bible" and next_type == "bible"):
+                    _add_blank_slide(prs, style)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     prs.save(str(output_path))

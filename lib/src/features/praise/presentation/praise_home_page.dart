@@ -127,6 +127,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
   int _currentSlideIndex = 0;
   bool _isPresentationOpen = false;
   bool _isBlackout = false;
+  final Set<String> _deletedSlideKeys = {};
 
   final List<Color> _swatches = const [
     Color(0xFF1B1B1B),
@@ -177,6 +178,9 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
 
   // ── 계산된 프로퍼티 ───────────────────────────────────────────────────
 
+  static String _slideKey(int stagingUid, int pageIndexInItem) =>
+      '$stagingUid:$pageIndexInItem';
+
   Set<int?> get _selectedSongIds => _stagingItems
       .map((e) => e.item)
       .whereType<SongStagingItem>()
@@ -213,6 +217,14 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
 
   List<_SlideInfo> get _allSlides {
     final slides = <_SlideInfo>[];
+
+    void tryAdd(_SlideInfo info) {
+      if (!_deletedSlideKeys.contains(
+          _slideKey(info.stagingUid, info.pageIndexInItem))) {
+        slides.add(info);
+      }
+    }
+
     for (var i = 0; i < _stagingItems.length; i++) {
       final entry = _stagingItems[i];
       final item = entry.item;
@@ -220,68 +232,60 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
       final nextIsBlank = !isLast && _stagingItems[i + 1].item is BlankStagingItem;
 
       if (item is BlankStagingItem) {
-        slides.add(
-          _SlideInfo(
+        tryAdd(_SlideInfo(
+          stagingUid: entry.uid,
+          mainText: '',
+          englishText: '',
+          title: null,
+          isBible: false,
+          pageIndexInItem: 0,
+          isBlank: true,
+        ));
+      } else if (item is SongStagingItem) {
+        final song = item.song;
+        final pairs = song.pairedPages;
+        for (var j = 0; j < pairs.length; j++) {
+          tryAdd(_SlideInfo(
+            stagingUid: entry.uid,
+            mainText: pairs[j].korean,
+            englishText: pairs[j].english,
+            title: song.title,
+            isBible: false,
+            pageIndexInItem: j,
+          ));
+        }
+        if (!isLast && !nextIsBlank) {
+          tryAdd(_SlideInfo(
             stagingUid: entry.uid,
             mainText: '',
             englishText: '',
             title: null,
             isBible: false,
-            pageIndexInItem: 0,
+            pageIndexInItem: pairs.length,
             isBlank: true,
-          ),
-        );
-      } else if (item is SongStagingItem) {
-        final song = item.song;
-        final pairs = song.pairedPages;
-        for (var j = 0; j < pairs.length; j++) {
-          slides.add(
-            _SlideInfo(
-              stagingUid: entry.uid,
-              mainText: pairs[j].korean,
-              englishText: pairs[j].english,
-              title: song.title,
-              isBible: false,
-              pageIndexInItem: j,
-            ),
-          );
-        }
-        if (!isLast && !nextIsBlank) {
-          slides.add(
-            _SlideInfo(
-              stagingUid: entry.uid,
-              mainText: '',
-              englishText: '',
-              title: null,
-              isBible: false,
-              pageIndexInItem: pairs.length,
-              isBlank: true,
-            ),
-          );
+          ));
         }
       } else if (item is BibleStagingItem) {
-        slides.add(
-          _SlideInfo(
+        tryAdd(_SlideInfo(
+          stagingUid: entry.uid,
+          mainText: item.text,
+          englishText: '',
+          title: item.reference,
+          isBible: true,
+          pageIndexInItem: 0,
+        ));
+        // 말씀 다음이 말씀이면 빈 페이지 삽입 안 함
+        if (!isLast && !nextIsBlank &&
+            _stagingItems[i + 1].item is! BibleStagingItem) {
+          tryAdd(_SlideInfo(
             stagingUid: entry.uid,
-            mainText: item.text,
+            mainText: '',
             englishText: '',
-            title: item.reference,
-            isBible: true,
-            pageIndexInItem: 0,
-          ),
-        );
-        if (!isLast && !nextIsBlank) {
-          slides.add(
-            _SlideInfo(
-              stagingUid: entry.uid,
-              mainText: '',
-              englishText: '',
-              title: null,
-              isBible: false,
-              pageIndexInItem: 1,
-              isBlank: true,
-            ),
-          );
+            title: null,
+            isBible: false,
+            pageIndexInItem: 1,
+            isBlank: true,
+          ));
         }
       }
     }
@@ -429,7 +433,6 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     final item = entry.item;
 
     StagingItem newItem;
-    PraiseSong? updatedSong;
     if (item is SongStagingItem) {
       final song = item.song;
       final pairs = List.of(song.pairedPages);
@@ -438,15 +441,13 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
         pairs[info.pageIndexInItem] = (korean: newMain, english: newEnglish);
       }
 
-      final newSong = PraiseSong(
+      newItem = SongStagingItem(PraiseSong(
         id: song.id,
         fileName: song.fileName,
         title: song.title,
         lyrics: encodePages(pairs.map((p) => p.korean)),
         englishLyrics: encodePages(pairs.map((p) => p.english)),
-      );
-      newItem = SongStagingItem(newSong);
-      updatedSong = newSong;
+      ));
     } else if (item is BibleStagingItem) {
       newItem = BibleStagingItem(reference: item.reference, text: newMain);
     } else {
@@ -456,20 +457,6 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     setState(() {
       _stagingItems[stagingIndex] = (uid: entry.uid, item: newItem);
     });
-
-    if (updatedSong != null) {
-      await _repository.updateSong(updatedSong);
-      if (mounted) {
-        setState(() {
-          final idx = _songs.indexWhere((s) => s.id == updatedSong!.id);
-          if (idx != -1) {
-            final newList = List.of(_songs);
-            newList[idx] = updatedSong!;
-            _songs = newList;
-          }
-        });
-      }
-    }
 
     if (_currentSlideIndex == slideIndex) {
       _sendCurrentSlide();
@@ -484,6 +471,17 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
       _previewStagingUid = slides[index].stagingUid;
     });
     await _sendCurrentSlide();
+  }
+
+  void _deleteSlide(int slideIndex) {
+    final slides = _allSlides;
+    if (slideIndex >= slides.length) return;
+    final info = slides[slideIndex];
+    setState(() {
+      _deletedSlideKeys.add(_slideKey(info.stagingUid, info.pageIndexInItem));
+      _clampCurrentSlideIndex();
+    });
+    _sendCurrentSlide();
   }
 
   static final _digitKeys = <LogicalKeyboardKey, String>{
@@ -645,6 +643,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
   void _removeFromStaging(int uid) {
     setState(() {
       _stagingItems.removeWhere((e) => e.uid == uid);
+      _deletedSlideKeys.removeWhere((k) => k.startsWith('$uid:'));
       if (_previewStagingUid == uid) {
         _previewStagingUid = _stagingItems.isEmpty
             ? null
@@ -1007,6 +1006,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
       _stagingItems
         ..clear()
         ..addAll(result.items);
+      _deletedSlideKeys.clear();
       _nextUid += result.items.length;
       _previewStagingUid = result.items.isEmpty ? null : result.items.first.uid;
       _currentSlideIndex = 0;
@@ -1054,6 +1054,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     if (!mounted) return;
     setState(() {
       _stagingItems.removeWhere((e) => e.item is SongStagingItem);
+      _deletedSlideKeys.clear();
       _clampCurrentSlideIndex();
     });
     await _loadSongs();
@@ -1317,6 +1318,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                                           style: _style,
                                           onSlideSelected: _goToSlide,
                                           onSlideEdit: _editSlide,
+                                          onSlideDelete: _deleteSlide,
                                           onCollapse: () => setState(
                                             () => _isSlideOrderCollapsed = true,
                                           ),
@@ -4372,6 +4374,7 @@ class _PresentationControllerPanel extends StatefulWidget {
     required this.style,
     required this.onSlideSelected,
     required this.onSlideEdit,
+    required this.onSlideDelete,
     required this.onCollapse,
     required this.isMaximized,
     required this.onToggleMaximized,
@@ -4382,6 +4385,7 @@ class _PresentationControllerPanel extends StatefulWidget {
   final ExportStyle style;
   final ValueChanged<int> onSlideSelected;
   final ValueChanged<int> onSlideEdit;
+  final ValueChanged<int> onSlideDelete;
   final VoidCallback onCollapse;
   final bool isMaximized;
   final VoidCallback onToggleMaximized;
@@ -4484,6 +4488,7 @@ class _PresentationControllerPanelState
               index: i,
               onTap: () => widget.onSlideSelected(i),
               onEdit: () => widget.onSlideEdit(i),
+              onDelete: () => widget.onSlideDelete(i),
             ),
           ),
         ),
@@ -4541,6 +4546,7 @@ class _PresentationControllerPanelState
               index: i,
               onTap: () => widget.onSlideSelected(i),
               onEdit: () => widget.onSlideEdit(i),
+              onDelete: () => widget.onSlideDelete(i),
             ),
           );
         },
@@ -4647,6 +4653,7 @@ class _SlideThumbnail extends StatefulWidget {
     required this.index,
     required this.onTap,
     required this.onEdit,
+    required this.onDelete,
   });
 
   final SlidePageData data;
@@ -4654,6 +4661,7 @@ class _SlideThumbnail extends StatefulWidget {
   final int index;
   final VoidCallback onTap;
   final VoidCallback onEdit;
+  final VoidCallback onDelete;
 
   @override
   State<_SlideThumbnail> createState() => _SlideThumbnailState();
@@ -4710,26 +4718,53 @@ class _SlideThumbnailState extends State<_SlideThumbnail> {
                     Positioned(
                       top: 4,
                       right: 4,
-                      child: GestureDetector(
-                        onTap: widget.onEdit,
-                        child: Container(
-                          padding: const EdgeInsets.all(5),
-                          decoration: BoxDecoration(
-                            color: cs.surface.withValues(alpha: 0.92),
-                            borderRadius: BorderRadius.circular(5),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.2),
-                                blurRadius: 4,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          GestureDetector(
+                            onTap: widget.onDelete,
+                            child: Container(
+                              padding: const EdgeInsets.all(5),
+                              decoration: BoxDecoration(
+                                color: cs.surface.withValues(alpha: 0.92),
+                                borderRadius: BorderRadius.circular(5),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.2),
+                                    blurRadius: 4,
+                                  ),
+                                ],
                               ),
-                            ],
+                              child: Icon(
+                                Icons.delete_outline_rounded,
+                                size: 13,
+                                color: cs.error,
+                              ),
+                            ),
                           ),
-                          child: Icon(
-                            Icons.edit_rounded,
-                            size: 13,
-                            color: cs.primary,
+                          const SizedBox(width: 4),
+                          GestureDetector(
+                            onTap: widget.onEdit,
+                            child: Container(
+                              padding: const EdgeInsets.all(5),
+                              decoration: BoxDecoration(
+                                color: cs.surface.withValues(alpha: 0.92),
+                                borderRadius: BorderRadius.circular(5),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.2),
+                                    blurRadius: 4,
+                                  ),
+                                ],
+                              ),
+                              child: Icon(
+                                Icons.edit_rounded,
+                                size: 13,
+                                color: cs.primary,
+                              ),
+                            ),
                           ),
-                        ),
+                        ],
                       ),
                     ),
                 ],

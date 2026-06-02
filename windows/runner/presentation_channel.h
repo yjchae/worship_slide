@@ -19,8 +19,9 @@ class PresentationChannel {
   using Channel = flutter::MethodChannel<EV>;
 
   struct Slide {
-    std::wstring main, english, title;
+    std::wstring main, english, title, fontFamily;
     bool    isBible  = false, showTitle = false, inclEng = true;
+    bool    blackout = false;
     COLORREF bg      = RGB(27, 27, 27);
     COLORREF txt     = RGB(255, 255, 255);
     COLORREF eng     = RGB(255, 241, 118);

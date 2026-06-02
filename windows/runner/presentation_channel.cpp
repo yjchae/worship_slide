@@ -79,6 +79,9 @@ void PresentationChannel::Setup(flutter::FlutterEngine* engine) {
             Apply(*data);
             InvalidateRect(hwnd_, nullptr, TRUE);
           }
+        } else if (call.method_name() == "blackout") {
+          slide_.blackout = !slide_.blackout;
+          if (hwnd_) InvalidateRect(hwnd_, nullptr, TRUE);
         } else if (call.method_name() == "closeWindow") {
           CloseWindow();
         } else {
@@ -216,16 +219,24 @@ void PresentationChannel::Apply(const flutter::EncodableMap& data) {
     slide_.ttlV       = VOf(GetStr(s, "title_vertical_position", "bottom"));
   }
 
-  slide_.inclEng = GetBool(s, "include_english_lyrics", true);
-  slide_.eng     = HexRgb(GetStr(s, "english_text_color", "#fff176"), RGB(255,241,118));
-  double baseSz  = GetDbl(s, "font_size", 30.0);
-  slide_.engSz   = baseSz * 0.8;
+  slide_.inclEng    = GetBool(s, "include_english_lyrics", true);
+  slide_.eng        = HexRgb(GetStr(s, "english_text_color", "#fff176"), RGB(255,241,118));
+  double baseSz     = GetDbl(s, "font_size", 30.0);
+  slide_.engSz      = baseSz * 0.8;
+  slide_.fontFamily = W(GetStr(s, "font_family", ""));
 }
 
 // ── rendering ─────────────────────────────────────────────────────────────────
 
 void PresentationChannel::Paint(HDC hdc, RECT cli) const {
   const int W = cli.right, H = cli.bottom;
+
+  if (slide_.blackout) {
+    HBRUSH black = CreateSolidBrush(RGB(0, 0, 0));
+    FillRect(hdc, &cli, black);
+    DeleteObject(black);
+    return;
+  }
 
   // Background
   HBRUSH bg = CreateSolidBrush(slide_.bg);
@@ -238,10 +249,13 @@ void PresentationChannel::Paint(HDC hdc, RECT cli) const {
   // fontScale = H / (7.5 * 72) = H / 540  (matches Flutter _PreviewBox)
   auto makeFont = [&](double ptSize, bool bold) -> HFONT {
     int h = -(int)(ptSize * H / 540.0 + 0.5);
+    const wchar_t* fname = slide_.fontFamily.empty()
+        ? L"\xB9DE\xC740 \xACE0\xB515"  // 맑은 고딕 (fallback)
+        : slide_.fontFamily.c_str();
     return CreateFontW(h, 0, 0, 0,
       bold ? FW_BOLD : FW_NORMAL, FALSE, FALSE, FALSE,
       DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-      CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"\xB9DE\xC740 \xACE0\xB515"); // 맑은 고딕
+      CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, fname);
   };
 
   // Body box (matches macOS HTML: left=5%, right=95%)
