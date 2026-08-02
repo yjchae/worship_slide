@@ -1103,6 +1103,9 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ),
             child: const Text('전체 삭제'),
           ),
         ],
@@ -1733,7 +1736,9 @@ class _ResizableWorkArea extends StatelessWidget {
   final bool isStagingCollapsed;
 
   static const double _dividerHeight = 18;
-  static const double _minPanelHeight = 140;
+  // 검색 패널의 탭/버튼/필터칩/검색창 등 고정 헤더만으로도 ~190px가 필요하므로
+  // 140은 실측상 RenderFlex overflow를 유발함 (창을 최소 크기로 줄였을 때 확인).
+  static const double _minPanelHeight = 220;
   static const double _collapsedSearchHeight = 48;
   static const double _collapsedStagingHeight = 48;
 
@@ -2305,16 +2310,26 @@ class _StagingPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
 
+    final accentShape = RoundedRectangleBorder(
+      borderRadius: const BorderRadius.all(Radius.circular(8)),
+      side: BorderSide(color: cs.primary.withValues(alpha: 0.35), width: 1.4),
+    );
+
     if (isCollapsed) {
       return Card(
+        shape: accentShape,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Row(
             children: [
-              const Expanded(
+              Expanded(
                 child: Text(
                   '예배 콘티',
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: cs.primary,
+                  ),
                 ),
               ),
               Text(
@@ -2336,6 +2351,7 @@ class _StagingPanel extends StatelessWidget {
     }
 
     return Card(
+      shape: accentShape,
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: Column(
@@ -2343,9 +2359,13 @@ class _StagingPanel extends StatelessWidget {
           children: [
             Row(
               children: [
-                const Text(
+                Text(
                   '예배 콘티',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: cs.primary,
+                  ),
                 ),
                 const Spacer(),
                 Text(
@@ -2765,11 +2785,17 @@ class _SongSearchContent extends StatelessWidget {
                 icon: const Icon(Icons.delete_outline_rounded),
                 label: const Text('선택 삭제'),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 20),
               OutlinedButton.icon(
                 onPressed: songs.isEmpty ? null : onClearAll,
                 icon: const Icon(Icons.restart_alt_rounded),
                 label: const Text('DB 초기화'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Theme.of(context).colorScheme.error,
+                  side: BorderSide(
+                    color: Theme.of(context).colorScheme.error.withValues(alpha: 0.5),
+                  ),
+                ),
               ),
             ],
           ),
@@ -3583,6 +3609,22 @@ class _DesignPanel extends StatelessWidget {
     );
   }
 
+  Widget _sectionLabel(BuildContext context, String label) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.4,
+          color: cs.primary,
+        ),
+      ),
+    );
+  }
+
   Widget _segmentedPicker<T>({
     required String title,
     required T selected,
@@ -3700,6 +3742,7 @@ class _DesignPanel extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        _sectionLabel(context, '배경'),
                         _controlSection(
                           children: [
                             _colorPicker(
@@ -3726,6 +3769,7 @@ class _DesignPanel extends StatelessWidget {
                           ],
                         ),
                         const SizedBox(height: 16),
+                        _sectionLabel(context, '텍스트 · 위치'),
                         _StyleTabControls(
                           style: style,
                           previewItem: previewItem,
@@ -3852,6 +3896,28 @@ class _StyleTabControlsState extends State<_StyleTabControls>
     );
   }
 
+  Widget _sectionDivider(BuildContext context, String label) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.4,
+              color: cs.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(child: Divider(color: cs.outlineVariant, height: 1)),
+        ],
+      ),
+    );
+  }
+
   Widget _fontSizeSlider({
     required String title,
     required double value,
@@ -3951,6 +4017,7 @@ class _StyleTabControlsState extends State<_StyleTabControls>
                     widget.style.copyWith(englishTextColor: color),
                   ),
                 ),
+                _sectionDivider(context, '위치'),
                 widget.verticalPicker(
                   title: '가사 수직 위치',
                   selected: widget.style.textPosition,
@@ -3971,6 +4038,7 @@ class _StyleTabControlsState extends State<_StyleTabControls>
                     widget.style.copyWith(lyricsTextAlign: position),
                   ),
                 ),
+                _sectionDivider(context, '제목'),
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   title: const Text('제목 표시'),
@@ -4030,6 +4098,7 @@ class _StyleTabControlsState extends State<_StyleTabControls>
                     widget.style.copyWith(bibleTextColor: color),
                   ),
                 ),
+                _sectionDivider(context, '위치'),
                 widget.verticalPicker(
                   title: '본문 수직 위치',
                   selected: widget.style.bibleTextPosition,
@@ -4050,6 +4119,7 @@ class _StyleTabControlsState extends State<_StyleTabControls>
                     widget.style.copyWith(bibleTextAlign: position),
                   ),
                 ),
+                _sectionDivider(context, '제목'),
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   title: const Text('제목 표시'),
