@@ -4415,12 +4415,12 @@ String lyricsToEditText(String stored) => stored;
 
 // 편집 텍스트 → 저장 형식 정규화.
 // 규칙: 빈 줄 1개(\n\n) = 페이지 구분, 빈 줄 N개 = 빈 페이지 N-1장.
-// ### 은 하위 호환 페이지 구분자로 허용.
+// ###, ==== 은 명시적 페이지 구분자로 허용.
 @visibleForTesting
 String normalizeEditableLyrics(String raw) {
   var text = raw.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
-  // ### → \n\n (주변 줄바꿈 포함 소비)
-  text = text.replaceAll(RegExp(r'\n?[ \t]*###[ \t]*\n?'), '\n\n');
+  // ###, ==== → \n\n (주변 줄바꿈 포함 소비)
+  text = text.replaceAll(RegExp(r'\n?[ \t]*(###|====)[ \t]*\n?'), '\n\n');
   // 분리 → 각 페이지 trim → 후행 빈 페이지 제거 → 재결합
   final pages = text
       .split(RegExp(r'\n[ \t]*\n'))
@@ -4519,7 +4519,7 @@ class _SongEditDialogState extends State<_SongEditDialog> {
                 textAlignVertical: TextAlignVertical.top,
                 decoration: const InputDecoration(
                   labelText: '한글 가사',
-                  hintText: '페이지 구분: 빈 줄',
+                  hintText: '페이지 구분: 빈 줄 (또는 ### / ====)',
                   border: OutlineInputBorder(),
                   alignLabelWithHint: true,
                 ),
@@ -4531,7 +4531,7 @@ class _SongEditDialogState extends State<_SongEditDialog> {
                 textAlignVertical: TextAlignVertical.top,
                 decoration: const InputDecoration(
                   labelText: '영어 가사',
-                  hintText: '페이지 구분: 빈 줄',
+                  hintText: '페이지 구분: 빈 줄 (또는 ### / ====)',
                   border: OutlineInputBorder(),
                   alignLabelWithHint: true,
                 ),
