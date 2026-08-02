@@ -33,11 +33,14 @@ class BibleStagingItem extends StagingItem {
 }
 
 class BlankStagingItem extends StagingItem {
-  const BlankStagingItem();
+  const BlankStagingItem({this.mainText = '', this.englishText = ''});
+
+  final String mainText;
+  final String englishText;
 
   @override
   String get displayTitle => '[ 빈 페이지 ]';
 
   @override
-  String get previewText => '';
+  String get previewText => mainText.replaceAll('\n', ' ');
 }

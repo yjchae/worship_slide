@@ -39,6 +39,7 @@ class _SlideInfo {
     required this.isBible,
     required this.pageIndexInItem,
     this.isBlank = false,
+    this.isAutoSpacer = false,
   });
   final int stagingUid;
   final String mainText;
@@ -47,6 +48,9 @@ class _SlideInfo {
   final bool isBible;
   final int pageIndexInItem; // 해당 아이템(곡/성경) 내의 페이지 인덱스
   final bool isBlank;
+  // 곡/말씀 사이에 자동으로 삽입되는 여백 페이지. 별도 항목이 아니라
+  // 앞 항목의 stagingUid를 그대로 빌려 쓰므로 수정 시 원본을 덮어쓰게 되어 편집 불가.
+  final bool isAutoSpacer;
 }
 
 class _PraiseHomePageState extends State<PraiseHomePage> {
@@ -277,8 +281,8 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
       if (item is BlankStagingItem) {
         tryAdd(_SlideInfo(
           stagingUid: entry.uid,
-          mainText: '',
-          englishText: '',
+          mainText: item.mainText,
+          englishText: item.englishText,
           title: null,
           isBible: false,
           pageIndexInItem: 0,
@@ -306,6 +310,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
             isBible: false,
             pageIndexInItem: pairs.length,
             isBlank: true,
+            isAutoSpacer: true,
           ));
         }
       } else if (item is BibleStagingItem) {
@@ -328,6 +333,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
             isBible: false,
             pageIndexInItem: 1,
             isBlank: true,
+            isAutoSpacer: true,
           ));
         }
       }
@@ -446,6 +452,14 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     final slides = _allSlides;
     if (slideIndex >= slides.length) return;
     final info = slides[slideIndex];
+    if (info.isAutoSpacer) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('여백 페이지는 수정할 수 없습니다. "빈 페이지 추가"로 만든 페이지만 수정할 수 있어요.'),
+        ),
+      );
+      return;
+    }
 
     final result = await showDialog<(String, String)?>(
       context: context,
@@ -467,6 +481,8 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     String newEnglish,
     int slideIndex,
   ) async {
+    if (info.isAutoSpacer) return;
+
     final stagingIndex = _stagingItems.indexWhere(
       (e) => e.uid == info.stagingUid,
     );
@@ -493,6 +509,8 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
       ));
     } else if (item is BibleStagingItem) {
       newItem = BibleStagingItem(reference: item.reference, text: newMain);
+    } else if (item is BlankStagingItem) {
+      newItem = BlankStagingItem(mainText: newMain, englishText: newEnglish);
     } else {
       return;
     }
@@ -2500,7 +2518,7 @@ class _StagingPanel extends StatelessWidget {
                                             ),
                                           ],
                                         ),
-                                        if (!isBlank)
+                                        if (item.previewText.isNotEmpty)
                                           Text(
                                             item.previewText,
                                             maxLines: 1,
@@ -4291,9 +4309,9 @@ class _PreviewBox extends StatelessWidget {
         sampleEnglishText = '';
         titleText = reference;
         isBible = true;
-      case BlankStagingItem():
-        sampleText = '';
-        sampleEnglishText = '';
+      case BlankStagingItem(:final mainText, :final englishText):
+        sampleText = mainText;
+        sampleEnglishText = englishText;
         titleText = null;
         isBible = false;
       case null:
@@ -4680,6 +4698,7 @@ class _PresentationControllerPanelState
               data: _pageDataFor(i),
               isSelected: i == widget.currentIndex,
               index: i,
+              isEditable: !widget.slides[i].isAutoSpacer,
               onTap: () => widget.onSlideSelected(i),
               onEdit: () => widget.onSlideEdit(i),
               onDelete: () => widget.onSlideDelete(i),
@@ -4738,6 +4757,7 @@ class _PresentationControllerPanelState
               data: _pageDataFor(i),
               isSelected: i == widget.currentIndex,
               index: i,
+              isEditable: !widget.slides[i].isAutoSpacer,
               onTap: () => widget.onSlideSelected(i),
               onEdit: () => widget.onSlideEdit(i),
               onDelete: () => widget.onSlideDelete(i),
@@ -4845,6 +4865,7 @@ class _SlideThumbnail extends StatefulWidget {
     required this.data,
     required this.isSelected,
     required this.index,
+    this.isEditable = true,
     required this.onTap,
     required this.onEdit,
     required this.onDelete,
@@ -4853,6 +4874,7 @@ class _SlideThumbnail extends StatefulWidget {
   final SlidePageData data;
   final bool isSelected;
   final int index;
+  final bool isEditable;
   final VoidCallback onTap;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
@@ -4936,28 +4958,30 @@ class _SlideThumbnailState extends State<_SlideThumbnail> {
                               ),
                             ),
                           ),
-                          const SizedBox(width: 4),
-                          GestureDetector(
-                            onTap: widget.onEdit,
-                            child: Container(
-                              padding: const EdgeInsets.all(5),
-                              decoration: BoxDecoration(
-                                color: cs.surface.withValues(alpha: 0.92),
-                                borderRadius: BorderRadius.circular(5),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.2),
-                                    blurRadius: 4,
-                                  ),
-                                ],
-                              ),
-                              child: Icon(
-                                Icons.edit_rounded,
-                                size: 13,
-                                color: cs.primary,
+                          if (widget.isEditable) ...[
+                            const SizedBox(width: 4),
+                            GestureDetector(
+                              onTap: widget.onEdit,
+                              child: Container(
+                                padding: const EdgeInsets.all(5),
+                                decoration: BoxDecoration(
+                                  color: cs.surface.withValues(alpha: 0.92),
+                                  borderRadius: BorderRadius.circular(5),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withValues(alpha: 0.2),
+                                      blurRadius: 4,
+                                    ),
+                                  ],
+                                ),
+                                child: Icon(
+                                  Icons.edit_rounded,
+                                  size: 13,
+                                  color: cs.primary,
+                                ),
                               ),
                             ),
-                          ),
+                          ],
                         ],
                       ),
                     ),

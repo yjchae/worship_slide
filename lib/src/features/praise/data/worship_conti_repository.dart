@@ -57,6 +57,8 @@ class WorshipContiRepository {
             'song_id': null,
             'bible_reference': null,
             'bible_text': null,
+            'blank_text': item.mainText,
+            'blank_english_text': item.englishText,
           };
         } else {
           continue;
@@ -150,7 +152,13 @@ class WorshipContiRepository {
         if (ref == null || text == null) continue;
         result.add((uid: uid++, item: BibleStagingItem(reference: ref, text: text)));
       } else if (type == 'blank') {
-        result.add((uid: uid++, item: const BlankStagingItem()));
+        result.add((
+          uid: uid++,
+          item: BlankStagingItem(
+            mainText: row['blank_text'] as String? ?? '',
+            englishText: row['blank_english_text'] as String? ?? '',
+          ),
+        ));
       }
     }
 

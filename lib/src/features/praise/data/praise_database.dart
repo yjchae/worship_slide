@@ -26,7 +26,7 @@ class PraiseDatabase {
     final dbPath = p.join(_dbDirectory, 'worship_slides.db');
     _database = await openDatabase(
       dbPath,
-      version: 7,
+      version: 8,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE praise_songs (
@@ -71,7 +71,9 @@ class PraiseDatabase {
             item_type       TEXT    NOT NULL,
             song_id         INTEGER,
             bible_reference TEXT,
-            bible_text      TEXT
+            bible_text      TEXT,
+            blank_text      TEXT,
+            blank_english_text TEXT
           )
         ''');
       },
@@ -162,6 +164,14 @@ class PraiseDatabase {
           );
           await db.execute(
             "ALTER TABLE worship_conti_items ADD COLUMN song_english_lyrics TEXT",
+          );
+        }
+        if (oldVersion < 8) {
+          await db.execute(
+            "ALTER TABLE worship_conti_items ADD COLUMN blank_text TEXT",
+          );
+          await db.execute(
+            "ALTER TABLE worship_conti_items ADD COLUMN blank_english_text TEXT",
           );
         }
       },
