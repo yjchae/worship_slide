@@ -187,6 +187,10 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
   static String _slideKey(int stagingUid, int pageIndexInItem) =>
       '$stagingUid:$pageIndexInItem';
 
+  // 콘티가 하나라도 있으면 발표 맨 앞에 무조건 삽입되는 빈 페이지.
+  // 실제 스테이징 항목이 아니므로 uid는 절대 겹치지 않는 -1로 고정.
+  static const int _leadingBlankUid = -1;
+
   Set<int?> get _selectedSongIds => _stagingItems
       .map((e) => e.item)
       .whereType<SongStagingItem>()
@@ -270,6 +274,19 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
           _slideKey(info.stagingUid, info.pageIndexInItem))) {
         slides.add(info);
       }
+    }
+
+    if (_stagingItems.isNotEmpty) {
+      slides.add(const _SlideInfo(
+        stagingUid: _leadingBlankUid,
+        mainText: '',
+        englishText: '',
+        title: null,
+        isBible: false,
+        pageIndexInItem: 0,
+        isBlank: true,
+        isAutoSpacer: true,
+      ));
     }
 
     for (var i = 0; i < _stagingItems.length; i++) {
@@ -538,6 +555,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     final slides = _allSlides;
     if (slideIndex >= slides.length) return;
     final info = slides[slideIndex];
+    if (info.stagingUid == _leadingBlankUid) return;
     setState(() {
       _deletedSlideKeys.add(_slideKey(info.stagingUid, info.pageIndexInItem));
       _clampCurrentSlideIndex();
@@ -604,7 +622,8 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     }
 
     if (key == LogicalKeyboardKey.arrowRight ||
-        key == LogicalKeyboardKey.arrowDown) {
+        key == LogicalKeyboardKey.arrowDown ||
+        key == LogicalKeyboardKey.space) {
       _nextSlide();
       return KeyEventResult.handled;
     }
