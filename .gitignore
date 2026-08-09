@@ -52,6 +52,10 @@ __pycache__/
 dist/
 .Python
 
+# PyInstaller 산출물 (scripts/build.sh · build.ps1 로 생성. 플랫폼 전용 바이너리라 커밋하지 않는다)
+python/ppt_tool/
+python/ppt_tool.exe
+
 # Sample / temp files
 tmp_sample/
 
