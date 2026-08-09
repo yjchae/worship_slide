@@ -4,6 +4,14 @@
 #include <stdexcept>
 #include <string>
 
+// gdiplus.h는 min/max를 한정자 없이 쓰는데 이 타깃은 NOMINMAX로 빌드되므로
+// std 버전을 먼저 끌어와야 컴파일된다.
+using std::max;
+using std::min;
+
+#include <objidl.h>
+#include <gdiplus.h>
+
 #include <flutter/standard_method_codec.h>
 #include <flutter/method_result_functions.h>
 
@@ -41,11 +49,17 @@ UINT PresentationChannel::HFlag(int h) {
 PresentationChannel::PresentationChannel(HWND main_hwnd)
     : main_hwnd_(main_hwnd) {
   s_ = this;
+  Gdiplus::GdiplusStartupInput startup_input;
+  Gdiplus::GdiplusStartup(&gdiplus_token_, &startup_input, nullptr);
   Register();
 }
 
 PresentationChannel::~PresentationChannel() {
   if (hwnd_) { DestroyWindow(hwnd_); hwnd_ = nullptr; }
+  if (gdiplus_token_) {
+    Gdiplus::GdiplusShutdown(gdiplus_token_);
+    gdiplus_token_ = 0;
+  }
   s_ = nullptr;
 }
 
@@ -184,6 +198,9 @@ void PresentationChannel::Apply(const flutter::EncodableMap& data) {
   const std::string* ttl = Get<std::string>(data, "title");
   slide_.title   = ttl ? W(*ttl) : std::wstring{};
   slide_.isBible = isBible;
+  // style이 없을 때도 유지되도록 아래 early return보다 먼저 읽는다.
+  const std::string* img = Get<std::string>(data, "image_path");
+  slide_.imagePath = img ? W(*img) : std::wstring{};
 
   const flutter::EncodableMap* style = nullptr;
   auto it = data.find(flutter::EncodableValue("style"));
@@ -242,6 +259,12 @@ void PresentationChannel::Paint(HDC hdc, RECT cli) const {
   HBRUSH bg = CreateSolidBrush(slide_.bg);
   FillRect(hdc, &cli, bg);
   DeleteObject(bg);
+
+  // 이미지 슬라이드는 디자인 설정을 타지 않고 원본 그대로 보여준다.
+  if (!slide_.imagePath.empty()) {
+    PaintImage(hdc, W, H);
+    return;
+  }
 
   SetBkMode(hdc, TRANSPARENT);
 
@@ -362,6 +385,29 @@ void PresentationChannel::Paint(HDC hdc, RECT cli) const {
     SelectObject(hdc, old);
     DeleteObject(ttlFont);
   }
+}
+
+// 비율을 유지한 채 화면 가운데에 그린다 (macOS의 object-fit: contain과 동일).
+// ponytail: 매 WM_PAINT마다 디코딩한다. 발표창은 대개 전체화면 고정이라 문제되지 않지만,
+// 리사이즈가 버벅이면 경로별 1개짜리 Bitmap 캐시를 두면 된다.
+void PresentationChannel::PaintImage(HDC hdc, int w, int h) const {
+  if (w <= 0 || h <= 0) return;
+
+  Gdiplus::Image image(slide_.imagePath.c_str());
+  if (image.GetLastStatus() != Gdiplus::Ok) return;
+
+  UINT iw = image.GetWidth();
+  UINT ih = image.GetHeight();
+  if (iw == 0 || ih == 0) return;
+
+  double scale = (std::min)(static_cast<double>(w) / iw,
+                            static_cast<double>(h) / ih);
+  int dw = static_cast<int>(iw * scale + 0.5);
+  int dh = static_cast<int>(ih * scale + 0.5);
+
+  Gdiplus::Graphics graphics(hdc);
+  graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+  graphics.DrawImage(&image, (w - dw) / 2, (h - dh) / 2, dw, dh);
 }
 
 // ── window procedure ──────────────────────────────────────────────────────────
