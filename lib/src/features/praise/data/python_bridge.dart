@@ -8,6 +8,14 @@ import '../domain/praise_song.dart';
 import '../domain/staging_item.dart';
 import 'app_logger.dart';
 
+class LibreOfficeMissingException implements Exception {
+  const LibreOfficeMissingException();
+
+  @override
+  String toString() =>
+      'PPT를 이미지로 변환하려면 LibreOffice가 필요합니다. 설치 후 다시 시도해 주세요.';
+}
+
 class ImportFailure {
   const ImportFailure({
     required this.fileName,
@@ -69,6 +77,19 @@ class PythonBridge {
     );
   }
 
+  /// 외부 PPT/PPTX의 모든 페이지를 PNG로 굽고 이미지 항목으로 돌려준다.
+  Future<ImageStagingItem> renderPptToImages(String filePath) async {
+    final result = await _runTool(['render', filePath]);
+    final json = jsonDecode(result.stdout as String) as Map<String, dynamic>;
+    if (json['error'] == 'libreoffice_missing') {
+      throw const LibreOfficeMissingException();
+    }
+    return ImageStagingItem(
+      sourceName: json['source_name'] as String,
+      imagePaths: (json['image_paths'] as List<dynamic>).cast<String>(),
+    );
+  }
+
   Future<String> exportPresentation({
     required String outputPath,
     required List<StagingItem> stagingItems,
@@ -95,6 +116,13 @@ class PythonBridge {
             'title': '',
             'lyrics': '',
             'english_lyrics': '',
+          },
+          ImageStagingItem(:final sourceName, :final imagePaths) => {
+            'type': 'image',
+            'title': sourceName,
+            'lyrics': '',
+            'english_lyrics': '',
+            'image_paths': imagePaths,
           },
         };
       }).toList(),

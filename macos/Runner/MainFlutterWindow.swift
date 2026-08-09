@@ -127,7 +127,39 @@ class PresentationWindowController: NSWindowController {
     return "background-image:url('data:\(mime);base64,\(b64)');background-size:cover;background-position:center;"
   }
 
+  // 외부 PPT에서 구운 페이지 이미지 한 장을 화면에 꽉 채워 보여준다.
+  private func buildImageHTML(imagePath: String, bgColor: String) -> String {
+    guard let data = try? Data(contentsOf: URL(fileURLWithPath: imagePath)) else {
+      return """
+      <!DOCTYPE html><html><head><meta charset="utf-8">
+      <style>*{margin:0;padding:0;}body{width:100vw;height:100vh;background:\(bgColor);}</style>
+      </head><body></body></html>
+      """
+    }
+    let ext = (imagePath as NSString).pathExtension.lowercased()
+    let mime = ext == "jpg" || ext == "jpeg" ? "image/jpeg" : "image/png"
+    let b64 = data.base64EncodedString()
+    return """
+    <!DOCTYPE html><html><head><meta charset="utf-8">
+    <style>
+      *{margin:0;padding:0;}
+      body{width:100vw;height:100vh;background:\(bgColor);overflow:hidden;}
+      img{width:100%;height:100%;object-fit:contain;display:block;}
+    </style></head><body>
+      <img src="data:\(mime);base64,\(b64)">
+    </body></html>
+    """
+  }
+
   private func buildHTML(data: [String: Any]) -> String {
+    let styleForImage = (data["style"] as? [String: Any]) ?? [:]
+    if let imagePath = data["image_path"] as? String, !imagePath.isEmpty {
+      return buildImageHTML(
+        imagePath: imagePath,
+        bgColor: styleForImage["background_color"] as? String ?? "#1b1b1b"
+      )
+    }
+
     let mainText = escapeHtml((data["main_text"] as? String) ?? "")
     let englishText = escapeHtml((data["english_text"] as? String) ?? "")
     let titleText = escapeHtml((data["title"] as? String) ?? "")

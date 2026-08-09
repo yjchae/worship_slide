@@ -37,15 +37,16 @@ $projectRoot = (Get-Location).Path
 $pyinstallerWorkDir = Join-Path $projectRoot "build\pyinstaller_windows"
 
 if (Test-Path "python\ppt_tool.exe") { Remove-Item -Force "python\ppt_tool.exe" }
+if (Test-Path "python\ppt_tool") { Remove-Item -Recurse -Force "python\ppt_tool" }
 if (Test-Path $pyinstallerWorkDir) { Remove-Item -Recurse -Force $pyinstallerWorkDir }
 New-Item -ItemType Directory -Force -Path $pyinstallerWorkDir | Out-Null
 
+# onefile이 아니라 onedir: onefile은 호출마다 아카이브를 임시폴더에 풀어 실행이 크게 느려진다.
 Invoke-Checked ".venv\Scripts\python.exe" @(
     "-m",
     "PyInstaller",
     "--noconfirm",
     "--clean",
-    "--onefile",
     "python\ppt_tool.py",
     "--distpath",
     "python",
@@ -59,10 +60,10 @@ Invoke-Checked ".venv\Scripts\python.exe" @(
     "--add-data=$projectRoot\assets\fonts\Pretendard-Regular.ttf;fonts"
 )
 
-if (-not (Test-Path "python\ppt_tool.exe")) {
-    throw "PyInstaller completed but python\ppt_tool.exe was not created."
+if (-not (Test-Path "python\ppt_tool\ppt_tool.exe")) {
+    throw "PyInstaller completed but python\ppt_tool\ppt_tool.exe was not created."
 }
-Write-Host "  -> Created python\ppt_tool.exe" -ForegroundColor Green
+Write-Host "  -> Created python\ppt_tool\ppt_tool.exe" -ForegroundColor Green
 
 Write-Host ""
 Write-Host "=== 2. Build Flutter Windows release ===" -ForegroundColor Cyan
@@ -79,7 +80,7 @@ if (Test-Path $distDir) { Remove-Item -Recurse -Force $distDir }
 New-Item -ItemType Directory -Force -Path "$distDir\python" | Out-Null
 
 Copy-Item -Recurse "build\windows\x64\runner\Release\*" "$distDir\"
-Copy-Item "python\ppt_tool.exe" "$distDir\python\"
+Copy-Item -Recurse "python\ppt_tool" "$distDir\python\"
 
 Write-Host "  -> Created $distDir" -ForegroundColor Green
 Write-Host ""

@@ -12,6 +12,8 @@ class SlideRenderView extends StatelessWidget {
   const SlideRenderView({super.key, required this.data});
   final SlidePageData data;
 
+  // ppt_tool render가 굽는 이미지 가로 픽셀 (RENDER_IMAGE_WIDTH와 동일)
+  static const int _imageMaxWidth = 1920;
   static const double _slideW = 13.333;
   static const double _slideH = 7.5;
   static const double _lyricsBoxT = 0.6;
@@ -28,6 +30,36 @@ class SlideRenderView extends StatelessWidget {
   Widget build(BuildContext context) {
     final style = data.style;
     final isBible = data.isBible;
+
+    // 외부 PPT 이미지 슬라이드는 디자인 설정을 타지 않고 원본 그대로 보여준다.
+    final imagePath = data.imagePath;
+    if (imagePath != null) {
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          // 썸네일이 1920px 원본을 그대로 디코딩하지 않도록 표시 크기로 제한한다.
+          final dpr = MediaQuery.devicePixelRatioOf(context);
+          final cacheWidth = constraints.maxWidth.isFinite
+              ? (constraints.maxWidth * dpr).round().clamp(1, _imageMaxWidth)
+              : _imageMaxWidth;
+          return Container(
+            color: style.backgroundColor,
+            child: Image.file(
+              File(imagePath),
+              fit: BoxFit.contain,
+              width: double.infinity,
+              height: double.infinity,
+              cacheWidth: cacheWidth,
+              errorBuilder: (_, _, _) => const Center(
+                child: Text(
+                  '이미지를 찾을 수 없습니다',
+                  style: TextStyle(color: Colors.white54, fontSize: 14),
+                ),
+              ),
+            ),
+          );
+        },
+      );
+    }
 
     final bodyTextPosition =
         isBible ? style.bibleTextPosition : style.textPosition;

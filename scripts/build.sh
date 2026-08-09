@@ -12,14 +12,16 @@ fi
 VENV_PYTHON="$(pwd)/.venv/bin/python"
 "$VENV_PYTHON" -m pip install -q -r python/requirements.txt
 rm -rf python/ppt_tool
-"$VENV_PYTHON" -m PyInstaller --onefile python/ppt_tool.py \
+# onefile이 아니라 onedir인 이유: onefile은 호출할 때마다 아카이브를 임시폴더에 풀고
+# macOS가 그때마다 검사해서 실행 1회당 10초씩 잡아먹는다. onedir는 0.1초.
+"$VENV_PYTHON" -m PyInstaller --noconfirm python/ppt_tool.py \
                        --distpath python \
                        --workpath /tmp/ppt_tool_build \
                        --specpath /tmp/ppt_tool_build \
                        --name ppt_tool \
                        --add-data "$(pwd)/assets/fonts/Pretendard-Bold.ttf:fonts" \
                        --add-data "$(pwd)/assets/fonts/Pretendard-Regular.ttf:fonts"
-echo "  → python/ppt_tool 생성 완료"
+echo "  → python/ppt_tool/ppt_tool 생성 완료"
 
 echo ""
 echo "=== 2. Flutter macOS 릴리즈 빌드 ==="
@@ -33,7 +35,7 @@ rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR/python"
 
 cp -R "build/macos/Build/Products/Release/Worship Slides.app" "$DIST_DIR/"
-cp python/ppt_tool "$DIST_DIR/python/"
+cp -R python/ppt_tool "$DIST_DIR/python/"
 
 cat > "$DIST_DIR/Unlock Worship Slides.command" <<'EOF'
 #!/bin/bash

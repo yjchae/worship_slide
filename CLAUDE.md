@@ -51,6 +51,10 @@ CLI 도구. Flutter에서 서브프로세스로 호출하며 stdout에 JSON을 �
 
 - `import <폴더>` — `.ppt`/`.pptx` 재귀 탐색 → 한/영 가사 분리 → JSON 출력
 - `export <JSON>` — 스타일 적용하여 새 PPTX 생성
+- `render <파일>` — 외부 PPT의 모든 페이지를 PNG로 변환 (soffice로 PDF → PyMuPDF로 페이지별 PNG).
+  결과는 `~/Library/Application Support/worship_slides/ppt_slides/<해시>/`에 캐시.
+  Caches가 아닌 Application Support인 이유: 저장한 콘티가 나중에 이미지 유실로 깨지면 안 되기 때문
+- self-check: `python3 python/test_render.py`
 - `.ppt` 파일은 LibreOffice(`soffice --headless`)로 변환 후 처리; 결과는 `~/Library/Caches/worship_slides/ppt_import_cache/`에 캐시
 - 병렬 처리: `concurrent.futures.ThreadPoolExecutor`, 최대 8 워커
 

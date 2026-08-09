@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import '../domain/praise_song.dart';
 import '../domain/staging_item.dart';
 import '../domain/worship_conti.dart';
@@ -48,6 +50,17 @@ class WorshipContiRepository {
             'song_id': null,
             'bible_reference': item.reference,
             'bible_text': item.text,
+          };
+        } else if (item is ImageStagingItem) {
+          row = {
+            'conti_id': contiId,
+            'position': i,
+            'item_type': 'image',
+            'song_id': null,
+            'bible_reference': null,
+            'bible_text': null,
+            'image_source': item.sourceName,
+            'image_paths': item.imagePaths.join('\n'),
           };
         } else if (item is BlankStagingItem) {
           row = {
@@ -151,6 +164,23 @@ class WorshipContiRepository {
         final text = row['bible_text'] as String?;
         if (ref == null || text == null) continue;
         result.add((uid: uid++, item: BibleStagingItem(reference: ref, text: text)));
+      } else if (type == 'image') {
+        final paths = (row['image_paths'] as String? ?? '')
+            .split('\n')
+            .where((path) => path.isNotEmpty)
+            .toList();
+        // 이미지 캐시가 지워졌으면 항목을 통째로 건너뛴다.
+        if (paths.isEmpty || paths.any((path) => !File(path).existsSync())) {
+          missingCount++;
+          continue;
+        }
+        result.add((
+          uid: uid++,
+          item: ImageStagingItem(
+            sourceName: row['image_source'] as String? ?? 'PPT',
+            imagePaths: paths,
+          ),
+        ));
       } else if (type == 'blank') {
         result.add((
           uid: uid++,

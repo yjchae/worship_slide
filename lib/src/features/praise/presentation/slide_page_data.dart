@@ -11,12 +11,15 @@ class SlidePageData {
     required this.pageIndex,
     required this.totalPages,
     required this.style,
+    this.imagePath,
   });
 
   final String mainText;
   final String englishText;
   final String? title;
   final bool isBible;
+  /// 외부 PPT에서 구운 페이지 이미지. 지정되면 텍스트 대신 이 이미지만 표시된다.
+  final String? imagePath;
   final int pageIndex;
   final int totalPages;
   final ExportStyle style;
@@ -29,6 +32,7 @@ class SlidePageData {
     'page_index': pageIndex,
     'total_pages': totalPages,
     'style': style.toJson(),
+    'image_path': imagePath,
   };
 
   factory SlidePageData.fromJson(Map<String, dynamic> json) {
@@ -40,6 +44,7 @@ class SlidePageData {
       pageIndex: (json['page_index'] as int?) ?? 0,
       totalPages: (json['total_pages'] as int?) ?? 0,
       style: ExportStyle.fromJson(json['style'] as Map<String, dynamic>),
+      imagePath: json['image_path'] as String?,
     );
   }
 

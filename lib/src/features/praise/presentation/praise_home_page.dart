@@ -40,6 +40,7 @@ class _SlideInfo {
     required this.pageIndexInItem,
     this.isBlank = false,
     this.isAutoSpacer = false,
+    this.imagePath,
   });
   final int stagingUid;
   final String mainText;
@@ -51,6 +52,8 @@ class _SlideInfo {
   // 곡/말씀 사이에 자동으로 삽입되는 여백 페이지. 별도 항목이 아니라
   // 앞 항목의 stagingUid를 그대로 빌려 쓰므로 수정 시 원본을 덮어쓰게 되어 편집 불가.
   final bool isAutoSpacer;
+  // 외부 PPT에서 구운 페이지 이미지 경로. 있으면 텍스트 대신 이미지가 표시된다.
+  final String? imagePath;
 }
 
 class _PraiseHomePageState extends State<PraiseHomePage> {
@@ -225,6 +228,24 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
             )),
           ));
         }
+      } else if (item is ImageStagingItem) {
+        final kept = [
+          for (var j = 0; j < item.imagePaths.length; j++)
+            if (!_deletedSlideKeys.contains(_slideKey(uid, j)))
+              item.imagePaths[j],
+        ];
+        if (kept.isEmpty) continue;
+        result.add(
+          kept.length == item.imagePaths.length
+              ? entry
+              : (
+                  uid: uid,
+                  item: ImageStagingItem(
+                    sourceName: item.sourceName,
+                    imagePaths: kept,
+                  ),
+                ),
+        );
       } else if (item is BibleStagingItem) {
         if (!_deletedSlideKeys.contains(_slideKey(uid, 0))) result.add(entry);
       } else if (item is BlankStagingItem) {
@@ -330,6 +351,30 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
             isAutoSpacer: true,
           ));
         }
+      } else if (item is ImageStagingItem) {
+        for (var j = 0; j < item.imagePaths.length; j++) {
+          tryAdd(_SlideInfo(
+            stagingUid: entry.uid,
+            mainText: '',
+            englishText: '',
+            title: null,
+            isBible: false,
+            pageIndexInItem: j,
+            imagePath: item.imagePaths[j],
+          ));
+        }
+        if (!isLast && !nextIsBlank) {
+          tryAdd(_SlideInfo(
+            stagingUid: entry.uid,
+            mainText: '',
+            englishText: '',
+            title: null,
+            isBible: false,
+            pageIndexInItem: item.imagePaths.length,
+            isBlank: true,
+            isAutoSpacer: true,
+          ));
+        }
       } else if (item is BibleStagingItem) {
         tryAdd(_SlideInfo(
           stagingUid: entry.uid,
@@ -386,6 +431,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
       pageIndex: index,
       totalPages: slides.length,
       style: _style,
+      imagePath: slide?.imagePath,
     );
   }
 
@@ -469,6 +515,12 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     final slides = _allSlides;
     if (slideIndex >= slides.length) return;
     final info = slides[slideIndex];
+    if (info.imagePath != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('가져온 PPT 슬라이드는 내용을 수정할 수 없습니다.')),
+      );
+      return;
+    }
     if (info.isAutoSpacer) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -718,6 +770,86 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
       _stagingItems.insert(insertIndex, (uid: uid, item: const BlankStagingItem()));
       _previewStagingUid = uid;
     });
+  }
+
+  /// 로컬 PPT/PPTX를 골라 페이지별 이미지로 변환한 뒤 콘티에 넣는다.
+  Future<void> _addPptImages() async {
+    await FilePicker.skipEntitlementsChecks();
+    final picked = await FilePicker.pickFiles(
+      dialogTitle: '콘티에 추가할 PPT 파일 선택',
+      type: FileType.custom,
+      allowedExtensions: ['ppt', 'pptx'],
+      allowMultiple: true,
+    );
+    final paths = picked?.paths.whereType<String>().toList() ?? const [];
+    if (paths.isEmpty || !mounted) return;
+
+    final progress = ValueNotifier<String>('변환 중…');
+    unawaited(showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          content: Row(
+            children: [
+              const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2.5),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: ValueListenableBuilder<String>(
+                  valueListenable: progress,
+                  builder: (_, text, _) => Text(text),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ));
+
+    final items = <ImageStagingItem>[];
+    String? errorMessage;
+    try {
+      for (var i = 0; i < paths.length; i++) {
+        progress.value = paths.length == 1
+            ? '${p.basename(paths[i])} 변환 중…'
+            : '${paths.length}개 중 ${i + 1}번째 변환 중…';
+        items.add(await _pythonBridge.renderPptToImages(paths[i]));
+      }
+    } on LibreOfficeMissingException catch (error) {
+      errorMessage = error.toString();
+    } catch (error, stack) {
+      await AppLogger.instance.error('PPT 이미지 변환 실패', error, stack);
+      errorMessage = 'PPT 변환 실패: $error';
+    }
+
+    progress.dispose();
+    if (!mounted) return;
+    Navigator.of(context, rootNavigator: true).pop();
+
+    if (items.isNotEmpty) {
+      setState(() {
+        final selectedIndex =
+            _stagingItems.indexWhere((e) => e.uid == _previewStagingUid);
+        var insertIndex =
+            selectedIndex >= 0 ? selectedIndex + 1 : _stagingItems.length;
+        for (final item in items) {
+          final uid = _nextUid++;
+          _stagingItems.insert(insertIndex++, (uid: uid, item: item));
+          _previewStagingUid = uid;
+        }
+      });
+    }
+
+    if (errorMessage != null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(errorMessage)));
+    }
   }
 
   void _removeFromStaging(int uid) {
@@ -1359,6 +1491,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                       importStatusText: _importStatusText,
                       onImportPressed: _pickAndImportFolder,
                       onBibleImportPressed: _pickAndImportBible,
+                      onImportPptPressed: _addPptImages,
                       onExtractLogsPressed: _showExtractLogsDialog,
                       isCheckingUpdate: _isCheckingUpdate,
                       hasUpdate: _pendingUpdate != null,
@@ -2122,6 +2255,7 @@ class _TopBar extends StatelessWidget {
     required this.importStatusText,
     required this.onImportPressed,
     required this.onBibleImportPressed,
+    required this.onImportPptPressed,
     required this.onExtractLogsPressed,
     required this.isCheckingUpdate,
     required this.hasUpdate,
@@ -2138,6 +2272,7 @@ class _TopBar extends StatelessWidget {
   final String? importStatusText;
   final VoidCallback onImportPressed;
   final VoidCallback onBibleImportPressed;
+  final VoidCallback onImportPptPressed;
   final VoidCallback onExtractLogsPressed;
   final bool isCheckingUpdate;
   final bool hasUpdate;
@@ -2237,6 +2372,18 @@ class _TopBar extends StatelessWidget {
               ),
             ),
           const SizedBox(width: 4),
+          // 다른 헤더 버튼(반투명 흰색)과 구분되도록 단색 앰버 + 짙은 글자.
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFFFC24B),
+              foregroundColor: const Color(0xFF10333D),
+              textStyle: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+            onPressed: onImportPptPressed,
+            icon: const Icon(Icons.slideshow_rounded, size: 18),
+            label: const Text('PPT 가져오기'),
+          ),
+          const SizedBox(width: 8),
           FilledButton.icon(
             style: FilledButton.styleFrom(
               backgroundColor: Colors.white.withValues(alpha: 0.22),
@@ -3887,6 +4034,7 @@ class _StyleTabControlsState extends State<_StyleTabControls>
       SongStagingItem() => 0,
       BibleStagingItem() => 1,
       BlankStagingItem() => null,
+      ImageStagingItem() => null,
       null => null,
     };
   }
@@ -4371,8 +4519,15 @@ class _PreviewBox extends StatelessWidget {
     final String sampleEnglishText;
     final String? titleText;
     final bool isBible;
+    String? imagePath;
 
     switch (previewItem) {
+      case ImageStagingItem(:final imagePaths):
+        sampleText = '';
+        sampleEnglishText = '';
+        titleText = null;
+        isBible = false;
+        imagePath = imagePaths.isEmpty ? null : imagePaths.first;
       case SongStagingItem(:final song):
         sampleText = song.pages.isEmpty ? song.title : song.pages.first;
         sampleEnglishText = song.englishPages.isEmpty
@@ -4410,6 +4565,7 @@ class _PreviewBox extends StatelessWidget {
             pageIndex: 0,
             totalPages: 1,
             style: style,
+            imagePath: imagePath,
           ),
         ),
       ),
@@ -4694,8 +4850,14 @@ class _PresentationControllerPanelState
   static const double _padding = 10;
   static const double _minZoom = 0.35;
   static const double _maxZoom = 3.0;
+  static const double _thumbAspectRatio = 13.333 / 7.5;
+  static const double _labelH = 22.0;
 
   double get _thumbW => (_baseThumbW * _zoomLevel).clamp(70.0, 700.0);
+
+  // 가로 목록에서 실제로 그려진 썸네일 너비. 스크롤 위치 계산이 이 값을 따라가야
+  // 현재 슬라이드가 화면 가운데로 온다.
+  double _lastThumbW = _baseThumbW;
 
   void _changeZoom(double delta) {
     setState(() {
@@ -4713,7 +4875,7 @@ class _PresentationControllerPanelState
 
   void _scrollToCurrentItem() {
     if (!_scrollController.hasClients) return;
-    final tw = _thumbW;
+    final tw = _lastThumbW;
     final targetOffset = widget.currentIndex * (tw + _itemSpacing) + _padding;
     final viewportWidth = _scrollController.position.viewportDimension;
     final centeredOffset = targetOffset - (viewportWidth - tw) / 2;
@@ -4741,11 +4903,11 @@ class _PresentationControllerPanelState
       pageIndex: i,
       totalPages: widget.slides.length,
       style: widget.style,
+      imagePath: info.imagePath,
     );
   }
 
   Widget _buildHorizontalList() {
-    final tw = _thumbW;
     return Listener(
       onPointerSignal: (event) {
         if (event is PointerScrollEvent &&
@@ -4759,36 +4921,45 @@ class _PresentationControllerPanelState
           });
         }
       },
-      child: ListView.builder(
-        controller: _scrollController,
-        scrollDirection: Axis.horizontal,
-        padding: EdgeInsets.all(_padding),
-        itemCount: widget.slides.length,
-        itemBuilder: (context, i) => SizedBox(
-          width: tw,
-          child: Padding(
-            padding: EdgeInsets.only(
-              right: i < widget.slides.length - 1 ? _itemSpacing : 0,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // 썸네일은 16:9를 유지하므로 패널이 낮으면 높이에 맞춰 좁아진다.
+          // 셀 너비를 _thumbW로 고정하면 그 차이만큼 칸마다 빈 공간이 생기므로
+          // 실제로 그려지는 너비에 맞춘다.
+          final thumbH = constraints.maxHeight - _padding * 2 - _labelH;
+          final maxW = thumbH > 0 ? thumbH * _thumbAspectRatio : _thumbW;
+          final tw = _thumbW > maxW ? maxW : _thumbW;
+          _lastThumbW = tw;
+
+          return ListView.builder(
+            controller: _scrollController,
+            scrollDirection: Axis.horizontal,
+            padding: EdgeInsets.all(_padding),
+            itemCount: widget.slides.length,
+            itemBuilder: (context, i) => SizedBox(
+              width: tw,
+              child: Padding(
+                padding: EdgeInsets.only(
+                  right: i < widget.slides.length - 1 ? _itemSpacing : 0,
+                ),
+                child: _SlideThumbnail(
+                  data: _pageDataFor(i),
+                  isSelected: i == widget.currentIndex,
+                  index: i,
+                  isEditable: !widget.slides[i].isAutoSpacer,
+                  onTap: () => widget.onSlideSelected(i),
+                  onEdit: () => widget.onSlideEdit(i),
+                  onDelete: () => widget.onSlideDelete(i),
+                ),
+              ),
             ),
-            child: _SlideThumbnail(
-              data: _pageDataFor(i),
-              isSelected: i == widget.currentIndex,
-              index: i,
-              isEditable: !widget.slides[i].isAutoSpacer,
-              onTap: () => widget.onSlideSelected(i),
-              onEdit: () => widget.onSlideEdit(i),
-              onDelete: () => widget.onSlideDelete(i),
-            ),
-          ),
-        ),
+          );
+        },
       ),
     );
   }
 
   Widget _buildGrid() {
-    const aspectRatio = 13.333 / 7.5;
-    const labelH = 22.0;
-
     return Listener(
       onPointerSignal: (event) {
         if (event is PointerScrollEvent &&
@@ -4815,7 +4986,7 @@ class _PresentationControllerPanelState
               .floor()
               .clamp(1, n);
           final actualThumbW = (W - (cols - 1) * _itemSpacing) / cols;
-          final cellH = actualThumbW / aspectRatio + labelH;
+          final cellH = actualThumbW / _thumbAspectRatio + _labelH;
           final childAspectRatio = (actualThumbW / cellH).clamp(0.1, 100.0);
 
           return GridView.builder(

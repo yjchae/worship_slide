@@ -209,6 +209,17 @@ def get_ppt_cache_key(source_path):
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()
 
 
+def get_app_support_root():
+    """Caches와 달리 OS가 임의로 비우지 않는 영역.
+    콘티에 저장된 이미지 슬라이드가 나중에 사라지면 안 되므로 여기에 굽는다."""
+    import platform
+    if platform.system() == "Windows":
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        base = Path(local_appdata) if local_appdata else Path.home() / "AppData" / "Local"
+        return base / "worship_slides" / "ppt_slides"
+    return Path.home() / "Library" / "Application Support" / "worship_slides" / "ppt_slides"
+
+
 def get_cached_pptx_path(source_path):
     cache_root = get_cache_root()
     cache_root.mkdir(parents=True, exist_ok=True)
@@ -485,6 +496,93 @@ def import_folder(folder):
     )
 
 
+RENDER_IMAGE_WIDTH = 1920
+
+
+def _convert_to_pdf(source_path, output_dir):
+    libreoffice = get_libreoffice_executable()
+    if libreoffice is None:
+        raise RuntimeError("LibreOffice 실행 파일을 찾지 못했습니다.")
+
+    subprocess.run(
+        [
+            libreoffice,
+            "--headless",
+            "--convert-to",
+            "pdf",
+            "--outdir",
+            str(output_dir),
+            str(source_path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    converted = sorted(output_dir.glob("*.pdf"))
+    if not converted:
+        raise RuntimeError(f"PDF 변환에 실패했습니다: {source_path.name}")
+    return converted[0]
+
+
+def render_presentation_images(file_path):
+    """PPT/PPTX의 모든 페이지를 PNG로 굽고 경로 목록을 돌려준다."""
+    source_path = Path(file_path)
+    if not source_path.exists():
+        raise RuntimeError(f"파일을 찾을 수 없습니다: {file_path}")
+
+    source_name = unicodedata.normalize("NFC", source_path.name)
+    target_dir = get_app_support_root() / get_ppt_cache_key(source_path)
+    cached = sorted(target_dir.glob("*.png"))
+    if cached:
+        return {
+            "source_name": source_name,
+            "image_paths": [str(path) for path in cached],
+            "page_count": len(cached),
+        }
+
+    if get_libreoffice_executable() is None:
+        return {"error": "libreoffice_missing"}
+
+    import pymupdf
+
+    # 도중에 실패해도 반쪽짜리 캐시가 남지 않도록 임시 폴더에 굽고 마지막에 옮긴다.
+    staging_dir = target_dir.with_name(f"{target_dir.name}.partial")
+    shutil.rmtree(staging_dir, ignore_errors=True)
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    temp_dir = Path(tempfile.mkdtemp(prefix="praise_ppt_render_"))
+    try:
+        pdf_path = _convert_to_pdf(source_path, temp_dir)
+        page_count = 0
+        with pymupdf.open(str(pdf_path)) as document:
+            for index, page in enumerate(document):
+                zoom = RENDER_IMAGE_WIDTH / max(page.rect.width, 1)
+                pixmap = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))
+                pixmap.save(str(staging_dir / f"{index + 1:03d}.png"))
+                page_count += 1
+
+        if page_count == 0:
+            raise RuntimeError(f"슬라이드가 없습니다: {source_name}")
+
+        shutil.rmtree(target_dir, ignore_errors=True)
+        target_dir.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(staging_dir, target_dir)
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        shutil.rmtree(staging_dir, ignore_errors=True)
+
+    image_paths = sorted(target_dir.glob("*.png"))
+    return {
+        "source_name": source_name,
+        "image_paths": [str(path) for path in image_paths],
+        "page_count": len(image_paths),
+    }
+
+
+def render_presentation(file_path):
+    print(json.dumps(render_presentation_images(file_path), ensure_ascii=True))
+
+
 def parse_hex_color(hex_color):
     value = hex_color.replace("#", "")
     return RGBColor(int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16))
@@ -725,6 +823,26 @@ def add_song_slides(prs, song, style):
             _add_title_textbox(slide, song.get("title", ""), style, is_bible=is_bible, font_name=font_name)
 
 
+def add_image_slides(prs, item, style):
+    """외부 PPT에서 구운 페이지 이미지를 슬라이드에 비율 유지해 중앙 배치."""
+    for image_path in item.get("image_paths", []):
+        if not os.path.isfile(image_path):
+            continue
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        _apply_slide_background(slide, style)
+        picture = slide.shapes.add_picture(image_path, 0, 0)
+        scale = min(
+            _SLIDE_W / picture.width.inches,
+            _SLIDE_H / picture.height.inches,
+        )
+        width = picture.width.inches * scale
+        height = picture.height.inches * scale
+        picture.width = Inches(width)
+        picture.height = Inches(height)
+        picture.left = Inches((_SLIDE_W - width) / 2)
+        picture.top = Inches((_SLIDE_H - height) / 2)
+
+
 def _add_blank_slide(prs, style):
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _apply_slide_background(slide, style)
@@ -753,7 +871,10 @@ def export_presentation(payload_json):
         if song.get("type") == "blank":
             _add_blank_slide(prs, style)
         else:
-            add_song_slides(prs, song, style)
+            if song.get("type") == "image":
+                add_image_slides(prs, song, style)
+            else:
+                add_song_slides(prs, song, style)
             is_last = index == len(songs) - 1
             next_is_blank = not is_last and songs[index + 1].get("type") == "blank"
             if not is_last and not next_is_blank:
@@ -780,6 +901,10 @@ def main():
 
     if command == "export":
         export_presentation(payload)
+        return
+
+    if command == "render":
+        render_presentation(payload)
         return
 
     raise SystemExit(f"unknown command: {command}")
