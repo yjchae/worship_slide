@@ -49,15 +49,18 @@ jobs:
       - name: Package distribution
         shell: pwsh
         run: |
-          $tag = "${{ github.ref_name }}"
-          $zipPath = "dist/worship_slides-windows-$tag.zip"
+          # 브랜치 dispatch면 ref_name에 /가 들어온다. 파일명·아티팩트 이름 모두 /를 못 쓴다.
+          $tag = "${{ github.ref_name }}".Replace('/', '-')
+          $name = "worship_slides-windows-$tag"
+          $zipPath = "dist/$name.zip"
           Compress-Archive -Path "dist/worship_slides/*" -DestinationPath $zipPath -Force
           "zip_path=$zipPath" >> $env:GITHUB_ENV
+          "artifact_name=$name" >> $env:GITHUB_ENV
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: worship_slides-windows-${{ github.ref_name }}
+          name: ${{ env.artifact_name }}
           path: ${{ env.zip_path }}
           if-no-files-found: error
 
@@ -103,15 +106,18 @@ jobs:
       - name: Package distribution
         shell: bash
         run: |
-          tag="${GITHUB_REF_NAME}"
-          zip_path="dist/worship_slides-macos-${tag}.zip"
+          # 브랜치 dispatch면 ref_name에 /가 들어온다. 파일명·아티팩트 이름 모두 /를 못 쓴다.
+          tag="${GITHUB_REF_NAME//\//-}"
+          name="worship_slides-macos-${tag}"
+          zip_path="dist/${name}.zip"
           ditto -c -k --sequesterRsrc --keepParent "dist/worship_slides" "$zip_path"
           echo "zip_path=$zip_path" >> "$GITHUB_ENV"
+          echo "artifact_name=$name" >> "$GITHUB_ENV"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: worship_slides-macos-${{ github.ref_name }}
+          name: ${{ env.artifact_name }}
           path: ${{ env.zip_path }}
           if-no-files-found: error
 

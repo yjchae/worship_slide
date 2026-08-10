@@ -24,7 +24,20 @@ flutter analyze
 flutter test
 
 # Python 의존성 (최초 1회)
-python3 -m venv .venv && source .venv/bin/activate && pip install python-pptx
+python3 -m venv .venv && .venv/bin/pip install -r python/requirements.txt
+
+# ppt_tool 실행 파일 빌드 (최초 1회 + ppt_tool.py 수정 시마다)
+# 앱은 python/ppt_tool/ 안의 PyInstaller 산출물만 호출한다. 이 폴더는 git에 없으므로
+# 클론 직후에는 반드시 한 번 만들어야 임포트·내보내기가 동작한다.
+.venv/bin/python -m PyInstaller --noconfirm python/ppt_tool.py \
+  --distpath python --workpath /tmp/ppt_tool_build --specpath /tmp/ppt_tool_build \
+  --name ppt_tool \
+  --add-data "$(pwd)/assets/fonts/Pretendard-Bold.ttf:fonts" \
+  --add-data "$(pwd)/assets/fonts/Pretendard-Regular.ttf:fonts"
+
+# 배포용 전체 빌드 (위 단계 포함)
+./scripts/build.sh          # macOS
+./scripts/build.ps1         # Windows
 ```
 
 ## 아키텍처
@@ -60,7 +73,9 @@ CLI 도구. Flutter에서 서브프로세스로 호출하며 stdout에 JSON을 �
 
 ## 중요 설계 결정
 
-- **Python 실행 방식** (`python_bridge.dart`): PyInstaller로 빌드된 `python/ppt_tool` 실행 파일만 탐색·호출
+- **Python 실행 방식** (`python_bridge.dart`): PyInstaller로 빌드된 실행 파일만 탐색·호출한다 (`.py`를 직접 실행하지 않는다)
+- **PyInstaller는 onefile이 아니라 onedir** (`python/ppt_tool/ppt_tool`): onefile은 호출할 때마다 아카이브를
+  임시폴더에 풀고 macOS가 매번 검사해서 **실행 1회당 약 10초**가 든다. onedir는 0.12초
 - **가사 페이지 구분자**: `"###"` — DB 저장 시 단일 문자열로 직렬화
 - **한/영 분리 기준** (`is_english_line`): 라틴 문자 비율 ≥ 60% 이면 영어 줄로 판단
 - **스타일 미리보기**: `_PreviewBox`에서 선택된 첫 번째 곡의 첫 페이지를 실시간 렌더링
