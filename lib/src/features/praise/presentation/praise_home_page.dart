@@ -1728,6 +1728,12 @@ class _PresentationControlBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
+    // 좁은 패널에서도 넘치지 않게 아이콘 버튼 기본 48px 탭 타깃을 32px로 줄인다
+    final compactIcon = IconButton.styleFrom(
+      minimumSize: const Size(32, 32),
+      padding: EdgeInsets.zero,
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
@@ -1774,6 +1780,7 @@ class _PresentationControlBar extends StatelessWidget {
             IconButton(
               icon: const Icon(Icons.arrow_back_ios_rounded, size: 16),
               tooltip: '이전  ←',
+              style: compactIcon,
               color: cs.onPrimaryContainer,
               onPressed: currentSlideIndex > 0 ? onPrev : null,
             ),
@@ -1805,17 +1812,20 @@ class _PresentationControlBar extends StatelessWidget {
             IconButton(
               icon: const Icon(Icons.arrow_forward_ios_rounded, size: 16),
               tooltip: '다음  →',
+              style: compactIcon,
               color: cs.onPrimaryContainer,
               onPressed: currentSlideIndex < totalSlides - 1 ? onNext : null,
             ),
             const SizedBox(width: 4),
             IconButton(
               tooltip: isBlackout ? '블랙아웃 해제  B' : '블랙아웃  B',
-              style: IconButton.styleFrom(
-                backgroundColor: isBlackout
-                    ? Colors.white.withValues(alpha: 0.2)
-                    : Colors.transparent,
-                foregroundColor: cs.onPrimaryContainer,
+              style: compactIcon.copyWith(
+                backgroundColor: WidgetStatePropertyAll(
+                  isBlackout
+                      ? Colors.white.withValues(alpha: 0.2)
+                      : Colors.transparent,
+                ),
+                foregroundColor: WidgetStatePropertyAll(cs.onPrimaryContainer),
               ),
               onPressed: onBlackout,
               icon: Icon(
