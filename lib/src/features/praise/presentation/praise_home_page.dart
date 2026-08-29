@@ -469,6 +469,8 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
         _isBlackout = false;
         _isSlideOrderCollapsed = false;
         _isSlideOrderMaximized = false;
+        _isSearchCollapsed = false;
+        _isDesignCollapsed = false;
       });
     }
   }
@@ -1158,11 +1160,19 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
 
     if (name == null || name.isEmpty || !mounted) return;
 
-    await _contiRepository.saveConti(name, _effectiveStagingItems);
-    if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text('"$name" 콘티를 저장했습니다.')));
+    try {
+      await _contiRepository.saveConti(name, _effectiveStagingItems);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('"$name" 콘티를 저장했습니다.')));
+    } catch (error, stack) {
+      await AppLogger.instance.error('콘티 저장 실패', error, stack);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('콘티 저장 실패: $error')));
+    }
   }
 
   Future<void> _loadContiDialog() async {
@@ -1538,10 +1548,13 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                                     () => _isSlideOrderCollapsed = true,
                                   ),
                                   isMaximized: _isSlideOrderMaximized,
-                                  onToggleMaximized: () => setState(
-                                    () => _isSlideOrderMaximized =
-                                        !_isSlideOrderMaximized,
-                                  ),
+                                  onToggleMaximized: () => setState(() {
+                                    _isSlideOrderMaximized =
+                                        !_isSlideOrderMaximized;
+                                    // 최대화하면 검색·디자인 패널은 함께 접는다.
+                                    _isSearchCollapsed = _isSlideOrderMaximized;
+                                    _isDesignCollapsed = _isSlideOrderMaximized;
+                                  }),
                                 ),
                                 collapsedSlideStrip: _CollapsedSlideOrderStrip(
                                   currentIndex: _currentSlideIndex,
@@ -2480,6 +2493,14 @@ class _StagingPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
 
+    // 좁은 패널에서도 넘치지 않게 아이콘 버튼 기본 48px 탭 타깃을 32px로 줄인다.
+    // (그러지 않으면 저장/불러오기 버튼이 오른쪽으로 잘려 사라진다)
+    final compactIcon = IconButton.styleFrom(
+      minimumSize: const Size(32, 32),
+      padding: EdgeInsets.zero,
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
+
     final accentShape = RoundedRectangleBorder(
       borderRadius: const BorderRadius.all(Radius.circular(8)),
       side: BorderSide(color: cs.primary.withValues(alpha: 0.35), width: 1.4),
@@ -2529,12 +2550,15 @@ class _StagingPanel extends StatelessWidget {
           children: [
             Row(
               children: [
-                Text(
-                  '예배 콘티',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                    color: cs.primary,
+                Flexible(
+                  child: Text(
+                    '예배 콘티',
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                      color: cs.primary,
+                    ),
                   ),
                 ),
                 const Spacer(),
@@ -2546,30 +2570,30 @@ class _StagingPanel extends StatelessWidget {
                 IconButton(
                   icon: const Icon(Icons.add_box_outlined, size: 18),
                   tooltip: '빈 페이지 추가',
+                  style: compactIcon,
                   color: cs.onSurfaceVariant,
-                  visualDensity: VisualDensity.compact,
                   onPressed: onAddBlank,
                 ),
                 IconButton(
                   icon: const Icon(Icons.save_outlined, size: 18),
                   tooltip: '콘티 저장',
+                  style: compactIcon,
                   color: cs.onSurfaceVariant,
-                  visualDensity: VisualDensity.compact,
                   onPressed: onSaveConti,
                 ),
                 IconButton(
                   icon: const Icon(Icons.folder_open_outlined, size: 18),
                   tooltip: '콘티 불러오기',
+                  style: compactIcon,
                   color: cs.onSurfaceVariant,
-                  visualDensity: VisualDensity.compact,
                   onPressed: onLoadConti,
                 ),
                 IconButton(
                   icon: const Icon(Icons.expand_less_rounded),
                   iconSize: 18,
                   tooltip: '예배 콘티 접기',
+                  style: compactIcon,
                   color: cs.onSurfaceVariant,
-                  visualDensity: VisualDensity.compact,
                   onPressed: onToggleCollapsed,
                 ),
               ],
