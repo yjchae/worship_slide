@@ -526,7 +526,10 @@ def _convert_to_pdf(source_path, output_dir):
 
 
 def render_presentation_images(file_path):
-    """PPT/PPTX의 모든 페이지를 PNG로 굽고 경로 목록을 돌려준다."""
+    """PPT/PPTX/PDF의 모든 페이지를 PNG로 굽고 경로 목록을 돌려준다.
+
+    PDF는 이미 PDF라서 LibreOffice 변환 단계를 건너뛴다(LibreOffice 없이도 동작).
+    """
     source_path = Path(file_path)
     if not source_path.exists():
         raise RuntimeError(f"파일을 찾을 수 없습니다: {file_path}")
@@ -541,7 +544,8 @@ def render_presentation_images(file_path):
             "page_count": len(cached),
         }
 
-    if get_libreoffice_executable() is None:
+    is_pdf = source_path.suffix.lower() == ".pdf"
+    if not is_pdf and get_libreoffice_executable() is None:
         return {"error": "libreoffice_missing"}
 
     import pymupdf
@@ -552,7 +556,7 @@ def render_presentation_images(file_path):
     staging_dir.mkdir(parents=True, exist_ok=True)
     temp_dir = Path(tempfile.mkdtemp(prefix="praise_ppt_render_"))
     try:
-        pdf_path = _convert_to_pdf(source_path, temp_dir)
+        pdf_path = source_path if is_pdf else _convert_to_pdf(source_path, temp_dir)
         page_count = 0
         with pymupdf.open(str(pdf_path)) as document:
             for index, page in enumerate(document):
@@ -562,7 +566,7 @@ def render_presentation_images(file_path):
                 page_count += 1
 
         if page_count == 0:
-            raise RuntimeError(f"슬라이드가 없습니다: {source_name}")
+            raise RuntimeError(f"페이지가 없습니다: {source_name}")
 
         shutil.rmtree(target_dir, ignore_errors=True)
         target_dir.parent.mkdir(parents=True, exist_ok=True)

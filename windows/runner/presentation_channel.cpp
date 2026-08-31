@@ -93,6 +93,27 @@ void PresentationChannel::Setup(flutter::FlutterEngine* engine) {
             Apply(*data);
             InvalidateRect(hwnd_, nullptr, TRUE);
           }
+        } else if (call.method_name() == "pointer") {
+          if (data) {
+            auto num = [&](const char* key, double def) {
+              auto it = data->find(EV(std::string(key)));
+              if (it == data->end()) return def;
+              if (const auto* d = std::get_if<double>(&it->second)) return *d;
+              if (const auto* i = std::get_if<int32_t>(&it->second))
+                return static_cast<double>(*i);
+              return def;
+            };
+            std::string mode = "off";
+            auto it = data->find(EV(std::string("mode")));
+            if (it != data->end()) {
+              if (const auto* m = std::get_if<std::string>(&it->second)) mode = *m;
+            }
+            ptr_mode_ = mode == "hand" ? 1 : (mode == "dot" ? 2 : 0);
+            ptr_x_    = num("x", 0.0);
+            ptr_y_    = num("y", 0.0);
+            ptr_size_ = num("size", 100.0);
+            if (hwnd_) InvalidateRect(hwnd_, nullptr, FALSE);
+          }
         } else if (call.method_name() == "blackout") {
           slide_.blackout = !slide_.blackout;
           if (hwnd_) InvalidateRect(hwnd_, nullptr, TRUE);
@@ -263,6 +284,7 @@ void PresentationChannel::Paint(HDC hdc, RECT cli) const {
   // 이미지 슬라이드는 디자인 설정을 타지 않고 원본 그대로 보여준다.
   if (!slide_.imagePath.empty()) {
     PaintImage(hdc, W, H);
+    PaintPointer(hdc, W, H);
     return;
   }
 
@@ -385,6 +407,8 @@ void PresentationChannel::Paint(HDC hdc, RECT cli) const {
     SelectObject(hdc, old);
     DeleteObject(ttlFont);
   }
+
+  PaintPointer(hdc, W, H);
 }
 
 // 비율을 유지한 채 화면 가운데에 그린다 (macOS의 object-fit: contain과 동일).
@@ -393,7 +417,11 @@ void PresentationChannel::Paint(HDC hdc, RECT cli) const {
 void PresentationChannel::PaintImage(HDC hdc, int w, int h) const {
   if (w <= 0 || h <= 0) return;
 
-  Gdiplus::Image image(slide_.imagePath.c_str());
+  if (!image_cache_ || image_cache_path_ != slide_.imagePath) {
+    image_cache_ = std::make_unique<Gdiplus::Image>(slide_.imagePath.c_str());
+    image_cache_path_ = slide_.imagePath;
+  }
+  Gdiplus::Image& image = *image_cache_;
   if (image.GetLastStatus() != Gdiplus::Ok) return;
 
   UINT iw = image.GetWidth();
@@ -408,6 +436,66 @@ void PresentationChannel::PaintImage(HDC hdc, int w, int h) const {
   Gdiplus::Graphics graphics(hdc);
   graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
   graphics.DrawImage(&image, (w - dw) / 2, (h - dh) / 2, dw, dh);
+}
+
+// 발표자 보기에서 보내온 좌표에 포인터를 얹는다. macOS 는 WKWebView 쪽 #ptr 이 같은 일을 한다.
+void PresentationChannel::PaintPointer(HDC hdc, int w, int h) const {
+  if (ptr_mode_ == 0 || w <= 0 || h <= 0) return;
+
+  // 이미지 슬라이드는 비율을 지켜 가운데 배치되므로(PaintImage) 그 사각형 안에서
+  // 좌표를 잡아야 발표자가 가리킨 지점과 맞는다.
+  double left = 0.0, top = 0.0, bw = w, bh = h;
+  if (!slide_.imagePath.empty() && image_cache_ &&
+      image_cache_->GetLastStatus() == Gdiplus::Ok) {
+    const UINT iw = image_cache_->GetWidth();
+    const UINT ih = image_cache_->GetHeight();
+    if (iw > 0 && ih > 0) {
+      const double scale = (std::min)(static_cast<double>(w) / iw,
+                                      static_cast<double>(h) / ih);
+      bw = iw * scale;
+      bh = ih * scale;
+      left = (w - bw) / 2.0;
+      top  = (h - bh) / 2.0;
+    }
+  }
+
+  const float cx   = static_cast<float>(left + ptr_x_ * bw);
+  const float cy   = static_cast<float>(top + ptr_y_ * bh);
+  const float size = static_cast<float>(ptr_size_);
+
+  Gdiplus::Graphics g(hdc);
+  g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+
+  if (ptr_mode_ == 2) {
+    // 레이저 점: 가운데가 진한 빨강, 바깥으로 갈수록 투명.
+    const float r = size / 2.0f;
+    Gdiplus::GraphicsPath path;
+    path.AddEllipse(cx - r, cy - r, size, size);
+    Gdiplus::PathGradientBrush brush(&path);
+    brush.SetCenterColor(Gdiplus::Color(242, 255, 64, 64));
+    Gdiplus::Color surround[] = {Gdiplus::Color(0, 255, 0, 0)};
+    int count = 1;
+    brush.SetSurroundColors(surround, &count);
+    g.FillEllipse(&brush, cx - r, cy - r, size, size);
+    return;
+  }
+
+  // 손가락 대신 화살표 커서 모양. GDI 로 이모지를 그릴 수 없어 도형으로 그린다.
+  const float s = size / 100.0f;
+  Gdiplus::PointF arrow[] = {
+      Gdiplus::PointF(cx,             cy),
+      Gdiplus::PointF(cx,             cy + 62 * s),
+      Gdiplus::PointF(cx + 15 * s,    cy + 47 * s),
+      Gdiplus::PointF(cx + 26 * s,    cy + 70 * s),
+      Gdiplus::PointF(cx + 38 * s,    cy + 64 * s),
+      Gdiplus::PointF(cx + 27 * s,    cy + 42 * s),
+      Gdiplus::PointF(cx + 47 * s,    cy + 42 * s),
+  };
+  const int n = static_cast<int>(sizeof(arrow) / sizeof(arrow[0]));
+  Gdiplus::SolidBrush fill(Gdiplus::Color(240, 255, 255, 255));
+  Gdiplus::Pen outline(Gdiplus::Color(220, 20, 20, 20), 2.0f * s);
+  g.FillPolygon(&fill, arrow, n);
+  g.DrawPolygon(&outline, arrow, n);
 }
 
 // ── window procedure ──────────────────────────────────────────────────────────

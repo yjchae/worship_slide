@@ -26,7 +26,7 @@ class PraiseDatabase {
     final dbPath = p.join(_dbDirectory, 'worship_slides.db');
     _database = await openDatabase(
       dbPath,
-      version: 9,
+      version: 10,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE praise_songs (
@@ -77,7 +77,8 @@ class PraiseDatabase {
             blank_text      TEXT,
             blank_english_text TEXT,
             image_source    TEXT,
-            image_paths     TEXT
+            image_paths     TEXT,
+            notes           TEXT
           )
         ''');
       },
@@ -184,6 +185,12 @@ class PraiseDatabase {
           );
           await db.execute(
             "ALTER TABLE worship_conti_items ADD COLUMN image_paths TEXT",
+          );
+        }
+        if (oldVersion < 10) {
+          // 발표자 보기의 슬라이드 메모. {"페이지번호": "메모"} JSON.
+          await db.execute(
+            "ALTER TABLE worship_conti_items ADD COLUMN notes TEXT",
           );
         }
       },

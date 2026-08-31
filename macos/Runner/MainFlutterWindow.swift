@@ -158,7 +158,16 @@ class PresentationWindowController: NSWindowController {
       if(mode==='off'){ e.style.display='none'; return; }
       e.className = mode;
       e.style.display='block';
-      e.style.left=(x*100)+'%'; e.style.top=(y*100)+'%';
+      // 이미지 슬라이드는 object-fit:contain 이라 창 안에서 레터박스가 생긴다.
+      // 발표자 화면은 슬라이드 비율 그대로이므로 이미지 영역 기준으로 다시 맞춘다.
+      var img=document.querySelector('img'), l=0, t=0, w=1, h=1;
+      if(img && img.naturalWidth && img.naturalHeight){
+        var cw=window.innerWidth, ch=window.innerHeight;
+        var s=Math.min(cw/img.naturalWidth, ch/img.naturalHeight);
+        w=img.naturalWidth*s/cw; h=img.naturalHeight*s/ch;
+        l=(1-w)/2; t=(1-h)/2;
+      }
+      e.style.left=((l+x*w)*100)+'%'; e.style.top=((t+y*h)*100)+'%';
       if(mode==='hand'){
         e.style.width='auto'; e.style.height='auto';
         e.style.fontSize=size+'px'; e.textContent='\u{1F446}';
