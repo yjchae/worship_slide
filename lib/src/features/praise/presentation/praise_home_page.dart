@@ -119,8 +119,12 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   // 최상위 탭: 0 편집(콘티·검색·디자인), 1 발표 보기
   late final TabController _mainTabController;
   final Map<String, String> _slideNotes = {};
-  PresenterPointerMode _pointerMode = PresenterPointerMode.hand;
+  PresenterPointerMode _pointerMode = PresenterPointerMode.off;
   double _pointerSize = 100;
+  // 관객 화면 확대. 확대 영역은 슬라이드와 같은 비율이라 크기 하나(가로 비율)면 된다.
+  bool _isZoomOn = false;
+  double _zoomScale = 0.45; // 영역 폭 / 슬라이드 폭 → 실제 배율은 1/이 값
+  Offset _zoomCenter = const Offset(0.5, 0.5);
   double _workColumnRatio = 3 / 7;
   String _slideJumpBuffer = '';
 
@@ -571,6 +575,18 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         'x': position?.dx ?? 0.0,
         'y': position?.dy ?? 0.0,
         'size': _pointerSize,
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _sendZoom() async {
+    if (!_isPresentationOpen) return;
+    try {
+      await _presentationChannel.invokeMethod('zoom', {
+        'on': _isZoomOn,
+        'x': _zoomCenter.dx - _zoomScale / 2,
+        'y': _zoomCenter.dy - _zoomScale / 2,
+        'size': _zoomScale,
       });
     } catch (_) {}
   }
@@ -1650,6 +1666,20 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               onPointerSizeChanged: (v) =>
                                   setState(() => _pointerSize = v),
                               onPointerMove: _sendPointer,
+                              isZoomOn: _isZoomOn,
+                              zoomScale: _zoomScale,
+                              zoomCenter: _zoomCenter,
+                              onZoomToggled: () {
+                                setState(() => _isZoomOn = !_isZoomOn);
+                                _sendZoom();
+                              },
+                              onZoomChanged: (center, scale) {
+                                setState(() {
+                                  _zoomCenter = center;
+                                  _zoomScale = scale;
+                                });
+                                _sendZoom();
+                              },
                             );
 
                             final searchColumn = _SearchAndBiblePanel(
@@ -5234,6 +5264,11 @@ class _PresenterConsole extends StatefulWidget {
     required this.onPointerModeChanged,
     required this.onPointerSizeChanged,
     required this.onPointerMove,
+    required this.isZoomOn,
+    required this.zoomScale,
+    required this.zoomCenter,
+    required this.onZoomToggled,
+    required this.onZoomChanged,
   });
 
   final List<_SlideInfo> slides;
@@ -5257,6 +5292,11 @@ class _PresenterConsole extends StatefulWidget {
   final ValueChanged<double> onPointerSizeChanged;
   // 현재 슬라이드 미리보기 위의 좌표(0~1). null 이면 화면 밖으로 나간 것.
   final ValueChanged<Offset?> onPointerMove;
+  final bool isZoomOn;
+  final double zoomScale;
+  final Offset zoomCenter;
+  final VoidCallback onZoomToggled;
+  final void Function(Offset center, double scale) onZoomChanged;
 
   @override
   State<_PresenterConsole> createState() => _PresenterConsoleState();
@@ -5460,6 +5500,14 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
           tooltip: '다음 (→ Space)',
         ),
         const SizedBox(width: 4),
+        IconButton(
+          onPressed: widget.onZoomToggled,
+          icon: Icon(
+            widget.isZoomOn ? Icons.zoom_in_rounded : Icons.search_rounded,
+          ),
+          tooltip: widget.isZoomOn ? '확대 끄기' : '영역 확대',
+          color: widget.isZoomOn ? cs.primary : null,
+        ),
         // 발표 시작/종료는 탭 옆 상단 버튼이 담당한다. 여기선 화면 끄기만.
         if (open)
           IconButton(
@@ -5498,8 +5546,19 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
                         border: Border.all(color: cs.outlineVariant),
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      child: SlideRenderView(
-                        data: _pageDataFor(widget.currentIndex),
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          SlideRenderView(
+                            data: _pageDataFor(widget.currentIndex),
+                          ),
+                          if (widget.isZoomOn)
+                            _ZoomRegionOverlay(
+                              center: widget.zoomCenter,
+                              scale: widget.zoomScale,
+                              onChanged: widget.onZoomChanged,
+                            ),
+                        ],
                       ),
                     ),
                   ),
@@ -5934,4 +5993,163 @@ class _TextPromptDialogState extends State<_TextPromptDialog> {
       ],
     );
   }
+}
+
+// 현재 슬라이드 미리보기 위에 얹는 "관객 화면에 확대해서 보여줄 영역" 상자.
+// 안쪽을 끌면 위치가, 오른쪽 아래 손잡이를 끌면 크기가 바뀐다. 빈 곳을 누르면
+// 그 지점이 상자 가운데로 온다. 영역 비율은 슬라이드와 같으므로 크기 값 하나로 충분하다.
+class _ZoomRegionOverlay extends StatelessWidget {
+  const _ZoomRegionOverlay({
+    required this.center,
+    required this.scale,
+    required this.onChanged,
+  });
+
+  final Offset center; // 0~1
+  final double scale; // 영역 폭 / 슬라이드 폭
+  final void Function(Offset center, double scale) onChanged;
+
+  static const double _minScale = 0.12;
+  static const double _maxScale = 0.9;
+  static const double _handle = 22;
+
+  // 상자가 슬라이드 밖으로 나가지 않게 가운데 좌표를 가둔다.
+  Offset _clampCenter(Offset c, double s) {
+    final half = s / 2;
+    return Offset(c.dx.clamp(half, 1 - half), c.dy.clamp(half, 1 - half));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final w = constraints.maxWidth;
+        final h = constraints.maxHeight;
+        final boxW = w * scale;
+        final boxH = h * scale;
+        final left = center.dx * w - boxW / 2;
+        final top = center.dy * h - boxH / 2;
+
+        void moveTo(Offset local) {
+          onChanged(
+            _clampCenter(Offset(local.dx / w, local.dy / h), scale),
+            scale,
+          );
+        }
+
+        return Stack(
+          children: [
+            // 상자 밖은 어둡게 — 어디가 확대되는지 한눈에 보이게.
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTapDown: (d) => moveTo(d.localPosition),
+                child: CustomPaint(
+                  painter: _ZoomDimPainter(
+                    rect: Rect.fromLTWH(left, top, boxW, boxH),
+                    color: Colors.black.withValues(alpha: 0.45),
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              left: left,
+              top: top,
+              width: boxW,
+              height: boxH,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onPanUpdate: (d) => onChanged(
+                  _clampCenter(
+                    Offset(
+                      center.dx + d.delta.dx / w,
+                      center.dy + d.delta.dy / h,
+                    ),
+                    scale,
+                  ),
+                  scale,
+                ),
+                child: Container(
+                  decoration: BoxDecoration(
+                    border: Border.all(color: cs.primary, width: 2),
+                  ),
+                  child: Align(
+                    alignment: Alignment.topLeft,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 5,
+                        vertical: 1,
+                      ),
+                      color: cs.primary,
+                      child: Text(
+                        '${(1 / scale).toStringAsFixed(1)}x',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: cs.onPrimary,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            // 크기 조절 손잡이
+            Positioned(
+              left: left + boxW - _handle / 2,
+              top: top + boxH - _handle / 2,
+              width: _handle,
+              height: _handle,
+              child: MouseRegion(
+                cursor: SystemMouseCursors.resizeUpLeftDownRight,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onPanUpdate: (d) {
+                    final next = (scale + d.delta.dx / w * 2).clamp(
+                      _minScale,
+                      _maxScale,
+                    );
+                    onChanged(_clampCenter(center, next), next);
+                  },
+                  child: Center(
+                    child: Container(
+                      width: 12,
+                      height: 12,
+                      decoration: BoxDecoration(
+                        color: cs.primary,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _ZoomDimPainter extends CustomPainter {
+  const _ZoomDimPainter({required this.rect, required this.color});
+
+  final Rect rect;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final outside = Path.combine(
+      PathOperation.difference,
+      Path()..addRect(Offset.zero & size),
+      Path()..addRect(rect),
+    );
+    canvas.drawPath(outside, Paint()..color = color);
+  }
+
+  @override
+  bool shouldRepaint(_ZoomDimPainter old) =>
+      old.rect != rect || old.color != color;
 }

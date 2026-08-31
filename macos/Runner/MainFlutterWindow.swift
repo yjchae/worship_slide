@@ -74,6 +74,22 @@ class PresentationWindowController: NSWindowController {
   private var _ptrY = 0.0
   private var _ptrSize = 100.0
 
+  // 발표자 보기에서 지정한 확대 영역(슬라이드 기준 0~1). 슬라이드와 같은 비율이라
+  // 크기 하나면 되고, 배율은 1/size 다.
+  private var _zoomOn = false
+  private var _zoomX = 0.0
+  private var _zoomY = 0.0
+  private var _zoomSize = 1.0
+
+  func setZoom(on: Bool, x: Double, y: Double, size: Double) {
+    _zoomOn = on; _zoomX = x; _zoomY = y; _zoomSize = max(size, 0.01)
+    webView.evaluateJavaScript(zoomCall(), completionHandler: nil)
+  }
+
+  private func zoomCall() -> String {
+    return "window.setZoom&&setZoom(\(_zoomOn),\(_zoomX),\(_zoomY),\(_zoomSize))"
+  }
+
   func setPointer(mode: String, x: Double, y: Double, size: Double) {
     _ptrMode = mode; _ptrX = x; _ptrY = y; _ptrSize = size
     // 마우스가 움직일 때마다 페이지를 다시 로드하면 깜빡이므로 JS 로만 옮긴다.
@@ -144,6 +160,7 @@ class PresentationWindowController: NSWindowController {
   // 외부 PPT에서 구운 페이지 이미지 한 장을 화면에 꽉 채워 보여준다.
   // 관객 화면 포인터 (발표자 보기에서 마우스를 움직이면 여기에 표시된다)
   static let pointerCSS = """
+      html{overflow:hidden;}
       #ptr{position:absolute;display:none;pointer-events:none;z-index:99;
            transform:translate(-50%,-50%);line-height:1;text-align:center;}
       #ptr.dot{border-radius:50%;
@@ -176,7 +193,16 @@ class PresentationWindowController: NSWindowController {
         e.style.width=size+'px'; e.style.height=size+'px';
       }
     };
+    window.setZoom=function(on,x,y,size){
+      var b=document.body;
+      if(!on){ b.style.transform='none'; return; }
+      var s=1/size;
+      // transform-origin 0 0 기준: 영역의 좌상단을 원점으로 옮긴 뒤 확대한다.
+      b.style.transformOrigin='0 0';
+      b.style.transform='scale('+s+') translate('+(-x*100)+'vw,'+(-y*100)+'vh)';
+    };
     setPtr('\(_ptrMode)',\(_ptrX),\(_ptrY),\(_ptrSize));
+    \(zoomCall());
     """
   }
 
@@ -443,6 +469,16 @@ class MainFlutterWindow: NSWindow {
 
       case "updatePage":
         if let d = data { self.presentationController?.updatePage(data: d) }
+        result(nil)
+
+      case "zoom":
+        if let d = data {
+          self.presentationController?.setZoom(
+            on: d["on"] as? Bool ?? false,
+            x: d["x"] as? Double ?? 0,
+            y: d["y"] as? Double ?? 0,
+            size: d["size"] as? Double ?? 1)
+        }
         result(nil)
 
       case "pointer":

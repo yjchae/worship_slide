@@ -93,6 +93,26 @@ void PresentationChannel::Setup(flutter::FlutterEngine* engine) {
             Apply(*data);
             InvalidateRect(hwnd_, nullptr, TRUE);
           }
+        } else if (call.method_name() == "zoom") {
+          if (data) {
+            auto num = [&](const char* key, double def) {
+              auto it = data->find(EV(std::string(key)));
+              if (it == data->end()) return def;
+              if (const auto* d = std::get_if<double>(&it->second)) return *d;
+              if (const auto* i = std::get_if<int32_t>(&it->second))
+                return static_cast<double>(*i);
+              return def;
+            };
+            zoom_on_ = false;
+            auto it = data->find(EV(std::string("on")));
+            if (it != data->end()) {
+              if (const auto* b = std::get_if<bool>(&it->second)) zoom_on_ = *b;
+            }
+            zoom_x_    = num("x", 0.0);
+            zoom_y_    = num("y", 0.0);
+            zoom_size_ = (std::max)(num("size", 1.0), 0.01);
+            if (hwnd_) InvalidateRect(hwnd_, nullptr, FALSE);
+          }
         } else if (call.method_name() == "pointer") {
           if (data) {
             auto num = [&](const char* key, double def) {
@@ -288,6 +308,20 @@ void PresentationChannel::Paint(HDC hdc, RECT cli) const {
     return;
   }
 
+  // 확대: 글자까지 같이 커져야 하므로 GDI 월드 변환을 건다. 배경은 위에서 이미
+  // 변환 없이 칠했으므로 확대해도 빈 곳이 생기지 않는다.
+  XFORM saved_xform = {};
+  const bool zoom_applied = zoom_on_;
+  if (zoom_applied) {
+    SetGraphicsMode(hdc, GM_ADVANCED);
+    GetWorldTransform(hdc, &saved_xform);
+    const float s = static_cast<float>(1.0 / zoom_size_);
+    XFORM xf = {s, 0.0f, 0.0f, s,
+                static_cast<float>(-zoom_x_ * W * s),
+                static_cast<float>(-zoom_y_ * H * s)};
+    SetWorldTransform(hdc, &xf);
+  }
+
   SetBkMode(hdc, TRANSPARENT);
 
   // Font factory: size in "slide points", height scaled to window height
@@ -408,6 +442,8 @@ void PresentationChannel::Paint(HDC hdc, RECT cli) const {
     DeleteObject(ttlFont);
   }
 
+  if (zoom_applied) SetWorldTransform(hdc, &saved_xform);
+
   PaintPointer(hdc, W, H);
 }
 
@@ -435,6 +471,13 @@ void PresentationChannel::PaintImage(HDC hdc, int w, int h) const {
 
   Gdiplus::Graphics graphics(hdc);
   graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+  if (zoom_on_) {
+    const float s = static_cast<float>(1.0 / zoom_size_);
+    Gdiplus::Matrix m(s, 0.0f, 0.0f, s,
+                      static_cast<float>(-zoom_x_ * w * s),
+                      static_cast<float>(-zoom_y_ * h * s));
+    graphics.SetTransform(&m);
+  }
   graphics.DrawImage(&image, (w - dw) / 2, (h - dh) / 2, dw, dh);
 }
 
@@ -465,6 +508,13 @@ void PresentationChannel::PaintPointer(HDC hdc, int w, int h) const {
 
   Gdiplus::Graphics g(hdc);
   g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+  if (zoom_on_) {
+    const float zs = static_cast<float>(1.0 / zoom_size_);
+    Gdiplus::Matrix zm(zs, 0.0f, 0.0f, zs,
+                       static_cast<float>(-zoom_x_ * w * zs),
+                       static_cast<float>(-zoom_y_ * h * zs));
+    g.SetTransform(&zm);
+  }
 
   if (ptr_mode_ == 2) {
     // 레이저 점: 가운데가 진한 빨강, 바깥으로 갈수록 투명.

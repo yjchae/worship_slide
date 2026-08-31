@@ -66,6 +66,13 @@ class PresentationChannel {
   double ptr_y_    = 0.0;   // 0~1
   double ptr_size_ = 100.0; // px
 
+  // 관객 화면 확대 영역(슬라이드 기준 0~1). 슬라이드와 같은 비율이라 크기 하나면 되고,
+  // 배율은 1/zoom_size_ 다.
+  bool   zoom_on_   = false;
+  double zoom_x_    = 0.0;
+  double zoom_y_    = 0.0;
+  double zoom_size_ = 1.0;
+
   // 포인터를 움직이면 매 프레임 다시 그리는데, 이미지 슬라이드를 그때마다
   // 디코딩하면 창이 버벅인다. 경로가 같으면 디코딩한 것을 재사용한다.
   mutable std::unique_ptr<Gdiplus::Image> image_cache_;
