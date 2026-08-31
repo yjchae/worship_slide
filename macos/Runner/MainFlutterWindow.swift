@@ -68,6 +68,18 @@ class PresentationWindowController: NSWindowController {
 
   private var _isBlackout = false
   private var _lastData: [String: Any]? = nil
+  // 발표자 보기에서 보내온 포인터. 슬라이드를 다시 그릴 때도 유지해야 해서 들고 있는다.
+  private var _ptrMode = "off"
+  private var _ptrX = 0.0
+  private var _ptrY = 0.0
+  private var _ptrSize = 100.0
+
+  func setPointer(mode: String, x: Double, y: Double, size: Double) {
+    _ptrMode = mode; _ptrX = x; _ptrY = y; _ptrSize = size
+    // 마우스가 움직일 때마다 페이지를 다시 로드하면 깜빡이므로 JS 로만 옮긴다.
+    let js = "window.setPtr&&setPtr('\(mode)',\(x),\(y),\(size))"
+    webView.evaluateJavaScript(js, completionHandler: nil)
+  }
 
   // data: Dart의 SlidePageData.toJson() 결과 ([String:Any])
   func updatePage(data: [String: Any]) {
@@ -130,6 +142,35 @@ class PresentationWindowController: NSWindowController {
   }
 
   // 외부 PPT에서 구운 페이지 이미지 한 장을 화면에 꽉 채워 보여준다.
+  // 관객 화면 포인터 (발표자 보기에서 마우스를 움직이면 여기에 표시된다)
+  static let pointerCSS = """
+      #ptr{position:absolute;display:none;pointer-events:none;z-index:99;
+           transform:translate(-50%,-50%);line-height:1;text-align:center;}
+      #ptr.dot{border-radius:50%;
+        background:radial-gradient(circle,rgba(255,64,64,.95) 0%,rgba(255,0,0,.55) 45%,rgba(255,0,0,0) 72%);}
+  """
+  static let pointerHTML = "<div id=\"ptr\"></div>"
+
+  private func pointerScript() -> String {
+    return """
+    window.setPtr=function(mode,x,y,size){
+      var e=document.getElementById('ptr'); if(!e) return;
+      if(mode==='off'){ e.style.display='none'; return; }
+      e.className = mode;
+      e.style.display='block';
+      e.style.left=(x*100)+'%'; e.style.top=(y*100)+'%';
+      if(mode==='hand'){
+        e.style.width='auto'; e.style.height='auto';
+        e.style.fontSize=size+'px'; e.textContent='\u{1F446}';
+      } else {
+        e.textContent=''; e.style.fontSize='0';
+        e.style.width=size+'px'; e.style.height=size+'px';
+      }
+    };
+    setPtr('\(_ptrMode)',\(_ptrX),\(_ptrY),\(_ptrSize));
+    """
+  }
+
   private func buildImageHTML(imagePath: String, bgColor: String) -> String {
     guard let data = try? Data(contentsOf: URL(fileURLWithPath: imagePath)) else {
       return """
@@ -145,10 +186,13 @@ class PresentationWindowController: NSWindowController {
     <!DOCTYPE html><html><head><meta charset="utf-8">
     <style>
       *{margin:0;padding:0;}
-      body{width:100vw;height:100vh;background:\(bgColor);overflow:hidden;}
+      body{width:100vw;height:100vh;background:\(bgColor);overflow:hidden;position:relative;}
       img{width:100%;height:100%;object-fit:contain;display:block;}
+      \(Self.pointerCSS)
     </style></head><body>
       <img src="data:\(mime);base64,\(b64)">
+      \(Self.pointerHTML)
+      <script>\(pointerScript())</script>
     </body></html>
     """
   }
@@ -275,13 +319,16 @@ class PresentationWindowController: NSWindowController {
       .english-text{color:\(englishColor);font-size:calc(\(englishFontSize)/540*100vh);
         font-weight:700;line-height:1.3;text-align:\(textAlign);
         margin-top:0.4em;white-space:pre-wrap;width:100%;}
+      \(Self.pointerCSS)
     </style></head><body>
       <div class="body-box">
         <div class="main-text">\(mainText.replacingOccurrences(of: "\n", with: "<br>"))</div>
         \(englishSection)
       </div>
       \(titleSection)
+      \(Self.pointerHTML)
     <script>
+    \(pointerScript())
     requestAnimationFrame(function(){
       var box = document.querySelector('.body-box');
       if (!box) return;
@@ -387,6 +434,16 @@ class MainFlutterWindow: NSWindow {
 
       case "updatePage":
         if let d = data { self.presentationController?.updatePage(data: d) }
+        result(nil)
+
+      case "pointer":
+        if let d = data {
+          self.presentationController?.setPointer(
+            mode: d["mode"] as? String ?? "off",
+            x: d["x"] as? Double ?? 0,
+            y: d["y"] as? Double ?? 0,
+            size: d["size"] as? Double ?? 100)
+        }
         result(nil)
 
       case "blackout":

@@ -57,7 +57,8 @@ class _SlideInfo {
   final String? imagePath;
 }
 
-class _PraiseHomePageState extends State<PraiseHomePage> {
+class _PraiseHomePageState extends State<PraiseHomePage>
+    with SingleTickerProviderStateMixin {
   static const MethodChannel _savePanelChannel = MethodChannel(
     'worship_slides/save_panel',
   );
@@ -118,6 +119,11 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
   bool _isSlideOrderCollapsed = false;
   bool _isSlideOrderMaximized = false;
   bool _isStagingCollapsed = false;
+  // 최상위 탭: 0 편집(콘티·검색·디자인), 1 발표 보기
+  late final TabController _mainTabController;
+  final Map<String, String> _slideNotes = {};
+  PresenterPointerMode _pointerMode = PresenterPointerMode.hand;
+  double _pointerSize = 100;
   double _presentationPanelRatio = 0.28;
   double _workColumnRatio = 3 / 7;
   String _slideJumpBuffer = '';
@@ -174,6 +180,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
   @override
   void initState() {
     super.initState();
+    _mainTabController = TabController(length: 2, vsync: this);
     _loadSongs();
     _loadSavedStyle();
     _loadBibleCount();
@@ -189,6 +196,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
 
   @override
   void dispose() {
+    _mainTabController.dispose();
     _presentationFocusNode.dispose();
     _searchController
       ..removeListener(_loadSongs)
@@ -485,7 +493,11 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
       // 검색창에 커서가 있어도 발표 시작 시엔 단축키가 먹어야 한다.
       FocusManager.instance.primaryFocus?.unfocus();
       _presentationFocusNode.requestFocus();
-      setState(() => _isPresentationOpen = true);
+      setState(() {
+        _isPresentationOpen = true;
+      });
+      // 발표를 시작하면 발표 보기 탭으로. 편집 탭은 그대로 살아 있다.
+      _mainTabController.animateTo(1);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -526,6 +538,25 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     } catch (_) {
       if (mounted) setState(() => _isPresentationOpen = false);
     }
+  }
+
+  String _slideKeyAt(int index) {
+    final slides = _allSlides;
+    if (index < 0 || index >= slides.length) return '';
+    return _slideKey(slides[index].stagingUid, slides[index].pageIndexInItem);
+  }
+
+  // 발표자 보기에서 현재 슬라이드 위 좌표(0~1)를 관객 화면에 그대로 넘긴다.
+  Future<void> _sendPointer(Offset? position) async {
+    if (!_isPresentationOpen) return;
+    try {
+      await _presentationChannel.invokeMethod('pointer', {
+        'mode': position == null ? 'off' : _pointerMode.name,
+        'x': position?.dx ?? 0.0,
+        'y': position?.dy ?? 0.0,
+        'size': _pointerSize,
+      });
+    } catch (_) {}
   }
 
   Future<void> _prevSlide() async {
@@ -1655,6 +1686,48 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                               ],
                             );
 
+                            final presenterConsole = _PresenterConsole(
+                              slides: slides,
+                              currentIndex: _currentSlideIndex.clamp(
+                                0,
+                                slides.isEmpty ? 0 : slides.length - 1,
+                              ),
+                              style: _style,
+                              isPresentationOpen: _isPresentationOpen,
+                              isBlackout: _isBlackout,
+                              slideKeyAt: _slideKeyAt,
+                              notes: _slideNotes,
+                              onNoteChanged: (key, note) {
+                                if (key.isEmpty) return;
+                                setState(() {
+                                  if (note.isEmpty) {
+                                    _slideNotes.remove(key);
+                                  } else {
+                                    _slideNotes[key] = note;
+                                  }
+                                });
+                              },
+                              onSlideSelected: _goToSlide,
+                              onSlideEdit: _editSlide,
+                              onSlideDelete: _deleteSlide,
+                              onPrev: _prevSlide,
+                              onNext: _nextSlide,
+                              onToggleBlackout: _toggleBlackout,
+                              onOpen: _openPresentation,
+                              onClose: _closePresentation,
+                              pointerMode: _pointerMode,
+                              pointerSize: _pointerSize,
+                              onPointerModeChanged: (m) {
+                                setState(() => _pointerMode = m);
+                                if (m == PresenterPointerMode.off) {
+                                  _sendPointer(null);
+                                }
+                              },
+                              onPointerSizeChanged: (v) =>
+                                  setState(() => _pointerSize = v),
+                              onPointerMove: _sendPointer,
+                            );
+
                             final searchColumn = _SearchAndBiblePanel(
                               searchController: _searchController,
                               songs: _songs,
@@ -1689,75 +1762,97 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                                   setState(() => _isSearchCollapsed = false),
                             );
 
-                            return Expanded(
-                              child: Flex(
-                                direction: isWide
-                                    ? Axis.horizontal
-                                    : Axis.vertical,
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  // ── 발표·콘티 + 검색 (가로 크기 조절 가능) ──
-                                  Expanded(
-                                    flex: 7,
-                                    child: isWide
-                                        ? _ResizableColumnSplit(
-                                            ratio: _workColumnRatio,
-                                            onRatioChanged: (v) => setState(
-                                              () => _workColumnRatio = v,
-                                            ),
-                                            first: presentationAndStagingColumn,
-                                            second: searchColumn,
-                                            isSecondCollapsed:
-                                                _isSearchCollapsed,
-                                            collapsedSecond:
-                                                collapsedSearchStrip,
-                                          )
-                                        : Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              Expanded(
-                                                flex: 3,
-                                                child:
-                                                    presentationAndStagingColumn,
-                                              ),
-                                              const SizedBox(height: 20),
-                                              if (_isSearchCollapsed)
-                                                collapsedSearchStrip
-                                              else
-                                                Expanded(
-                                                  flex: 4,
-                                                  child: searchColumn,
-                                                ),
-                                            ],
+                            final workspace = Flex(
+                              direction: isWide
+                                  ? Axis.horizontal
+                                  : Axis.vertical,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                // ── 발표·콘티 + 검색 (가로 크기 조절 가능) ──
+                                Expanded(
+                                  flex: 7,
+                                  child: isWide
+                                      ? _ResizableColumnSplit(
+                                          ratio: _workColumnRatio,
+                                          onRatioChanged: (v) => setState(
+                                            () => _workColumnRatio = v,
                                           ),
-                                  ),
-                                  gap,
-                                  // ── PPTX 디자인 ──
-                                  if (_isDesignCollapsed)
-                                    _CollapsedPanelStrip(
-                                      label: 'PPTX 디자인',
-                                      isVertical: isWide,
-                                      onExpand: () => setState(
-                                        () => _isDesignCollapsed = false,
-                                      ),
-                                    )
-                                  else
-                                    Expanded(
-                                      flex: 2,
-                                      child: _DesignPanel(
-                                        style: _style,
-                                        isExporting: _isExporting,
-                                        swatches: _swatches,
-                                        textSwatches: _textSwatches,
-                                        previewItem: previewItem,
-                                        onStyleChanged: _updateStyle,
-                                        onExportPressed: _exportPresentation,
-                                        onCollapse: () => setState(
-                                          () => _isDesignCollapsed = true,
+                                          first: presentationAndStagingColumn,
+                                          second: searchColumn,
+                                          isSecondCollapsed: _isSearchCollapsed,
+                                          collapsedSecond: collapsedSearchStrip,
+                                        )
+                                      : Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Expanded(
+                                              flex: 3,
+                                              child:
+                                                  presentationAndStagingColumn,
+                                            ),
+                                            const SizedBox(height: 20),
+                                            if (_isSearchCollapsed)
+                                              collapsedSearchStrip
+                                            else
+                                              Expanded(
+                                                flex: 4,
+                                                child: searchColumn,
+                                              ),
+                                          ],
                                         ),
+                                ),
+                                gap,
+                                // ── PPTX 디자인 ──
+                                if (_isDesignCollapsed)
+                                  _CollapsedPanelStrip(
+                                    label: 'PPTX 디자인',
+                                    isVertical: isWide,
+                                    onExpand: () => setState(
+                                      () => _isDesignCollapsed = false,
+                                    ),
+                                  )
+                                else
+                                  Expanded(
+                                    flex: 2,
+                                    child: _DesignPanel(
+                                      style: _style,
+                                      isExporting: _isExporting,
+                                      swatches: _swatches,
+                                      textSwatches: _textSwatches,
+                                      previewItem: previewItem,
+                                      onStyleChanged: _updateStyle,
+                                      onExportPressed: _exportPresentation,
+                                      onCollapse: () => setState(
+                                        () => _isDesignCollapsed = true,
                                       ),
                                     ),
+                                  ),
+                              ],
+                            );
+
+                            return Expanded(
+                              child: Column(
+                                children: [
+                                  TabBar(
+                                    controller: _mainTabController,
+                                    isScrollable: true,
+                                    tabAlignment: TabAlignment.start,
+                                    tabs: const [
+                                      Tab(text: '편집'),
+                                      Tab(text: '발표 보기'),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Expanded(
+                                    child: TabBarView(
+                                      controller: _mainTabController,
+                                      // 좌우 드래그로 탭이 넘어가면 슬라이드 목록 스크롤과 겹친다.
+                                      physics:
+                                          const NeverScrollableScrollPhysics(),
+                                      children: [workspace, presenterConsole],
+                                    ),
+                                  ),
                                 ],
                               ),
                             );
@@ -5769,6 +5864,644 @@ class _BackgroundImagePicker extends StatelessWidget {
           ] else
             Text('없음', style: TextStyle(color: cs.onSurfaceVariant)),
         ],
+      ),
+    );
+  }
+}
+
+// ── PresenterConsole ─────────────────────────────────────────────────────
+// PPT 발표자 보기. 검색 패널의 세 번째 탭으로 들어간다(창을 새로 띄우지 않는 이유는
+// 발표 중에도 같은 창에서 검색·콘티 편집을 해야 하기 때문).
+// 관객 화면은 기존 네이티브 발표 창이 그대로 담당한다.
+
+enum PresenterPointerMode { hand, dot, off }
+
+class _PresenterConsole extends StatefulWidget {
+  const _PresenterConsole({
+    required this.slides,
+    required this.currentIndex,
+    required this.style,
+    required this.isPresentationOpen,
+    required this.isBlackout,
+    required this.slideKeyAt,
+    required this.notes,
+    required this.onNoteChanged,
+    required this.onSlideSelected,
+    required this.onSlideEdit,
+    required this.onSlideDelete,
+    required this.onPrev,
+    required this.onNext,
+    required this.onToggleBlackout,
+    required this.onOpen,
+    required this.onClose,
+    required this.pointerMode,
+    required this.pointerSize,
+    required this.onPointerModeChanged,
+    required this.onPointerSizeChanged,
+    required this.onPointerMove,
+  });
+
+  final List<_SlideInfo> slides;
+  final int currentIndex;
+  final ExportStyle style;
+  final bool isPresentationOpen;
+  final bool isBlackout;
+  final String Function(int index) slideKeyAt;
+  final Map<String, String> notes;
+  final void Function(String key, String note) onNoteChanged;
+  final ValueChanged<int> onSlideSelected;
+  final ValueChanged<int> onSlideEdit;
+  final ValueChanged<int> onSlideDelete;
+  final VoidCallback onPrev;
+  final VoidCallback onNext;
+  final VoidCallback onToggleBlackout;
+  final VoidCallback onOpen;
+  final VoidCallback onClose;
+  final PresenterPointerMode pointerMode;
+  final double pointerSize;
+  final ValueChanged<PresenterPointerMode> onPointerModeChanged;
+  final ValueChanged<double> onPointerSizeChanged;
+  // 현재 슬라이드 미리보기 위의 좌표(0~1). null 이면 화면 밖으로 나간 것.
+  final ValueChanged<Offset?> onPointerMove;
+
+  @override
+  State<_PresenterConsole> createState() => _PresenterConsoleState();
+}
+
+class _PresenterConsoleState extends State<_PresenterConsole> {
+  Timer? _ticker;
+  Duration _elapsed = Duration.zero;
+  bool _isPaused = false;
+  int _targetMinutes = 20;
+
+  final _noteController = TextEditingController();
+  final _targetController = TextEditingController(text: '20');
+  final _stripScrollController = ScrollController();
+  String _noteKey = '';
+
+  static const double _thumbAspect = 13.333 / 7.5;
+  static const double _stripHeight = 104;
+  static const double _stripSpacing = 8;
+
+  @override
+  void initState() {
+    super.initState();
+    _syncNote();
+    if (widget.isPresentationOpen) _startTimer();
+  }
+
+  @override
+  void didUpdateWidget(_PresenterConsole oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 발표를 새로 시작하면 타이머도 0부터 다시.
+    if (!oldWidget.isPresentationOpen && widget.isPresentationOpen) {
+      _elapsed = Duration.zero;
+      _isPaused = false;
+      _startTimer();
+    } else if (oldWidget.isPresentationOpen && !widget.isPresentationOpen) {
+      _ticker?.cancel();
+      _ticker = null;
+    }
+    if (oldWidget.currentIndex != widget.currentIndex ||
+        oldWidget.slides.length != widget.slides.length) {
+      _syncNote();
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _scrollStripToCurrent(),
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    _ticker?.cancel();
+    _noteController.dispose();
+    _targetController.dispose();
+    _stripScrollController.dispose();
+    super.dispose();
+  }
+
+  void _startTimer() {
+    _ticker?.cancel();
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted || _isPaused) return;
+      setState(() => _elapsed += const Duration(seconds: 1));
+    });
+  }
+
+  // 슬라이드가 바뀌면 그 슬라이드의 메모를 컨트롤러에 옮긴다.
+  void _syncNote() {
+    final key = widget.currentIndex < widget.slides.length
+        ? widget.slideKeyAt(widget.currentIndex)
+        : '';
+    if (key == _noteKey) return;
+    _noteKey = key;
+    final text = widget.notes[key] ?? '';
+    if (_noteController.text != text) _noteController.text = text;
+  }
+
+  void _scrollStripToCurrent() {
+    if (!_stripScrollController.hasClients || widget.slides.isEmpty) return;
+    final tw = (_stripHeight - 26) * _thumbAspect;
+    final target = widget.currentIndex * (tw + _stripSpacing);
+    final viewport = _stripScrollController.position.viewportDimension;
+    _stripScrollController.animateTo(
+      (target - (viewport - tw) / 2).clamp(
+        0.0,
+        _stripScrollController.position.maxScrollExtent,
+      ),
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeInOut,
+    );
+  }
+
+  SlidePageData _pageDataFor(int i) {
+    final info = widget.slides[i];
+    return SlidePageData(
+      mainText: info.mainText,
+      englishText: info.englishText,
+      title: info.title,
+      isBible: info.isBible,
+      pageIndex: i,
+      totalPages: widget.slides.length,
+      style: widget.style,
+      imagePath: info.imagePath,
+    );
+  }
+
+  static String _fmt(Duration d) {
+    final m = d.inMinutes.toString().padLeft(2, '0');
+    final s = (d.inSeconds % 60).toString().padLeft(2, '0');
+    return '$m:$s';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    if (widget.slides.isEmpty) {
+      return _centerHint(
+        cs,
+        Icons.co_present_rounded,
+        '콘티에 찬양이나 성경 본문을 담으면\n여기에서 발표자 보기를 쓸 수 있습니다.',
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+      child: Column(
+        children: [
+          _header(cs),
+          const SizedBox(height: 10),
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                // 좁으면 옆 패널을 아래로 내린다.
+                final isWide = constraints.maxWidth >= 620;
+                final current = _currentStage(cs);
+                final side = _sidePanel(cs);
+                return isWide
+                    ? Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(flex: 3, child: current),
+                          const SizedBox(width: 12),
+                          SizedBox(width: 240, child: side),
+                        ],
+                      )
+                    : Column(
+                        children: [
+                          Expanded(flex: 3, child: current),
+                          const SizedBox(height: 12),
+                          Expanded(flex: 2, child: side),
+                        ],
+                      );
+              },
+            ),
+          ),
+          const SizedBox(height: 10),
+          SizedBox(height: _stripHeight, child: _thumbStrip(cs)),
+        ],
+      ),
+    );
+  }
+
+  Widget _centerHint(ColorScheme cs, IconData icon, String text) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 42, color: cs.outline),
+          const SizedBox(height: 12),
+          Text(
+            text,
+            textAlign: TextAlign.center,
+            style: TextStyle(color: cs.onSurfaceVariant, height: 1.5),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _header(ColorScheme cs) {
+    final open = widget.isPresentationOpen;
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            color: open ? cs.primaryContainer : cs.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                open ? Icons.cast_connected_rounded : Icons.cast_rounded,
+                size: 15,
+                color: open ? cs.onPrimaryContainer : cs.onSurfaceVariant,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                open ? '발표 중' : '발표 대기',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: open ? cs.onPrimaryContainer : cs.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 10),
+        Text(
+          '${widget.currentIndex + 1} / ${widget.slides.length}',
+          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+        ),
+        const Spacer(),
+        IconButton(
+          onPressed: widget.currentIndex > 0 ? widget.onPrev : null,
+          icon: const Icon(Icons.chevron_left_rounded),
+          tooltip: '이전 (←)',
+        ),
+        IconButton(
+          onPressed: widget.currentIndex < widget.slides.length - 1
+              ? widget.onNext
+              : null,
+          icon: const Icon(Icons.chevron_right_rounded),
+          tooltip: '다음 (→ Space)',
+        ),
+        const SizedBox(width: 4),
+        if (open) ...[
+          IconButton(
+            onPressed: widget.onToggleBlackout,
+            icon: Icon(
+              widget.isBlackout
+                  ? Icons.visibility_off_rounded
+                  : Icons.visibility_rounded,
+            ),
+            tooltip: '화면 끄기 (B)',
+            color: widget.isBlackout ? cs.error : null,
+          ),
+          FilledButton.tonalIcon(
+            onPressed: widget.onClose,
+            icon: const Icon(Icons.stop_rounded, size: 17),
+            label: const Text('종료'),
+            style: FilledButton.styleFrom(
+              backgroundColor: cs.errorContainer,
+              foregroundColor: cs.onErrorContainer,
+            ),
+          ),
+        ] else
+          FilledButton.icon(
+            onPressed: widget.onOpen,
+            icon: const Icon(Icons.play_arrow_rounded, size: 18),
+            label: const Text('발표 시작'),
+          ),
+      ],
+    );
+  }
+
+  Widget _currentStage(ColorScheme cs) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _sectionLabel(cs, '현재 슬라이드'),
+        const SizedBox(height: 6),
+        Expanded(
+          child: LayoutBuilder(
+            builder: (context, constraints) => MouseRegion(
+              onHover: (event) =>
+                  _emitPointer(constraints.biggest, event.localPosition),
+              onExit: (_) => widget.onPointerMove(null),
+              child: Center(
+                child: AspectRatio(
+                  aspectRatio: _thumbAspect,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        border: Border.all(color: cs.outlineVariant),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: SlideRenderView(
+                        data: _pageDataFor(widget.currentIndex),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _emitPointer(Size size, Offset local) {
+    if (widget.pointerMode == PresenterPointerMode.off) return;
+    if (size.isEmpty) return;
+    // MouseRegion 은 stage 전체를 덮지만 슬라이드는 그 안에서 비율을 유지한 채
+    // 가운데 놓인다. 슬라이드 영역 기준으로 다시 계산해야 관객 화면과 맞는다.
+    var w = size.width;
+    var h = w / _thumbAspect;
+    if (h > size.height) {
+      h = size.height;
+      w = h * _thumbAspect;
+    }
+    final left = (size.width - w) / 2;
+    final top = (size.height - h) / 2;
+    final x = (local.dx - left) / w;
+    final y = (local.dy - top) / h;
+    if (x < 0 || x > 1 || y < 0 || y > 1) {
+      widget.onPointerMove(null);
+      return;
+    }
+    widget.onPointerMove(Offset(x, y));
+  }
+
+  Widget _sidePanel(ColorScheme cs) {
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _sectionLabel(cs, '다음 슬라이드'),
+          const SizedBox(height: 6),
+          _nextPreview(cs),
+          const SizedBox(height: 14),
+          _timerBox(cs),
+          const SizedBox(height: 14),
+          _pointerBox(cs),
+          const SizedBox(height: 14),
+          _sectionLabel(cs, '발표 메모'),
+          const SizedBox(height: 6),
+          _noteBox(cs),
+        ],
+      ),
+    );
+  }
+
+  Widget _nextPreview(ColorScheme cs) {
+    final hasNext = widget.currentIndex < widget.slides.length - 1;
+    return AspectRatio(
+      aspectRatio: _thumbAspect,
+      child: Container(
+        decoration: BoxDecoration(
+          color: cs.surfaceContainerHighest,
+          border: Border.all(color: cs.outlineVariant),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: hasNext
+            ? SlideRenderView(data: _pageDataFor(widget.currentIndex + 1))
+            : Center(
+                child: Text(
+                  '— 마지막 —',
+                  style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+                ),
+              ),
+      ),
+    );
+  }
+
+  Widget _timerBox(ColorScheme cs) {
+    final target = Duration(minutes: _targetMinutes);
+    final ratio = target.inSeconds == 0
+        ? 0.0
+        : (_elapsed.inSeconds / target.inSeconds).clamp(0.0, 1.0);
+    final over = _elapsed > target;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _sectionLabel(cs, '경과 시간'),
+        const SizedBox(height: 6),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Text(
+              _fmt(_elapsed),
+              style: TextStyle(
+                fontSize: 30,
+                fontWeight: FontWeight.w800,
+                height: 1.0,
+                fontFeatures: const [FontFeature.tabularFigures()],
+                color: over ? cs.error : cs.onSurface,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 3),
+              child: Text(
+                TimeOfDay.now().format(context),
+                style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(999),
+          child: LinearProgressIndicator(
+            value: ratio,
+            minHeight: 5,
+            backgroundColor: cs.surfaceContainerHighest,
+            color: over ? cs.error : cs.primary,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            SizedBox(
+              width: 52,
+              height: 32,
+              child: TextField(
+                controller: _targetController,
+                keyboardType: TextInputType.number,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 13),
+                decoration: const InputDecoration(
+                  isDense: true,
+                  contentPadding: EdgeInsets.symmetric(vertical: 6),
+                  border: OutlineInputBorder(),
+                ),
+                onSubmitted: (v) {
+                  final n = int.tryParse(v);
+                  if (n != null && n > 0) setState(() => _targetMinutes = n);
+                },
+              ),
+            ),
+            const SizedBox(width: 4),
+            Text(
+              '분',
+              style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+            ),
+            const Spacer(),
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              onPressed: () => setState(() => _isPaused = !_isPaused),
+              icon: Icon(
+                _isPaused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+                size: 19,
+              ),
+              tooltip: _isPaused ? '계속' : '일시정지',
+            ),
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              onPressed: () => setState(() => _elapsed = Duration.zero),
+              icon: const Icon(Icons.restart_alt_rounded, size: 19),
+              tooltip: '리셋',
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _pointerBox(ColorScheme cs) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _sectionLabel(cs, '관객 화면 포인터'),
+        const SizedBox(height: 6),
+        SegmentedButton<PresenterPointerMode>(
+          showSelectedIcon: false,
+          style: SegmentedButton.styleFrom(
+            visualDensity: VisualDensity.compact,
+            textStyle: const TextStyle(fontSize: 11),
+          ),
+          segments: const [
+            ButtonSegment(value: PresenterPointerMode.hand, label: Text('손가락')),
+            ButtonSegment(value: PresenterPointerMode.dot, label: Text('레이저')),
+            ButtonSegment(value: PresenterPointerMode.off, label: Text('숨김')),
+          ],
+          selected: {widget.pointerMode},
+          onSelectionChanged: (s) => widget.onPointerModeChanged(s.first),
+        ),
+        if (widget.pointerMode != PresenterPointerMode.off) ...[
+          Row(
+            children: [
+              Expanded(
+                child: Slider(
+                  value: widget.pointerSize,
+                  min: 40,
+                  max: 260,
+                  onChanged: widget.onPointerSizeChanged,
+                ),
+              ),
+              Text(
+                widget.pointerSize.round().toString(),
+                style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+              ),
+            ],
+          ),
+          Text(
+            '현재 슬라이드 위에서 마우스를 움직이면\n관객 화면에 그대로 표시됩니다.',
+            style: TextStyle(
+              fontSize: 11,
+              height: 1.4,
+              color: cs.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _noteBox(ColorScheme cs) {
+    return TextField(
+      controller: _noteController,
+      maxLines: 5,
+      minLines: 3,
+      style: const TextStyle(fontSize: 12, height: 1.5),
+      decoration: const InputDecoration(
+        isDense: true,
+        hintText: '이 슬라이드에서 할 말을 적어두세요.\n콘티를 저장하면 함께 저장됩니다.',
+        hintMaxLines: 2,
+        border: OutlineInputBorder(),
+      ),
+      onChanged: (v) => widget.onNoteChanged(_noteKey, v),
+    );
+  }
+
+  Widget _sectionLabel(ColorScheme cs, String text) {
+    return Text(
+      text,
+      style: TextStyle(
+        fontSize: 11,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 0.3,
+        color: cs.onSurfaceVariant,
+      ),
+    );
+  }
+
+  Widget _thumbStrip(ColorScheme cs) {
+    final thumbW = (_stripHeight - 26) * _thumbAspect;
+    return Container(
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHighest.withValues(alpha: 0.4),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: ListView.builder(
+        controller: _stripScrollController,
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        itemCount: widget.slides.length,
+        itemBuilder: (context, i) {
+          final hasNote = (widget.notes[widget.slideKeyAt(i)] ?? '').isNotEmpty;
+          return Padding(
+            padding: EdgeInsets.only(
+              right: i < widget.slides.length - 1 ? _stripSpacing : 0,
+            ),
+            child: SizedBox(
+              width: thumbW,
+              child: Stack(
+                children: [
+                  // 편집 탭의 슬라이드 순서와 같은 썸네일. 마우스를 올리면
+                  // 수정·삭제 버튼이 그대로 나온다.
+                  _SlideThumbnail(
+                    data: _pageDataFor(i),
+                    isSelected: i == widget.currentIndex,
+                    index: i,
+                    isEditable: !widget.slides[i].isAutoSpacer,
+                    onTap: () => widget.onSlideSelected(i),
+                    onEdit: () => widget.onSlideEdit(i),
+                    onDelete: () => widget.onSlideDelete(i),
+                  ),
+                  // 수정/삭제 버튼이 오른쪽 위에 뜨므로 메모 표시는 왼쪽에.
+                  if (hasNote)
+                    Positioned(
+                      top: 3,
+                      left: 3,
+                      child: Icon(
+                        Icons.sticky_note_2_rounded,
+                        size: 12,
+                        color: cs.primary,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          );
+        },
       ),
     );
   }
