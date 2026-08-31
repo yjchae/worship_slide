@@ -219,13 +219,15 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
         } else {
           result.add((
             uid: uid,
-            item: SongStagingItem(PraiseSong(
-              id: song.id,
-              fileName: song.fileName,
-              title: song.title,
-              lyrics: encodePages(kept.map((p) => p.korean)),
-              englishLyrics: encodePages(kept.map((p) => p.english)),
-            )),
+            item: SongStagingItem(
+              PraiseSong(
+                id: song.id,
+                fileName: song.fileName,
+                title: song.title,
+                lyrics: encodePages(kept.map((p) => p.korean)),
+                englishLyrics: encodePages(kept.map((p) => p.english)),
+              ),
+            ),
           ));
         }
       } else if (item is ImageStagingItem) {
@@ -292,111 +294,130 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
 
     void tryAdd(_SlideInfo info) {
       if (!_deletedSlideKeys.contains(
-          _slideKey(info.stagingUid, info.pageIndexInItem))) {
+        _slideKey(info.stagingUid, info.pageIndexInItem),
+      )) {
         slides.add(info);
       }
     }
 
     if (_stagingItems.isNotEmpty) {
-      slides.add(const _SlideInfo(
-        stagingUid: _leadingBlankUid,
-        mainText: '',
-        englishText: '',
-        title: null,
-        isBible: false,
-        pageIndexInItem: 0,
-        isBlank: true,
-        isAutoSpacer: true,
-      ));
+      slides.add(
+        const _SlideInfo(
+          stagingUid: _leadingBlankUid,
+          mainText: '',
+          englishText: '',
+          title: null,
+          isBible: false,
+          pageIndexInItem: 0,
+          isBlank: true,
+          isAutoSpacer: true,
+        ),
+      );
     }
 
     for (var i = 0; i < _stagingItems.length; i++) {
       final entry = _stagingItems[i];
       final item = entry.item;
       final isLast = i == _stagingItems.length - 1;
-      final nextIsBlank = !isLast && _stagingItems[i + 1].item is BlankStagingItem;
+      final nextIsBlank =
+          !isLast && _stagingItems[i + 1].item is BlankStagingItem;
 
       if (item is BlankStagingItem) {
-        tryAdd(_SlideInfo(
-          stagingUid: entry.uid,
-          mainText: item.mainText,
-          englishText: item.englishText,
-          title: null,
-          isBible: false,
-          pageIndexInItem: 0,
-          isBlank: true,
-        ));
+        tryAdd(
+          _SlideInfo(
+            stagingUid: entry.uid,
+            mainText: item.mainText,
+            englishText: item.englishText,
+            title: null,
+            isBible: false,
+            pageIndexInItem: 0,
+            isBlank: true,
+          ),
+        );
       } else if (item is SongStagingItem) {
         final song = item.song;
         final pairs = song.pairedPages;
         for (var j = 0; j < pairs.length; j++) {
-          tryAdd(_SlideInfo(
-            stagingUid: entry.uid,
-            mainText: pairs[j].korean,
-            englishText: pairs[j].english,
-            title: song.title,
-            isBible: false,
-            pageIndexInItem: j,
-          ));
+          tryAdd(
+            _SlideInfo(
+              stagingUid: entry.uid,
+              mainText: pairs[j].korean,
+              englishText: pairs[j].english,
+              title: song.title,
+              isBible: false,
+              pageIndexInItem: j,
+            ),
+          );
         }
         if (!isLast && !nextIsBlank) {
-          tryAdd(_SlideInfo(
-            stagingUid: entry.uid,
-            mainText: '',
-            englishText: '',
-            title: null,
-            isBible: false,
-            pageIndexInItem: pairs.length,
-            isBlank: true,
-            isAutoSpacer: true,
-          ));
+          tryAdd(
+            _SlideInfo(
+              stagingUid: entry.uid,
+              mainText: '',
+              englishText: '',
+              title: null,
+              isBible: false,
+              pageIndexInItem: pairs.length,
+              isBlank: true,
+              isAutoSpacer: true,
+            ),
+          );
         }
       } else if (item is ImageStagingItem) {
         for (var j = 0; j < item.imagePaths.length; j++) {
-          tryAdd(_SlideInfo(
-            stagingUid: entry.uid,
-            mainText: '',
-            englishText: '',
-            title: null,
-            isBible: false,
-            pageIndexInItem: j,
-            imagePath: item.imagePaths[j],
-          ));
+          tryAdd(
+            _SlideInfo(
+              stagingUid: entry.uid,
+              mainText: '',
+              englishText: '',
+              title: null,
+              isBible: false,
+              pageIndexInItem: j,
+              imagePath: item.imagePaths[j],
+            ),
+          );
         }
         if (!isLast && !nextIsBlank) {
-          tryAdd(_SlideInfo(
-            stagingUid: entry.uid,
-            mainText: '',
-            englishText: '',
-            title: null,
-            isBible: false,
-            pageIndexInItem: item.imagePaths.length,
-            isBlank: true,
-            isAutoSpacer: true,
-          ));
+          tryAdd(
+            _SlideInfo(
+              stagingUid: entry.uid,
+              mainText: '',
+              englishText: '',
+              title: null,
+              isBible: false,
+              pageIndexInItem: item.imagePaths.length,
+              isBlank: true,
+              isAutoSpacer: true,
+            ),
+          );
         }
       } else if (item is BibleStagingItem) {
-        tryAdd(_SlideInfo(
-          stagingUid: entry.uid,
-          mainText: item.text,
-          englishText: '',
-          title: item.reference,
-          isBible: true,
-          pageIndexInItem: 0,
-        ));
-        // 말씀 다음이 말씀이면 빈 페이지 삽입 안 함
-        if (!isLast && !nextIsBlank &&
-            _stagingItems[i + 1].item is! BibleStagingItem) {
-          tryAdd(_SlideInfo(
+        tryAdd(
+          _SlideInfo(
             stagingUid: entry.uid,
-            mainText: '',
+            mainText: item.text,
             englishText: '',
-            title: null,
-            isBible: false,
-            pageIndexInItem: 1,
-            isBlank: true,
-            isAutoSpacer: true,
-          ));
+            title: item.reference,
+            isBible: true,
+            pageIndexInItem: 0,
+          ),
+        );
+        // 말씀 다음이 말씀이면 빈 페이지 삽입 안 함
+        if (!isLast &&
+            !nextIsBlank &&
+            _stagingItems[i + 1].item is! BibleStagingItem) {
+          tryAdd(
+            _SlideInfo(
+              stagingUid: entry.uid,
+              mainText: '',
+              englishText: '',
+              title: null,
+              isBible: false,
+              pageIndexInItem: 1,
+              isBlank: true,
+              isAutoSpacer: true,
+            ),
+          );
         }
       }
     }
@@ -571,13 +592,15 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
         pairs[info.pageIndexInItem] = (korean: newMain, english: newEnglish);
       }
 
-      newItem = SongStagingItem(PraiseSong(
-        id: song.id,
-        fileName: song.fileName,
-        title: song.title,
-        lyrics: encodePages(pairs.map((p) => p.korean)),
-        englishLyrics: encodePages(pairs.map((p) => p.english)),
-      ));
+      newItem = SongStagingItem(
+        PraiseSong(
+          id: song.id,
+          fileName: song.fileName,
+          title: song.title,
+          lyrics: encodePages(pairs.map((p) => p.korean)),
+          englishLyrics: encodePages(pairs.map((p) => p.english)),
+        ),
+      );
     } else if (item is BibleStagingItem) {
       newItem = BibleStagingItem(reference: item.reference, text: newMain);
     } else if (item is BlankStagingItem) {
@@ -765,11 +788,16 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
   void _addBlankItem() {
     setState(() {
       final uid = _nextUid++;
-      final selectedIndex =
-          _stagingItems.indexWhere((e) => e.uid == _previewStagingUid);
-      final insertIndex =
-          selectedIndex >= 0 ? selectedIndex + 1 : _stagingItems.length;
-      _stagingItems.insert(insertIndex, (uid: uid, item: const BlankStagingItem()));
+      final selectedIndex = _stagingItems.indexWhere(
+        (e) => e.uid == _previewStagingUid,
+      );
+      final insertIndex = selectedIndex >= 0
+          ? selectedIndex + 1
+          : _stagingItems.length;
+      _stagingItems.insert(insertIndex, (
+        uid: uid,
+        item: const BlankStagingItem(),
+      ));
       _previewStagingUid = uid;
     });
   }
@@ -787,31 +815,33 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     if (paths.isEmpty || !mounted) return;
 
     final progress = ValueNotifier<String>('변환 중…');
-    unawaited(showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => PopScope(
-        canPop: false,
-        child: AlertDialog(
-          content: Row(
-            children: [
-              const SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2.5),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: ValueListenableBuilder<String>(
-                  valueListenable: progress,
-                  builder: (_, text, _) => Text(text),
+    unawaited(
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => PopScope(
+          canPop: false,
+          child: AlertDialog(
+            content: Row(
+              children: [
+                const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2.5),
                 ),
-              ),
-            ],
+                const SizedBox(width: 16),
+                Expanded(
+                  child: ValueListenableBuilder<String>(
+                    valueListenable: progress,
+                    builder: (_, text, _) => Text(text),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
-    ));
+    );
 
     final items = <ImageStagingItem>[];
     String? errorMessage;
@@ -835,10 +865,12 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
 
     if (items.isNotEmpty) {
       setState(() {
-        final selectedIndex =
-            _stagingItems.indexWhere((e) => e.uid == _previewStagingUid);
-        var insertIndex =
-            selectedIndex >= 0 ? selectedIndex + 1 : _stagingItems.length;
+        final selectedIndex = _stagingItems.indexWhere(
+          (e) => e.uid == _previewStagingUid,
+        );
+        var insertIndex = selectedIndex >= 0
+            ? selectedIndex + 1
+            : _stagingItems.length;
         for (final item in items) {
           final uid = _nextUid++;
           _stagingItems.insert(insertIndex++, (uid: uid, item: item));
@@ -1485,8 +1517,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                         isDownloading: _isDownloadingUpdate,
                         progress: _updateProgress,
                         onUpdate: _startUpdate,
-                        onDismiss: () =>
-                            setState(() => _pendingUpdate = null),
+                        onDismiss: () => setState(() => _pendingUpdate = null),
                       ),
                       const SizedBox(height: 8),
                     ],
@@ -1531,9 +1562,8 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
                             Expanded(
                               child: _PresentingLayout(
                                 presentationRatio: _presentationPanelRatio,
-                                onPresentationRatioChanged: (v) => setState(
-                                  () => _presentationPanelRatio = v,
-                                ),
+                                onPresentationRatioChanged: (v) =>
+                                    setState(() => _presentationPanelRatio = v),
                                 isSlideOrderCollapsed: _isSlideOrderCollapsed,
                                 isSlideOrderMaximized: _isSlideOrderMaximized,
                                 isWorkAreaCollapsed: _isStagingCollapsed,
@@ -1626,9 +1656,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
 
                         return Expanded(
                           child: Flex(
-                            direction: isWide
-                                ? Axis.horizontal
-                                : Axis.vertical,
+                            direction: isWide ? Axis.horizontal : Axis.vertical,
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               // ── 발표·콘티 + 검색 (가로 크기 조절 가능) ──
@@ -2675,9 +2703,9 @@ class _StagingPanel extends StatelessWidget {
                                                 ),
                                                 padding:
                                                     const EdgeInsets.symmetric(
-                                                  horizontal: 5,
-                                                  vertical: 1,
-                                                ),
+                                                      horizontal: 5,
+                                                      vertical: 1,
+                                                    ),
                                                 decoration: BoxDecoration(
                                                   color: Colors.blue.shade100,
                                                   borderRadius:
@@ -2699,9 +2727,9 @@ class _StagingPanel extends StatelessWidget {
                                                 ),
                                                 padding:
                                                     const EdgeInsets.symmetric(
-                                                  horizontal: 5,
-                                                  vertical: 1,
-                                                ),
+                                                      horizontal: 5,
+                                                      vertical: 1,
+                                                    ),
                                                 decoration: BoxDecoration(
                                                   color: Colors.grey.shade200,
                                                   borderRadius:
@@ -2725,7 +2753,8 @@ class _StagingPanel extends StatelessWidget {
                                                 style: isBlank
                                                     ? TextStyle(
                                                         color: Colors
-                                                            .grey.shade500,
+                                                            .grey
+                                                            .shade500,
                                                       )
                                                     : null,
                                               ),
@@ -4706,10 +4735,7 @@ String normalizeEditableLyrics(String raw) {
   // ###, ==== → \n\n (주변 줄바꿈 포함 소비)
   text = text.replaceAll(RegExp(r'\n?[ \t]*(###|====)[ \t]*\n?'), '\n\n');
   // 분리 → 각 페이지 trim → 후행 빈 페이지 제거 → 재결합
-  final pages = text
-      .split(RegExp(r'\n[ \t]*\n'))
-      .map((p) => p.trim())
-      .toList();
+  final pages = text.split(RegExp(r'\n[ \t]*\n')).map((p) => p.trim()).toList();
   while (pages.isNotEmpty && pages.last.isEmpty) {
     pages.removeLast();
   }
@@ -5250,7 +5276,9 @@ class _SlideThumbnailState extends State<_SlideThumbnail> {
                                   borderRadius: BorderRadius.circular(5),
                                   boxShadow: [
                                     BoxShadow(
-                                      color: Colors.black.withValues(alpha: 0.2),
+                                      color: Colors.black.withValues(
+                                        alpha: 0.2,
+                                      ),
                                       blurRadius: 4,
                                     ),
                                   ],
@@ -5553,10 +5581,7 @@ class _LogViewerDialog extends StatelessWidget {
 // ── _FontFamilyPicker ─────────────────────────────────────────────────────
 
 class _FontFamilyPicker extends StatelessWidget {
-  const _FontFamilyPicker({
-    required this.selected,
-    required this.onChanged,
-  });
+  const _FontFamilyPicker({required this.selected, required this.onChanged});
 
   final String selected;
   final ValueChanged<String> onChanged;
@@ -5583,10 +5608,7 @@ class _FontFamilyPicker extends StatelessWidget {
               child: Row(
                 children: [
                   Expanded(
-                    child: Text(
-                      f.$2,
-                      style: TextStyle(fontFamily: f.$1),
-                    ),
+                    child: Text(f.$2, style: TextStyle(fontFamily: f.$1)),
                   ),
                   if (f.$1 == selected)
                     Icon(Icons.check_rounded, size: 16, color: cs.primary),
@@ -5604,10 +5626,7 @@ class _FontFamilyPicker extends StatelessWidget {
         child: Row(
           children: [
             Expanded(
-              child: Text(
-                '폰트',
-                style: TextStyle(color: cs.onSurface),
-              ),
+              child: Text('폰트', style: TextStyle(color: cs.onSurface)),
             ),
             Text(
               _displayName,
@@ -5618,7 +5637,11 @@ class _FontFamilyPicker extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 4),
-            Icon(Icons.expand_more_rounded, size: 16, color: cs.onSurfaceVariant),
+            Icon(
+              Icons.expand_more_rounded,
+              size: 16,
+              color: cs.onSurfaceVariant,
+            ),
           ],
         ),
       ),
@@ -5663,10 +5686,7 @@ class _BackgroundImagePicker extends StatelessWidget {
       child: Row(
         children: [
           Expanded(
-            child: Text(
-              '배경 이미지',
-              style: TextStyle(color: cs.onSurface),
-            ),
+            child: Text('배경 이미지', style: TextStyle(color: cs.onSurface)),
           ),
           if (hasImage) ...[
             Flexible(
@@ -5682,13 +5702,14 @@ class _BackgroundImagePicker extends StatelessWidget {
             const SizedBox(width: 4),
             GestureDetector(
               onTap: () => onChanged(null),
-              child: Icon(Icons.close_rounded, size: 16, color: cs.onSurfaceVariant),
+              child: Icon(
+                Icons.close_rounded,
+                size: 16,
+                color: cs.onSurfaceVariant,
+              ),
             ),
           ] else
-            Text(
-              '없음',
-              style: TextStyle(color: cs.onSurfaceVariant),
-            ),
+            Text('없음', style: TextStyle(color: cs.onSurfaceVariant)),
         ],
       ),
     );
