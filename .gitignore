@@ -59,5 +59,7 @@ python/ppt_tool.exe
 # Sample / temp files
 tmp_sample/
 
-# Duplicate / temp Flutter files
-".flutter-plugins-dependencies 2"
+# iCloud 동기화가 만드는 중복본 ("Generated 2.xcconfig", ".flutter-plugins-dependencies 2" 등)
+# 따옴표는 gitignore 에서 리터럴로 취급되므로 쓰지 않는다.
+* 2*
+* 3*
