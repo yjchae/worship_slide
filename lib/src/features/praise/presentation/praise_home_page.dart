@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart' as p;
 
 import '../../../features/bible/data/bible_repository.dart';
@@ -99,6 +100,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
   final WorshipContiRepository _contiRepository = WorshipContiRepository();
   final TextEditingController _searchController = TextEditingController();
   final UpdateService _updateService = UpdateService();
+  final Future<PackageInfo> _packageInfo = PackageInfo.fromPlatform();
 
   UpdateInfo? _pendingUpdate;
   bool _isDownloadingUpdate = false;
@@ -1521,238 +1523,272 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
       onKeyEvent: _handleKeyEvent,
       child: Scaffold(
         body: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final isWide = constraints.maxWidth >= 1120;
-                final gap = SizedBox(
-                  width: isWide ? 20 : 0,
-                  height: isWide ? 0 : 20,
-                );
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (_pendingUpdate != null) ...[
-                      _UpdateBanner(
-                        version: _pendingUpdate!.version,
-                        isDownloading: _isDownloadingUpdate,
-                        progress: _updateProgress,
-                        onUpdate: _startUpdate,
-                        onDismiss: () => setState(() => _pendingUpdate = null),
-                      ),
-                      const SizedBox(height: 8),
-                    ],
-                    _TopBar(
-                      storedCount: _storedCount,
-                      bibleVerseCount: _bibleVerseCount,
-                      selectedFolder: _selectedFolder,
-                      isImporting: _isImporting,
-                      isBibleImporting: _isBibleImporting,
-                      importTotalCount: _importTotalCount,
-                      importSavedCount: _importSavedCount,
-                      importStatusText: _importStatusText,
-                      onImportPressed: _pickAndImportFolder,
-                      onBibleImportPressed: _pickAndImportBible,
-                      onImportPptPressed: _addPptImages,
-                      onExtractLogsPressed: _showExtractLogsDialog,
-                      isCheckingUpdate: _isCheckingUpdate,
-                      hasUpdate: _pendingUpdate != null,
-                      onCheckUpdate: _checkForUpdates,
-                    ),
-                    const SizedBox(height: 10),
-                    Builder(
-                      builder: (context) {
-                        final presentationAndStagingColumn = Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            _PresentationControlBar(
-                              slidesReady: slides.isNotEmpty,
-                              isPresentationOpen: _isPresentationOpen,
-                              isBlackout: _isBlackout,
-                              currentSlideIndex: _currentSlideIndex,
-                              totalSlides: slides.length,
-                              currentSlideTitle: currentSlideTitle,
-                              slideJumpBuffer: _slideJumpBuffer,
-                              onOpen: _openPresentation,
-                              onClose: _closePresentation,
-                              onPrev: _prevSlide,
-                              onNext: _nextSlide,
-                              onBlackout: _toggleBlackout,
-                            ),
-                            const SizedBox(height: 10),
-                            Expanded(
-                              child: _PresentingLayout(
-                                presentationRatio: _presentationPanelRatio,
-                                onPresentationRatioChanged: (v) =>
-                                    setState(() => _presentationPanelRatio = v),
-                                isSlideOrderCollapsed: _isSlideOrderCollapsed,
-                                isSlideOrderMaximized: _isSlideOrderMaximized,
-                                isWorkAreaCollapsed: _isStagingCollapsed,
-                                presentationPanel: _PresentationControllerPanel(
-                                  slides: slides,
-                                  currentIndex: _currentSlideIndex,
-                                  style: _style,
-                                  onSlideSelected: _goToSlide,
-                                  onSlideEdit: _editSlide,
-                                  onSlideDelete: _deleteSlide,
-                                  onCollapse: () => setState(
-                                    () => _isSlideOrderCollapsed = true,
-                                  ),
-                                  isMaximized: _isSlideOrderMaximized,
-                                  onToggleMaximized: () => setState(() {
-                                    _isSlideOrderMaximized =
-                                        !_isSlideOrderMaximized;
-                                    // 최대화하면 검색·디자인 패널은 함께 접는다.
-                                    _isSearchCollapsed = _isSlideOrderMaximized;
-                                    _isDesignCollapsed = _isSlideOrderMaximized;
-                                  }),
-                                ),
-                                collapsedSlideStrip: _CollapsedSlideOrderStrip(
-                                  currentIndex: _currentSlideIndex,
-                                  totalSlides: slides.length,
-                                  onExpand: () => setState(
-                                    () => _isSlideOrderCollapsed = false,
-                                  ),
-                                ),
-                                workArea: _StagingPanel(
-                                  stagingItems: _stagingItems,
-                                  selectedUid: _previewStagingUid,
-                                  onReorder: _onStagingReorder,
-                                  onRemove: _removeFromStaging,
-                                  isCollapsed: _isStagingCollapsed,
-                                  onToggleCollapsed: () => setState(
-                                    () => _isStagingCollapsed =
-                                        !_isStagingCollapsed,
-                                  ),
-                                  onSaveConti: _saveConti,
-                                  onLoadConti: _loadContiDialog,
-                                  onAddBlank: _addBlankItem,
-                                  onSelect: (uid) {
-                                    setState(() {
-                                      _previewStagingUid = uid;
-                                      _currentSlideIndex =
-                                          _findFirstSlideForStaging(uid);
-                                    });
-                                    _sendCurrentSlide();
-                                  },
-                                ),
-                              ),
-                            ),
-                          ],
-                        );
-
-                        final searchColumn = _SearchAndBiblePanel(
-                          searchController: _searchController,
-                          songs: _songs,
-                          selectedSongIds: _selectedSongIds,
-                          onSongChanged: _toggleSongSelection,
-                          onDeleteSelected: _deleteSelectedSongs,
-                          onClearAll: _clearAllSongs,
-                          onAddSong: () => _openSongEditor(null),
-                          onEditSong: _openSongEditor,
-                          bibleRepository: _bibleRepository,
+          child: Stack(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(24),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final isWide = constraints.maxWidth >= 1120;
+                    final gap = SizedBox(
+                      width: isWide ? 20 : 0,
+                      height: isWide ? 0 : 20,
+                    );
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (_pendingUpdate != null) ...[
+                          _UpdateBanner(
+                            version: _pendingUpdate!.version,
+                            isDownloading: _isDownloadingUpdate,
+                            progress: _updateProgress,
+                            onUpdate: _startUpdate,
+                            onDismiss: () =>
+                                setState(() => _pendingUpdate = null),
+                          ),
+                          const SizedBox(height: 8),
+                        ],
+                        _TopBar(
+                          storedCount: _storedCount,
                           bibleVerseCount: _bibleVerseCount,
-                          bibleDataRevision: _bibleDataRevision,
-                          onAddBibleItem: _addBibleItem,
-                          onCollapse: () =>
-                              setState(() => _isSearchCollapsed = true),
-                          searchInTitle: _searchInTitle,
-                          searchInLyrics: _searchInLyrics,
-                          onSearchInTitleChanged: (v) => setState(() {
-                            _searchInTitle = v;
-                            _loadSongs();
-                          }),
-                          onSearchInLyricsChanged: (v) => setState(() {
-                            _searchInLyrics = v;
-                            _loadSongs();
-                          }),
-                        );
-
-                        final collapsedSearchStrip = _CollapsedPanelStrip(
-                          label: '찬양 검색',
-                          isVertical: isWide,
-                          onExpand: () =>
-                              setState(() => _isSearchCollapsed = false),
-                        );
-
-                        return Expanded(
-                          child: Flex(
-                            direction: isWide ? Axis.horizontal : Axis.vertical,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              // ── 발표·콘티 + 검색 (가로 크기 조절 가능) ──
-                              Expanded(
-                                flex: 7,
-                                child: isWide
-                                    ? _ResizableColumnSplit(
-                                        ratio: _workColumnRatio,
-                                        onRatioChanged: (v) => setState(
-                                          () => _workColumnRatio = v,
-                                        ),
-                                        first: presentationAndStagingColumn,
-                                        second: searchColumn,
-                                        isSecondCollapsed: _isSearchCollapsed,
-                                        collapsedSecond: collapsedSearchStrip,
-                                      )
-                                    : Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Expanded(
-                                            flex: 3,
-                                            child: presentationAndStagingColumn,
-                                          ),
-                                          const SizedBox(height: 20),
-                                          if (_isSearchCollapsed)
-                                            collapsedSearchStrip
-                                          else
-                                            Expanded(
-                                              flex: 4,
-                                              child: searchColumn,
-                                            ),
-                                        ],
-                                      ),
-                              ),
-                              gap,
-                              // ── PPTX 디자인 ──
-                              if (_isDesignCollapsed)
-                                _CollapsedPanelStrip(
-                                  label: 'PPTX 디자인',
-                                  isVertical: isWide,
-                                  onExpand: () => setState(
-                                    () => _isDesignCollapsed = false,
-                                  ),
-                                )
-                              else
+                          selectedFolder: _selectedFolder,
+                          isImporting: _isImporting,
+                          isBibleImporting: _isBibleImporting,
+                          importTotalCount: _importTotalCount,
+                          importSavedCount: _importSavedCount,
+                          importStatusText: _importStatusText,
+                          onImportPressed: _pickAndImportFolder,
+                          onBibleImportPressed: _pickAndImportBible,
+                          onImportPptPressed: _addPptImages,
+                          onExtractLogsPressed: _showExtractLogsDialog,
+                          isCheckingUpdate: _isCheckingUpdate,
+                          hasUpdate: _pendingUpdate != null,
+                          onCheckUpdate: _checkForUpdates,
+                        ),
+                        const SizedBox(height: 10),
+                        Builder(
+                          builder: (context) {
+                            final presentationAndStagingColumn = Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                _PresentationControlBar(
+                                  slidesReady: slides.isNotEmpty,
+                                  isPresentationOpen: _isPresentationOpen,
+                                  isBlackout: _isBlackout,
+                                  currentSlideIndex: _currentSlideIndex,
+                                  totalSlides: slides.length,
+                                  currentSlideTitle: currentSlideTitle,
+                                  slideJumpBuffer: _slideJumpBuffer,
+                                  onOpen: _openPresentation,
+                                  onClose: _closePresentation,
+                                  onPrev: _prevSlide,
+                                  onNext: _nextSlide,
+                                  onBlackout: _toggleBlackout,
+                                ),
+                                const SizedBox(height: 10),
                                 Expanded(
-                                  flex: 2,
-                                  child: _DesignPanel(
-                                    style: _style,
-                                    isExporting: _isExporting,
-                                    swatches: _swatches,
-                                    textSwatches: _textSwatches,
-                                    previewItem: previewItem,
-                                    onStyleChanged: _updateStyle,
-                                    onExportPressed: _exportPresentation,
-                                    onCollapse: () => setState(
-                                      () => _isDesignCollapsed = true,
+                                  child: _PresentingLayout(
+                                    presentationRatio: _presentationPanelRatio,
+                                    onPresentationRatioChanged: (v) => setState(
+                                      () => _presentationPanelRatio = v,
+                                    ),
+                                    isSlideOrderCollapsed:
+                                        _isSlideOrderCollapsed,
+                                    isSlideOrderMaximized:
+                                        _isSlideOrderMaximized,
+                                    isWorkAreaCollapsed: _isStagingCollapsed,
+                                    presentationPanel:
+                                        _PresentationControllerPanel(
+                                          slides: slides,
+                                          currentIndex: _currentSlideIndex,
+                                          style: _style,
+                                          onSlideSelected: _goToSlide,
+                                          onSlideEdit: _editSlide,
+                                          onSlideDelete: _deleteSlide,
+                                          onCollapse: () => setState(
+                                            () => _isSlideOrderCollapsed = true,
+                                          ),
+                                          isMaximized: _isSlideOrderMaximized,
+                                          onToggleMaximized: () => setState(() {
+                                            _isSlideOrderMaximized =
+                                                !_isSlideOrderMaximized;
+                                            // 최대화하면 검색·디자인 패널은 함께 접는다.
+                                            _isSearchCollapsed =
+                                                _isSlideOrderMaximized;
+                                            _isDesignCollapsed =
+                                                _isSlideOrderMaximized;
+                                          }),
+                                        ),
+                                    collapsedSlideStrip:
+                                        _CollapsedSlideOrderStrip(
+                                          currentIndex: _currentSlideIndex,
+                                          totalSlides: slides.length,
+                                          onExpand: () => setState(
+                                            () =>
+                                                _isSlideOrderCollapsed = false,
+                                          ),
+                                        ),
+                                    workArea: _StagingPanel(
+                                      stagingItems: _stagingItems,
+                                      selectedUid: _previewStagingUid,
+                                      onReorder: _onStagingReorder,
+                                      onRemove: _removeFromStaging,
+                                      isCollapsed: _isStagingCollapsed,
+                                      onToggleCollapsed: () => setState(
+                                        () => _isStagingCollapsed =
+                                            !_isStagingCollapsed,
+                                      ),
+                                      onSaveConti: _saveConti,
+                                      onLoadConti: _loadContiDialog,
+                                      onAddBlank: _addBlankItem,
+                                      onSelect: (uid) {
+                                        setState(() {
+                                          _previewStagingUid = uid;
+                                          _currentSlideIndex =
+                                              _findFirstSlideForStaging(uid);
+                                        });
+                                        _sendCurrentSlide();
+                                      },
                                     ),
                                   ),
                                 ),
-                            ],
-                          ),
-                        );
-                      },
+                              ],
+                            );
+
+                            final searchColumn = _SearchAndBiblePanel(
+                              searchController: _searchController,
+                              songs: _songs,
+                              selectedSongIds: _selectedSongIds,
+                              onSongChanged: _toggleSongSelection,
+                              onDeleteSelected: _deleteSelectedSongs,
+                              onClearAll: _clearAllSongs,
+                              onAddSong: () => _openSongEditor(null),
+                              onEditSong: _openSongEditor,
+                              bibleRepository: _bibleRepository,
+                              bibleVerseCount: _bibleVerseCount,
+                              bibleDataRevision: _bibleDataRevision,
+                              onAddBibleItem: _addBibleItem,
+                              onCollapse: () =>
+                                  setState(() => _isSearchCollapsed = true),
+                              searchInTitle: _searchInTitle,
+                              searchInLyrics: _searchInLyrics,
+                              onSearchInTitleChanged: (v) => setState(() {
+                                _searchInTitle = v;
+                                _loadSongs();
+                              }),
+                              onSearchInLyricsChanged: (v) => setState(() {
+                                _searchInLyrics = v;
+                                _loadSongs();
+                              }),
+                            );
+
+                            final collapsedSearchStrip = _CollapsedPanelStrip(
+                              label: '찬양 검색',
+                              isVertical: isWide,
+                              onExpand: () =>
+                                  setState(() => _isSearchCollapsed = false),
+                            );
+
+                            return Expanded(
+                              child: Flex(
+                                direction: isWide
+                                    ? Axis.horizontal
+                                    : Axis.vertical,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  // ── 발표·콘티 + 검색 (가로 크기 조절 가능) ──
+                                  Expanded(
+                                    flex: 7,
+                                    child: isWide
+                                        ? _ResizableColumnSplit(
+                                            ratio: _workColumnRatio,
+                                            onRatioChanged: (v) => setState(
+                                              () => _workColumnRatio = v,
+                                            ),
+                                            first: presentationAndStagingColumn,
+                                            second: searchColumn,
+                                            isSecondCollapsed:
+                                                _isSearchCollapsed,
+                                            collapsedSecond:
+                                                collapsedSearchStrip,
+                                          )
+                                        : Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Expanded(
+                                                flex: 3,
+                                                child:
+                                                    presentationAndStagingColumn,
+                                              ),
+                                              const SizedBox(height: 20),
+                                              if (_isSearchCollapsed)
+                                                collapsedSearchStrip
+                                              else
+                                                Expanded(
+                                                  flex: 4,
+                                                  child: searchColumn,
+                                                ),
+                                            ],
+                                          ),
+                                  ),
+                                  gap,
+                                  // ── PPTX 디자인 ──
+                                  if (_isDesignCollapsed)
+                                    _CollapsedPanelStrip(
+                                      label: 'PPTX 디자인',
+                                      isVertical: isWide,
+                                      onExpand: () => setState(
+                                        () => _isDesignCollapsed = false,
+                                      ),
+                                    )
+                                  else
+                                    Expanded(
+                                      flex: 2,
+                                      child: _DesignPanel(
+                                        style: _style,
+                                        isExporting: _isExporting,
+                                        swatches: _swatches,
+                                        textSwatches: _textSwatches,
+                                        previewItem: previewItem,
+                                        onStyleChanged: _updateStyle,
+                                        onExportPressed: _exportPresentation,
+                                        onCollapse: () => setState(
+                                          () => _isDesignCollapsed = true,
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ),
+              Positioned(
+                right: 10,
+                bottom: 2,
+                child: FutureBuilder<PackageInfo>(
+                  future: _packageInfo,
+                  builder: (context, snapshot) => Text(
+                    snapshot.hasData
+                        ? '${snapshot.data!.appName} v${snapshot.data!.version}'
+                        : '',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Theme.of(context).hintColor,
                     ),
-                  ],
-                );
-              },
-            ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
-      ), // Scaffold
-    ); // Focus
+      ),
+    );
   }
 }
 
