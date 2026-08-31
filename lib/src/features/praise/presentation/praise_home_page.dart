@@ -161,6 +161,14 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     Color(0xFFD1C4E9),
   ];
 
+  // 발표 단축키를 받는 노드. autofocus 로 뺏지 않고 발표를 시작할 때만 가져온다.
+  // Focus 가 아니라 FocusScope 인 이유: 검색창에서 포커스가 빠지면(다른 곳 클릭 등)
+  // 포커스가 "가장 가까운 상위 스코프"로 돌아오는데, 그게 이 노드여야 단축키가 계속 먹는다.
+  final FocusScopeNode _presentationFocusNode = FocusScopeNode(
+    debugLabel: 'presentation-shortcuts',
+    skipTraversal: true,
+  );
+
   @override
   void initState() {
     super.initState();
@@ -171,7 +179,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     _checkForUpdates(isStartup: true);
     _mainPresentationChannel.setMethodCallHandler((call) async {
       if (call.method == 'presentationClosed' && mounted) {
-        setState(() => _isPresentationOpen = false);
+        setState(_resetPresentationState);
       }
       return null;
     });
@@ -179,6 +187,7 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
 
   @override
   void dispose() {
+    _presentationFocusNode.dispose();
     _searchController
       ..removeListener(_loadSongs)
       ..dispose();
@@ -471,6 +480,9 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
       final pageData = _buildSlidePageData(_currentSlideIndex);
       await _presentationChannel.invokeMethod('openWindow', pageData.toJson());
       if (!mounted) return;
+      // 검색창에 커서가 있어도 발표 시작 시엔 단축키가 먹어야 한다.
+      FocusManager.instance.primaryFocus?.unfocus();
+      _presentationFocusNode.requestFocus();
       setState(() => _isPresentationOpen = true);
     } catch (e) {
       if (!mounted) return;
@@ -480,20 +492,20 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     }
   }
 
+  void _resetPresentationState() {
+    _isPresentationOpen = false;
+    _isBlackout = false;
+    _isSlideOrderCollapsed = false;
+    _isSlideOrderMaximized = false;
+    _isSearchCollapsed = false;
+    _isDesignCollapsed = false;
+  }
+
   Future<void> _closePresentation() async {
     try {
       await _presentationChannel.invokeMethod('closeWindow');
     } catch (_) {}
-    if (mounted) {
-      setState(() {
-        _isPresentationOpen = false;
-        _isBlackout = false;
-        _isSlideOrderCollapsed = false;
-        _isSlideOrderMaximized = false;
-        _isSearchCollapsed = false;
-        _isDesignCollapsed = false;
-      });
-    }
+    if (mounted) setState(_resetPresentationState);
   }
 
   Future<void> _toggleBlackout() async {
@@ -663,9 +675,17 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
     LogicalKeyboardKey.numpad9: '9',
   };
 
+  /// 검색창 등 텍스트 입력 중이면 발표 단축키가 글자를 가로채면 안 된다.
+  bool get _isTextFieldFocused {
+    final ctx = FocusManager.instance.primaryFocus?.context;
+    return ctx != null &&
+        ctx.findAncestorWidgetOfExactType<EditableText>() != null;
+  }
+
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
     if (!_isPresentationOpen) return KeyEventResult.ignored;
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (_isTextFieldFocused) return KeyEventResult.ignored;
 
     final key = event.logicalKey;
 
@@ -692,6 +712,8 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
         setState(() => _slideJumpBuffer = '');
         return KeyEventResult.handled;
       }
+      _closePresentation();
+      return KeyEventResult.handled;
     }
 
     if (_slideJumpBuffer.isNotEmpty) {
@@ -1494,8 +1516,8 @@ class _PraiseHomePageState extends State<PraiseHomePage> {
         ? null
         : slides[_currentSlideIndex.clamp(0, slides.length - 1)].title;
 
-    return Focus(
-      autofocus: true,
+    return FocusScope(
+      node: _presentationFocusNode,
       onKeyEvent: _handleKeyEvent,
       child: Scaffold(
         body: SafeArea(

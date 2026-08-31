@@ -48,7 +48,9 @@ class PresentationWindowController: NSWindowController {
     window.makeKeyAndOrderFront(nil)
 
     keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-      if event.keyCode == 53 { // ESC
+      // ESC 는 발표 창이 키 윈도우일 때만 여기서 처리한다.
+      // 메인 창(검색창 입력 등)의 ESC 는 Flutter 로 그대로 넘긴다.
+      if event.keyCode == 53, event.window === self?.window {
         self?.window?.close()
         return nil
       }
