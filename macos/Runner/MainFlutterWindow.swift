@@ -161,6 +161,10 @@ class PresentationWindowController: NSWindowController {
   // 관객 화면 포인터 (발표자 보기에서 마우스를 움직이면 여기에 표시된다)
   static let pointerCSS = """
       html{overflow:hidden;}
+      /* 슬라이드 내용은 이 안에. body 배경은 캔버스로 전파돼 transform 이 안 먹으므로
+         배경 이미지도 여기에 둔다. #ptr 은 이 밖에 있어야 확대해도 커지지 않는다. */
+      #stage{position:absolute;left:0;top:0;width:100%;height:100%;
+             transform-origin:0 0;overflow:hidden;}
       #ptr{position:absolute;display:none;pointer-events:none;z-index:99;
            transform:translate(-50%,-50%);line-height:1;text-align:center;}
       #ptr.dot{border-radius:50%;
@@ -170,21 +174,50 @@ class PresentationWindowController: NSWindowController {
 
   private func pointerScript() -> String {
     return """
-    window.setPtr=function(mode,x,y,size){
-      var e=document.getElementById('ptr'); if(!e) return;
-      if(mode==='off'){ e.style.display='none'; return; }
-      e.className = mode;
-      e.style.display='block';
-      // 이미지 슬라이드는 object-fit:contain 이라 창 안에서 레터박스가 생긴다.
-      // 발표자 화면은 슬라이드 비율 그대로이므로 이미지 영역 기준으로 다시 맞춘다.
-      var img=document.querySelector('img'), l=0, t=0, w=1, h=1;
+    window.__z={on:false,x:0,y:0,s:1};
+    // 이미지 슬라이드는 object-fit:contain 이라 창 안에서 레터박스가 생긴다.
+    // 슬라이드 좌표(0~1)를 창 좌표(0~1)로 옮기려면 이 사각형이 필요하다.
+    function __rect(){
+      var img=document.querySelector('#stage img'), r={l:0,t:0,w:1,h:1};
       if(img && img.naturalWidth && img.naturalHeight){
         var cw=window.innerWidth, ch=window.innerHeight;
-        var s=Math.min(cw/img.naturalWidth, ch/img.naturalHeight);
-        w=img.naturalWidth*s/cw; h=img.naturalHeight*s/ch;
-        l=(1-w)/2; t=(1-h)/2;
+        var k=Math.min(cw/img.naturalWidth, ch/img.naturalHeight);
+        r.w=img.naturalWidth*k/cw; r.h=img.naturalHeight*k/ch;
+        r.l=(1-r.w)/2; r.t=(1-r.h)/2;
       }
-      e.style.left=((l+x*w)*100)+'%'; e.style.top=((t+y*h)*100)+'%';
+      return r;
+    }
+    // 확대 영역을 창 가운데에 비율 그대로 채운다. 확대가 꺼져 있으면 항등 변환.
+    function __zoomFit(){
+      var r=__rect(), z=window.__z;
+      if(!z.on) return {k:1,cx:0.5,cy:0.5};
+      var k=Math.min(1/(z.s*r.w), 1/(z.s*r.h));
+      return {k:k, cx:r.l+(z.x+z.s/2)*r.w, cy:r.t+(z.y+z.s/2)*r.h};
+    }
+    window.setZoom=function(on,x,y,size){
+      window.__z={on:on,x:x,y:y,s:size};
+      var st=document.getElementById('stage');
+      if(st){
+        if(!on){ st.style.transform='none'; }
+        else {
+          var f=__zoomFit();
+          st.style.transform='translate('+((0.5-f.k*f.cx)*100)+'vw,'
+                            +((0.5-f.k*f.cy)*100)+'vh) scale('+f.k+')';
+        }
+      }
+      if(window.__p) setPtr(window.__p[0],window.__p[1],window.__p[2],window.__p[3]);
+    };
+    window.setPtr=function(mode,x,y,size){
+      window.__p=[mode,x,y,size];
+      var e=document.getElementById('ptr'); if(!e) return;
+      if(mode==='off'){ e.style.display='none'; return; }
+      var r=__rect(), f=__zoomFit();
+      // 위치만 확대를 따라가고 크기는 그대로 둔다(확대 배율만큼 커지면 화면을 덮는다).
+      var px=r.l+x*r.w, py=r.t+y*r.h;
+      px=0.5+f.k*(px-f.cx); py=0.5+f.k*(py-f.cy);
+      e.className = mode;
+      e.style.display='block';
+      e.style.left=(px*100)+'%'; e.style.top=(py*100)+'%';
       if(mode==='hand'){
         e.style.width='auto'; e.style.height='auto';
         e.style.fontSize=size+'px'; e.textContent='\u{1F446}';
@@ -192,14 +225,6 @@ class PresentationWindowController: NSWindowController {
         e.textContent=''; e.style.fontSize='0';
         e.style.width=size+'px'; e.style.height=size+'px';
       }
-    };
-    window.setZoom=function(on,x,y,size){
-      var b=document.body;
-      if(!on){ b.style.transform='none'; return; }
-      var s=1/size;
-      // transform-origin 0 0 기준: 영역의 좌상단을 원점으로 옮긴 뒤 확대한다.
-      b.style.transformOrigin='0 0';
-      b.style.transform='scale('+s+') translate('+(-x*100)+'vw,'+(-y*100)+'vh)';
     };
     setPtr('\(_ptrMode)',\(_ptrX),\(_ptrY),\(_ptrSize));
     \(zoomCall());
@@ -225,7 +250,7 @@ class PresentationWindowController: NSWindowController {
       img{width:100%;height:100%;object-fit:contain;display:block;}
       \(Self.pointerCSS)
     </style></head><body>
-      <img src="data:\(mime);base64,\(b64)">
+      <div id="stage"><img src="data:\(mime);base64,\(b64)"></div>
       \(Self.pointerHTML)
       <script>\(pointerScript())</script>
     </body></html>
@@ -342,7 +367,8 @@ class PresentationWindowController: NSWindowController {
       \(fontFaceCSS(family: fontFamily))
       *{margin:0;padding:0;box-sizing:border-box;}
       body{width:100vw;height:100vh;background:\(bgColor);position:relative;
-           overflow:hidden;font-family:'\(fontFamily)',sans-serif;\(bgImageCSS)}
+           overflow:hidden;font-family:'\(fontFamily)',sans-serif;}
+      #stage{\(bgImageCSS)}
       .body-box{position:absolute;left:5%;width:90%;
         top:\(String(format:"%.4f",bodyBoxTopPct))%;
         height:\(String(format:"%.4f",bodyBoxHeightPct))%;
@@ -356,11 +382,13 @@ class PresentationWindowController: NSWindowController {
         margin-top:0.4em;white-space:pre-wrap;width:100%;}
       \(Self.pointerCSS)
     </style></head><body>
-      <div class="body-box">
-        <div class="main-text">\(mainText.replacingOccurrences(of: "\n", with: "<br>"))</div>
-        \(englishSection)
+      <div id="stage">
+        <div class="body-box">
+          <div class="main-text">\(mainText.replacingOccurrences(of: "\n", with: "<br>"))</div>
+          \(englishSection)
+        </div>
+        \(titleSection)
       </div>
-      \(titleSection)
       \(Self.pointerHTML)
     <script>
     \(pointerScript())

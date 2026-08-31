@@ -48,6 +48,9 @@ class PresentationChannel {
   void Paint(HDC hdc, RECT cli) const;
   void PaintImage(HDC hdc, int w, int h) const;
   void PaintPointer(HDC hdc, int w, int h) const;
+  // 확대 변환(px 기준). 확대가 꺼져 있으면 false. 이미지 슬라이드는 레터박스 안쪽
+  // 사각형을 기준으로 잡아 발표자 미리보기와 같은 영역이 나오게 한다.
+  bool ZoomTransform(int w, int h, float* scale, float* tx, float* ty) const;
 
   static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
   static void Register();

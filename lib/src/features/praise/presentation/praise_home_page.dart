@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -528,6 +529,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       });
       // 발표를 시작하면 발표 보기 탭으로. 편집 탭은 그대로 살아 있다.
       _mainTabController.animateTo(1);
+      // 발표 전에 잡아둔 확대 영역을 새 창에 그대로 반영한다.
+      await _sendZoom();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -539,6 +542,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   void _resetPresentationState() {
     _isPresentationOpen = false;
     _isBlackout = false;
+    // 발표 창을 닫으면 네이티브 쪽 확대 상태도 함께 사라진다(macOS 는 컨트롤러를
+    // 통째로 버린다). Dart 쪽만 켜져 있으면 다음 발표에서 어긋나므로 같이 끈다.
+    _isZoomOn = false;
   }
 
   Future<void> _closePresentation() async {
@@ -5306,6 +5312,11 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
   final _noteController = TextEditingController();
   final _stripScrollController = ScrollController();
   String _noteKey = '';
+  // 현재/다음 슬라이드 가로 비율 (가운데 | 바를 끌어서 조절)
+  double _splitRatio = 0.68;
+  // 모든 페이지 보기
+  bool _showAllPages = false;
+  double _gridThumbW = 140;
 
   static const double _thumbAspect = 13.333 / 7.5;
   static const double _stripHeight = 104;
@@ -5402,33 +5413,38 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
           _header(cs),
           const SizedBox(height: 10),
           Expanded(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                // 좁으면 옆 패널을 아래로 내린다.
-                final isWide = constraints.maxWidth >= 620;
-                final current = _currentStage(cs);
-                final side = _sidePanel(cs);
-                return isWide
-                    ? Row(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Expanded(flex: 3, child: current),
-                          const SizedBox(width: 12),
-                          SizedBox(width: 240, child: side),
-                        ],
-                      )
-                    : Column(
-                        children: [
-                          Expanded(flex: 3, child: current),
-                          const SizedBox(height: 12),
-                          Expanded(flex: 2, child: side),
-                        ],
-                      );
-              },
-            ),
+            child: _showAllPages
+                ? _allPagesGrid(cs)
+                : LayoutBuilder(
+                    builder: (context, constraints) {
+                      // 좁으면 옆 패널을 아래로 내린다.
+                      final isWide = constraints.maxWidth >= 620;
+                      final current = _currentStage(cs);
+                      final side = _sidePanel(cs);
+                      return isWide
+                          ? _ResizableColumnSplit(
+                              ratio: _splitRatio,
+                              onRatioChanged: (v) =>
+                                  setState(() => _splitRatio = v),
+                              first: current,
+                              second: side,
+                              isSecondCollapsed: false,
+                              collapsedSecond: const SizedBox.shrink(),
+                            )
+                          : Column(
+                              children: [
+                                Expanded(flex: 3, child: current),
+                                const SizedBox(height: 12),
+                                Expanded(flex: 2, child: side),
+                              ],
+                            );
+                    },
+                  ),
           ),
-          const SizedBox(height: 10),
-          SizedBox(height: _stripHeight, child: _thumbStrip(cs)),
+          if (!_showAllPages) ...[
+            const SizedBox(height: 10),
+            SizedBox(height: _stripHeight, child: _thumbStrip(cs)),
+          ],
         ],
       ),
     );
@@ -5500,6 +5516,16 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
           tooltip: '다음 (→ Space)',
         ),
         const SizedBox(width: 4),
+        IconButton(
+          onPressed: () => setState(() => _showAllPages = !_showAllPages),
+          icon: Icon(
+            _showAllPages
+                ? Icons.view_carousel_rounded
+                : Icons.grid_view_rounded,
+          ),
+          tooltip: _showAllPages ? '발표자 보기로' : '모든 페이지 보기',
+          color: _showAllPages ? cs.primary : null,
+        ),
         IconButton(
           onPressed: widget.onZoomToggled,
           icon: Icon(
@@ -5714,6 +5740,90 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
         letterSpacing: 0.3,
         color: cs.onSurfaceVariant,
       ),
+    );
+  }
+
+  // 모든 페이지 보기. 기본 크기는 하단 스트립 썸네일과 비슷하게 두고,
+  // 많아지면 세로로 스크롤한다. +/- 나 Ctrl(⌘)+휠로 크기를 바꾼다.
+  Widget _allPagesGrid(ColorScheme cs) {
+    void changeZoom(double delta) {
+      setState(() => _gridThumbW = (_gridThumbW + delta).clamp(70.0, 460.0));
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            _sectionLabel(cs, '모든 페이지 · ${widget.slides.length}장'),
+            const Spacer(),
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              onPressed: () => changeZoom(-30),
+              icon: const Icon(Icons.remove_rounded, size: 18),
+              tooltip: '작게',
+            ),
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              onPressed: () => changeZoom(30),
+              icon: const Icon(Icons.add_rounded, size: 18),
+              tooltip: '크게',
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Expanded(
+          child: Listener(
+            onPointerSignal: (event) {
+              if (event is PointerScrollEvent &&
+                  (HardwareKeyboard.instance.isControlPressed ||
+                      HardwareKeyboard.instance.isMetaPressed)) {
+                changeZoom(-event.scrollDelta.dy * 0.6);
+              }
+            },
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                const spacing = 8.0;
+                const labelH = 20.0;
+                const pad = 10.0;
+                final avail = (constraints.maxWidth - pad * 2).clamp(
+                  1.0,
+                  double.infinity,
+                );
+                final cols = ((avail + spacing) / (_gridThumbW + spacing))
+                    .floor()
+                    .clamp(1, widget.slides.length.clamp(1, 9999));
+                final tw = (avail - (cols - 1) * spacing) / cols;
+                final cellH = tw / _thumbAspect + labelH;
+
+                return GridView.builder(
+                  padding: const EdgeInsets.all(pad),
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: cols,
+                    crossAxisSpacing: spacing,
+                    mainAxisSpacing: spacing,
+                    childAspectRatio: (tw / cellH).clamp(0.1, 100.0),
+                  ),
+                  itemCount: widget.slides.length,
+                  itemBuilder: (context, i) => _SlideThumbnail(
+                    data: _pageDataFor(i),
+                    isSelected: i == widget.currentIndex,
+                    index: i,
+                    isEditable: !widget.slides[i].isAutoSpacer,
+                    // 누른 페이지로 넘기고 발표자 보기로 돌아간다.
+                    onTap: () {
+                      widget.onSlideSelected(i);
+                      setState(() => _showAllPages = false);
+                    },
+                    onEdit: () => widget.onSlideEdit(i),
+                    onDelete: () => widget.onSlideDelete(i),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ],
     );
   }
 

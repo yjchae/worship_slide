@@ -84,6 +84,16 @@ void PresentationChannel::Setup(flutter::FlutterEngine* engine) {
       [this](const flutter::MethodCall<EV>& call,
              std::unique_ptr<flutter::MethodResult<EV>> result) {
         const auto* data = std::get_if<flutter::EncodableMap>(call.arguments());
+        // pointer/zoom 이 같이 쓰는 숫자 읽기 (Dart 는 정수를 int32 로 보낼 수 있다)
+        auto num = [&](const char* key, double def) {
+          if (!data) return def;
+          auto it = data->find(EV(std::string(key)));
+          if (it == data->end()) return def;
+          if (const auto* d = std::get_if<double>(&it->second)) return *d;
+          if (const auto* i = std::get_if<int32_t>(&it->second))
+            return static_cast<double>(*i);
+          return def;
+        };
 
         if (call.method_name() == "openWindow") {
           OpenWindow();
@@ -95,14 +105,6 @@ void PresentationChannel::Setup(flutter::FlutterEngine* engine) {
           }
         } else if (call.method_name() == "zoom") {
           if (data) {
-            auto num = [&](const char* key, double def) {
-              auto it = data->find(EV(std::string(key)));
-              if (it == data->end()) return def;
-              if (const auto* d = std::get_if<double>(&it->second)) return *d;
-              if (const auto* i = std::get_if<int32_t>(&it->second))
-                return static_cast<double>(*i);
-              return def;
-            };
             zoom_on_ = false;
             auto it = data->find(EV(std::string("on")));
             if (it != data->end()) {
@@ -115,14 +117,6 @@ void PresentationChannel::Setup(flutter::FlutterEngine* engine) {
           }
         } else if (call.method_name() == "pointer") {
           if (data) {
-            auto num = [&](const char* key, double def) {
-              auto it = data->find(EV(std::string(key)));
-              if (it == data->end()) return def;
-              if (const auto* d = std::get_if<double>(&it->second)) return *d;
-              if (const auto* i = std::get_if<int32_t>(&it->second))
-                return static_cast<double>(*i);
-              return def;
-            };
             std::string mode = "off";
             auto it = data->find(EV(std::string("mode")));
             if (it != data->end()) {
@@ -311,14 +305,12 @@ void PresentationChannel::Paint(HDC hdc, RECT cli) const {
   // 확대: 글자까지 같이 커져야 하므로 GDI 월드 변환을 건다. 배경은 위에서 이미
   // 변환 없이 칠했으므로 확대해도 빈 곳이 생기지 않는다.
   XFORM saved_xform = {};
-  const bool zoom_applied = zoom_on_;
+  float zs = 1.0f, ztx = 0.0f, zty = 0.0f;
+  const bool zoom_applied = ZoomTransform(W, H, &zs, &ztx, &zty);
   if (zoom_applied) {
     SetGraphicsMode(hdc, GM_ADVANCED);
     GetWorldTransform(hdc, &saved_xform);
-    const float s = static_cast<float>(1.0 / zoom_size_);
-    XFORM xf = {s, 0.0f, 0.0f, s,
-                static_cast<float>(-zoom_x_ * W * s),
-                static_cast<float>(-zoom_y_ * H * s)};
+    XFORM xf = {zs, 0.0f, 0.0f, zs, ztx, zty};
     SetWorldTransform(hdc, &xf);
   }
 
@@ -448,8 +440,8 @@ void PresentationChannel::Paint(HDC hdc, RECT cli) const {
 }
 
 // 비율을 유지한 채 화면 가운데에 그린다 (macOS의 object-fit: contain과 동일).
-// ponytail: 매 WM_PAINT마다 디코딩한다. 발표창은 대개 전체화면 고정이라 문제되지 않지만,
-// 리사이즈가 버벅이면 경로별 1개짜리 Bitmap 캐시를 두면 된다.
+// 디코딩한 이미지는 경로가 같으면 재사용한다. 포인터를 움직이면 매 프레임 다시
+// 그리는데, 그때마다 PNG 를 디코딩하면 창이 버벅인다.
 void PresentationChannel::PaintImage(HDC hdc, int w, int h) const {
   if (w <= 0 || h <= 0) return;
 
@@ -471,14 +463,42 @@ void PresentationChannel::PaintImage(HDC hdc, int w, int h) const {
 
   Gdiplus::Graphics graphics(hdc);
   graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
-  if (zoom_on_) {
-    const float s = static_cast<float>(1.0 / zoom_size_);
-    Gdiplus::Matrix m(s, 0.0f, 0.0f, s,
-                      static_cast<float>(-zoom_x_ * w * s),
-                      static_cast<float>(-zoom_y_ * h * s));
+  float zs = 1.0f, ztx = 0.0f, zty = 0.0f;
+  if (ZoomTransform(w, h, &zs, &ztx, &zty)) {
+    Gdiplus::Matrix m(zs, 0.0f, 0.0f, zs, ztx, zty);
     graphics.SetTransform(&m);
   }
   graphics.DrawImage(&image, (w - dw) / 2, (h - dh) / 2, dw, dh);
+}
+
+bool PresentationChannel::ZoomTransform(int w, int h, float* scale, float* tx,
+                                       float* ty) const {
+  if (!zoom_on_ || w <= 0 || h <= 0) return false;
+
+  // 슬라이드가 실제로 그려지는 사각형(비율). 이미지 슬라이드만 레터박스가 생긴다.
+  double l = 0.0, t = 0.0, rw = 1.0, rh = 1.0;
+  if (!slide_.imagePath.empty() && image_cache_ &&
+      image_cache_->GetLastStatus() == Gdiplus::Ok) {
+    const UINT iw = image_cache_->GetWidth();
+    const UINT ih = image_cache_->GetHeight();
+    if (iw > 0 && ih > 0) {
+      const double k = (std::min)(static_cast<double>(w) / iw,
+                                  static_cast<double>(h) / ih);
+      rw = iw * k / w;
+      rh = ih * k / h;
+      l = (1.0 - rw) / 2.0;
+      t = (1.0 - rh) / 2.0;
+    }
+  }
+
+  // 확대 영역을 창 가운데에 비율 그대로 채운다.
+  const double k = (std::min)(1.0 / (zoom_size_ * rw), 1.0 / (zoom_size_ * rh));
+  const double cx = (l + (zoom_x_ + zoom_size_ / 2) * rw) * w;
+  const double cy = (t + (zoom_y_ + zoom_size_ / 2) * rh) * h;
+  *scale = static_cast<float>(k);
+  *tx = static_cast<float>(w / 2.0 - k * cx);
+  *ty = static_cast<float>(h / 2.0 - k * cy);
+  return true;
 }
 
 // 발표자 보기에서 보내온 좌표에 포인터를 얹는다. macOS 는 WKWebView 쪽 #ptr 이 같은 일을 한다.
@@ -502,19 +522,18 @@ void PresentationChannel::PaintPointer(HDC hdc, int w, int h) const {
     }
   }
 
-  const float cx   = static_cast<float>(left + ptr_x_ * bw);
-  const float cy   = static_cast<float>(top + ptr_y_ * bh);
+  float cx = static_cast<float>(left + ptr_x_ * bw);
+  float cy = static_cast<float>(top + ptr_y_ * bh);
+  // 위치만 확대를 따라간다. 크기까지 키우면 8배 확대에서 화면을 덮어 버린다.
+  float zs = 1.0f, ztx = 0.0f, zty = 0.0f;
+  if (ZoomTransform(w, h, &zs, &ztx, &zty)) {
+    cx = zs * cx + ztx;
+    cy = zs * cy + zty;
+  }
   const float size = static_cast<float>(ptr_size_);
 
   Gdiplus::Graphics g(hdc);
   g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-  if (zoom_on_) {
-    const float zs = static_cast<float>(1.0 / zoom_size_);
-    Gdiplus::Matrix zm(zs, 0.0f, 0.0f, zs,
-                       static_cast<float>(-zoom_x_ * w * zs),
-                       static_cast<float>(-zoom_y_ * h * zs));
-    g.SetTransform(&zm);
-  }
 
   if (ptr_mode_ == 2) {
     // 레이저 점: 가운데가 진한 빨강, 바깥으로 갈수록 투명.
