@@ -56,6 +56,10 @@ PresentationChannel::PresentationChannel(HWND main_hwnd)
 
 PresentationChannel::~PresentationChannel() {
   if (hwnd_) { DestroyWindow(hwnd_); hwnd_ = nullptr; }
+  // 멤버는 소멸자 본문 뒤에 정리되므로, GdiplusShutdown 뒤에 ~Image() 가 돈다.
+  // 캐시를 먼저 비워야 이미 내려간 GDI+ 를 건드리지 않는다.
+  image_cache_.reset();
+  image_cache_path_.clear();
   if (gdiplus_token_) {
     Gdiplus::GdiplusShutdown(gdiplus_token_);
     gdiplus_token_ = 0;
@@ -84,6 +88,16 @@ void PresentationChannel::Setup(flutter::FlutterEngine* engine) {
       [this](const flutter::MethodCall<EV>& call,
              std::unique_ptr<flutter::MethodResult<EV>> result) {
         const auto* data = std::get_if<flutter::EncodableMap>(call.arguments());
+        // pointer/zoom 이 같이 쓰는 숫자 읽기 (Dart 는 정수를 int32 로 보낼 수 있다)
+        auto num = [&](const char* key, double def) {
+          if (!data) return def;
+          auto it = data->find(EV(std::string(key)));
+          if (it == data->end()) return def;
+          if (const auto* d = std::get_if<double>(&it->second)) return *d;
+          if (const auto* i = std::get_if<int32_t>(&it->second))
+            return static_cast<double>(*i);
+          return def;
+        };
 
         if (call.method_name() == "openWindow") {
           OpenWindow();
@@ -92,6 +106,31 @@ void PresentationChannel::Setup(flutter::FlutterEngine* engine) {
           if (data && hwnd_) {
             Apply(*data);
             InvalidateRect(hwnd_, nullptr, TRUE);
+          }
+        } else if (call.method_name() == "zoom") {
+          if (data) {
+            zoom_on_ = false;
+            auto it = data->find(EV(std::string("on")));
+            if (it != data->end()) {
+              if (const auto* b = std::get_if<bool>(&it->second)) zoom_on_ = *b;
+            }
+            zoom_x_    = num("x", 0.0);
+            zoom_y_    = num("y", 0.0);
+            zoom_size_ = (std::max)(num("size", 1.0), 0.01);
+            if (hwnd_) InvalidateRect(hwnd_, nullptr, FALSE);
+          }
+        } else if (call.method_name() == "pointer") {
+          if (data) {
+            std::string mode = "off";
+            auto it = data->find(EV(std::string("mode")));
+            if (it != data->end()) {
+              if (const auto* m = std::get_if<std::string>(&it->second)) mode = *m;
+            }
+            ptr_mode_ = mode == "hand" ? 1 : (mode == "dot" ? 2 : 0);
+            ptr_x_    = num("x", 0.0);
+            ptr_y_    = num("y", 0.0);
+            ptr_size_ = num("size", 100.0);
+            if (hwnd_) InvalidateRect(hwnd_, nullptr, FALSE);
           }
         } else if (call.method_name() == "blackout") {
           slide_.blackout = !slide_.blackout;
@@ -112,6 +151,10 @@ void PresentationChannel::Setup(flutter::FlutterEngine* engine) {
 
 void PresentationChannel::OpenWindow() {
   if (hwnd_) { SetForegroundWindow(hwnd_); return; }
+
+  // 이전 발표에서 쓰던 포인터 위치가 남아 있으면 창을 열자마자 엉뚱한 곳에 그려진다.
+  ptr_mode_ = 0;  // 0 = 숨김
+  ptr_x_ = ptr_y_ = 0.0;
 
   // Place on secondary monitor when available, else center on primary.
   struct MonInfo { HMONITOR primary; HMONITOR second; };
@@ -263,7 +306,20 @@ void PresentationChannel::Paint(HDC hdc, RECT cli) const {
   // 이미지 슬라이드는 디자인 설정을 타지 않고 원본 그대로 보여준다.
   if (!slide_.imagePath.empty()) {
     PaintImage(hdc, W, H);
+    PaintPointer(hdc, W, H);
     return;
+  }
+
+  // 확대: 글자까지 같이 커져야 하므로 GDI 월드 변환을 건다. 배경은 위에서 이미
+  // 변환 없이 칠했으므로 확대해도 빈 곳이 생기지 않는다.
+  XFORM saved_xform = {};
+  float zs = 1.0f, ztx = 0.0f, zty = 0.0f;
+  const bool zoom_applied = ZoomTransform(W, H, &zs, &ztx, &zty);
+  if (zoom_applied) {
+    SetGraphicsMode(hdc, GM_ADVANCED);
+    GetWorldTransform(hdc, &saved_xform);
+    XFORM xf = {zs, 0.0f, 0.0f, zs, ztx, zty};
+    SetWorldTransform(hdc, &xf);
   }
 
   SetBkMode(hdc, TRANSPARENT);
@@ -385,15 +441,23 @@ void PresentationChannel::Paint(HDC hdc, RECT cli) const {
     SelectObject(hdc, old);
     DeleteObject(ttlFont);
   }
+
+  if (zoom_applied) SetWorldTransform(hdc, &saved_xform);
+
+  PaintPointer(hdc, W, H);
 }
 
 // 비율을 유지한 채 화면 가운데에 그린다 (macOS의 object-fit: contain과 동일).
-// ponytail: 매 WM_PAINT마다 디코딩한다. 발표창은 대개 전체화면 고정이라 문제되지 않지만,
-// 리사이즈가 버벅이면 경로별 1개짜리 Bitmap 캐시를 두면 된다.
+// 디코딩한 이미지는 경로가 같으면 재사용한다. 포인터를 움직이면 매 프레임 다시
+// 그리는데, 그때마다 PNG 를 디코딩하면 창이 버벅인다.
 void PresentationChannel::PaintImage(HDC hdc, int w, int h) const {
   if (w <= 0 || h <= 0) return;
 
-  Gdiplus::Image image(slide_.imagePath.c_str());
+  if (!image_cache_ || image_cache_path_ != slide_.imagePath) {
+    image_cache_ = std::make_unique<Gdiplus::Image>(slide_.imagePath.c_str());
+    image_cache_path_ = slide_.imagePath;
+  }
+  Gdiplus::Image& image = *image_cache_;
   if (image.GetLastStatus() != Gdiplus::Ok) return;
 
   UINT iw = image.GetWidth();
@@ -407,7 +471,108 @@ void PresentationChannel::PaintImage(HDC hdc, int w, int h) const {
 
   Gdiplus::Graphics graphics(hdc);
   graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+  float zs = 1.0f, ztx = 0.0f, zty = 0.0f;
+  if (ZoomTransform(w, h, &zs, &ztx, &zty)) {
+    Gdiplus::Matrix m(zs, 0.0f, 0.0f, zs, ztx, zty);
+    graphics.SetTransform(&m);
+  }
   graphics.DrawImage(&image, (w - dw) / 2, (h - dh) / 2, dw, dh);
+}
+
+bool PresentationChannel::ZoomTransform(int w, int h, float* scale, float* tx,
+                                       float* ty) const {
+  if (!zoom_on_ || w <= 0 || h <= 0) return false;
+
+  // 슬라이드가 실제로 그려지는 사각형(비율). 이미지 슬라이드만 레터박스가 생긴다.
+  double l = 0.0, t = 0.0, rw = 1.0, rh = 1.0;
+  if (!slide_.imagePath.empty() && image_cache_ &&
+      image_cache_->GetLastStatus() == Gdiplus::Ok) {
+    const UINT iw = image_cache_->GetWidth();
+    const UINT ih = image_cache_->GetHeight();
+    if (iw > 0 && ih > 0) {
+      const double k = (std::min)(static_cast<double>(w) / iw,
+                                  static_cast<double>(h) / ih);
+      rw = iw * k / w;
+      rh = ih * k / h;
+      l = (1.0 - rw) / 2.0;
+      t = (1.0 - rh) / 2.0;
+    }
+  }
+
+  // 확대 영역을 창 가운데에 비율 그대로 채운다.
+  const double k = (std::min)(1.0 / (zoom_size_ * rw), 1.0 / (zoom_size_ * rh));
+  const double cx = (l + (zoom_x_ + zoom_size_ / 2) * rw) * w;
+  const double cy = (t + (zoom_y_ + zoom_size_ / 2) * rh) * h;
+  *scale = static_cast<float>(k);
+  *tx = static_cast<float>(w / 2.0 - k * cx);
+  *ty = static_cast<float>(h / 2.0 - k * cy);
+  return true;
+}
+
+// 발표자 보기에서 보내온 좌표에 포인터를 얹는다. macOS 는 WKWebView 쪽 #ptr 이 같은 일을 한다.
+void PresentationChannel::PaintPointer(HDC hdc, int w, int h) const {
+  if (ptr_mode_ == 0 || w <= 0 || h <= 0) return;
+
+  // 이미지 슬라이드는 비율을 지켜 가운데 배치되므로(PaintImage) 그 사각형 안에서
+  // 좌표를 잡아야 발표자가 가리킨 지점과 맞는다.
+  double left = 0.0, top = 0.0, bw = w, bh = h;
+  if (!slide_.imagePath.empty() && image_cache_ &&
+      image_cache_->GetLastStatus() == Gdiplus::Ok) {
+    const UINT iw = image_cache_->GetWidth();
+    const UINT ih = image_cache_->GetHeight();
+    if (iw > 0 && ih > 0) {
+      const double scale = (std::min)(static_cast<double>(w) / iw,
+                                      static_cast<double>(h) / ih);
+      bw = iw * scale;
+      bh = ih * scale;
+      left = (w - bw) / 2.0;
+      top  = (h - bh) / 2.0;
+    }
+  }
+
+  float cx = static_cast<float>(left + ptr_x_ * bw);
+  float cy = static_cast<float>(top + ptr_y_ * bh);
+  // 위치만 확대를 따라간다. 크기까지 키우면 8배 확대에서 화면을 덮어 버린다.
+  float zs = 1.0f, ztx = 0.0f, zty = 0.0f;
+  if (ZoomTransform(w, h, &zs, &ztx, &zty)) {
+    cx = zs * cx + ztx;
+    cy = zs * cy + zty;
+  }
+  const float size = static_cast<float>(ptr_size_);
+
+  Gdiplus::Graphics g(hdc);
+  g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+
+  if (ptr_mode_ == 2) {
+    // 레이저 점: 가운데가 진한 빨강, 바깥으로 갈수록 투명.
+    const float r = size / 2.0f;
+    Gdiplus::GraphicsPath path;
+    path.AddEllipse(cx - r, cy - r, size, size);
+    Gdiplus::PathGradientBrush brush(&path);
+    brush.SetCenterColor(Gdiplus::Color(242, 255, 64, 64));
+    Gdiplus::Color surround[] = {Gdiplus::Color(0, 255, 0, 0)};
+    int count = 1;
+    brush.SetSurroundColors(surround, &count);
+    g.FillEllipse(&brush, cx - r, cy - r, size, size);
+    return;
+  }
+
+  // 손가락 대신 화살표 커서 모양. GDI 로 이모지를 그릴 수 없어 도형으로 그린다.
+  const float s = size / 100.0f;
+  Gdiplus::PointF arrow[] = {
+      Gdiplus::PointF(cx,             cy),
+      Gdiplus::PointF(cx,             cy + 62 * s),
+      Gdiplus::PointF(cx + 15 * s,    cy + 47 * s),
+      Gdiplus::PointF(cx + 26 * s,    cy + 70 * s),
+      Gdiplus::PointF(cx + 38 * s,    cy + 64 * s),
+      Gdiplus::PointF(cx + 27 * s,    cy + 42 * s),
+      Gdiplus::PointF(cx + 47 * s,    cy + 42 * s),
+  };
+  const int n = static_cast<int>(sizeof(arrow) / sizeof(arrow[0]));
+  Gdiplus::SolidBrush fill(Gdiplus::Color(240, 255, 255, 255));
+  Gdiplus::Pen outline(Gdiplus::Color(220, 20, 20, 20), 2.0f * s);
+  g.FillPolygon(&fill, arrow, n);
+  g.DrawPolygon(&outline, arrow, n);
 }
 
 // ── window procedure ──────────────────────────────────────────────────────────

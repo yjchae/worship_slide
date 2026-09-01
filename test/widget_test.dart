@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:worship_slides/src/features/praise/data/worship_conti_repository.dart';
 import 'package:worship_slides/src/features/praise/domain/export_style.dart';
 import 'package:worship_slides/src/features/praise/domain/praise_song.dart';
 import 'package:worship_slides/src/features/praise/presentation/praise_home_page.dart';
@@ -275,5 +276,28 @@ void main() {
     );
 
     expect(ratio, 0.5703703703703704);
+  });
+
+  test('conti notes survive a save/load round trip', () {
+    // 저장: uid 7 항목의 0·2페이지 메모만 골라 JSON 한 칸에 담는다.
+    final notes = {'7:0': '1절 시작', '7:2': '간주', '9:0': '다른 항목', '7:1': ''};
+    final encoded = encodeContiNotes(notes, 7);
+    expect(encoded, isNotNull);
+
+    // 불러오기: 새 uid(42)로 다시 붙는다.
+    final restored = <String, String>{};
+    decodeContiNotes(encoded, 42, restored);
+    expect(restored, {'42:0': '1절 시작', '42:2': '간주'});
+
+    // 메모가 없는 항목은 컬럼을 비워 둔다.
+    expect(encodeContiNotes(notes, 100), isNull);
+  });
+
+  test('broken notes json does not break conti loading', () {
+    final restored = <String, String>{};
+    decodeContiNotes('{쓰레기', 1, restored);
+    decodeContiNotes('[1,2,3]', 1, restored);
+    decodeContiNotes(null, 1, restored);
+    expect(restored, isEmpty);
   });
 }

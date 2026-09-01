@@ -68,6 +68,34 @@ class PresentationWindowController: NSWindowController {
 
   private var _isBlackout = false
   private var _lastData: [String: Any]? = nil
+  // 발표자 보기에서 보내온 포인터. 슬라이드를 다시 그릴 때도 유지해야 해서 들고 있는다.
+  private var _ptrMode = "off"
+  private var _ptrX = 0.0
+  private var _ptrY = 0.0
+  private var _ptrSize = 100.0
+
+  // 발표자 보기에서 지정한 확대 영역(슬라이드 기준 0~1). 슬라이드와 같은 비율이라
+  // 크기 하나면 되고, 배율은 1/size 다.
+  private var _zoomOn = false
+  private var _zoomX = 0.0
+  private var _zoomY = 0.0
+  private var _zoomSize = 1.0
+
+  func setZoom(on: Bool, x: Double, y: Double, size: Double) {
+    _zoomOn = on; _zoomX = x; _zoomY = y; _zoomSize = max(size, 0.01)
+    webView.evaluateJavaScript(zoomCall(), completionHandler: nil)
+  }
+
+  private func zoomCall() -> String {
+    return "window.setZoom&&setZoom(\(_zoomOn),\(_zoomX),\(_zoomY),\(_zoomSize))"
+  }
+
+  func setPointer(mode: String, x: Double, y: Double, size: Double) {
+    _ptrMode = mode; _ptrX = x; _ptrY = y; _ptrSize = size
+    // 마우스가 움직일 때마다 페이지를 다시 로드하면 깜빡이므로 JS 로만 옮긴다.
+    let js = "window.setPtr&&setPtr('\(mode)',\(x),\(y),\(size))"
+    webView.evaluateJavaScript(js, completionHandler: nil)
+  }
 
   // data: Dart의 SlidePageData.toJson() 결과 ([String:Any])
   func updatePage(data: [String: Any]) {
@@ -130,6 +158,89 @@ class PresentationWindowController: NSWindowController {
   }
 
   // 외부 PPT에서 구운 페이지 이미지 한 장을 화면에 꽉 채워 보여준다.
+  // 관객 화면 포인터 (발표자 보기에서 마우스를 움직이면 여기에 표시된다)
+  static let pointerCSS = """
+      html{overflow:hidden;}
+      /* 슬라이드 내용은 이 안에. body 배경은 캔버스로 전파돼 transform 이 안 먹으므로
+         배경 이미지도 여기에 둔다. #ptr 은 이 밖에 있어야 확대해도 커지지 않는다. */
+      #stage{position:absolute;left:0;top:0;width:100%;height:100%;
+             transform-origin:0 0;overflow:hidden;}
+      #ptr{position:absolute;display:none;pointer-events:none;z-index:99;
+           transform:translate(-50%,-50%);line-height:1;text-align:center;}
+      #ptr.dot{border-radius:50%;
+        background:radial-gradient(circle,rgba(255,64,64,.95) 0%,rgba(255,0,0,.55) 45%,rgba(255,0,0,0) 72%);}
+  """
+  static let pointerHTML = "<div id=\"ptr\"></div>"
+
+  private func pointerScript() -> String {
+    return """
+    window.__z={on:false,x:0,y:0,s:1};
+    // 이미지 슬라이드는 object-fit:contain 이라 창 안에서 레터박스가 생긴다.
+    // 슬라이드 좌표(0~1)를 창 좌표(0~1)로 옮기려면 이 사각형이 필요하다.
+    function __rect(){
+      var img=document.querySelector('#stage img'), r={l:0,t:0,w:1,h:1};
+      if(img && img.naturalWidth && img.naturalHeight){
+        var cw=window.innerWidth, ch=window.innerHeight;
+        var k=Math.min(cw/img.naturalWidth, ch/img.naturalHeight);
+        r.w=img.naturalWidth*k/cw; r.h=img.naturalHeight*k/ch;
+        r.l=(1-r.w)/2; r.t=(1-r.h)/2;
+      }
+      return r;
+    }
+    // 확대 영역을 창 가운데에 비율 그대로 채운다. 확대가 꺼져 있으면 항등 변환.
+    function __zoomFit(){
+      var r=__rect(), z=window.__z;
+      if(!z.on) return {k:1,cx:0.5,cy:0.5};
+      var k=Math.min(1/(z.s*r.w), 1/(z.s*r.h));
+      return {k:k, cx:r.l+(z.x+z.s/2)*r.w, cy:r.t+(z.y+z.s/2)*r.h};
+    }
+    window.setZoom=function(on,x,y,size){
+      window.__z={on:on,x:x,y:y,s:size};
+      var st=document.getElementById('stage');
+      if(st){
+        if(!on){ st.style.transform='none'; }
+        else {
+          var f=__zoomFit();
+          st.style.transform='translate('+((0.5-f.k*f.cx)*100)+'vw,'
+                            +((0.5-f.k*f.cy)*100)+'vh) scale('+f.k+')';
+        }
+      }
+      if(window.__p) setPtr(window.__p[0],window.__p[1],window.__p[2],window.__p[3]);
+    };
+    window.setPtr=function(mode,x,y,size){
+      window.__p=[mode,x,y,size];
+      var e=document.getElementById('ptr'); if(!e) return;
+      if(mode==='off'){ e.style.display='none'; return; }
+      var r=__rect(), f=__zoomFit();
+      // 위치만 확대를 따라가고 크기는 그대로 둔다(확대 배율만큼 커지면 화면을 덮는다).
+      var px=r.l+x*r.w, py=r.t+y*r.h;
+      px=0.5+f.k*(px-f.cx); py=0.5+f.k*(py-f.cy);
+      e.className = mode;
+      e.style.display='block';
+      e.style.left=(px*100)+'%'; e.style.top=(py*100)+'%';
+      if(mode==='hand'){
+        e.style.width='auto'; e.style.height='auto';
+        e.style.fontSize=size+'px'; e.textContent='\u{1F446}';
+      } else {
+        e.textContent=''; e.style.fontSize='0';
+        e.style.width=size+'px'; e.style.height=size+'px';
+      }
+    };
+    setPtr('\(_ptrMode)',\(_ptrX),\(_ptrY),\(_ptrSize));
+    \(zoomCall());
+    // data: URI 이미지는 이 스크립트가 도는 시점엔 아직 디코딩 전이라 naturalWidth 가 0 이다.
+    // 레터박스 계산이 어긋나므로 로드가 끝나면 확대·포인터를 다시 적용한다.
+    (function(){
+      var im=document.querySelector('#stage img');
+      if(im && !im.complete){
+        im.addEventListener('load', function(){
+          var z=window.__z; setZoom(z.on,z.x,z.y,z.s);
+        });
+      }
+    })();
+    """
+  }
+
   private func buildImageHTML(imagePath: String, bgColor: String) -> String {
     guard let data = try? Data(contentsOf: URL(fileURLWithPath: imagePath)) else {
       return """
@@ -145,10 +256,13 @@ class PresentationWindowController: NSWindowController {
     <!DOCTYPE html><html><head><meta charset="utf-8">
     <style>
       *{margin:0;padding:0;}
-      body{width:100vw;height:100vh;background:\(bgColor);overflow:hidden;}
+      body{width:100vw;height:100vh;background:\(bgColor);overflow:hidden;position:relative;}
       img{width:100%;height:100%;object-fit:contain;display:block;}
+      \(Self.pointerCSS)
     </style></head><body>
-      <img src="data:\(mime);base64,\(b64)">
+      <div id="stage"><img src="data:\(mime);base64,\(b64)"></div>
+      \(Self.pointerHTML)
+      <script>\(pointerScript())</script>
     </body></html>
     """
   }
@@ -263,7 +377,8 @@ class PresentationWindowController: NSWindowController {
       \(fontFaceCSS(family: fontFamily))
       *{margin:0;padding:0;box-sizing:border-box;}
       body{width:100vw;height:100vh;background:\(bgColor);position:relative;
-           overflow:hidden;font-family:'\(fontFamily)',sans-serif;\(bgImageCSS)}
+           overflow:hidden;font-family:'\(fontFamily)',sans-serif;}
+      #stage{\(bgImageCSS)}
       .body-box{position:absolute;left:5%;width:90%;
         top:\(String(format:"%.4f",bodyBoxTopPct))%;
         height:\(String(format:"%.4f",bodyBoxHeightPct))%;
@@ -275,13 +390,18 @@ class PresentationWindowController: NSWindowController {
       .english-text{color:\(englishColor);font-size:calc(\(englishFontSize)/540*100vh);
         font-weight:700;line-height:1.3;text-align:\(textAlign);
         margin-top:0.4em;white-space:pre-wrap;width:100%;}
+      \(Self.pointerCSS)
     </style></head><body>
-      <div class="body-box">
-        <div class="main-text">\(mainText.replacingOccurrences(of: "\n", with: "<br>"))</div>
-        \(englishSection)
+      <div id="stage">
+        <div class="body-box">
+          <div class="main-text">\(mainText.replacingOccurrences(of: "\n", with: "<br>"))</div>
+          \(englishSection)
+        </div>
+        \(titleSection)
       </div>
-      \(titleSection)
+      \(Self.pointerHTML)
     <script>
+    \(pointerScript())
     requestAnimationFrame(function(){
       var box = document.querySelector('.body-box');
       if (!box) return;
@@ -387,6 +507,26 @@ class MainFlutterWindow: NSWindow {
 
       case "updatePage":
         if let d = data { self.presentationController?.updatePage(data: d) }
+        result(nil)
+
+      case "zoom":
+        if let d = data {
+          self.presentationController?.setZoom(
+            on: d["on"] as? Bool ?? false,
+            x: d["x"] as? Double ?? 0,
+            y: d["y"] as? Double ?? 0,
+            size: d["size"] as? Double ?? 1)
+        }
+        result(nil)
+
+      case "pointer":
+        if let d = data {
+          self.presentationController?.setPointer(
+            mode: d["mode"] as? String ?? "off",
+            x: d["x"] as? Double ?? 0,
+            y: d["y"] as? Double ?? 0,
+            size: d["size"] as? Double ?? 100)
+        }
         result(nil)
 
       case "blackout":

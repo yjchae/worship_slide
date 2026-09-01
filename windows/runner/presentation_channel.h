@@ -8,6 +8,12 @@
 #include <flutter/method_channel.h>
 #include <flutter/encodable_value.h>
 
+// gdiplus.h 는 NOMINMAX 충돌 때문에 .cpp 에서 순서를 맞춰 include 한다.
+// 여기서는 전방 선언만 하고, 소멸은 타입이 완전한 .cpp 쪽에서 이뤄진다.
+namespace Gdiplus {
+class Image;
+}
+
 class PresentationChannel {
  public:
   explicit PresentationChannel(HWND main_hwnd);
@@ -41,6 +47,10 @@ class PresentationChannel {
   void Apply(const flutter::EncodableMap& data);
   void Paint(HDC hdc, RECT cli) const;
   void PaintImage(HDC hdc, int w, int h) const;
+  void PaintPointer(HDC hdc, int w, int h) const;
+  // 확대 변환(px 기준). 확대가 꺼져 있으면 false. 이미지 슬라이드는 레터박스 안쪽
+  // 사각형을 기준으로 잡아 발표자 미리보기와 같은 영역이 나오게 한다.
+  bool ZoomTransform(int w, int h, float* scale, float* tx, float* ty) const;
 
   static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
   static void Register();
@@ -52,6 +62,24 @@ class PresentationChannel {
   HWND hwnd_      = nullptr;
   ULONG_PTR gdiplus_token_ = 0;  // 이미지 슬라이드 렌더링용 GDI+ 토큰
   Slide slide_;
+
+  // 발표자 보기에서 보내온 관객 화면 포인터. 0=숨김 1=손가락 2=레이저 점.
+  int    ptr_mode_ = 0;
+  double ptr_x_    = 0.0;   // 0~1
+  double ptr_y_    = 0.0;   // 0~1
+  double ptr_size_ = 100.0; // px
+
+  // 관객 화면 확대 영역(슬라이드 기준 0~1). 슬라이드와 같은 비율이라 크기 하나면 되고,
+  // 배율은 1/zoom_size_ 다.
+  bool   zoom_on_   = false;
+  double zoom_x_    = 0.0;
+  double zoom_y_    = 0.0;
+  double zoom_size_ = 1.0;
+
+  // 포인터를 움직이면 매 프레임 다시 그리는데, 이미지 슬라이드를 그때마다
+  // 디코딩하면 창이 버벅인다. 경로가 같으면 디코딩한 것을 재사용한다.
+  mutable std::unique_ptr<Gdiplus::Image> image_cache_;
+  mutable std::wstring image_cache_path_;
   std::unique_ptr<Channel> cmd_;
   std::unique_ptr<Channel> main_;
 

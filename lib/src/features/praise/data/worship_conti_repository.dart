@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import '../domain/praise_song.dart';
@@ -6,9 +7,39 @@ import '../domain/worship_conti.dart';
 import 'praise_database.dart';
 
 class LoadContiResult {
-  const LoadContiResult({required this.items, required this.missingCount});
+  const LoadContiResult({
+    required this.items,
+    required this.missingCount,
+    this.notes = const {},
+  });
   final List<({int uid, StagingItem item})> items;
   final int missingCount;
+  // 발표자 보기 슬라이드 메모. 키는 '<uid>:<항목 안 페이지 번호>'.
+  final Map<String, String> notes;
+}
+
+// 메모는 항목별로 {"페이지": "메모"} JSON 한 칸에 담는다.
+String? encodeContiNotes(Map<String, String> notes, int uid) {
+  final prefix = '$uid:';
+  final forItem = <String, String>{
+    for (final e in notes.entries)
+      if (e.key.startsWith(prefix) && e.value.isNotEmpty)
+        e.key.substring(prefix.length): e.value,
+  };
+  return forItem.isEmpty ? null : jsonEncode(forItem);
+}
+
+void decodeContiNotes(Object? stored, int uid, Map<String, String> out) {
+  if (stored is! String || stored.isEmpty) return;
+  try {
+    final decoded = jsonDecode(stored);
+    if (decoded is! Map) return;
+    decoded.forEach((page, note) {
+      if (note is String && note.isNotEmpty) out['$uid:$page'] = note;
+    });
+  } catch (_) {
+    // 손상된 메모 때문에 콘티 자체를 못 불러오면 안 된다.
+  }
 }
 
 class WorshipContiRepository {
@@ -19,8 +50,9 @@ class WorshipContiRepository {
 
   Future<int> saveConti(
     String name,
-    List<({int uid, StagingItem item})> stagingItems,
-  ) async {
+    List<({int uid, StagingItem item})> stagingItems, {
+    Map<String, String> notes = const {},
+  }) async {
     final db = await _db.database;
     final now = DateTime.now().millisecondsSinceEpoch;
     return db.transaction((txn) async {
@@ -76,6 +108,7 @@ class WorshipContiRepository {
         } else {
           continue;
         }
+        row['notes'] = encodeContiNotes(notes, stagingItems[i].uid);
         await txn.insert('worship_conti_items', row);
       }
       return contiId;
@@ -129,8 +162,10 @@ class WorshipContiRepository {
     var uid = startUid;
     var missingCount = 0;
     final result = <({int uid, StagingItem item})>[];
+    final notes = <String, String>{};
 
     for (final row in itemRows) {
+      final addedBefore = result.length;
       final type = row['item_type'] as String;
       if (type == 'song') {
         final songId = row['song_id'] as int?;
@@ -190,9 +225,16 @@ class WorshipContiRepository {
           ),
         ));
       }
+      if (result.length > addedBefore) {
+        decodeContiNotes(row['notes'], result.last.uid, notes);
+      }
     }
 
-    return LoadContiResult(items: result, missingCount: missingCount);
+    return LoadContiResult(
+      items: result,
+      missingCount: missingCount,
+      notes: notes,
+    );
   }
 
   Future<void> deleteConti(int contiId) async {

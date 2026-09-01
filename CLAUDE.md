@@ -38,7 +38,7 @@ lib/
   src/app.dart                       -- MaterialApp (seed #1B6B5C, 배경 #F4F1EA)
   src/features/praise/
     data/
-      praise_database.dart           -- SQLite 스키마 + 마이그레이션 (현재 version 9)
+      praise_database.dart           -- SQLite 스키마 + 마이그레이션 (현재 version 10)
       praise_repository.dart         -- 곡 CRUD (searchSongs, replaceAllSongs, deleteSongsByIds ...)
       worship_conti_repository.dart  -- 콘티 저장/불러오기 (곡 가사 스냅샷까지 함께 보관)
       python_bridge.dart             -- Process.run으로 ppt_tool 실행 (import / render / export)
@@ -79,7 +79,8 @@ lib/
 Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
 
 - `import <폴더>` — `.ppt`/`.pptx` 재귀 탐색 → 한/영 가사 분리 → `{songs, processed_count, errors, libreoffice_missing}`
-- `render <파일>` — 외부 PPT 전 페이지를 PNG로 (soffice → PDF → PyMuPDF → 페이지별 PNG)
+- `render <파일>` — 외부 PPT/PDF 전 페이지를 PNG로 (soffice → PDF → PyMuPDF → 페이지별 PNG).
+  `.pdf`는 soffice 변환을 건너뛰므로 LibreOffice 없이도 된다
 - `export <JSON payload>` — 콘티 + 스타일로 새 PPTX 생성 (곡/성경/이미지/빈 페이지 슬라이드)
 
 ## 중요 설계 결정
