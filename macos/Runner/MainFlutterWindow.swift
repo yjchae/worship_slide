@@ -4,9 +4,12 @@ import WebKit
 
 // ── 발표 창 ──────────────────────────────────────────────────────────────────
 
-class PresentationWindowController: NSWindowController {
+class PresentationWindowController: NSWindowController, NSWindowDelegate {
   private var webView: WKWebView!
   private var keyMonitor: Any?
+  /// 창이 닫힐 때 한 번 호출된다. NotificationCenter 옵저버를 쓰면 창마다 하나씩
+  /// 쌓이고(제거를 안 함) 해제된 창 주소로 남아 다음 발표에서 오작동한다.
+  var onClose: (() -> Void)?
 
   convenience init() {
     let window = NSWindow(
@@ -25,6 +28,15 @@ class PresentationWindowController: NSWindowController {
     webView = WKWebView(frame: window.contentView!.bounds, configuration: config)
     webView.autoresizingMask = [.width, .height]
     window.contentView!.addSubview(webView)
+    window.delegate = self
+  }
+
+  func windowWillClose(_ notification: Notification) {
+    if let monitor = keyMonitor {
+      NSEvent.removeMonitor(monitor)
+      keyMonitor = nil
+    }
+    onClose?()
   }
 
   func show(on screen: NSScreen? = nil) {
@@ -55,14 +67,6 @@ class PresentationWindowController: NSWindowController {
         return nil
       }
       return event
-    }
-    NotificationCenter.default.addObserver(
-      forName: NSWindow.willCloseNotification, object: window, queue: .main
-    ) { [weak self] _ in
-      if let monitor = self?.keyMonitor {
-        NSEvent.removeMonitor(monitor)
-        self?.keyMonitor = nil
-      }
     }
   }
 
@@ -490,15 +494,13 @@ class MainFlutterWindow: NSWindow {
       case "openWindow":
         if self.presentationController == nil {
           let ctrl = PresentationWindowController()
-          self.presentationController = ctrl
-          let screens = NSScreen.screens
-          ctrl.show(on: screens.count > 1 ? screens[1] : nil)
-          NotificationCenter.default.addObserver(
-            forName: NSWindow.willCloseNotification, object: ctrl.window, queue: .main
-          ) { [weak self] _ in
+          ctrl.onClose = { [weak self] in
             self?.presentationController = nil
             self?.mainPresentationChannel?.invokeMethod("presentationClosed", arguments: nil)
           }
+          self.presentationController = ctrl
+          let screens = NSScreen.screens
+          ctrl.show(on: screens.count > 1 ? screens[1] : nil)
         } else {
           self.presentationController?.window?.makeKeyAndOrderFront(nil)
         }

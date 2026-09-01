@@ -183,7 +183,14 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   @override
   void initState() {
     super.initState();
-    _mainTabController = TabController(length: 2, vsync: this);
+    // 탭 전환에 애니메이션을 쓰지 않는다. TabBarView(PageView) 의 전환 애니메이션이
+    // 중간에 멈추면(발표 창이 뜨면서 메인 창이 가려지는 등으로 프레임이 끊길 때)
+    // 내부 카운터가 0으로 안 돌아와 탭이 영영 안 넘어간다.
+    _mainTabController = TabController(
+      length: 2,
+      vsync: this,
+      animationDuration: Duration.zero,
+    )..addListener(_onMainTabChanged);
     _loadSongs();
     _loadSavedStyle();
     _loadBibleCount();
@@ -197,9 +204,15 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     });
   }
 
+  void _onMainTabChanged() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void dispose() {
-    _mainTabController.dispose();
+    _mainTabController
+      ..removeListener(_onMainTabChanged)
+      ..dispose();
     _presentationFocusNode.dispose();
     _searchController
       ..removeListener(_loadSongs)
@@ -530,7 +543,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         _isPresentationOpen = true;
       });
       // 발표를 시작하면 발표 보기 탭으로. 편집 탭은 그대로 살아 있다.
-      _mainTabController.animateTo(1);
+      _mainTabController.index = 1;
       // 발표 전에 잡아둔 확대 영역을 새 창에 그대로 반영한다.
       await _sendZoom();
     } catch (e) {
@@ -1865,13 +1878,29 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                                     ],
                                   ),
                                   const SizedBox(height: 12),
+                                  // TabBarView 가 아니라 IndexedStack 인 이유:
+                                  // 드래그 전환은 어차피 막아 뒀고, PageView 스크롤을
+                                  // 거치지 않아야 탭 전환이 항상 즉시 먹는다.
+                                  // (디자인 패널 탭도 같은 방식)
                                   Expanded(
-                                    child: TabBarView(
-                                      controller: _mainTabController,
-                                      // 좌우 드래그로 탭이 넘어가면 슬라이드 목록 스크롤과 겹친다.
-                                      physics:
-                                          const NeverScrollableScrollPhysics(),
-                                      children: [workspace, presenterConsole],
+                                    child: IndexedStack(
+                                      index: _mainTabController.index,
+                                      sizing: StackFit.expand,
+                                      children: [
+                                        // 숨은 탭은 그려지지 않을 뿐 살아 있다.
+                                        // 검색창/메모창에 포커스가 남으면 발표 단축키가
+                                        // 안 보이는 입력칸으로 빨려 들어가므로 잘라낸다.
+                                        for (final (i, child)
+                                            in [
+                                              workspace,
+                                              presenterConsole,
+                                            ].indexed)
+                                          ExcludeFocus(
+                                            excluding:
+                                                i != _mainTabController.index,
+                                            child: child,
+                                          ),
+                                      ],
                                     ),
                                   ),
                                 ],
@@ -2696,7 +2725,13 @@ class _SearchAndBiblePanelState extends State<_SearchAndBiblePanel>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
+    // 애니메이션 0: 프레임이 끊기면(발표 창이 메인 창을 가릴 때 등) TabBarView 의
+    // 전환 애니메이션이 안 끝나 탭이 영영 안 넘어간다. 메인 탭과 같은 이유.
+    _tabController = TabController(
+      length: 2,
+      vsync: this,
+      animationDuration: Duration.zero,
+    );
   }
 
   @override
