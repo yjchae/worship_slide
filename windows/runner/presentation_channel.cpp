@@ -56,6 +56,10 @@ PresentationChannel::PresentationChannel(HWND main_hwnd)
 
 PresentationChannel::~PresentationChannel() {
   if (hwnd_) { DestroyWindow(hwnd_); hwnd_ = nullptr; }
+  // 멤버는 소멸자 본문 뒤에 정리되므로, GdiplusShutdown 뒤에 ~Image() 가 돈다.
+  // 캐시를 먼저 비워야 이미 내려간 GDI+ 를 건드리지 않는다.
+  image_cache_.reset();
+  image_cache_path_.clear();
   if (gdiplus_token_) {
     Gdiplus::GdiplusShutdown(gdiplus_token_);
     gdiplus_token_ = 0;
@@ -147,6 +151,10 @@ void PresentationChannel::Setup(flutter::FlutterEngine* engine) {
 
 void PresentationChannel::OpenWindow() {
   if (hwnd_) { SetForegroundWindow(hwnd_); return; }
+
+  // 이전 발표에서 쓰던 포인터 위치가 남아 있으면 창을 열자마자 엉뚱한 곳에 그려진다.
+  ptr_mode_ = 0;  // 0 = 숨김
+  ptr_x_ = ptr_y_ = 0.0;
 
   // Place on secondary monitor when available, else center on primary.
   struct MonInfo { HMONITOR primary; HMONITOR second; };

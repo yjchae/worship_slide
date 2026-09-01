@@ -126,6 +126,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   bool _isZoomOn = false;
   double _zoomScale = 0.45; // 영역 폭 / 슬라이드 폭 → 실제 배율은 1/이 값
   Offset _zoomCenter = const Offset(0.5, 0.5);
+  // 콘솔이 트리에서 빠져도 남아야 하는 값들 (경과 시간, 분할 비율 등)
+  final PresenterViewState _presenterView = PresenterViewState();
   double _workColumnRatio = 3 / 7;
   String _slideJumpBuffer = '';
 
@@ -573,7 +575,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   }
 
   // 발표자 보기에서 현재 슬라이드 위 좌표(0~1)를 관객 화면에 그대로 넘긴다.
+  Offset? _lastPointerPos;
+
   Future<void> _sendPointer(Offset? position) async {
+    _lastPointerPos = position;
     if (!_isPresentationOpen) return;
     try {
       await _presentationChannel.invokeMethod('pointer', {
@@ -1665,12 +1670,18 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               pointerSize: _pointerSize,
                               onPointerModeChanged: (m) {
                                 setState(() => _pointerMode = m);
-                                if (m == PresenterPointerMode.off) {
-                                  _sendPointer(null);
-                                }
+                                // 마지막 좌표로 바로 다시 그린다. 안 그러면 마우스를
+                                // 다시 움직일 때까지 예전 모양이 남는다.
+                                _sendPointer(
+                                  m == PresenterPointerMode.off
+                                      ? null
+                                      : _lastPointerPos,
+                                );
                               },
-                              onPointerSizeChanged: (v) =>
-                                  setState(() => _pointerSize = v),
+                              onPointerSizeChanged: (v) {
+                                setState(() => _pointerSize = v);
+                                _sendPointer(_lastPointerPos);
+                              },
                               onPointerMove: _sendPointer,
                               isZoomOn: _isZoomOn,
                               zoomScale: _zoomScale,
@@ -1679,6 +1690,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                                 setState(() => _isZoomOn = !_isZoomOn);
                                 _sendZoom();
                               },
+                              viewState: _presenterView,
                               onZoomChanged: (center, scale) {
                                 setState(() {
                                   _zoomCenter = center;
@@ -5243,6 +5255,18 @@ class _BackgroundImagePicker extends StatelessWidget {
   }
 }
 
+// 발표자 보기의 "화면을 떠나도 남아야 하는" 값들. 콘솔은 탭을 옮기거나
+// 모든 페이지 보기로 바꾸면 통째로 트리에서 빠지기 때문에, State 안에 두면
+// 예배 도중에 경과 시간이 00:00 으로 리셋된다.
+class PresenterViewState {
+  Duration elapsed = Duration.zero;
+  bool isPaused = false;
+  int targetMinutes = 20;
+  double splitRatio = 0.68;
+  bool showAllPages = false;
+  double gridThumbW = 140;
+}
+
 // ── PresenterConsole ─────────────────────────────────────────────────────
 // PPT 발표자 보기. 검색 패널의 세 번째 탭으로 들어간다(창을 새로 띄우지 않는 이유는
 // 발표 중에도 같은 창에서 검색·콘티 편집을 해야 하기 때문).
@@ -5275,6 +5299,7 @@ class _PresenterConsole extends StatefulWidget {
     required this.zoomCenter,
     required this.onZoomToggled,
     required this.onZoomChanged,
+    required this.viewState,
   });
 
   final List<_SlideInfo> slides;
@@ -5303,6 +5328,7 @@ class _PresenterConsole extends StatefulWidget {
   final Offset zoomCenter;
   final VoidCallback onZoomToggled;
   final void Function(Offset center, double scale) onZoomChanged;
+  final PresenterViewState viewState;
 
   @override
   State<_PresenterConsole> createState() => _PresenterConsoleState();
@@ -5312,11 +5338,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
   final _noteController = TextEditingController();
   final _stripScrollController = ScrollController();
   String _noteKey = '';
-  // 현재/다음 슬라이드 가로 비율 (가운데 | 바를 끌어서 조절)
-  double _splitRatio = 0.68;
-  // 모든 페이지 보기
-  bool _showAllPages = false;
-  double _gridThumbW = 140;
+  PresenterViewState get _view => widget.viewState;
 
   static const double _thumbAspect = 13.333 / 7.5;
   static const double _stripHeight = 104;
@@ -5354,9 +5376,10 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
   // 슬라이드가 바뀌면 그 슬라이드의 메모를 컨트롤러에 옮긴다.
   void _syncNote() {
     final key = _keyAt(widget.currentIndex);
-    if (key == _noteKey) return;
-    _noteKey = key;
     final text = widget.notes[key] ?? '';
+    // 키가 같아도 콘티를 다시 불러오면 내용이 통째로 바뀐다.
+    if (key == _noteKey && _noteController.text == text) return;
+    _noteKey = key;
     if (_noteController.text != text) _noteController.text = text;
   }
 
@@ -5392,6 +5415,12 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
   String _keyAt(int index) {
     if (index < 0 || index >= widget.slides.length) return '';
     final info = widget.slides[index];
+    // 자동으로 끼워 넣는 빈 페이지·여백은 콘티 항목이 아니라 메모를 저장할 곳이 없다.
+    // 키를 주지 않아서 메모칸도 잠그고 썸네일 배지도 안 뜨게 한다.
+    if (info.isAutoSpacer ||
+        info.stagingUid == _PraiseHomePageState._leadingBlankUid) {
+      return '';
+    }
     return '${info.stagingUid}:${info.pageIndexInItem}';
   }
 
@@ -5413,7 +5442,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
           _header(cs),
           const SizedBox(height: 10),
           Expanded(
-            child: _showAllPages
+            child: _view.showAllPages
                 ? _allPagesGrid(cs)
                 : LayoutBuilder(
                     builder: (context, constraints) {
@@ -5423,9 +5452,9 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
                       final side = _sidePanel(cs);
                       return isWide
                           ? _ResizableColumnSplit(
-                              ratio: _splitRatio,
+                              ratio: _view.splitRatio,
                               onRatioChanged: (v) =>
-                                  setState(() => _splitRatio = v),
+                                  setState(() => _view.splitRatio = v),
                               first: current,
                               second: side,
                               isSecondCollapsed: false,
@@ -5441,7 +5470,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
                     },
                   ),
           ),
-          if (!_showAllPages) ...[
+          if (!_view.showAllPages) ...[
             const SizedBox(height: 10),
             SizedBox(height: _stripHeight, child: _thumbStrip(cs)),
           ],
@@ -5517,14 +5546,15 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
         ),
         const SizedBox(width: 4),
         IconButton(
-          onPressed: () => setState(() => _showAllPages = !_showAllPages),
+          onPressed: () =>
+              setState(() => _view.showAllPages = !_view.showAllPages),
           icon: Icon(
-            _showAllPages
+            _view.showAllPages
                 ? Icons.view_carousel_rounded
                 : Icons.grid_view_rounded,
           ),
-          tooltip: _showAllPages ? '발표자 보기로' : '모든 페이지 보기',
-          color: _showAllPages ? cs.primary : null,
+          tooltip: _view.showAllPages ? '발표자 보기로' : '모든 페이지 보기',
+          color: _view.showAllPages ? cs.primary : null,
         ),
         IconButton(
           onPressed: widget.onZoomToggled,
@@ -5628,7 +5658,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
           const SizedBox(height: 6),
           _nextPreview(cs),
           const SizedBox(height: 14),
-          _ElapsedClock(isRunning: widget.isPresentationOpen),
+          _ElapsedClock(isRunning: widget.isPresentationOpen, state: _view),
           const SizedBox(height: 14),
           _pointerBox(cs),
           const SizedBox(height: 14),
@@ -5714,18 +5744,20 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
   }
 
   Widget _noteBox(ColorScheme cs) {
+    final canWrite = _noteKey.isNotEmpty;
     return TextField(
       controller: _noteController,
       maxLines: 5,
       minLines: 3,
+      enabled: canWrite,
       style: const TextStyle(fontSize: 12, height: 1.5),
-      decoration: const InputDecoration(
+      decoration: InputDecoration(
         isDense: true,
-        // 자동으로 끼워 넣는 빈 페이지·여백 슬라이드는 콘티 항목이 아니라서
-        // 메모를 붙여도 저장되지 않는다(_effectiveSlideNotes 참고).
-        hintText: '이 슬라이드에서 할 말을 적어두세요.\n콘티를 저장하면 함께 저장됩니다(자동 여백 슬라이드 제외).',
+        hintText: canWrite
+            ? '이 슬라이드에서 할 말을 적어두세요.\n콘티를 저장하면 함께 저장됩니다.'
+            : '자동으로 들어간 빈 페이지에는\n메모를 저장할 수 없습니다.',
         hintMaxLines: 2,
-        border: OutlineInputBorder(),
+        border: const OutlineInputBorder(),
       ),
       onChanged: (v) => widget.onNoteChanged(_noteKey, v),
     );
@@ -5747,7 +5779,9 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
   // 많아지면 세로로 스크롤한다. +/- 나 Ctrl(⌘)+휠로 크기를 바꾼다.
   Widget _allPagesGrid(ColorScheme cs) {
     void changeZoom(double delta) {
-      setState(() => _gridThumbW = (_gridThumbW + delta).clamp(70.0, 460.0));
+      setState(
+        () => _view.gridThumbW = (_view.gridThumbW + delta).clamp(70.0, 460.0),
+      );
     }
 
     return Column(
@@ -5790,7 +5824,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
                   1.0,
                   double.infinity,
                 );
-                final cols = ((avail + spacing) / (_gridThumbW + spacing))
+                final cols = ((avail + spacing) / (_view.gridThumbW + spacing))
                     .floor()
                     .clamp(1, widget.slides.length.clamp(1, 9999));
                 final tw = (avail - (cols - 1) * spacing) / cols;
@@ -5813,7 +5847,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
                     // 누른 페이지로 넘기고 발표자 보기로 돌아간다.
                     onTap: () {
                       widget.onSlideSelected(i);
-                      setState(() => _showAllPages = false);
+                      setState(() => _view.showAllPages = false);
                     },
                     onEdit: () => widget.onSlideEdit(i),
                     onDelete: () => widget.onSlideDelete(i),
@@ -5884,9 +5918,10 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
 // 경과 시간만 따로 뗀 이유: 1초마다 setState 를 하면 콘솔 전체(슬라이드 미리보기
 // 두 장 + 썸네일 전부)가 매초 다시 그려진다. 시계만 다시 그리게 가둔다.
 class _ElapsedClock extends StatefulWidget {
-  const _ElapsedClock({required this.isRunning});
+  const _ElapsedClock({required this.isRunning, required this.state});
 
   final bool isRunning;
+  final PresenterViewState state;
 
   @override
   State<_ElapsedClock> createState() => _ElapsedClockState();
@@ -5894,10 +5929,14 @@ class _ElapsedClock extends StatefulWidget {
 
 class _ElapsedClockState extends State<_ElapsedClock> {
   Timer? _ticker;
-  Duration _elapsed = Duration.zero;
-  bool _isPaused = false;
-  int _targetMinutes = 20;
-  final _targetController = TextEditingController(text: '20');
+  late final _targetController = TextEditingController(
+    text: widget.state.targetMinutes.toString(),
+  );
+
+  // 시계 값은 위젯이 아니라 부모가 들고 있다(탭을 옮겨도 계속 흘러야 한다).
+  Duration get _elapsed => widget.state.elapsed;
+  bool get _isPaused => widget.state.isPaused;
+  int get _targetMinutes => widget.state.targetMinutes;
 
   @override
   void initState() {
@@ -5910,8 +5949,8 @@ class _ElapsedClockState extends State<_ElapsedClock> {
     super.didUpdateWidget(oldWidget);
     // 발표를 새로 시작하면 0부터 다시.
     if (!oldWidget.isRunning && widget.isRunning) {
-      _elapsed = Duration.zero;
-      _isPaused = false;
+      widget.state.elapsed = Duration.zero;
+      widget.state.isPaused = false;
       _start();
     } else if (oldWidget.isRunning && !widget.isRunning) {
       _ticker?.cancel();
@@ -5930,7 +5969,7 @@ class _ElapsedClockState extends State<_ElapsedClock> {
     _ticker?.cancel();
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted || _isPaused) return;
-      setState(() => _elapsed += const Duration(seconds: 1));
+      setState(() => widget.state.elapsed += const Duration(seconds: 1));
     });
   }
 
@@ -6014,7 +6053,9 @@ class _ElapsedClockState extends State<_ElapsedClock> {
                 // 남아 진행 막대가 엉뚱하게 보인다.
                 onChanged: (v) {
                   final n = int.tryParse(v);
-                  if (n != null && n > 0) setState(() => _targetMinutes = n);
+                  if (n != null && n > 0) {
+                    setState(() => widget.state.targetMinutes = n);
+                  }
                 },
               ),
             ),
@@ -6026,7 +6067,8 @@ class _ElapsedClockState extends State<_ElapsedClock> {
             const Spacer(),
             IconButton(
               visualDensity: VisualDensity.compact,
-              onPressed: () => setState(() => _isPaused = !_isPaused),
+              onPressed: () =>
+                  setState(() => widget.state.isPaused = !_isPaused),
               icon: Icon(
                 _isPaused ? Icons.play_arrow_rounded : Icons.pause_rounded,
                 size: 19,
@@ -6035,7 +6077,8 @@ class _ElapsedClockState extends State<_ElapsedClock> {
             ),
             IconButton(
               visualDensity: VisualDensity.compact,
-              onPressed: () => setState(() => _elapsed = Duration.zero),
+              onPressed: () =>
+                  setState(() => widget.state.elapsed = Duration.zero),
               icon: const Icon(Icons.restart_alt_rounded, size: 19),
               tooltip: '리셋',
             ),

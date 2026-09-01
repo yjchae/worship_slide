@@ -228,6 +228,16 @@ class PresentationWindowController: NSWindowController {
     };
     setPtr('\(_ptrMode)',\(_ptrX),\(_ptrY),\(_ptrSize));
     \(zoomCall());
+    // data: URI 이미지는 이 스크립트가 도는 시점엔 아직 디코딩 전이라 naturalWidth 가 0 이다.
+    // 레터박스 계산이 어긋나므로 로드가 끝나면 확대·포인터를 다시 적용한다.
+    (function(){
+      var im=document.querySelector('#stage img');
+      if(im && !im.complete){
+        im.addEventListener('load', function(){
+          var z=window.__z; setZoom(z.on,z.x,z.y,z.s);
+        });
+      }
+    })();
     """
   }
 
