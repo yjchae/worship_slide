@@ -154,6 +154,16 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
 - `scripts/build.sh` / `build.ps1` → `dist/worship_slides/` (앱 + `python/ppt_tool/`)
 - macOS 배포본에는 Gatekeeper 해제용 `Unlock Worship Slides.command`와 안내 txt가 함께 들어간다 (서명 없음)
 - `v*` 태그를 푸시하면 `.github/workflows`가 macOS/Windows zip을 만들어 Release에 올린다
+- **PR 을 열면 같은 워크플로가 자동으로 돈다**(문서만 바뀐 PR 은 제외). Swift·C++ 발표 창 코드는
+  여기서만 실제로 컴파일되므로 네이티브 쪽 사실상 유일한 검증 수단이다. 브랜치를 직접 빌드해
+  받고 싶으면 Actions → Build Release → Run workflow 로 그 브랜치를 골라 아티팩트를 받는다
+  (`ppt_tool` PyInstaller 빌드까지 CI 가 하므로 로컬 재빌드가 필요 없다)
+- **배포 zip 은 `worship_slides/` 폴더를 최상위에 포함해야 한다.** 앱 내장 업데이터
+  (`update_service.dart`)가 압축을 푼 뒤 그 폴더를 찾아 설치 폴더에 덮어쓴다. 폴더가 없으면
+  아무것도 복사하지 못하고 조용히 재시작만 한다. Windows 는 `Compress-Archive -Path dist/worship_slides`
+  (뒤에 `\*` 를 붙이면 내용물만 담긴다), macOS 는 `ditto --keepParent`
+- 업데이트는 폴더를 지우지 않고 **덮어쓰기**다. 실행 파일 옆 `worship_slides.db` 가 살아남아야 하기 때문.
+  수동으로 새 빌드를 받아 갈아끼울 때도 폴더째 교체하지 말고 덮어써야 곡·콘티가 유지된다
 - 앱은 시작 시 `yjchae/make_ppt-releases`의 최신 릴리즈를 확인해 업데이트 배너를 띄운다.
   **릴리즈 태그와 `pubspec.yaml`의 version이 같아야 한다**
 
