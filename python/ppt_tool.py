@@ -1,4 +1,5 @@
 import concurrent.futures
+import copy
 import hashlib
 import json
 import os
@@ -8,8 +9,10 @@ import subprocess
 import sys
 import tempfile
 import unicodedata
+import zipfile
 from pathlib import Path
 
+from lxml import etree
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
@@ -496,6 +499,374 @@ def import_folder(folder):
     )
 
 
+# ---------------------------------------------------------------------------
+# 외부 PPT 애니메이션 → 단계별 페이지
+#
+# LibreOffice가 PDF로 굽는 순간 애니메이션은 사라지고 "다 나타난 마지막 상태" 한 장만
+# 남는다. 그래서 PDF로 넘기기 전에 pptx를 직접 뜯어, 클릭 한 번마다 화면에 보이는 상태를
+# 슬라이드 한 장씩으로 복제해 둔다. 움직이는 효과 자체는 재현하지 못하지만
+# "클릭할 때마다 하나씩 나타난다"는 순서는 그대로 살아난다.
+# ---------------------------------------------------------------------------
+
+_P_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
+_A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
+_R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+_CT_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
+_PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+
+_SLIDE_CONTENT_TYPE = (
+    "application/vnd.openxmlformats-officedocument.presentationml.slide+xml"
+)
+_SLIDE_REL_TYPE = f"{_R_NS}/slide"
+_NOTES_REL_TYPE = f"{_R_NS}/notesSlide"
+
+# 슬라이드 한 장이 수십 장으로 불어나면 발표도 캐시도 감당이 안 된다.
+ANIM_MAX_STEPS_PER_SLIDE = 30
+ANIM_MAX_TOTAL_PAGES = 600
+
+_SLIDE_PART_RE = re.compile(r"ppt/slides/slide(\d+)\.xml$")
+
+
+def _p(tag):
+    return f"{{{_P_NS}}}{tag}"
+
+
+def _a(tag):
+    return f"{{{_A_NS}}}{tag}"
+
+
+_SHAPE_TAGS = frozenset(
+    _p(tag) for tag in ("sp", "pic", "graphicFrame", "grpSp", "cxnSp")
+)
+
+
+def _shape_id(element):
+    """도형 XML → PowerPoint가 애니메이션 대상으로 지목하는 id(spid)."""
+    # cNvPr은 항상 nvSpPr/nvPicPr/... 바로 아래에 있다. iter로 훑으면 그룹 안쪽
+    # 자식 도형의 id까지 잡히므로 한 단계만 내려간다.
+    marker = element.find(f"./*/{_p('cNvPr')}")
+    return None if marker is None else marker.get("id")
+
+
+def _iter_shapes(parent):
+    """spTree 아래 도형을 그룹 안쪽까지 훑는다."""
+    for element in parent:
+        if element.tag in _SHAPE_TAGS:
+            yield element
+            if element.tag == _p("grpSp"):
+                yield from _iter_shapes(element)
+
+
+def _paragraph_count(shape):
+    body = shape.find(_p("txBody"))
+    return 0 if body is None else len(body.findall(_a("p")))
+
+
+def _paragraph_range(shape_target):
+    """<p:spTgt><p:txEl><p:pRg st=".." end=".."/> → 문단 번호들. 없으면 None(도형 통째)."""
+    text_range = shape_target.find(f"{_p('txEl')}/{_p('pRg')}")
+    if text_range is None:
+        return None
+    try:
+        start = int(text_range.get("st", "0"))
+        end = int(text_range.get("end", text_range.get("st", "0")))
+    except ValueError:
+        return None
+    return tuple(range(start, max(start, end) + 1))
+
+
+def _click_steps(slide_root):
+    """메인 시퀀스를 클릭 단위로 끊는다 → [[(entr|exit, spid, 문단들|None), ...], ...]"""
+    timing = slide_root.find(_p("timing"))
+    if timing is None:
+        return []
+
+    main_sequence = next(
+        (node for node in timing.iter(_p("cTn")) if node.get("nodeType") == "mainSeq"),
+        None,
+    )
+    if main_sequence is None:
+        return []
+
+    children = main_sequence.find(_p("childTnLst"))
+    if children is None:
+        return []
+
+    steps = []
+    for click_group in children:
+        effects = []
+        for node in click_group.iter(_p("cTn")):
+            preset = node.get("presetClass")
+            if preset not in ("entr", "exit"):
+                continue
+            for target in node.iter(_p("spTgt")):
+                spid = target.get("spid")
+                if spid:
+                    effects.append((preset, spid, _paragraph_range(target)))
+        if effects:
+            steps.append(effects)
+    return steps
+
+
+def _animation_frames(slide_root):
+    """클릭 단계마다 '감춰야 할 것' 목록. 나눌 게 없으면 None.
+
+    한 프레임은 (감출 도형 id 집합, {도형 id: 감출 문단 번호 집합}).
+    """
+    steps = _click_steps(slide_root)
+    if not steps:
+        return None
+
+    shape_tree = slide_root.find(f"{_p('cSld')}/{_p('spTree')}")
+    if shape_tree is None:
+        return None
+
+    shapes = {}
+    for element in _iter_shapes(shape_tree):
+        spid = _shape_id(element)
+        if spid:
+            shapes[spid] = element
+
+    def hide(hidden_shapes, hidden_paragraphs, spid, paragraphs):
+        if paragraphs is None:
+            hidden_shapes.add(spid)
+        else:
+            limit = _paragraph_count(shapes[spid])
+            hidden_paragraphs.setdefault(spid, set()).update(
+                index for index in paragraphs if index < limit
+            )
+
+    # 시작 화면: 등장 애니메이션이 걸린 것들은 아직 안 보인다.
+    hidden_shapes = set()
+    hidden_paragraphs = {}
+    for effects in steps:
+        for preset, spid, paragraphs in effects:
+            if preset == "entr" and spid in shapes:
+                hide(hidden_shapes, hidden_paragraphs, spid, paragraphs)
+
+    def snapshot():
+        return (
+            set(hidden_shapes),
+            {spid: set(indexes) for spid, indexes in hidden_paragraphs.items() if indexes},
+        )
+
+    frames = [snapshot()]
+    for effects in steps:
+        for preset, spid, paragraphs in effects:
+            if spid not in shapes:
+                continue
+            if preset == "entr":
+                if paragraphs is None:
+                    hidden_shapes.discard(spid)
+                else:
+                    hidden_paragraphs.get(spid, set()).difference_update(paragraphs)
+            else:
+                hide(hidden_shapes, hidden_paragraphs, spid, paragraphs)
+        frames.append(snapshot())
+
+    # 강조 효과처럼 화면이 그대로인 단계는 페이지를 늘릴 이유가 없다.
+    unique = [frames[0]]
+    for frame in frames[1:]:
+        if frame != unique[-1]:
+            unique.append(frame)
+
+    if len(unique) < 2 or len(unique) > ANIM_MAX_STEPS_PER_SLIDE:
+        return None
+    return unique
+
+
+def _blank_paragraphs(shape, indexes):
+    """문단의 글자만 지운다. 문단 자체는 남겨야 나머지 줄이 위아래로 밀리지 않는다."""
+    body = shape.find(_p("txBody"))
+    if body is None:
+        return
+    paragraphs = body.findall(_a("p"))
+    for index in indexes:
+        if index >= len(paragraphs):
+            continue
+        paragraph = paragraphs[index]
+        line_height_source = None
+        for child in list(paragraph):
+            if child.tag in (_a("r"), _a("br"), _a("fld")):
+                if line_height_source is None:
+                    run_properties = child.find(_a("rPr"))
+                    if run_properties is not None:
+                        line_height_source = copy.deepcopy(run_properties)
+                paragraph.remove(child)
+            elif child.tag == _a("endParaRPr"):
+                if line_height_source is None:
+                    line_height_source = copy.deepcopy(child)
+                paragraph.remove(child)
+        # 빈 문단의 줄 높이는 endParaRPr의 글자 크기를 따라간다.
+        if line_height_source is not None:
+            line_height_source.tag = _a("endParaRPr")
+            paragraph.append(line_height_source)
+
+
+def _apply_frame(slide_root, frame):
+    hidden_shapes, hidden_paragraphs = frame
+    shape_tree = slide_root.find(f"{_p('cSld')}/{_p('spTree')}")
+    if shape_tree is None:
+        return
+    for element in list(_iter_shapes(shape_tree)):
+        spid = _shape_id(element)
+        if spid is None:
+            continue
+        if spid in hidden_shapes:
+            parent = element.getparent()
+            if parent is not None:
+                parent.remove(element)
+        elif spid in hidden_paragraphs:
+            _blank_paragraphs(element, hidden_paragraphs[spid])
+
+
+def _read_package(path):
+    with zipfile.ZipFile(path) as archive:
+        return {name: archive.read(name) for name in archive.namelist()}
+
+
+def _write_package(parts, path):
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, data in parts.items():
+            archive.writestr(name, data)
+
+
+def _parse_xml(data):
+    return etree.fromstring(data)
+
+
+def _serialize_xml(root):
+    return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+
+
+def _slide_parts_in_order(presentation_rels, slide_id_list):
+    targets = {}
+    for relationship in presentation_rels:
+        if relationship.get("Type") != _SLIDE_REL_TYPE:
+            continue
+        target = (relationship.get("Target") or "").lstrip("/")
+        if not target.startswith("ppt/"):
+            target = f"ppt/{target}"
+        targets[relationship.get("Id")] = target
+
+    order = []
+    for slide_id in slide_id_list:
+        part_name = targets.get(slide_id.get(f"{{{_R_NS}}}id"))
+        if part_name:
+            order.append((slide_id, part_name))
+    return order
+
+
+def _next_relationship_id(used_ids):
+    number = 1
+    while f"rId{number}" in used_ids:
+        number += 1
+    relationship_id = f"rId{number}"
+    used_ids.add(relationship_id)
+    return relationship_id
+
+
+def _copy_slide_rels(data):
+    """복제 슬라이드용 관계 파일. 슬라이드 노트는 1:1이라 물려주면 안 된다."""
+    root = _parse_xml(data)
+    for relationship in list(root):
+        if relationship.get("Type") == _NOTES_REL_TYPE:
+            root.remove(relationship)
+    return _serialize_xml(root)
+
+
+def expand_animation_steps(source_pptx, output_pptx):
+    """클릭 애니메이션이 걸린 슬라이드를 단계 수만큼 복제한 pptx를 만든다.
+
+    만든 파일 경로를 돌려준다. 나눌 애니메이션이 없으면 None(원본 그대로 렌더하면 된다).
+    """
+    parts = _read_package(source_pptx)
+    if "ppt/presentation.xml" not in parts or "ppt/_rels/presentation.xml.rels" not in parts:
+        return None
+
+    presentation = _parse_xml(parts["ppt/presentation.xml"])
+    presentation_rels = _parse_xml(parts["ppt/_rels/presentation.xml.rels"])
+    slide_id_list = presentation.find(_p("sldIdLst"))
+    if slide_id_list is None:
+        return None
+
+    order = _slide_parts_in_order(presentation_rels, slide_id_list)
+    plans = {}
+    total_pages = 0
+    for _, part_name in order:
+        frames = _animation_frames(_parse_xml(parts[part_name])) if part_name in parts else None
+        plans[part_name] = frames
+        total_pages += len(frames) if frames else 1
+
+    if not any(plans.values()) or total_pages > ANIM_MAX_TOTAL_PAGES:
+        return None
+
+    content_types = _parse_xml(parts["[Content_Types].xml"])
+    used_numbers = {
+        int(match.group(1))
+        for name in parts
+        if (match := _SLIDE_PART_RE.fullmatch(name))
+    }
+    used_relationship_ids = {relationship.get("Id") for relationship in presentation_rels}
+    max_slide_id = max(
+        (int(slide_id.get("id", "0")) for slide_id in slide_id_list), default=255
+    )
+
+    for slide_id, part_name in order:
+        slide_root = _parse_xml(parts[part_name])
+        # 타이밍 정보는 PDF 변환이 어차피 무시한다. 남겨 둘 이유가 없다.
+        for timing in slide_root.findall(_p("timing")):
+            slide_root.remove(timing)
+
+        frames = plans[part_name]
+        if not frames:
+            parts[part_name] = _serialize_xml(slide_root)
+            continue
+
+        source_rels = parts.get(f"ppt/slides/_rels/{Path(part_name).name}.rels")
+        # _apply_frame은 트리를 직접 깎으므로 단계마다 깨끗한 원본에서 다시 시작해야 한다.
+        base_xml = _serialize_xml(slide_root)
+        anchor = slide_id
+        for index, frame in enumerate(frames):
+            step_root = _parse_xml(base_xml)
+            _apply_frame(step_root, frame)
+            if index == 0:
+                parts[part_name] = _serialize_xml(step_root)
+                continue
+
+            number = max(used_numbers) + 1
+            used_numbers.add(number)
+            step_part = f"ppt/slides/slide{number}.xml"
+            parts[step_part] = _serialize_xml(step_root)
+            if source_rels is not None:
+                parts[f"ppt/slides/_rels/slide{number}.xml.rels"] = _copy_slide_rels(source_rels)
+
+            override = etree.SubElement(content_types, f"{{{_CT_NS}}}Override")
+            override.set("PartName", f"/{step_part}")
+            override.set("ContentType", _SLIDE_CONTENT_TYPE)
+
+            relationship_id = _next_relationship_id(used_relationship_ids)
+            relationship = etree.SubElement(
+                presentation_rels, f"{{{_PKG_REL_NS}}}Relationship"
+            )
+            relationship.set("Id", relationship_id)
+            relationship.set("Type", _SLIDE_REL_TYPE)
+            relationship.set("Target", f"slides/slide{number}.xml")
+
+            max_slide_id += 1
+            step_slide_id = etree.Element(_p("sldId"))
+            step_slide_id.set("id", str(max_slide_id))
+            step_slide_id.set(f"{{{_R_NS}}}id", relationship_id)
+            anchor.addnext(step_slide_id)
+            anchor = step_slide_id
+
+    parts["ppt/presentation.xml"] = _serialize_xml(presentation)
+    parts["ppt/_rels/presentation.xml.rels"] = _serialize_xml(presentation_rels)
+    parts["[Content_Types].xml"] = _serialize_xml(content_types)
+    _write_package(parts, output_pptx)
+    return Path(output_pptx)
+
+
 RENDER_IMAGE_WIDTH = 1920
 
 
@@ -525,26 +896,83 @@ def _convert_to_pdf(source_path, output_dir):
     return converted[0]
 
 
-def render_presentation_images(file_path):
+# 굽는 방식이 바뀌면 예전 캐시를 그대로 읽으면 안 되므로 키에 버전을 섞는다.
+# (예전 폴더는 저장된 콘티가 참조하고 있을 수 있어 지우지 않고 그냥 둔다.)
+RENDER_CACHE_VERSION = 2
+
+
+def get_render_cache_key(source_path, expand_animation):
+    stat = source_path.stat()
+    payload = (
+        f"{source_path.resolve()}::{stat.st_size}::{stat.st_mtime_ns}"
+        f"::v{RENDER_CACHE_VERSION}::anim={int(bool(expand_animation))}"
+    )
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
+
+
+def _prepare_render_source(source_path, temp_dir):
+    """렌더에 넘길 파일을 고른다.
+
+    애니메이션이 걸려 있으면 클릭 단계를 슬라이드로 펼친 pptx를 새로 만들어 그걸 넘기고,
+    없거나 분석에 실패하면 원본을 그대로 넘긴다(기존 동작).
+    """
+    try:
+        if source_path.suffix.lower() == ".pptx":
+            pptx_path = source_path
+        else:
+            # .ppt는 XML을 열 수 없어서 먼저 pptx로 바꿔야 애니메이션을 볼 수 있다.
+            convert_dir = temp_dir / "pptx"
+            convert_dir.mkdir(parents=True, exist_ok=True)
+            pptx_path = convert_ppt_group_to_pptx([source_path], convert_dir).get(source_path)
+            if pptx_path is None:
+                return source_path
+        return expand_animation_steps(pptx_path, temp_dir / "animated.pptx") or source_path
+    except Exception as error:
+        print(
+            json.dumps(
+                {"warning": f"애니메이션 단계 분석을 건너뜁니다: {error}"},
+                ensure_ascii=True,
+            ),
+            file=sys.stderr,
+        )
+        return source_path
+
+
+def _render_result(source_name, image_paths, target_dir):
+    animated = False
+    meta_path = target_dir / "meta.json"
+    if meta_path.exists():
+        try:
+            animated = bool(json.loads(meta_path.read_text(encoding="utf-8")).get("animated"))
+        except (OSError, ValueError):
+            animated = False
+    return {
+        "source_name": source_name,
+        "image_paths": [str(path) for path in image_paths],
+        "page_count": len(image_paths),
+        "animated": animated,
+    }
+
+
+def render_presentation_images(file_path, expand_animation=True):
     """PPT/PPTX/PDF의 모든 페이지를 PNG로 굽고 경로 목록을 돌려준다.
 
+    PPT/PPTX에 클릭 애니메이션이 걸려 있으면 클릭 단계마다 한 장씩 나눠 굽는다.
     PDF는 이미 PDF라서 LibreOffice 변환 단계를 건너뛴다(LibreOffice 없이도 동작).
     """
     source_path = Path(file_path)
     if not source_path.exists():
         raise RuntimeError(f"파일을 찾을 수 없습니다: {file_path}")
 
+    is_pdf = source_path.suffix.lower() == ".pdf"
+    expand_animation = expand_animation and not is_pdf
+
     source_name = unicodedata.normalize("NFC", source_path.name)
-    target_dir = get_app_support_root() / get_ppt_cache_key(source_path)
+    target_dir = get_app_support_root() / get_render_cache_key(source_path, expand_animation)
     cached = sorted(target_dir.glob("*.png"))
     if cached:
-        return {
-            "source_name": source_name,
-            "image_paths": [str(path) for path in cached],
-            "page_count": len(cached),
-        }
+        return _render_result(source_name, cached, target_dir)
 
-    is_pdf = source_path.suffix.lower() == ".pdf"
     if not is_pdf and get_libreoffice_executable() is None:
         return {"error": "libreoffice_missing"}
 
@@ -556,17 +984,34 @@ def render_presentation_images(file_path):
     staging_dir.mkdir(parents=True, exist_ok=True)
     temp_dir = Path(tempfile.mkdtemp(prefix="praise_ppt_render_"))
     try:
-        pdf_path = source_path if is_pdf else _convert_to_pdf(source_path, temp_dir)
+        if is_pdf:
+            pdf_path = source_path
+            animated = False
+        else:
+            render_source = (
+                _prepare_render_source(source_path, temp_dir)
+                if expand_animation
+                else source_path
+            )
+            animated = render_source != source_path
+            pdf_dir = temp_dir / "pdf"
+            pdf_dir.mkdir(parents=True, exist_ok=True)
+            pdf_path = _convert_to_pdf(render_source, pdf_dir)
+
         page_count = 0
         with pymupdf.open(str(pdf_path)) as document:
             for index, page in enumerate(document):
                 zoom = RENDER_IMAGE_WIDTH / max(page.rect.width, 1)
                 pixmap = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))
-                pixmap.save(str(staging_dir / f"{index + 1:03d}.png"))
+                pixmap.save(str(staging_dir / f"{index + 1:04d}.png"))
                 page_count += 1
 
         if page_count == 0:
             raise RuntimeError(f"페이지가 없습니다: {source_name}")
+
+        (staging_dir / "meta.json").write_text(
+            json.dumps({"animated": animated}), encoding="utf-8"
+        )
 
         shutil.rmtree(target_dir, ignore_errors=True)
         target_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -575,16 +1020,16 @@ def render_presentation_images(file_path):
         shutil.rmtree(temp_dir, ignore_errors=True)
         shutil.rmtree(staging_dir, ignore_errors=True)
 
-    image_paths = sorted(target_dir.glob("*.png"))
-    return {
-        "source_name": source_name,
-        "image_paths": [str(path) for path in image_paths],
-        "page_count": len(image_paths),
-    }
+    return _render_result(source_name, sorted(target_dir.glob("*.png")), target_dir)
 
 
-def render_presentation(file_path):
-    print(json.dumps(render_presentation_images(file_path), ensure_ascii=True))
+def render_presentation(file_path, expand_animation=True):
+    print(
+        json.dumps(
+            render_presentation_images(file_path, expand_animation=expand_animation),
+            ensure_ascii=True,
+        )
+    )
 
 
 def parse_hex_color(hex_color):
@@ -908,7 +1353,8 @@ def main():
         return
 
     if command == "render":
-        render_presentation(payload)
+        # --no-animation: 애니메이션을 펼치지 않고 슬라이드당 한 장만 굽는다.
+        render_presentation(payload, expand_animation="--no-animation" not in sys.argv[3:])
         return
 
     raise SystemExit(f"unknown command: {command}")
