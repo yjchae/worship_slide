@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 
 import '../domain/export_style.dart';
 import '../domain/praise_song.dart';
+import '../domain/slide_background.dart';
 import '../domain/staging_item.dart';
 import 'app_logger.dart';
 
@@ -90,15 +91,18 @@ class PythonBridge {
     );
   }
 
+  /// [stagingItems] 의 `background` 는 그 항목에만 적용되는 배경 오버라이드.
+  /// null 이면 [style] 의 전역 배경을 그대로 쓴다.
   Future<String> exportPresentation({
     required String outputPath,
-    required List<StagingItem> stagingItems,
+    required List<({StagingItem item, SlideBackground? background})>
+    stagingItems,
     required ExportStyle style,
   }) async {
     final payload = jsonEncode({
       'output_path': outputPath,
-      'songs': stagingItems.map((item) {
-        return switch (item) {
+      'songs': stagingItems.map((entry) {
+        final Map<String, dynamic> json = switch (entry.item) {
           SongStagingItem(:final song) => {
             'type': 'song',
             'title': song.title,
@@ -125,6 +129,8 @@ class PythonBridge {
             'image_paths': imagePaths,
           },
         };
+        json['background'] = entry.background?.toJson();
+        return json;
       }).toList(),
       'style': style.toJson(),
     });

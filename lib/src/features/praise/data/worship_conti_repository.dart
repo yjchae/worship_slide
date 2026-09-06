@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../domain/praise_song.dart';
+import '../domain/slide_background.dart';
 import '../domain/staging_item.dart';
 import '../domain/worship_conti.dart';
 import 'praise_database.dart';
@@ -11,11 +12,14 @@ class LoadContiResult {
     required this.items,
     required this.missingCount,
     this.notes = const {},
+    this.backgrounds = const {},
   });
   final List<({int uid, StagingItem item})> items;
   final int missingCount;
   // 발표자 보기 슬라이드 메모. 키는 '<uid>:<항목 안 페이지 번호>'.
   final Map<String, String> notes;
+  // 항목별 배경 오버라이드. 키는 항목 uid. 없는 항목은 전역 배경을 쓴다.
+  final Map<int, SlideBackground> backgrounds;
 }
 
 // 메모는 항목별로 {"페이지": "메모"} JSON 한 칸에 담는다.
@@ -52,6 +56,7 @@ class WorshipContiRepository {
     String name,
     List<({int uid, StagingItem item})> stagingItems, {
     Map<String, String> notes = const {},
+    Map<int, SlideBackground> backgrounds = const {},
   }) async {
     final db = await _db.database;
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -109,6 +114,9 @@ class WorshipContiRepository {
           continue;
         }
         row['notes'] = encodeContiNotes(notes, stagingItems[i].uid);
+        row['background'] = SlideBackground.encode(
+          backgrounds[stagingItems[i].uid],
+        );
         await txn.insert('worship_conti_items', row);
       }
       return contiId;
@@ -163,6 +171,7 @@ class WorshipContiRepository {
     var missingCount = 0;
     final result = <({int uid, StagingItem item})>[];
     final notes = <String, String>{};
+    final backgrounds = <int, SlideBackground>{};
 
     for (final row in itemRows) {
       final addedBefore = result.length;
@@ -227,6 +236,8 @@ class WorshipContiRepository {
       }
       if (result.length > addedBefore) {
         decodeContiNotes(row['notes'], result.last.uid, notes);
+        final background = SlideBackground.decode(row['background']);
+        if (background != null) backgrounds[result.last.uid] = background;
       }
     }
 
@@ -234,6 +245,7 @@ class WorshipContiRepository {
       items: result,
       missingCount: missingCount,
       notes: notes,
+      backgrounds: backgrounds,
     );
   }
 

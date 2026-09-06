@@ -19,6 +19,7 @@ import '../data/worship_conti_repository.dart';
 import '../domain/worship_conti.dart';
 import '../domain/export_style.dart';
 import '../domain/praise_song.dart';
+import '../domain/slide_background.dart';
 import '../domain/staging_item.dart';
 import 'slide_page_data.dart';
 import 'slide_render_view.dart';
@@ -42,6 +43,7 @@ class _SlideInfo {
     this.isBlank = false,
     this.isAutoSpacer = false,
     this.imagePath,
+    this.background,
   });
   final int stagingUid;
   final String mainText;
@@ -55,6 +57,8 @@ class _SlideInfo {
   final bool isAutoSpacer;
   // 외부 PPT에서 구운 페이지 이미지 경로. 있으면 텍스트 대신 이미지가 표시된다.
   final String? imagePath;
+  // 이 슬라이드에만 적용되는 배경. null 이면 전역 디자인의 배경을 쓴다.
+  final SlideBackground? background;
 }
 
 class _PraiseHomePageState extends State<PraiseHomePage>
@@ -120,6 +124,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   // 최상위 탭: 0 편집(콘티·검색·디자인), 1 발표 보기
   late final TabController _mainTabController;
   final Map<String, String> _slideNotes = {};
+  // 콘티 항목별 배경 오버라이드. 키는 항목 uid. 없는 항목은 전역 배경을 쓴다.
+  // (헌금송만 다른 배경으로 띄우는 등 "일부만 다르게" 하기 위한 것)
+  final Map<int, SlideBackground> _itemBackgrounds = {};
   PresenterPointerMode _pointerMode = PresenterPointerMode.off;
   double _pointerSize = 100;
   // 관객 화면 확대. 확대 영역은 슬라이드와 같은 비율이라 크기 하나(가로 비율)면 된다.
@@ -386,6 +393,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       final isLast = i == _stagingItems.length - 1;
       final nextIsBlank =
           !isLast && _stagingItems[i + 1].item is BlankStagingItem;
+      // 항목에 배경 오버라이드가 걸려 있으면 그 항목이 만드는 모든 페이지가
+      // (뒤에 자동으로 붙는 여백까지) 같은 배경을 쓴다.
+      final background = _itemBackgrounds[entry.uid];
 
       if (item is BlankStagingItem) {
         tryAdd(
@@ -397,6 +407,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
             isBible: false,
             pageIndexInItem: 0,
             isBlank: true,
+            background: background,
           ),
         );
       } else if (item is SongStagingItem) {
@@ -411,6 +422,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
               title: song.title,
               isBible: false,
               pageIndexInItem: j,
+              background: background,
             ),
           );
         }
@@ -425,6 +437,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
               pageIndexInItem: pairs.length,
               isBlank: true,
               isAutoSpacer: true,
+              background: background,
             ),
           );
         }
@@ -439,6 +452,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
               isBible: false,
               pageIndexInItem: j,
               imagePath: item.imagePaths[j],
+              background: background,
             ),
           );
         }
@@ -453,6 +467,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
               pageIndexInItem: item.imagePaths.length,
               isBlank: true,
               isAutoSpacer: true,
+              background: background,
             ),
           );
         }
@@ -465,6 +480,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
             title: item.reference,
             isBible: true,
             pageIndexInItem: 0,
+            background: background,
           ),
         );
         // 말씀 다음이 말씀이면 빈 페이지 삽입 안 함
@@ -481,6 +497,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
               pageIndexInItem: 1,
               isBlank: true,
               isAutoSpacer: true,
+              background: background,
             ),
           );
         }
@@ -516,7 +533,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       isBible: slide?.isBible ?? false,
       pageIndex: index,
       totalPages: slides.length,
-      style: _style,
+      style: _style.withBackground(slide?.background),
       imagePath: slide?.imagePath,
     );
   }
@@ -878,11 +895,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
           _stagingItems.add((uid: _nextUid++, item: SongStagingItem(song)));
         }
       } else {
-        _stagingItems.removeWhere(
-          (e) =>
-              e.item is SongStagingItem &&
-              (e.item as SongStagingItem).song.id == song.id,
-        );
+        _stagingItems.removeWhere((e) {
+          final item = e.item;
+          final matches =
+              item is SongStagingItem && item.song.id == song.id;
+          if (matches) _itemBackgrounds.remove(e.uid);
+          return matches;
+        });
         _clampCurrentSlideIndex();
       }
     });
@@ -911,6 +930,35 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       ));
       _previewStagingUid = uid;
     });
+  }
+
+  /// 콘티 항목 하나의 배경만 따로 지정한다(헌금송만 다른 배경 등).
+  /// 다이얼로그에서 "전역 배경 사용"으로 되돌리면 오버라이드가 지워진다.
+  Future<void> _editItemBackground(int uid) async {
+    final index = _stagingItems.indexWhere((e) => e.uid == uid);
+    if (index < 0) return;
+    final entry = _stagingItems[index];
+
+    final result = await showDialog<({SlideBackground? background})>(
+      context: context,
+      builder: (ctx) => _ItemBackgroundDialog(
+        item: entry.item,
+        initial: _itemBackgrounds[uid],
+        globalStyle: _style,
+        swatches: _swatches,
+      ),
+    );
+    if (result == null || !mounted) return;
+
+    setState(() {
+      if (result.background == null) {
+        _itemBackgrounds.remove(uid);
+      } else {
+        _itemBackgrounds[uid] = result.background!;
+      }
+      _previewStagingUid = uid;
+    });
+    await _sendCurrentSlide();
   }
 
   /// 로컬 PPT/PPTX를 골라 페이지별 이미지로 변환한 뒤 콘티에 넣는다.
@@ -1002,6 +1050,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     setState(() {
       _stagingItems.removeWhere((e) => e.uid == uid);
       _deletedSlideKeys.removeWhere((k) => k.startsWith('$uid:'));
+      _itemBackgrounds.remove(uid);
       if (_previewStagingUid == uid) {
         _previewStagingUid = _stagingItems.isEmpty
             ? null
@@ -1195,7 +1244,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     try {
       final savedPath = await _pythonBridge.exportPresentation(
         outputPath: normalizedOutputPath,
-        stagingItems: _effectiveStagingItems.map((e) => e.item).toList(),
+        stagingItems: _effectiveStagingItems
+            .map((e) => (item: e.item, background: _itemBackgrounds[e.uid]))
+            .toList(),
         style: _style,
       );
       if (!mounted) return;
@@ -1270,6 +1321,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         name,
         _effectiveStagingItems,
         notes: _effectiveSlideNotes,
+        backgrounds: _itemBackgrounds,
       );
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -1340,6 +1392,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       _slideNotes
         ..clear()
         ..addAll(result.notes);
+      _itemBackgrounds
+        ..clear()
+        ..addAll(result.backgrounds);
       _nextUid += result.items.length;
       _previewStagingUid = result.items.isEmpty ? null : result.items.first.uid;
       _currentSlideIndex = 0;
@@ -1389,7 +1444,11 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     await _repository.clearAllSongs();
     if (!mounted) return;
     setState(() {
-      _stagingItems.removeWhere((e) => e.item is SongStagingItem);
+      _stagingItems.removeWhere((e) {
+        final isSong = e.item is SongStagingItem;
+        if (isSong) _itemBackgrounds.remove(e.uid);
+        return isSong;
+      });
       _deletedSlideKeys.clear();
       _clampCurrentSlideIndex();
     });
@@ -1560,14 +1619,19 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   @override
   Widget build(BuildContext context) {
-    StagingItem? previewItem;
+    ({int uid, StagingItem item})? previewEntry;
     for (final entry in _stagingItems) {
       if (entry.uid == _previewStagingUid) {
-        previewItem = entry.item;
+        previewEntry = entry;
         break;
       }
     }
-    previewItem ??= _stagingItems.isEmpty ? null : _stagingItems.first.item;
+    previewEntry ??= _stagingItems.isEmpty ? null : _stagingItems.first;
+    final previewItem = previewEntry?.item;
+    // 미리보기는 그 항목의 배경 오버라이드까지 반영해야 실제 발표 화면과 같다.
+    final previewBackground = previewEntry == null
+        ? null
+        : _itemBackgrounds[previewEntry.uid];
 
     final slides = _allSlides;
     return FocusScope(
@@ -1624,6 +1688,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                             final stagingPanel = _StagingPanel(
                               stagingItems: _stagingItems,
                               selectedUid: _previewStagingUid,
+                              backgrounds: _itemBackgrounds,
+                              onEditBackground: _editItemBackground,
                               onReorder: _onStagingReorder,
                               onRemove: _removeFromStaging,
                               isCollapsed: _isStagingCollapsed,
@@ -1802,6 +1868,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                                     flex: 2,
                                     child: _DesignPanel(
                                       style: _style,
+                                      previewBackground: previewBackground,
                                       isExporting: _isExporting,
                                       swatches: _swatches,
                                       textSwatches: _textSwatches,
@@ -2362,6 +2429,8 @@ class _StagingPanel extends StatelessWidget {
   const _StagingPanel({
     required this.stagingItems,
     required this.selectedUid,
+    required this.backgrounds,
+    required this.onEditBackground,
     required this.onReorder,
     required this.onRemove,
     required this.onSelect,
@@ -2374,6 +2443,9 @@ class _StagingPanel extends StatelessWidget {
 
   final List<({int uid, StagingItem item})> stagingItems;
   final int? selectedUid;
+  // 항목별 배경 오버라이드. 키가 있는 항목만 전역 배경 대신 이 배경으로 나간다.
+  final Map<int, SlideBackground> backgrounds;
+  final ValueChanged<int> onEditBackground;
   final void Function(int oldIndex, int newIndex) onReorder;
   final void Function(int uid) onRemove;
   final ValueChanged<int> onSelect;
@@ -2526,6 +2598,7 @@ class _StagingPanel extends StatelessWidget {
                         final isBlank = item is BlankStagingItem;
                         final cs = Theme.of(context).colorScheme;
                         final isSelected = entry.uid == selectedUid;
+                        final background = backgrounds[entry.uid];
                         return Material(
                           key: ValueKey(entry.uid),
                           color: isSelected
@@ -2610,6 +2683,10 @@ class _StagingPanel extends StatelessWidget {
                                                   ),
                                                 ),
                                               ),
+                                            if (background != null)
+                                              _BackgroundBadge(
+                                                background: background,
+                                              ),
                                             Flexible(
                                               child: Text(
                                                 isBlank
@@ -2640,12 +2717,32 @@ class _StagingPanel extends StatelessWidget {
                                       ],
                                     ),
                                   ),
+                                  // 버튼이 셋이라 기본 48px 탭 타깃이면 제목이 밀린다.
+                                  IconButton(
+                                    icon: Icon(
+                                      background == null
+                                          ? Icons.wallpaper_rounded
+                                          : Icons.wallpaper,
+                                      size: 19,
+                                      color: background == null
+                                          ? cs.onSurfaceVariant
+                                          : cs.primary,
+                                    ),
+                                    tooltip: background == null
+                                        ? '이 항목만 배경 바꾸기'
+                                        : '이 항목의 배경 수정',
+                                    style: compactIcon,
+                                    onPressed: () =>
+                                        onEditBackground(entry.uid),
+                                  ),
+                                  const SizedBox(width: 4),
                                   IconButton(
                                     icon: const Icon(
                                       Icons.close_rounded,
                                       size: 20,
                                     ),
                                     tooltip: '제거',
+                                    style: compactIcon,
                                     onPressed: () => onRemove(entry.uid),
                                   ),
                                   ReorderableDragStartListener(
@@ -3579,6 +3676,7 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
 class _DesignPanel extends StatelessWidget {
   const _DesignPanel({
     required this.style,
+    required this.previewBackground,
     required this.isExporting,
     required this.swatches,
     required this.textSwatches,
@@ -3589,6 +3687,8 @@ class _DesignPanel extends StatelessWidget {
   });
 
   final ExportStyle style;
+  // 선택한 콘티 항목의 배경 오버라이드. 미리보기에만 반영한다(설정값은 전역 그대로).
+  final SlideBackground? previewBackground;
   final bool isExporting;
   final List<Color> swatches;
   final List<Color> textSwatches;
@@ -3597,7 +3697,8 @@ class _DesignPanel extends StatelessWidget {
   final VoidCallback onExportPressed;
   final VoidCallback onCollapse;
 
-  static final TextInputFormatter _hexInputFormatter =
+  // 배경 다이얼로그에서도 같은 hex 입력 규칙을 쓴다.
+  static final TextInputFormatter hexInputFormatter =
       FilteringTextInputFormatter.allow(RegExp(r'[0-9a-fA-F#]'));
 
   List<ButtonSegment<T>> _segments<T>(
@@ -3622,7 +3723,7 @@ class _DesignPanel extends StatelessWidget {
         title: title,
         initialColor: current,
         colors: colors,
-        inputFormatter: _hexInputFormatter,
+        inputFormatter: hexInputFormatter,
       ),
     );
     if (selected != null) onSelected(selected);
@@ -3820,7 +3921,10 @@ class _DesignPanel extends StatelessWidget {
                   const SizedBox(height: 16),
                   ConstrainedBox(
                     constraints: BoxConstraints(maxHeight: previewMaxHeight),
-                    child: _PreviewBox(style: style, previewItem: previewItem),
+                    child: _PreviewBox(
+                      style: style.withBackground(previewBackground),
+                      previewItem: previewItem,
+                    ),
                   ),
                   const SizedBox(height: 12),
                 ] else
@@ -5290,6 +5394,213 @@ class _BackgroundImagePicker extends StatelessWidget {
   }
 }
 
+// ── 항목별 배경 ───────────────────────────────────────────────────────────
+
+/// 콘티 목록에서 "이 항목은 배경이 다르다"를 한눈에 보여주는 작은 칩.
+class _BackgroundBadge extends StatelessWidget {
+  const _BackgroundBadge({required this.background});
+
+  final SlideBackground background;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      margin: const EdgeInsets.only(right: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+      decoration: BoxDecoration(
+        color: cs.primary.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 9,
+            height: 9,
+            decoration: BoxDecoration(
+              color: background.color,
+              shape: BoxShape.circle,
+              border: Border.all(color: Theme.of(context).dividerColor),
+            ),
+          ),
+          const SizedBox(width: 4),
+          Text(
+            background.hasImage ? '배경 이미지' : '배경',
+            style: TextStyle(
+              fontSize: 11,
+              color: cs.primary,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 콘티 항목 하나의 배경만 따로 정하는 다이얼로그.
+///
+/// "전역 배경 사용"이면 오버라이드를 지우고 전역 디자인을 따른다. 끄고 색·이미지를
+/// 고르면 그 항목(과 뒤에 자동으로 붙는 여백)만 다른 배경으로 나간다.
+/// 결과로 `(background: null)` 을 돌려주면 "오버라이드 없음", 다이얼로그를 그냥
+/// 닫으면 null 이라 아무것도 바꾸지 않는다.
+class _ItemBackgroundDialog extends StatefulWidget {
+  const _ItemBackgroundDialog({
+    required this.item,
+    required this.initial,
+    required this.globalStyle,
+    required this.swatches,
+  });
+
+  final StagingItem item;
+  final SlideBackground? initial;
+  final ExportStyle globalStyle;
+  final List<Color> swatches;
+
+  @override
+  State<_ItemBackgroundDialog> createState() => _ItemBackgroundDialogState();
+}
+
+class _ItemBackgroundDialogState extends State<_ItemBackgroundDialog> {
+  late bool _useCustom = widget.initial != null;
+  late SlideBackground _background =
+      widget.initial ?? SlideBackground.fromStyle(widget.globalStyle);
+
+  ExportStyle get _previewStyle =>
+      widget.globalStyle.withBackground(_useCustom ? _background : null);
+
+  Future<void> _pickColor() async {
+    final selected = await showDialog<Color>(
+      context: context,
+      builder: (ctx) => _HexColorDialog(
+        title: '이 항목의 배경 색상',
+        initialColor: _background.color,
+        colors: widget.swatches,
+        inputFormatter: _DesignPanel.hexInputFormatter,
+      ),
+    );
+    if (selected != null && mounted) {
+      setState(() => _background = _background.copyWith(color: selected));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final title = widget.item is BlankStagingItem
+        ? '빈 페이지'
+        : widget.item.displayTitle;
+
+    return AlertDialog(
+      title: Text('항목 배경 — $title', overflow: TextOverflow.ellipsis),
+      content: SizedBox(
+        width: 420,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _PreviewBox(style: _previewStyle, previewItem: widget.item),
+              const SizedBox(height: 16),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                value: _useCustom,
+                title: const Text('이 항목만 다른 배경 사용'),
+                subtitle: Text(
+                  _useCustom
+                      ? '이 항목의 모든 페이지에 아래 배경이 적용됩니다.'
+                      : 'PPTX 디자인의 전역 배경을 그대로 씁니다.',
+                  style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+                ),
+                onChanged: (value) => setState(() => _useCustom = value),
+              ),
+              const SizedBox(height: 8),
+              AnimatedOpacity(
+                opacity: _useCustom ? 1 : 0.4,
+                duration: const Duration(milliseconds: 150),
+                child: IgnorePointer(
+                  ignoring: !_useCustom,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      OutlinedButton(
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                        onPressed: _pickColor,
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                '배경 색상',
+                                style: TextStyle(color: cs.onSurface),
+                              ),
+                            ),
+                            Container(
+                              width: 28,
+                              height: 28,
+                              decoration: BoxDecoration(
+                                color: _background.color,
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(
+                                  color: Theme.of(context).dividerColor,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Text(
+                              colorToHex(_background.color),
+                              style: TextStyle(
+                                color: cs.primary,
+                                fontFeatures: const [
+                                  FontFeature.tabularFigures(),
+                                ],
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      _BackgroundImagePicker(
+                        imagePath: _background.imagePath,
+                        onChanged: (path) => setState(
+                          () => _background = _background.copyWith(
+                            imagePath: path,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('취소'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop((
+            background: _useCustom ? _background : null,
+          )),
+          child: const Text('적용'),
+        ),
+      ],
+    );
+  }
+}
+
 // 발표자 보기의 "화면을 떠나도 남아야 하는" 값들. 콘솔은 탭을 옮기거나
 // 모든 페이지 보기로 바꾸면 통째로 트리에서 빠지기 때문에, State 안에 두면
 // 예배 도중에 경과 시간이 00:00 으로 리셋된다.
@@ -5442,7 +5753,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
       isBible: info.isBible,
       pageIndex: i,
       totalPages: widget.slides.length,
-      style: widget.style,
+      style: widget.style.withBackground(info.background),
       imagePath: info.imagePath,
     );
   }

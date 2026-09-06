@@ -245,11 +245,14 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
     """
   }
 
-  private func buildImageHTML(imagePath: String, bgColor: String) -> String {
+  // bgImageCSS: 원본 이미지가 슬라이드를 꽉 채우지 못할 때 남는 여백에 깔리는 배경.
+  // PPTX 내보내기·미리보기와 같게 보이도록 여기서도 배경 이미지를 깐다.
+  private func buildImageHTML(imagePath: String, bgColor: String, bgImageCSS: String) -> String {
     guard let data = try? Data(contentsOf: URL(fileURLWithPath: imagePath)) else {
       return """
       <!DOCTYPE html><html><head><meta charset="utf-8">
-      <style>*{margin:0;padding:0;}body{width:100vw;height:100vh;background:\(bgColor);}</style>
+      <style>*{margin:0;padding:0;}
+      body{width:100vw;height:100vh;background:\(bgColor);\(bgImageCSS)}</style>
       </head><body></body></html>
       """
     }
@@ -261,6 +264,7 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
     <style>
       *{margin:0;padding:0;}
       body{width:100vw;height:100vh;background:\(bgColor);overflow:hidden;position:relative;}
+      #stage{\(bgImageCSS)}
       img{width:100%;height:100%;object-fit:contain;display:block;}
       \(Self.pointerCSS)
     </style></head><body>
@@ -276,7 +280,8 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
     if let imagePath = data["image_path"] as? String, !imagePath.isEmpty {
       return buildImageHTML(
         imagePath: imagePath,
-        bgColor: styleForImage["background_color"] as? String ?? "#1b1b1b"
+        bgColor: styleForImage["background_color"] as? String ?? "#1b1b1b",
+        bgImageCSS: backgroundImageCSS(path: styleForImage["background_image_path"] as? String)
       )
     }
 

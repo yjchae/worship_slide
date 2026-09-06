@@ -26,10 +26,19 @@ class SlideRenderView extends StatelessWidget {
   static const double _titleBoxWSide = _slideW - (_titlePad * 2);
   static const double _titleBoxWCenter = 10.0;
 
+  /// 존재하는 배경 이미지 파일. 경로가 없거나 파일이 사라졌으면 null.
+  static File? _backgroundImageFile(ExportStyle style) {
+    final path = style.backgroundImagePath;
+    if (path == null || path.isEmpty) return null;
+    final file = File(path);
+    return file.existsSync() ? file : null;
+  }
+
   @override
   Widget build(BuildContext context) {
     final style = data.style;
     final isBible = data.isBible;
+    final backgroundImage = _backgroundImageFile(style);
 
     // 외부 PPT 이미지 슬라이드는 디자인 설정을 타지 않고 원본 그대로 보여준다.
     final imagePath = data.imagePath;
@@ -43,18 +52,27 @@ class SlideRenderView extends StatelessWidget {
               : _imageMaxWidth;
           return Container(
             color: style.backgroundColor,
-            child: Image.file(
-              File(imagePath),
-              fit: BoxFit.contain,
-              width: double.infinity,
-              height: double.infinity,
-              cacheWidth: cacheWidth,
-              errorBuilder: (_, _, _) => const Center(
-                child: Text(
-                  '이미지를 찾을 수 없습니다',
-                  style: TextStyle(color: Colors.white54, fontSize: 14),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                // 원본 이미지가 꽉 차지 않을 때 남는 여백. PPTX 내보내기와 같게
+                // 슬라이드 배경(이미지가 있으면 이미지)이 보여야 한다.
+                if (backgroundImage != null)
+                  Image.file(backgroundImage, fit: BoxFit.cover),
+                Image.file(
+                  File(imagePath),
+                  fit: BoxFit.contain,
+                  width: double.infinity,
+                  height: double.infinity,
+                  cacheWidth: cacheWidth,
+                  errorBuilder: (_, _, _) => const Center(
+                    child: Text(
+                      '이미지를 찾을 수 없습니다',
+                      style: TextStyle(color: Colors.white54, fontSize: 14),
+                    ),
+                  ),
                 ),
-              ),
+              ],
             ),
           );
         },
@@ -130,23 +148,14 @@ class SlideRenderView extends StatelessWidget {
           VerticalTextPosition.bottom => _slideH - _titlePad - _titleBoxH,
         };
 
-        final bgImagePath = style.backgroundImagePath;
-        final bgImageFile =
-            bgImagePath != null ? File(bgImagePath) : null;
-        final hasImage =
-            bgImageFile != null && bgImageFile.existsSync();
-
         return Container(
           color: style.backgroundColor,
           child: Stack(
             clipBehavior: Clip.hardEdge,
             children: [
-              if (hasImage)
+              if (backgroundImage != null)
                 Positioned.fill(
-                  child: Image.file(
-                    bgImageFile!,
-                    fit: BoxFit.cover,
-                  ),
+                  child: Image.file(backgroundImage, fit: BoxFit.cover),
                 ),
               Positioned(
                 left: w * _lyricsBoxL / _slideW,

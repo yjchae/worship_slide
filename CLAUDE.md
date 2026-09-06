@@ -19,6 +19,7 @@ flutter analyze
 flutter test                  # test/widget_test.dart (페이지 파싱·슬라이드 렌더 단위 테스트)
 python3 python/test_render.py    # render 명령 self-check (LibreOffice 없으면 skip)
 python3 python/test_animation.py # 애니메이션 단계 펼치기 self-check (LibreOffice 불필요)
+python3 python/test_export_background.py # 항목별 배경 오버라이드 self-check (LibreOffice 불필요)
 
 # 배포용 전체 빌드 (PyInstaller + Flutter 릴리즈 + dist/ 구성)
 ./scripts/build.sh    # macOS
@@ -39,7 +40,7 @@ lib/
   src/app.dart                       -- MaterialApp (seed #1B6B5C, 배경 #F4F1EA)
   src/features/praise/
     data/
-      praise_database.dart           -- SQLite 스키마 + 마이그레이션 (현재 version 10)
+      praise_database.dart           -- SQLite 스키마 + 마이그레이션 (현재 version 11)
       praise_repository.dart         -- 곡 CRUD (searchSongs, replaceAllSongs, deleteSongsByIds ...)
       worship_conti_repository.dart  -- 콘티 저장/불러오기 (곡 가사 스냅샷까지 함께 보관)
       python_bridge.dart             -- Process.run으로 ppt_tool 실행 (import / render / export)
@@ -48,6 +49,7 @@ lib/
     domain/
       praise_song.dart               -- PraiseSong; 페이지 구분자는 빈 줄(\n\n)
       export_style.dart              -- ExportStyle (가사/성경 각각의 색·크기·정렬·제목 표시 등)
+      slide_background.dart          -- SlideBackground (콘티 항목 하나만 배경을 다르게)
       staging_item.dart              -- sealed StagingItem: Song / Bible / Image / Blank
       worship_conti.dart             -- 콘티 모델
     presentation/
@@ -98,6 +100,18 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
 - **DB 갱신** (`replaceAllSongs`): 전체 삭제 후 재삽입 (증분 갱신 아님)
 - **콘티 저장 시 가사 스냅샷**: 곡 id만이 아니라 당시 가사(`song_lyrics`)까지 저장한다.
   나중에 곡을 지우거나 다시 임포트해도 저장한 콘티가 깨지지 않는다
+- **항목별 배경 오버라이드**: "헌금송만 다른 배경"처럼 콘티 일부만 배경을 다르게 하는 기능.
+  전역 `ExportStyle` 은 그대로 두고, 항목 uid → `SlideBackground`(색 + 이미지 경로) 맵
+  (`_itemBackgrounds`)을 따로 들고 다닌다. 메모(`_slideNotes`)와 같은 방식이라 `StagingItem`
+  4형제를 건드리지 않는다.
+  - 적용은 `ExportStyle.withBackground()` 한 곳. 오버라이드가 있으면 배경 **색과 이미지를
+    통째로** 대체하므로, 색만 담긴 오버라이드는 "전역 배경 이미지 위가 아니라 단색"이 된다
+  - 발표 창(네이티브)은 페이지마다 style JSON을 통째로 받으므로 자동으로 따라온다.
+    단 **Windows 발표 창은 배경 이미지를 아직 못 그린다**(색만 반영, 전역 배경도 마찬가지)
+  - 항목이 만드는 모든 페이지 + 뒤에 자동으로 붙는 여백까지 같은 배경을 쓴다
+    (Dart `_allSlides` 는 앞 항목의 uid 를, Python `export_presentation` 은 앞 항목의
+    background 를 그대로 빌려 쓴다)
+  - 저장은 `worship_conti_items.background` 한 칸(JSON, DB version 11)
 - **외부 PPT 애니메이션**: LibreOffice가 PDF로 굽는 순간 애니메이션은 사라지고 "다 나타난 마지막
   상태" 한 장만 남는다. 그래서 PDF로 넘기기 전에 pptx의 `<p:timing>`(메인 시퀀스)을 읽어
   **클릭 한 번 = 페이지 한 장**으로 슬라이드를 복제해 둔다 (`expand_animation_steps`).
@@ -117,6 +131,8 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
 - **폰트**: 앱은 번들 폰트(Pretendard/NanumGothic/NanumMyeongjo)를 쓰지만, 내보낸 PPTX를 PowerPoint에서
   열 때 필요하므로 `_ensure_fonts_installed`가 사용자 폰트 폴더에 복사한다.
   단, PyInstaller에는 **Pretendard만** 번들되어 있다
+- **PPTX 배경 XML 위치**: `p:bg` 는 `p:sld` 가 아니라 **`p:cSld` 의 첫 자식**이다.
+  자리를 틀리면 PowerPoint 가 배경을 조용히 무시한다 (`_apply_slide_background` 참고)
 - **좌표계 일치**: 미리보기·발표 창·PPTX가 같게 보여야 한다. 기준은 슬라이드 높이 7.5인치 = 540pt,
   `fontScale = 높이 / 540`. Swift HTML은 `calc(N / 540 * 100vh)`로 맞춘다
 

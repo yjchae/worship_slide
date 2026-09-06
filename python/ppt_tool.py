@@ -1162,41 +1162,55 @@ def _add_bible_page_text(frame, page, text_align, font_size, text_color, font_na
         _add_text_run(paragraph, line, font_size, text_color, font_name)
 
 
-def _apply_slide_background(slide, style):
-    bg_image_path = style.get("background_image_path")
+def _resolve_background(style, background):
+    """(배경 이미지 경로, 배경 색 hex) 결정.
+
+    background 는 콘티 항목 하나에만 적용되는 오버라이드({"color", "image_path"}).
+    None 이면 전역 style 의 배경을 그대로 쓴다. 오버라이드가 있으면 색·이미지를
+    통째로 대체하므로, 이미지 없이 색만 담긴 오버라이드는 "이 항목만 단색"이 된다.
+    """
+    if background:
+        return (
+            background.get("image_path"),
+            background.get("color") or style["background_color"],
+        )
+    return style.get("background_image_path"), style["background_color"]
+
+
+def _apply_slide_background(slide, style, background=None):
+    bg_image_path, bg_color = _resolve_background(style, background)
     if bg_image_path and os.path.isfile(bg_image_path):
         try:
-            slide_part = slide.part
-            _, rId = slide_part.get_or_add_image_part(bg_image_path)
-            bg = slide._element.find(qn('p:bg'))
+            _, rId = slide.part.get_or_add_image_part(bg_image_path)
+            # p:bg 는 p:sld 가 아니라 p:cSld 의 첫 자식이다. 위치를 틀리면
+            # PowerPoint 가 배경을 무시한다.
+            c_sld = slide._element.find(qn('p:cSld'))
+            bg = c_sld.find(qn('p:bg'))
             if bg is None:
-                from lxml import etree
-                sp_tree = slide.shapes._spTree
-                idx = list(slide._element).index(sp_tree)
                 bg = OxmlElement('p:bg')
-                slide._element.insert(idx, bg)
-            bgPr = bg.find(qn('p:bgPr'))
-            if bgPr is None:
-                bgPr = OxmlElement('p:bgPr')
-                bg.append(bgPr)
-            bgPr.clear()
+                c_sld.insert(0, bg)
+            bg.clear()
+            bgPr = OxmlElement('p:bgPr')
+            bg.append(bgPr)
             blipFill = OxmlElement('a:blipFill')
             blip = OxmlElement('a:blip')
-            blip.set('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed', rId)
+            blip.set(qn('r:embed'), rId)
             blipFill.append(blip)
             stretch = OxmlElement('a:stretch')
             stretch.append(OxmlElement('a:fillRect'))
             blipFill.append(stretch)
             bgPr.append(blipFill)
+            # CT_BackgroundProperties 는 fill 뒤에 effect 가 와야 한다.
+            bgPr.append(OxmlElement('a:effectLst'))
             return
         except Exception:
             pass
     # fallback: solid color
     slide.background.fill.solid()
-    slide.background.fill.fore_color.rgb = parse_hex_color(style["background_color"])
+    slide.background.fill.fore_color.rgb = parse_hex_color(bg_color)
 
 
-def add_song_slides(prs, song, style):
+def add_song_slides(prs, song, style, background=None):
     is_bible = song.get("type") == "bible"
     font_name = style.get("font_family", "Pretendard")
     text_color_key = "bible_text_color" if is_bible else "text_color"
@@ -1232,7 +1246,7 @@ def add_song_slides(prs, song, style):
             continue
 
         slide = prs.slides.add_slide(prs.slide_layouts[6])
-        _apply_slide_background(slide, style)
+        _apply_slide_background(slide, style, background)
         lyrics_box_top, lyrics_box_height = _lyrics_box_vertical_layout(
             style, is_bible
         )
@@ -1272,13 +1286,13 @@ def add_song_slides(prs, song, style):
             _add_title_textbox(slide, song.get("title", ""), style, is_bible=is_bible, font_name=font_name)
 
 
-def add_image_slides(prs, item, style):
+def add_image_slides(prs, item, style, background=None):
     """외부 PPT에서 구운 페이지 이미지를 슬라이드에 비율 유지해 중앙 배치."""
     for image_path in item.get("image_paths", []):
         if not os.path.isfile(image_path):
             continue
         slide = prs.slides.add_slide(prs.slide_layouts[6])
-        _apply_slide_background(slide, style)
+        _apply_slide_background(slide, style, background)
         picture = slide.shapes.add_picture(image_path, 0, 0)
         scale = min(
             _SLIDE_W / picture.width.inches,
@@ -1292,9 +1306,9 @@ def add_image_slides(prs, item, style):
         picture.top = Inches((_SLIDE_H - height) / 2)
 
 
-def _add_blank_slide(prs, style):
+def _add_blank_slide(prs, style, background=None):
     slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _apply_slide_background(slide, style)
+    _apply_slide_background(slide, style, background)
 
 
 def export_presentation(payload_json):
@@ -1317,20 +1331,24 @@ def export_presentation(payload_json):
     prs.slide_height = Inches(7.5)
 
     for index, song in enumerate(songs):
+        # 항목별 배경 오버라이드. 없으면 전역 배경.
+        background = song.get("background")
         if song.get("type") == "blank":
-            _add_blank_slide(prs, style)
+            _add_blank_slide(prs, style, background)
         else:
             if song.get("type") == "image":
-                add_image_slides(prs, song, style)
+                add_image_slides(prs, song, style, background)
             else:
-                add_song_slides(prs, song, style)
+                add_song_slides(prs, song, style, background)
             is_last = index == len(songs) - 1
             next_is_blank = not is_last and songs[index + 1].get("type") == "blank"
             if not is_last and not next_is_blank:
                 next_type = songs[index + 1].get("type")
                 # 말씀 다음 말씀이면 빈 슬라이드 삽입 안 함
                 if not (song.get("type") == "bible" and next_type == "bible"):
-                    _add_blank_slide(prs, style)
+                    # 자동으로 끼우는 여백은 앞 항목의 배경을 따라간다
+                    # (발표 화면의 _allSlides 도 앞 항목 uid 를 빌려 쓴다).
+                    _add_blank_slide(prs, style, background)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     prs.save(str(output_path))
