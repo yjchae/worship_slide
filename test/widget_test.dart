@@ -396,6 +396,43 @@ void main() {
     expect(decoded!.hasImage, isFalse);
   });
 
+  test('발표 창(네이티브)으로 나가는 JSON 에 항목 배경이 실려 있다', () {
+    // macOS(Swift) 와 Windows(C++) 발표 창이 페이지마다 이 style 을 통째로 받아
+    // background_color / background_image_path 두 키를 읽는다. 키 이름이 바뀌면
+    // 발표 화면에서만 조용히 배경이 사라지므로 계약으로 못 박아 둔다.
+    const offering = SlideBackground(
+      color: Color(0xFF1A3A5C),
+      imagePath: '/tmp/offering_bg.png',
+    );
+    final page = SlidePageData(
+      mainText: '내게 있는 향유 옥합',
+      englishText: '',
+      title: '헌금송',
+      isBible: false,
+      pageIndex: 0,
+      totalPages: 1,
+      style: baseStyle.withBackground(offering),
+    );
+
+    final style = page.toJson()['style'] as Map<String, dynamic>;
+    expect(style['background_color'], '#1A3A5C');
+    expect(style['background_image_path'], '/tmp/offering_bg.png');
+
+    // 오버라이드가 없는 항목은 전역 배경이 그대로 실린다.
+    final global =
+        (SlidePageData(
+              mainText: '',
+              englishText: '',
+              title: null,
+              isBible: false,
+              pageIndex: 0,
+              totalPages: 1,
+              style: baseStyle.withBackground(null),
+            ).toJson()['style']
+            as Map<String, dynamic>);
+    expect(global['background_image_path'], '/tmp/global.png');
+  });
+
   testWidgets('배경 오버라이드 색이 실제로 슬라이드에 칠해진다', (tester) async {
     const overrideColor = Color(0xFF123456);
 
