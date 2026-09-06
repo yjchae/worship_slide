@@ -21,6 +21,7 @@ python3 python/test_render.py    # render 명령 self-check (LibreOffice 없으�
 python3 python/test_animation.py # 애니메이션 단계 펼치기 self-check (LibreOffice 불필요)
 python3 python/test_export_background.py # 항목별 배경 오버라이드 self-check (LibreOffice 불필요)
 python3 python/test_export_text.py       # 가사 줄바꿈 self-check (LibreOffice 불필요)
+python3 python/test_export_position.py   # 본문·제목 세로 미세 조정 self-check (LibreOffice 불필요)
 
 # 배포용 전체 빌드 (PyInstaller + Flutter 릴리즈 + dist/ 구성)
 ./scripts/build.sh    # macOS
@@ -144,6 +145,31 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   성경 본문은 내어쓰기 때문에 원래 줄마다 문단을 만들므로 이 경로를 타지 않는다
 - **좌표계 일치**: 미리보기·발표 창·PPTX가 같게 보여야 한다. 기준은 슬라이드 높이 7.5인치 = 540pt,
   `fontScale = 높이 / 540`. Swift HTML은 `calc(N / 540 * 100vh)`로 맞춘다
+- **세로 위치 = 기준선 + 미세 조정**: 상단/중단/하단(`text_position`, `title_vertical_position`)은
+  세 칸짜리 고정값이라 그 사이 높이를 못 맞춘다. 그래서 미세 조정 값(인치, + = 아래, ±2.0,
+  0.05 단위)을 따로 둔다. 본문은 `text_offset_y`/`bible_text_offset_y`,
+  제목은 `title_offset_y`/`bible_title_offset_y` 네 개가 서로 독립이다.
+  - **본문 상자는 크기가 고정(0.6인치 위, 5.4인치 높이)이고 미세 조정이 그 상자를 통째로 민다.**
+    높이를 건드리지 않으므로 상단/중단/하단 어느 기준을 골라도 밀어 준 만큼 똑같이 움직인다
+  - **예전 "본문 상단 여백"(`text_box_top`)은 제거됐다.** 상자의 위쪽만 끌어내려 높이까지
+    같이 줄이던 값이라 기준마다 효과가 달랐다 — 상자 아래쪽이 늘 6.0인치에 붙어 있어서
+    **하단 기준에서는 아무 효과가 없었고, 중단 기준에서는 절반만** 움직였다. 낼 수 있던 위치
+    (상단 0.3~2.2 / 중단 중심 3.15~4.10)는 모두 미세 조정 범위 안에 들어온다.
+    예전 `export_style.json` 은 `migrateLegacyTopMargin()`(`export_style.dart`)이 기준선별로
+    환산해 미세 조정 값에 더한다 — 상단은 그대로, 중단은 절반, 하단은 0. 콘티는 스타일을
+    저장하지 않으므로 옮길 게 없다
+  - 제목은 상자 높이가 0.55인치로 고정이라 기준선에 그냥 더하면 된다
+    (`slide_render_view.dart`의 `titleTop`, `ppt_tool.py`의 `_add_title_textbox`,
+    `presentation_channel.cpp`의 `ty`). macOS 는 제목을 `top`/`bottom` 퍼센트로
+    붙이므로 `calc(1.5% ± Nvh)`로 넣는다 — **아래로 미는 값은 `top` 에는 더하고
+    `bottom` 에서는 뺀다**. 가운데+중단은 `translateX`/`translateY` 가 서로를 덮으므로
+    `translate()` 하나로 합쳐 쓴다
+  - 계산하는 곳이 네 군데다. 하나만 고치면 미리보기와 실제 화면이 어긋난다 —
+    `slide_render_view.dart`(미리보기), `MainFlutterWindow.swift`(macOS 발표),
+    `presentation_channel.cpp`(Windows 발표), `ppt_tool.py`의
+    `_lyrics_box_vertical_layout`·`_add_title_textbox`(PPTX).
+    허용 범위(±2.0)도 네 곳이 같아야 한다
+  - 키가 없는 예전 설정·콘티는 0으로 읽혀 기존 동작 그대로다
 
 ## 발표 모드 단축키
 

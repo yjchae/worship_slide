@@ -1045,9 +1045,11 @@ _SLIDE_H = 7.5
 _TITLE_BOX_WIDTH_SIDE = _SLIDE_W - (_TITLE_BOX_PADDING * 2)
 _LYRICS_BOX_TOP = 0.6
 _LYRICS_BOX_HEIGHT = 5.4
-_LYRICS_BOX_BOTTOM = _SLIDE_H - _LYRICS_BOX_TOP - _LYRICS_BOX_HEIGHT
 _LYRICS_BOX_WIDTH = _SLIDE_W * 0.9
 _LYRICS_BOX_LEFT = (_SLIDE_W - _LYRICS_BOX_WIDTH) / 2
+# 세로 미세 조정 허용 범위 (인치). Dart kMin/kMaxTextOffsetY 와 같아야 한다.
+_TEXT_OFFSET_Y_MIN = -2.0
+_TEXT_OFFSET_Y_MAX = 2.0
 _TEXT_ALIGN_MAP = {
     "left": PP_ALIGN.LEFT,
     "center": PP_ALIGN.CENTER,
@@ -1059,12 +1061,33 @@ def _lyrics_text_layout(horizontal_position):
 
 
 def _lyrics_box_vertical_layout(style, is_bible):
-    top = float(style.get(
-        "bible_text_box_top" if is_bible else "text_box_top",
-        _LYRICS_BOX_TOP,
+    """가사/본문 상자의 (top, height) 를 인치로 돌려준다.
+
+    상자 크기는 고정이고, 미세 조정(``text_offset_y``)이 그 상자를 통째로
+    위아래로 민다. 그래야 상단/중단/하단 어느 기준이든 밀어 준 만큼 똑같이
+    움직인다. 미리보기(Dart)·발표 창(Swift/GDI)도 같은 식으로 계산한다.
+    """
+    top = _LYRICS_BOX_TOP + _lyrics_offset_y(style, is_bible)
+    return top, _LYRICS_BOX_HEIGHT
+
+
+def _lyrics_offset_y(style, is_bible):
+    """본문 세로 미세 조정 값(인치, + = 아래로)."""
+    return _clamp_offset_y(style.get(
+        "bible_text_offset_y" if is_bible else "text_offset_y",
+        0.0,
     ))
-    top = min(max(top, 0.3), _SLIDE_H - _LYRICS_BOX_BOTTOM - 1.0)
-    return top, _SLIDE_H - top - _LYRICS_BOX_BOTTOM
+
+
+def _clamp_offset_y(value):
+    """세로 미세 조정 값을 허용 범위로 자른다. 숫자가 아니면 0."""
+    try:
+        offset = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if offset != offset:  # NaN
+        return 0.0
+    return min(max(offset, _TEXT_OFFSET_Y_MIN), _TEXT_OFFSET_Y_MAX)
 
 
 def _add_title_textbox(slide, song_title, style, is_bible=False, font_name="Pretendard"):
@@ -1104,6 +1127,10 @@ def _add_title_textbox(slide, song_title, style, is_bible=False, font_name="Pret
         title_top = (_SLIDE_H - _TITLE_BOX_HEIGHT) / 2
     else:
         title_top = _SLIDE_H - _TITLE_BOX_PADDING - _TITLE_BOX_HEIGHT
+    # 제목도 본문과 같다. 기준선에서 미세 조정만큼 더 민다.
+    title_top += _clamp_offset_y(style.get(
+        "bible_title_offset_y" if is_bible else "title_offset_y", 0.0
+    ))
 
     box = slide.shapes.add_textbox(
         Inches(title_left), Inches(title_top),

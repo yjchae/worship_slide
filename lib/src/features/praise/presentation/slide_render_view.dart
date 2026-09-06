@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
@@ -18,7 +17,6 @@ class SlideRenderView extends StatelessWidget {
   static const double _slideH = 7.5;
   static const double _lyricsBoxT = 0.6;
   static const double _lyricsBoxH = 5.4;
-  static const double _lyricsBoxBottom = _slideH - _lyricsBoxT - _lyricsBoxH;
   static const double _lyricsBoxW = _slideW * 0.9;
   static const double _lyricsBoxL = (_slideW - _lyricsBoxW) / 2;
   static const double _titleBoxH = 0.55;
@@ -88,18 +86,19 @@ class SlideRenderView extends StatelessWidget {
         ? style.bibleTitleVerticalPosition
         : style.titleVerticalPosition;
     final bodyFontSize = isBible ? style.bibleFontSize : style.fontSize;
-    final bodyBoxTop = (isBible ? style.bibleTextBoxTop : style.textBoxTop)
-        .clamp(0.0, _slideH - _lyricsBoxBottom)
-        .toDouble();
-    final bodyBoxHeight = math.max(
-      0.01,
-      _slideH - bodyBoxTop - _lyricsBoxBottom,
-    );
+    // 본문 상자는 크기가 고정이고, 미세 조정이 그 상자를 통째로 위아래로 민다.
+    // 그래야 상단/중단/하단 어느 기준이든 밀어 준 만큼 똑같이 움직인다.
+    final bodyBoxTop =
+        _lyricsBoxT +
+        clampTextOffsetY(isBible ? style.bibleTextOffsetY : style.textOffsetY);
     final showTitle = isBible ? style.showBibleTitle : style.showSongTitle;
     final titleFontSize =
         isBible ? style.bibleTitleFontSize : style.titleFontSize;
     final titleTextColor =
         isBible ? style.bibleTitleTextColor : style.titleTextColor;
+    final titleOffsetY = clampTextOffsetY(
+      isBible ? style.bibleTitleOffsetY : style.titleOffsetY,
+    );
     final bodyTextColor = isBible ? style.bibleTextColor : style.textColor;
     final bodyTextAlign =
         isBible ? style.bibleTextAlign : style.lyricsTextAlign;
@@ -142,11 +141,14 @@ class SlideRenderView extends StatelessWidget {
             titleLeft = _slideW - _titlePad - _titleBoxWSide;
             titleAlign = TextAlign.right;
         }
-        final double titleTop = switch (titleVPos) {
-          VerticalTextPosition.top => _titlePad,
-          VerticalTextPosition.middle => (_slideH - _titleBoxH) / 2,
-          VerticalTextPosition.bottom => _slideH - _titlePad - _titleBoxH,
-        };
+        // 제목도 본문과 같다. 기준선(상단/중단/하단)에서 미세 조정만큼 더 민다.
+        final double titleTop =
+            switch (titleVPos) {
+              VerticalTextPosition.top => _titlePad,
+              VerticalTextPosition.middle => (_slideH - _titleBoxH) / 2,
+              VerticalTextPosition.bottom => _slideH - _titlePad - _titleBoxH,
+            } +
+            titleOffsetY;
 
         return Container(
           color: style.backgroundColor,
@@ -161,7 +163,7 @@ class SlideRenderView extends StatelessWidget {
                 left: w * _lyricsBoxL / _slideW,
                 top: h * bodyBoxTop / _slideH,
                 width: w * _lyricsBoxW / _slideW,
-                height: h * bodyBoxHeight / _slideH,
+                height: h * _lyricsBoxH / _slideH,
                 child: Align(
                   alignment: bodyAlignment,
                   child: FittedBox(

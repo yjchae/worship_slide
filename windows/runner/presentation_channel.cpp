@@ -1,6 +1,7 @@
 #include "presentation_channel.h"
 
 #include <algorithm>
+#include <cmath>
 #include <stdexcept>
 #include <string>
 
@@ -233,6 +234,11 @@ namespace {
     if (s == "right") return 2;
     return 1;
   }
+  // 세로 미세 조정 허용 범위 (인치). Dart kMin/kMaxTextOffsetY 와 같아야 한다.
+  double ClampOffsetY(double v) {
+    if (std::isnan(v)) return 0.0;
+    return std::min(std::max(v, -2.0), 2.0);
+  }
 }
 
 void PresentationChannel::Apply(const flutter::EncodableMap& data) {
@@ -263,7 +269,7 @@ void PresentationChannel::Apply(const flutter::EncodableMap& data) {
   if (isBible) {
     slide_.mainSz  = GetDbl(s, "bible_font_size", 30.0);
     slide_.txt     = HexRgb(GetStr(s, "bible_text_color", "#ffffff"), RGB(255,255,255));
-    slide_.boxTop  = GetDbl(s, "bible_text_box_top", 0.6);
+    slide_.boxOffsetY = ClampOffsetY(GetDbl(s, "bible_text_offset_y", 0.0));
     slide_.vAlign  = VOf(GetStr(s, "bible_text_position", "middle"));
     slide_.hAlign  = HOf(GetStr(s, "bible_text_align", "center"));
     slide_.showTitle  = GetBool(s, "show_bible_title");
@@ -271,10 +277,11 @@ void PresentationChannel::Apply(const flutter::EncodableMap& data) {
     slide_.ttlClr     = HexRgb(GetStr(s, "bible_title_text_color", "#ffffff"), RGB(255,255,255));
     slide_.ttlH       = HOf(GetStr(s, "bible_title_horizontal_position", "right"));
     slide_.ttlV       = VOf(GetStr(s, "bible_title_vertical_position", "bottom"));
+    slide_.ttlOffsetY = ClampOffsetY(GetDbl(s, "bible_title_offset_y", 0.0));
   } else {
     slide_.mainSz  = GetDbl(s, "font_size", 30.0);
     slide_.txt     = HexRgb(GetStr(s, "text_color", "#ffffff"), RGB(255,255,255));
-    slide_.boxTop  = GetDbl(s, "text_box_top", 0.6);
+    slide_.boxOffsetY = ClampOffsetY(GetDbl(s, "text_offset_y", 0.0));
     slide_.vAlign  = VOf(GetStr(s, "text_position", "middle"));
     slide_.hAlign  = HOf(GetStr(s, "lyrics_text_align", "center"));
     slide_.showTitle  = GetBool(s, "show_song_title");
@@ -282,6 +289,7 @@ void PresentationChannel::Apply(const flutter::EncodableMap& data) {
     slide_.ttlClr     = HexRgb(GetStr(s, "title_text_color", "#ffffff"), RGB(255,255,255));
     slide_.ttlH       = HOf(GetStr(s, "title_horizontal_position", "right"));
     slide_.ttlV       = VOf(GetStr(s, "title_vertical_position", "bottom"));
+    slide_.ttlOffsetY = ClampOffsetY(GetDbl(s, "title_offset_y", 0.0));
   }
 
   slide_.inclEng    = GetBool(s, "include_english_lyrics", true);
@@ -346,11 +354,13 @@ void PresentationChannel::Paint(HDC hdc, RECT cli) const {
   };
 
   // Body box (matches macOS HTML: left=5%, right=95%)
-  double boxH    = 7.5 - slide_.boxTop - 1.5;  // 1.5 = lyricsBoxBottom
+  // 상자 크기는 고정이고, 미세 조정이 그 상자를 통째로 민다.
+  const double boxH = 5.4;
+  double boxTop  = 0.6 + slide_.boxOffsetY;
   int bodyLeft   = (int)(0.05 * W);
   int bodyRight  = (int)(0.95 * W);
-  int bodyTop    = (int)(slide_.boxTop / 7.5 * H);
-  int bodyBottom = (int)((slide_.boxTop + boxH) / 7.5 * H);
+  int bodyTop    = (int)(boxTop / 7.5 * H);
+  int bodyBottom = (int)((boxTop + boxH) / 7.5 * H);
   int bodyBoxH   = bodyBottom - bodyTop;
 
   UINT hf = HFlag(slide_.hAlign);
@@ -423,6 +433,8 @@ void PresentationChannel::Paint(HDC hdc, RECT cli) const {
       case 1: ty = (H - ttlBoxH) / 2; break;
       default: ty = H - ttlPad - ttlBoxH; break;
     }
+    // 기준선에서 미세 조정만큼 더 민다(인치 → 화면 픽셀).
+    ty += slide_.ttlOffsetY / 7.5 * H;
 
     RECT ttlBox;
     UINT tf;

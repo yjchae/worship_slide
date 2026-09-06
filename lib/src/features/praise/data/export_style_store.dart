@@ -15,17 +15,22 @@ class ExportStyleStore {
     }
 
     final json = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+    final textPosition = VerticalTextPosition.values.firstWhere(
+      (position) => position.name == json['text_position'],
+      orElse: () => VerticalTextPosition.middle,
+    );
+    final bibleTextPosition = VerticalTextPosition.values.firstWhere(
+      (position) =>
+          position.name ==
+          (json['bible_text_position'] ?? json['text_position']),
+      orElse: () => VerticalTextPosition.middle,
+    );
     return ExportStyle(
       fontSize: (json['font_size'] as num?)?.toDouble() ?? 30,
       bibleFontSize:
           (json['bible_font_size'] as num?)?.toDouble() ??
           (json['font_size'] as num?)?.toDouble() ??
           30,
-      textBoxTop: (json['text_box_top'] as num?)?.toDouble() ?? 0.6,
-      bibleTextBoxTop:
-          (json['bible_text_box_top'] as num?)?.toDouble() ??
-          (json['text_box_top'] as num?)?.toDouble() ??
-          0.6,
       backgroundColor: parseHexColor(
         json['background_color'] as String?,
         const Color(0xFF1B1B1B),
@@ -35,15 +40,30 @@ class ExportStyleStore {
         json['bible_text_color'] as String?,
         parseHexColor(json['text_color'] as String?, Colors.white),
       ),
-      textPosition: VerticalTextPosition.values.firstWhere(
-        (position) => position.name == json['text_position'],
-        orElse: () => VerticalTextPosition.middle,
+      textPosition: textPosition,
+      bibleTextPosition: bibleTextPosition,
+      // 없어진 "본문 상단 여백"은 같은 위치가 나오는 미세 조정으로 환산해 둔다.
+      textOffsetY: migrateLegacyTopMargin(
+        savedTopMargin: json['text_box_top'] as num?,
+        savedOffset: (json['text_offset_y'] as num?)?.toDouble() ?? 0,
+        position: textPosition,
       ),
-      bibleTextPosition: VerticalTextPosition.values.firstWhere(
-        (position) =>
-            position.name ==
-            (json['bible_text_position'] ?? json['text_position']),
-        orElse: () => VerticalTextPosition.middle,
+      bibleTextOffsetY: migrateLegacyTopMargin(
+        savedTopMargin:
+            (json['bible_text_box_top'] ?? json['text_box_top']) as num?,
+        savedOffset:
+            (json['bible_text_offset_y'] as num?)?.toDouble() ??
+            (json['text_offset_y'] as num?)?.toDouble() ??
+            0,
+        position: bibleTextPosition,
+      ),
+      titleOffsetY: clampTextOffsetY(
+        (json['title_offset_y'] as num?)?.toDouble() ?? 0,
+      ),
+      bibleTitleOffsetY: clampTextOffsetY(
+        (json['bible_title_offset_y'] as num?)?.toDouble() ??
+            (json['title_offset_y'] as num?)?.toDouble() ??
+            0,
       ),
       lyricsTextAlign: HorizontalPosition.values.firstWhere(
         (pos) => pos.name == json['lyrics_text_align'],

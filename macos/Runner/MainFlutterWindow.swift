@@ -307,13 +307,14 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
     let englishColor = style["english_text_color"] as? String ?? "#fff176"
     let englishFontSize = ((style["font_size"] as? Double) ?? 30) * 0.8
 
-    let bodyBoxTop = isBible
-      ? ((style["bible_text_box_top"] as? Double) ?? 0.6)
-      : ((style["text_box_top"] as? Double) ?? 0.6)
-    let lyricsBoxBottom = 1.5
-    let bodyBoxHeight = 7.5 - bodyBoxTop - lyricsBoxBottom
-    let bodyBoxTopPct  = bodyBoxTop / 7.5 * 100
-    let bodyBoxHeightPct = bodyBoxHeight / 7.5 * 100
+    // 본문 상자는 크기가 고정이고, 미세 조정(text_offset_y)이 그 상자를 통째로
+    // 위아래로 민다. 미리보기(Dart)·PPTX 와 같은 규칙이다.
+    let rawOffsetY = isBible
+      ? ((style["bible_text_offset_y"] as? Double) ?? 0)
+      : ((style["text_offset_y"] as? Double) ?? 0)
+    let bodyOffsetY = rawOffsetY.isNaN ? 0 : min(max(rawOffsetY, -2.0), 2.0)
+    let bodyBoxTopPct  = (0.6 + bodyOffsetY) / 7.5 * 100
+    let bodyBoxHeightPct = 5.4 / 7.5 * 100
 
     let textPositionKey = isBible ? "bible_text_position" : "text_position"
     let justifyContent: String
@@ -343,6 +344,19 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
     let titleHPos = style[titleHPosKey] as? String ?? "right"
     let titleVPos = style[titleVPosKey] as? String ?? "bottom"
 
+    // 제목도 본문과 같다. 기준선(상단/중단/하단)에서 미세 조정만큼 더 민다.
+    // 화면 높이 = 슬라이드 7.5인치이므로 인치를 vh 로 바꿔 calc() 에 끼워 넣는다.
+    // 부호는 연산자로 내보낸다("+ -3vh" 같은 모양을 피한다).
+    let titleOffsetKey = isBible ? "bible_title_offset_y" : "title_offset_y"
+    let rawTitleOffsetY = (style[titleOffsetKey] as? Double) ?? 0
+    let titleOffsetY = rawTitleOffsetY.isNaN
+      ? 0 : min(max(rawTitleOffsetY, -2.0), 2.0)
+    let titleOffsetVh = String(format: "%.4fvh", abs(titleOffsetY / 7.5 * 100))
+    let down = titleOffsetY >= 0
+    // 아래로 밀면 top 은 커지고 bottom 은 작아진다.
+    let titleShiftTop = "\(down ? "+" : "-") \(titleOffsetVh)"
+    let titleShiftBottom = "\(down ? "-" : "+") \(titleOffsetVh)"
+
     let titleHorizCSS: String
     switch titleHPos {
     case "left": titleHorizCSS = "left:1.5%;text-align:left;"
@@ -351,19 +365,17 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
     }
     let titleVertCSS: String
     switch titleVPos {
-    case "top": titleVertCSS = "top:1.5%;"
-    case "middle": titleVertCSS = "top:50%;transform:translateY(-50%);"
-    default: titleVertCSS = "bottom:1.5%;"
+    case "top": titleVertCSS = "top:calc(1.5% \(titleShiftTop));"
+    case "middle":
+      titleVertCSS = "top:50%;transform:translateY(calc(-50% \(titleShiftTop)));"
+    default: titleVertCSS = "bottom:calc(1.5% \(titleShiftBottom));"
     }
 
+    // 가운데+중단은 transform 이 겹친다(뒤에 오는 쪽이 앞을 덮는다). 한 번에 쓴다.
     let titlePositionCSS: String
     if titleHPos == "center" && titleVPos == "middle" {
-      titlePositionCSS = "left:50%;top:50%;transform:translate(-50%,-50%);text-align:center;"
-    } else if titleHPos == "center" {
-      titlePositionCSS = "\(titleHorizCSS)\(titleVertCSS)"
-    } else if titleVPos == "middle" {
-      let h = "top:50%;transform:translateY(-50%);"
-      titlePositionCSS = "\(titleHorizCSS)\(h)"
+      titlePositionCSS = "left:50%;top:50%;text-align:center;"
+        + "transform:translate(-50%,calc(-50% \(titleShiftTop)));"
     } else {
       titlePositionCSS = "\(titleHorizCSS)\(titleVertCSS)"
     }

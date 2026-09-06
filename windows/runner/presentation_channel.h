@@ -38,11 +38,14 @@ class PresentationChannel {
     COLORREF eng     = RGB(255, 241, 118);
     COLORREF ttlClr  = RGB(255, 255, 255);
     double   mainSz  = 30.0, engSz = 24.0, ttlSz = 14.0;
-    double   boxTop  = 0.6;   // slide units (0–7.5)
+    // 본문 세로 미세 조정 (인치, + = 아래로). 고정 크기 상자를 통째로 민다.
+    double   boxOffsetY = 0.0;
     int      vAlign  = 1;     // 0=top 1=center 2=bottom
     int      hAlign  = 1;     // 0=left 1=center 2=right
     int      ttlH    = 2;     // 0=left 1=center 2=right
     int      ttlV    = 2;     // 0=top 1=middle 2=bottom
+    // 제목 세로 미세 조정 (인치, + = 아래로). 기준선에서 더 민다.
+    double   ttlOffsetY = 0.0;
   };
 
   void OpenWindow();

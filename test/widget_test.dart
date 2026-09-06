@@ -158,13 +158,15 @@ void main() {
     const style = ExportStyle(
       fontSize: 32,
       bibleFontSize: 36,
-      textBoxTop: 0.8,
-      bibleTextBoxTop: 1.1,
       backgroundColor: Color(0xFF0F4C5C),
       textColor: Colors.white,
       bibleTextColor: Color(0xFFFFF8E1),
       textPosition: VerticalTextPosition.bottom,
       bibleTextPosition: VerticalTextPosition.top,
+      textOffsetY: 0.35,
+      bibleTextOffsetY: -0.5,
+      titleOffsetY: -0.15,
+      bibleTitleOffsetY: 0.25,
       lyricsTextAlign: HorizontalPosition.center,
       bibleTextAlign: HorizontalPosition.left,
       includeEnglishLyrics: true,
@@ -184,13 +186,15 @@ void main() {
     final json = style.toJson();
     expect(json['font_size'], 32.0);
     expect(json['bible_font_size'], 36.0);
-    expect(json['text_box_top'], 0.8);
-    expect(json['bible_text_box_top'], 1.1);
     expect(json['background_color'], '#0F4C5C');
     expect(json['text_color'], '#FFFFFF');
     expect(json['bible_text_color'], '#FFF8E1');
     expect(json['text_position'], 'bottom');
     expect(json['bible_text_position'], 'top');
+    expect(json['text_offset_y'], 0.35);
+    expect(json['bible_text_offset_y'], -0.5);
+    expect(json['title_offset_y'], -0.15);
+    expect(json['bible_title_offset_y'], 0.25);
     expect(json['lyrics_text_align'], 'center');
     expect(json['bible_text_align'], 'left');
     expect(json['include_english_lyrics'], true);
@@ -201,6 +205,120 @@ void main() {
     expect(json['bible_title_text_color'], '#FFFFFF');
     expect(json['bible_title_horizontal_position'], 'center');
     expect(json['bible_title_vertical_position'], 'top');
+  });
+
+  test('vertical fine-tune offset round-trips and stays in range', () {
+    final json = _offsetStyle
+        .copyWith(
+          textOffsetY: 0.35,
+          bibleTextOffsetY: -0.5,
+          titleOffsetY: -0.15,
+          bibleTitleOffsetY: 0.25,
+        )
+        .toJson();
+    final restored = ExportStyle.fromJson(json);
+    expect(restored.textOffsetY, 0.35);
+    expect(restored.bibleTextOffsetY, -0.5);
+    expect(restored.titleOffsetY, -0.15);
+    expect(restored.bibleTitleOffsetY, 0.25);
+
+    // 예전 설정 파일에는 키가 없다 → 0(= 기존 동작 그대로)
+    final legacy = Map<String, dynamic>.from(json)
+      ..remove('text_offset_y')
+      ..remove('bible_text_offset_y')
+      ..remove('title_offset_y')
+      ..remove('bible_title_offset_y');
+    final fromLegacy = ExportStyle.fromJson(legacy);
+    expect(fromLegacy.textOffsetY, 0.0);
+    expect(fromLegacy.bibleTextOffsetY, 0.0);
+    expect(fromLegacy.titleOffsetY, 0.0);
+    expect(fromLegacy.bibleTitleOffsetY, 0.0);
+
+    // 본문과 제목은 서로 간섭하지 않는다
+    final onlyTitle = _offsetStyle.copyWith(titleOffsetY: 0.4);
+    expect(onlyTitle.titleOffsetY, 0.4);
+    expect(onlyTitle.textOffsetY, 0.0);
+
+    // 범위 밖 값은 잘린다 (미리보기·발표 창·PPTX가 같은 범위를 쓴다)
+    expect(_offsetStyle.copyWith(textOffsetY: 99).textOffsetY, kMaxTextOffsetY);
+    expect(_offsetStyle.copyWith(textOffsetY: -99).textOffsetY, kMinTextOffsetY);
+    expect(
+      _offsetStyle.copyWith(titleOffsetY: 99).titleOffsetY,
+      kMaxTextOffsetY,
+    );
+    expect(clampTextOffsetY(double.nan), 0.0);
+  });
+
+  test('없어진 상단 여백이 같은 위치의 미세 조정으로 옮겨진다', () {
+    // 상단 기준: 여백만큼 그대로 내려가 있었다 → 그대로 옮긴다.
+    expect(
+      migrateLegacyTopMargin(
+        savedTopMargin: 1.6,
+        savedOffset: 0,
+        position: VerticalTextPosition.top,
+      ),
+      closeTo(1.0, 1e-9),
+    );
+
+    // 중단 기준: 가운데가 절반만 내려가 있었다 → 절반만 옮긴다.
+    expect(
+      migrateLegacyTopMargin(
+        savedTopMargin: 1.6,
+        savedOffset: 0,
+        position: VerticalTextPosition.middle,
+      ),
+      closeTo(0.5, 1e-9),
+    );
+
+    // 하단 기준: 상자 아래쪽이 늘 6.0인치라 아무 효과가 없었다 → 0.
+    expect(
+      migrateLegacyTopMargin(
+        savedTopMargin: 1.6,
+        savedOffset: 0,
+        position: VerticalTextPosition.bottom,
+      ),
+      0.0,
+    );
+
+    // 기본값(0.6)이면 위치를 건드린 적 없다 → 변화 없음.
+    expect(
+      migrateLegacyTopMargin(
+        savedTopMargin: kLegacyDefaultTopMargin,
+        savedOffset: 0,
+        position: VerticalTextPosition.top,
+      ),
+      0.0,
+    );
+
+    // 이미 저장된 미세 조정이 있으면 거기에 더한다.
+    expect(
+      migrateLegacyTopMargin(
+        savedTopMargin: 1.6,
+        savedOffset: 0.25,
+        position: VerticalTextPosition.top,
+      ),
+      closeTo(1.25, 1e-9),
+    );
+
+    // 여백 키가 없는(= 이미 옮겨진) 설정은 그대로 둔다.
+    expect(
+      migrateLegacyTopMargin(
+        savedTopMargin: null,
+        savedOffset: 0.4,
+        position: VerticalTextPosition.top,
+      ),
+      0.4,
+    );
+
+    // 합쳐서 범위를 넘으면 잘린다.
+    expect(
+      migrateLegacyTopMargin(
+        savedTopMargin: 2.2,
+        savedOffset: 2.0,
+        position: VerticalTextPosition.top,
+      ),
+      kMaxTextOffsetY,
+    );
   });
 
   test('hex colors parse consistently', () {
@@ -218,8 +336,6 @@ void main() {
     const style = ExportStyle(
       fontSize: 54,
       bibleFontSize: 54,
-      textBoxTop: 0.6,
-      bibleTextBoxTop: 0.6,
       backgroundColor: Color(0xFF1B1B1B),
       textColor: Colors.white,
       bibleTextColor: Colors.white,
@@ -299,8 +415,6 @@ void main() {
   const baseStyle = ExportStyle(
     fontSize: 30,
     bibleFontSize: 30,
-    textBoxTop: 0.6,
-    bibleTextBoxTop: 0.6,
     backgroundColor: Color(0xFF1B1B1B),
     textColor: Colors.white,
     bibleTextColor: Colors.white,
@@ -474,3 +588,29 @@ void main() {
     expect(restored, isEmpty);
   });
 }
+
+/// 세로 미세 조정 테스트용 기본 스타일. (main() 안의 baseStyle 은 배경 테스트가
+/// 쓰는 지역 상수라 선언 위쪽에서는 못 쓴다.)
+const _offsetStyle = ExportStyle(
+  fontSize: 30,
+  bibleFontSize: 30,
+  backgroundColor: Color(0xFF1B1B1B),
+  textColor: Colors.white,
+  bibleTextColor: Colors.white,
+  textPosition: VerticalTextPosition.middle,
+  bibleTextPosition: VerticalTextPosition.middle,
+  lyricsTextAlign: HorizontalPosition.center,
+  bibleTextAlign: HorizontalPosition.center,
+  includeEnglishLyrics: true,
+  englishTextColor: Color(0xFFFFF176),
+  showSongTitle: false,
+  showBibleTitle: false,
+  titleFontSize: 14,
+  bibleTitleFontSize: 14,
+  titleTextColor: Color(0xB3FFFFFF),
+  bibleTitleTextColor: Color(0xB3FFFFFF),
+  titleHorizontalPosition: HorizontalPosition.right,
+  titleVerticalPosition: VerticalTextPosition.bottom,
+  bibleTitleHorizontalPosition: HorizontalPosition.right,
+  bibleTitleVerticalPosition: VerticalTextPosition.bottom,
+);

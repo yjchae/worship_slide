@@ -25,6 +25,50 @@ enum VerticalTextPosition {
   final String label;
 }
 
+/// 상단/중단/하단 기준선에서 위아래로 더 밀어 주는 미세 조정 값(인치).
+/// 양수면 아래로, 음수면 위로 올라간다. 0이면 기준선 그대로.
+/// 예전 "본문 상단 여백"(`text_box_top`)을 대체한다 — 상단 여백은 상자 높이까지
+/// 같이 바꿔서 기준마다 효과가 달랐고(하단 기준에서는 아예 효과가 없었다),
+/// 낼 수 있는 위치는 모두 이 값의 범위 안에 들어온다.
+const double kMinTextOffsetY = -2.0;
+const double kMaxTextOffsetY = 2.0;
+
+/// 미세 조정 슬라이더 한 칸(인치). UI 눈금과 +/- 버튼이 같은 값을 쓴다.
+const double kTextOffsetYStep = 0.05;
+
+double clampTextOffsetY(double value) {
+  if (value.isNaN) return 0;
+  return value.clamp(kMinTextOffsetY, kMaxTextOffsetY).toDouble();
+}
+
+/// 예전 "본문 상단 여백"의 기본값. 이 값이면 위치를 건드린 적 없다는 뜻이다.
+const double kLegacyDefaultTopMargin = 0.6;
+
+/// 없어진 "본문 상단 여백"(`text_box_top`)을 세로 미세 조정 값으로 옮긴다.
+///
+/// 상단 여백은 상자의 위쪽만 끌어내려 높이까지 같이 줄이던 값이라 기준선마다
+/// 효과가 달랐다. 상자 아래쪽은 항상 6.0인치에 붙어 있었기 때문에
+/// - 상단 기준: 여백만큼 그대로 내려갔고
+/// - 중단 기준: 가운데가 여백의 **절반**만 내려갔고
+/// - 하단 기준: 아무 효과가 없었다.
+///
+/// 예전 설정 파일을 열었을 때 글자가 튀지 않도록 기준선별로 같은 위치가 나오는
+/// 미세 조정 값으로 환산해 [savedOffset] 에 더한다. 여백 키가 없으면 그대로 둔다.
+double migrateLegacyTopMargin({
+  required num? savedTopMargin,
+  required double savedOffset,
+  required VerticalTextPosition position,
+}) {
+  if (savedTopMargin == null) return clampTextOffsetY(savedOffset);
+  final shift = savedTopMargin.toDouble() - kLegacyDefaultTopMargin;
+  final converted = switch (position) {
+    VerticalTextPosition.top => shift,
+    VerticalTextPosition.middle => shift / 2,
+    VerticalTextPosition.bottom => 0.0,
+  };
+  return clampTextOffsetY(savedOffset + converted);
+}
+
 enum HorizontalPosition {
   left('좌측'),
   center('중앙'),
@@ -38,13 +82,15 @@ class ExportStyle {
   const ExportStyle({
     required this.fontSize,
     required this.bibleFontSize,
-    required this.textBoxTop,
-    required this.bibleTextBoxTop,
     required this.backgroundColor,
     required this.textColor,
     required this.bibleTextColor,
     required this.textPosition,
     required this.bibleTextPosition,
+    this.textOffsetY = 0,
+    this.bibleTextOffsetY = 0,
+    this.titleOffsetY = 0,
+    this.bibleTitleOffsetY = 0,
     required this.lyricsTextAlign,
     required this.bibleTextAlign,
     required this.includeEnglishLyrics,
@@ -65,13 +111,19 @@ class ExportStyle {
 
   final double fontSize;
   final double bibleFontSize;
-  final double textBoxTop;
-  final double bibleTextBoxTop;
   final Color backgroundColor;
   final Color textColor;
   final Color bibleTextColor;
   final VerticalTextPosition textPosition;
   final VerticalTextPosition bibleTextPosition;
+
+  /// 가사/성경 본문 세로 미세 조정 (인치, + = 아래로)
+  final double textOffsetY;
+  final double bibleTextOffsetY;
+
+  /// 곡/성경 제목 세로 미세 조정 (인치, + = 아래로)
+  final double titleOffsetY;
+  final double bibleTitleOffsetY;
   final HorizontalPosition lyricsTextAlign;
   final HorizontalPosition bibleTextAlign;
   final bool includeEnglishLyrics;
@@ -93,13 +145,15 @@ class ExportStyle {
     return {
       'font_size': fontSize,
       'bible_font_size': bibleFontSize,
-      'text_box_top': textBoxTop,
-      'bible_text_box_top': bibleTextBoxTop,
       'background_color': colorToHex(backgroundColor),
       'text_color': colorToHex(textColor),
       'bible_text_color': colorToHex(bibleTextColor),
       'text_position': textPosition.name,
       'bible_text_position': bibleTextPosition.name,
+      'text_offset_y': textOffsetY,
+      'bible_text_offset_y': bibleTextOffsetY,
+      'title_offset_y': titleOffsetY,
+      'bible_title_offset_y': bibleTitleOffsetY,
       'lyrics_text_align': lyricsTextAlign.name,
       'bible_text_align': bibleTextAlign.name,
       'include_english_lyrics': includeEnglishLyrics,
@@ -133,8 +187,6 @@ class ExportStyle {
     return ExportStyle(
       fontSize: (json['font_size'] as num).toDouble(),
       bibleFontSize: (json['bible_font_size'] as num).toDouble(),
-      textBoxTop: (json['text_box_top'] as num).toDouble(),
-      bibleTextBoxTop: (json['bible_text_box_top'] as num).toDouble(),
       backgroundColor: parseHexColor(
         json['background_color'] as String?,
         const Color(0xFF1B1B1B),
@@ -146,6 +198,18 @@ class ExportStyle {
       ),
       textPosition: parseVertical(json['text_position'] as String?),
       bibleTextPosition: parseVertical(json['bible_text_position'] as String?),
+      textOffsetY: clampTextOffsetY(
+        (json['text_offset_y'] as num?)?.toDouble() ?? 0,
+      ),
+      bibleTextOffsetY: clampTextOffsetY(
+        (json['bible_text_offset_y'] as num?)?.toDouble() ?? 0,
+      ),
+      titleOffsetY: clampTextOffsetY(
+        (json['title_offset_y'] as num?)?.toDouble() ?? 0,
+      ),
+      bibleTitleOffsetY: clampTextOffsetY(
+        (json['bible_title_offset_y'] as num?)?.toDouble() ?? 0,
+      ),
       lyricsTextAlign: parseHorizontal(json['lyrics_text_align'] as String?),
       bibleTextAlign: parseHorizontal(json['bible_text_align'] as String?),
       includeEnglishLyrics:
@@ -187,13 +251,15 @@ class ExportStyle {
   ExportStyle copyWith({
     double? fontSize,
     double? bibleFontSize,
-    double? textBoxTop,
-    double? bibleTextBoxTop,
     Color? backgroundColor,
     Color? textColor,
     Color? bibleTextColor,
     VerticalTextPosition? textPosition,
     VerticalTextPosition? bibleTextPosition,
+    double? textOffsetY,
+    double? bibleTextOffsetY,
+    double? titleOffsetY,
+    double? bibleTitleOffsetY,
     HorizontalPosition? lyricsTextAlign,
     HorizontalPosition? bibleTextAlign,
     bool? includeEnglishLyrics,
@@ -214,13 +280,19 @@ class ExportStyle {
     return ExportStyle(
       fontSize: fontSize ?? this.fontSize,
       bibleFontSize: bibleFontSize ?? this.bibleFontSize,
-      textBoxTop: textBoxTop ?? this.textBoxTop,
-      bibleTextBoxTop: bibleTextBoxTop ?? this.bibleTextBoxTop,
       backgroundColor: backgroundColor ?? this.backgroundColor,
       textColor: textColor ?? this.textColor,
       bibleTextColor: bibleTextColor ?? this.bibleTextColor,
       textPosition: textPosition ?? this.textPosition,
       bibleTextPosition: bibleTextPosition ?? this.bibleTextPosition,
+      textOffsetY: clampTextOffsetY(textOffsetY ?? this.textOffsetY),
+      bibleTextOffsetY: clampTextOffsetY(
+        bibleTextOffsetY ?? this.bibleTextOffsetY,
+      ),
+      titleOffsetY: clampTextOffsetY(titleOffsetY ?? this.titleOffsetY),
+      bibleTitleOffsetY: clampTextOffsetY(
+        bibleTitleOffsetY ?? this.bibleTitleOffsetY,
+      ),
       lyricsTextAlign: lyricsTextAlign ?? this.lyricsTextAlign,
       bibleTextAlign: bibleTextAlign ?? this.bibleTextAlign,
       includeEnglishLyrics: includeEnglishLyrics ?? this.includeEnglishLyrics,

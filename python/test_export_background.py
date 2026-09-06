@@ -30,8 +30,6 @@ BLANK_BG = "#654321"
 _STYLE = {
     "font_size": 30,
     "bible_font_size": 30,
-    "text_box_top": 0.6,
-    "bible_text_box_top": 0.6,
     "background_color": GLOBAL_BG,
     "text_color": "#FFFFFF",
     "bible_text_color": "#FFFFFF",
