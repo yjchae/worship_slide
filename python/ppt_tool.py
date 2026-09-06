@@ -1048,6 +1048,9 @@ _LYRICS_BOX_HEIGHT = 5.4
 _LYRICS_BOX_BOTTOM = _SLIDE_H - _LYRICS_BOX_TOP - _LYRICS_BOX_HEIGHT
 _LYRICS_BOX_WIDTH = _SLIDE_W * 0.9
 _LYRICS_BOX_LEFT = (_SLIDE_W - _LYRICS_BOX_WIDTH) / 2
+# 세로 미세 조정 허용 범위 (인치). Dart kMin/kMaxTextOffsetY 와 같아야 한다.
+_TEXT_OFFSET_Y_MIN = -2.0
+_TEXT_OFFSET_Y_MAX = 2.0
 _TEXT_ALIGN_MAP = {
     "left": PP_ALIGN.LEFT,
     "center": PP_ALIGN.CENTER,
@@ -1059,12 +1062,34 @@ def _lyrics_text_layout(horizontal_position):
 
 
 def _lyrics_box_vertical_layout(style, is_bible):
+    """가사/본문 상자의 (top, height) 를 인치로 돌려준다.
+
+    상단 여백(``text_box_top``)은 상자의 높이를 정하고, 미세 조정
+    (``text_offset_y``)은 그 상자를 통째로 위아래로 민다(높이는 그대로).
+    그래야 상단/중단/하단 어느 기준이든 밀어 준 만큼 똑같이 움직인다.
+    미리보기(Dart)·발표 창(Swift/GDI)도 같은 식으로 계산한다.
+    """
     top = float(style.get(
         "bible_text_box_top" if is_bible else "text_box_top",
         _LYRICS_BOX_TOP,
     ))
     top = min(max(top, 0.3), _SLIDE_H - _LYRICS_BOX_BOTTOM - 1.0)
-    return top, _SLIDE_H - top - _LYRICS_BOX_BOTTOM
+    height = _SLIDE_H - top - _LYRICS_BOX_BOTTOM
+    return top + _lyrics_offset_y(style, is_bible), height
+
+
+def _lyrics_offset_y(style, is_bible):
+    """세로 미세 조정 값(인치, + = 아래로). 숫자가 아니면 0."""
+    try:
+        offset = float(style.get(
+            "bible_text_offset_y" if is_bible else "text_offset_y",
+            0.0,
+        ))
+    except (TypeError, ValueError):
+        return 0.0
+    if offset != offset:  # NaN
+        return 0.0
+    return min(max(offset, _TEXT_OFFSET_Y_MIN), _TEXT_OFFSET_Y_MAX)
 
 
 def _add_title_textbox(slide, song_title, style, is_bible=False, font_name="Pretendard"):

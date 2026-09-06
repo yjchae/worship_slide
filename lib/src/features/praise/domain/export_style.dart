@@ -25,6 +25,19 @@ enum VerticalTextPosition {
   final String label;
 }
 
+/// 상단/중단/하단 기준선에서 위아래로 더 밀어 주는 미세 조정 값(인치).
+/// 양수면 아래로, 음수면 위로 내려간다. 0이면 기존 동작 그대로.
+const double kMinTextOffsetY = -2.0;
+const double kMaxTextOffsetY = 2.0;
+
+/// 미세 조정 슬라이더 한 칸(인치). UI 눈금과 +/- 버튼이 같은 값을 쓴다.
+const double kTextOffsetYStep = 0.05;
+
+double clampTextOffsetY(double value) {
+  if (value.isNaN) return 0;
+  return value.clamp(kMinTextOffsetY, kMaxTextOffsetY).toDouble();
+}
+
 enum HorizontalPosition {
   left('좌측'),
   center('중앙'),
@@ -45,6 +58,8 @@ class ExportStyle {
     required this.bibleTextColor,
     required this.textPosition,
     required this.bibleTextPosition,
+    this.textOffsetY = 0,
+    this.bibleTextOffsetY = 0,
     required this.lyricsTextAlign,
     required this.bibleTextAlign,
     required this.includeEnglishLyrics,
@@ -72,6 +87,10 @@ class ExportStyle {
   final Color bibleTextColor;
   final VerticalTextPosition textPosition;
   final VerticalTextPosition bibleTextPosition;
+
+  /// 가사/성경 본문 세로 미세 조정 (인치, + = 아래로)
+  final double textOffsetY;
+  final double bibleTextOffsetY;
   final HorizontalPosition lyricsTextAlign;
   final HorizontalPosition bibleTextAlign;
   final bool includeEnglishLyrics;
@@ -100,6 +119,8 @@ class ExportStyle {
       'bible_text_color': colorToHex(bibleTextColor),
       'text_position': textPosition.name,
       'bible_text_position': bibleTextPosition.name,
+      'text_offset_y': textOffsetY,
+      'bible_text_offset_y': bibleTextOffsetY,
       'lyrics_text_align': lyricsTextAlign.name,
       'bible_text_align': bibleTextAlign.name,
       'include_english_lyrics': includeEnglishLyrics,
@@ -146,6 +167,12 @@ class ExportStyle {
       ),
       textPosition: parseVertical(json['text_position'] as String?),
       bibleTextPosition: parseVertical(json['bible_text_position'] as String?),
+      textOffsetY: clampTextOffsetY(
+        (json['text_offset_y'] as num?)?.toDouble() ?? 0,
+      ),
+      bibleTextOffsetY: clampTextOffsetY(
+        (json['bible_text_offset_y'] as num?)?.toDouble() ?? 0,
+      ),
       lyricsTextAlign: parseHorizontal(json['lyrics_text_align'] as String?),
       bibleTextAlign: parseHorizontal(json['bible_text_align'] as String?),
       includeEnglishLyrics:
@@ -194,6 +221,8 @@ class ExportStyle {
     Color? bibleTextColor,
     VerticalTextPosition? textPosition,
     VerticalTextPosition? bibleTextPosition,
+    double? textOffsetY,
+    double? bibleTextOffsetY,
     HorizontalPosition? lyricsTextAlign,
     HorizontalPosition? bibleTextAlign,
     bool? includeEnglishLyrics,
@@ -221,6 +250,10 @@ class ExportStyle {
       bibleTextColor: bibleTextColor ?? this.bibleTextColor,
       textPosition: textPosition ?? this.textPosition,
       bibleTextPosition: bibleTextPosition ?? this.bibleTextPosition,
+      textOffsetY: clampTextOffsetY(textOffsetY ?? this.textOffsetY),
+      bibleTextOffsetY: clampTextOffsetY(
+        bibleTextOffsetY ?? this.bibleTextOffsetY,
+      ),
       lyricsTextAlign: lyricsTextAlign ?? this.lyricsTextAlign,
       bibleTextAlign: bibleTextAlign ?? this.bibleTextAlign,
       includeEnglishLyrics: includeEnglishLyrics ?? this.includeEnglishLyrics,

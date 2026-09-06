@@ -307,12 +307,18 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
     let englishColor = style["english_text_color"] as? String ?? "#fff176"
     let englishFontSize = ((style["font_size"] as? Double) ?? 30) * 0.8
 
-    let bodyBoxTop = isBible
+    // 상단 여백은 본문 상자의 높이를 정하고, 미세 조정(text_offset_y)은 그 상자를
+    // 통째로 위아래로 민다(높이는 그대로). 미리보기(Dart)·PPTX 와 같은 규칙이다.
+    let bodyBoxBase = isBible
       ? ((style["bible_text_box_top"] as? Double) ?? 0.6)
       : ((style["text_box_top"] as? Double) ?? 0.6)
+    let rawOffsetY = isBible
+      ? ((style["bible_text_offset_y"] as? Double) ?? 0)
+      : ((style["text_offset_y"] as? Double) ?? 0)
+    let bodyOffsetY = rawOffsetY.isNaN ? 0 : min(max(rawOffsetY, -2.0), 2.0)
     let lyricsBoxBottom = 1.5
-    let bodyBoxHeight = 7.5 - bodyBoxTop - lyricsBoxBottom
-    let bodyBoxTopPct  = bodyBoxTop / 7.5 * 100
+    let bodyBoxHeight = 7.5 - bodyBoxBase - lyricsBoxBottom
+    let bodyBoxTopPct  = (bodyBoxBase + bodyOffsetY) / 7.5 * 100
     let bodyBoxHeightPct = bodyBoxHeight / 7.5 * 100
 
     let textPositionKey = isBible ? "bible_text_position" : "text_position"

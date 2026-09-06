@@ -4150,6 +4150,104 @@ class _StyleTabControlsState extends State<_StyleTabControls>
     );
   }
 
+  /// 상단/중단/하단 기준선에서 위아래로 더 밀어 주는 미세 조정.
+  /// 슬라이더로 크게, +/- 버튼으로 한 칸(0.05인치)씩 움직인다.
+  Widget _verticalOffsetSlider({
+    required double value,
+    required ValueChanged<double> onChanged,
+  }) {
+    final cs = Theme.of(context).colorScheme;
+    final current = clampTextOffsetY(value);
+    final label = current == 0
+        ? '기본'
+        : '${current > 0 ? '+' : '-'}${current.abs().toStringAsFixed(2)}';
+
+    // 0.05를 더해 나가면 0.30000000000000004 같은 값이 남는다. 눈금에 맞춰 끊는다.
+    double snap(double raw) {
+      final steps = (clampTextOffsetY(raw) / kTextOffsetYStep).round();
+      return clampTextOffsetY(
+        double.parse((steps * kTextOffsetYStep).toStringAsFixed(2)),
+      );
+    }
+
+    void nudge(double delta) {
+      final next = snap(current + delta);
+      if (next != current) onChanged(next);
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Text('세로 미세 조정'),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: cs.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                  color: cs.onSurfaceVariant,
+                ),
+              ),
+            ),
+            const Spacer(),
+            if (current != 0)
+              TextButton(
+                onPressed: () => onChanged(0),
+                style: TextButton.styleFrom(
+                  minimumSize: Size.zero,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text('초기화', style: TextStyle(fontSize: 11)),
+              ),
+          ],
+        ),
+        Row(
+          children: [
+            IconButton(
+              tooltip: '위로 조금',
+              iconSize: 18,
+              visualDensity: VisualDensity.compact,
+              onPressed: current <= kMinTextOffsetY
+                  ? null
+                  : () => nudge(-kTextOffsetYStep),
+              icon: const Icon(Icons.keyboard_arrow_up),
+            ),
+            Expanded(
+              child: Slider(
+                min: kMinTextOffsetY,
+                max: kMaxTextOffsetY,
+                divisions:
+                    ((kMaxTextOffsetY - kMinTextOffsetY) / kTextOffsetYStep)
+                        .round(),
+                value: current,
+                onChanged: (next) => onChanged(snap(next)),
+              ),
+            ),
+            IconButton(
+              tooltip: '아래로 조금',
+              iconSize: 18,
+              visualDensity: VisualDensity.compact,
+              onPressed: current >= kMaxTextOffsetY
+                  ? null
+                  : () => nudge(kTextOffsetYStep),
+              icon: const Icon(Icons.keyboard_arrow_down),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
   Widget _titleSizeSlider({
     required double value,
     required ValueChanged<double> onChanged,
@@ -4222,6 +4320,12 @@ class _StyleTabControlsState extends State<_StyleTabControls>
                   value: widget.style.textBoxTop,
                   onChanged: (value) => widget.onStyleChanged(
                     widget.style.copyWith(textBoxTop: value),
+                  ),
+                ),
+                _verticalOffsetSlider(
+                  value: widget.style.textOffsetY,
+                  onChanged: (value) => widget.onStyleChanged(
+                    widget.style.copyWith(textOffsetY: value),
                   ),
                 ),
                 widget.horizontalPicker(
@@ -4303,6 +4407,12 @@ class _StyleTabControlsState extends State<_StyleTabControls>
                   value: widget.style.bibleTextBoxTop,
                   onChanged: (value) => widget.onStyleChanged(
                     widget.style.copyWith(bibleTextBoxTop: value),
+                  ),
+                ),
+                _verticalOffsetSlider(
+                  value: widget.style.bibleTextOffsetY,
+                  onChanged: (value) => widget.onStyleChanged(
+                    widget.style.copyWith(bibleTextOffsetY: value),
                   ),
                 ),
                 widget.horizontalPicker(

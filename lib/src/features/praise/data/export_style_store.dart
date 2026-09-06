@@ -45,6 +45,14 @@ class ExportStyleStore {
             (json['bible_text_position'] ?? json['text_position']),
         orElse: () => VerticalTextPosition.middle,
       ),
+      textOffsetY: clampTextOffsetY(
+        (json['text_offset_y'] as num?)?.toDouble() ?? 0,
+      ),
+      bibleTextOffsetY: clampTextOffsetY(
+        (json['bible_text_offset_y'] as num?)?.toDouble() ??
+            (json['text_offset_y'] as num?)?.toDouble() ??
+            0,
+      ),
       lyricsTextAlign: HorizontalPosition.values.firstWhere(
         (pos) => pos.name == json['lyrics_text_align'],
         orElse: () => HorizontalPosition.center,

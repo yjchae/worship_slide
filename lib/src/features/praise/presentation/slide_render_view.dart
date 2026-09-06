@@ -88,13 +88,19 @@ class SlideRenderView extends StatelessWidget {
         ? style.bibleTitleVerticalPosition
         : style.titleVerticalPosition;
     final bodyFontSize = isBible ? style.bibleFontSize : style.fontSize;
-    final bodyBoxTop = (isBible ? style.bibleTextBoxTop : style.textBoxTop)
+    // 상단 여백은 본문 상자의 "높이"를 정하고, 미세 조정은 그 상자를 통째로
+    // 위아래로 민다(높이는 그대로). 그래야 상단/중단/하단 어느 기준이든
+    // 밀어 준 만큼 똑같이 움직인다.
+    final bodyBoxBase = (isBible ? style.bibleTextBoxTop : style.textBoxTop)
         .clamp(0.0, _slideH - _lyricsBoxBottom)
         .toDouble();
     final bodyBoxHeight = math.max(
       0.01,
-      _slideH - bodyBoxTop - _lyricsBoxBottom,
+      _slideH - bodyBoxBase - _lyricsBoxBottom,
     );
+    final bodyBoxTop =
+        bodyBoxBase +
+        clampTextOffsetY(isBible ? style.bibleTextOffsetY : style.textOffsetY);
     final showTitle = isBible ? style.showBibleTitle : style.showSongTitle;
     final titleFontSize =
         isBible ? style.bibleTitleFontSize : style.titleFontSize;
