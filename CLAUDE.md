@@ -17,7 +17,8 @@ flutter run -d macos          # 실행
 flutter build macos           # 빌드
 flutter analyze
 flutter test                  # test/widget_test.dart (페이지 파싱·슬라이드 렌더 단위 테스트)
-python3 python/test_render.py # render 명령 self-check (LibreOffice 없으면 skip)
+python3 python/test_render.py    # render 명령 self-check (LibreOffice 없으면 skip)
+python3 python/test_animation.py # 애니메이션 단계 펼치기 self-check (LibreOffice 불필요)
 
 # 배포용 전체 빌드 (PyInstaller + Flutter 릴리즈 + dist/ 구성)
 ./scripts/build.sh    # macOS
@@ -79,7 +80,8 @@ lib/
 Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
 
 - `import <폴더>` — `.ppt`/`.pptx` 재귀 탐색 → 한/영 가사 분리 → `{songs, processed_count, errors, libreoffice_missing}`
-- `render <파일>` — 외부 PPT/PDF 전 페이지를 PNG로 (soffice → PDF → PyMuPDF → 페이지별 PNG).
+- `render <파일> [--no-animation]` — 외부 PPT/PDF 전 페이지를 PNG로
+  (애니메이션 펼치기 → soffice → PDF → PyMuPDF → 페이지별 PNG).
   `.pdf`는 soffice 변환을 건너뛰므로 LibreOffice 없이도 된다
 - `export <JSON payload>` — 콘티 + 스타일로 새 PPTX 생성 (곡/성경/이미지/빈 페이지 슬라이드)
 
@@ -96,9 +98,19 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
 - **DB 갱신** (`replaceAllSongs`): 전체 삭제 후 재삽입 (증분 갱신 아님)
 - **콘티 저장 시 가사 스냅샷**: 곡 id만이 아니라 당시 가사(`song_lyrics`)까지 저장한다.
   나중에 곡을 지우거나 다시 임포트해도 저장한 콘티가 깨지지 않는다
+- **외부 PPT 애니메이션**: LibreOffice가 PDF로 굽는 순간 애니메이션은 사라지고 "다 나타난 마지막
+  상태" 한 장만 남는다. 그래서 PDF로 넘기기 전에 pptx의 `<p:timing>`(메인 시퀀스)을 읽어
+  **클릭 한 번 = 페이지 한 장**으로 슬라이드를 복제해 둔다 (`expand_animation_steps`).
+  움직이는 효과 자체는 재현하지 못하지만 "클릭할 때마다 하나씩 나타난다"는 순서는 살아난다.
+  도형 단위(`spTgt`)와 문단 단위(`txEl/pRg`, 가사 한 줄씩 등장) 둘 다 지원하고 사라짐(`exit`)도 따라간다.
+  - 문단을 감출 때는 글자만 지우고 빈 문단은 남긴다. 문단째 지우면 나머지 줄이 위아래로 밀린다
+  - 슬라이드당 30단계 / 파일당 600페이지를 넘으면 펼치기를 포기하고 원본대로 한 장씩 굽는다
+  - 결과는 `image_paths`가 길어지는 것뿐이라 Dart·발표 창·내보내기·콘티 저장은 손댈 게 없다
 - **PPT 렌더 캐시 위치**: `~/Library/Application Support/worship_slides/ppt_slides/<해시>/`.
   Caches가 아닌 이유 — 저장한 콘티가 나중에 이미지 유실로 깨지면 안 되기 때문.
   (`.ppt`→`.pptx` 변환 캐시는 유실돼도 되므로 `~/Library/Caches/worship_slides/ppt_import_cache/`)
+  굽는 방식이 바뀌면 `RENDER_CACHE_VERSION`을 올린다. 키가 달라져 다시 굽지만, 예전 폴더는
+  저장된 콘티가 참조하고 있을 수 있으므로 지우지 않는다
 - **폰트**: 앱은 번들 폰트(Pretendard/NanumGothic/NanumMyeongjo)를 쓰지만, 내보낸 PPTX를 PowerPoint에서
   열 때 필요하므로 `_ensure_fonts_installed`가 사용자 폰트 폴더에 복사한다.
   단, PyInstaller에는 **Pretendard만** 번들되어 있다
