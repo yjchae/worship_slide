@@ -4,6 +4,13 @@ on:
   push:
     tags:
       - "v*"
+  # PR 이 열려 있는 동안만 자동으로 돈다. 브랜치 push 마다 돌리면 CI 시간이 많이 든다.
+  # 윈도우·macOS 네이티브 코드는 여기서만 실제로 컴파일되므로, PR 빌드가 사실상
+  # 네이티브 쪽 유일한 검증 수단이다.
+  pull_request:
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
   workflow_dispatch:
 
 permissions:
@@ -53,7 +60,11 @@ jobs:
           $tag = "${{ github.ref_name }}".Replace('/', '-')
           $name = "worship_slides-windows-$tag"
           $zipPath = "dist/$name.zip"
-          Compress-Archive -Path "dist/worship_slides/*" -DestinationPath $zipPath -Force
+          # -Path 에 폴더를 그대로 준다. 뒤에 \* 를 붙이면 내용물만 압축돼서
+          # zip 안에 worship_slides 폴더가 사라진다. 앱 내장 업데이터
+          # (update_service.dart _applyWindows) 가 그 폴더를 찾으므로 없으면
+          # 아무것도 복사하지 못하고 조용히 넘어간다. macOS 의 ditto --keepParent 와 맞춘다.
+          Compress-Archive -Path "dist/worship_slides" -DestinationPath $zipPath -Force
           "zip_path=$zipPath" >> $env:GITHUB_ENV
           "artifact_name=$name" >> $env:GITHUB_ENV
 
