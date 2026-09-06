@@ -87,6 +87,7 @@ class WorshipContiRepository {
             'song_id': null,
             'bible_reference': item.reference,
             'bible_text': item.text,
+            'bible_sub_text': item.subText,
           };
         } else if (item is ImageStagingItem) {
           row = {
@@ -207,7 +208,14 @@ class WorshipContiRepository {
         final ref = row['bible_reference'] as String?;
         final text = row['bible_text'] as String?;
         if (ref == null || text == null) continue;
-        result.add((uid: uid++, item: BibleStagingItem(reference: ref, text: text)));
+        result.add((
+          uid: uid++,
+          item: BibleStagingItem(
+            reference: ref,
+            text: text,
+            subText: row['bible_sub_text'] as String? ?? '',
+          ),
+        ));
       } else if (type == 'image') {
         final paths = (row['image_paths'] as String? ?? '')
             .split('\n')

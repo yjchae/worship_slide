@@ -29,7 +29,7 @@ class PraiseDatabase {
     final dbPath = p.join(_dbDirectory, 'worship_slides.db');
     _database = await openDatabase(
       dbPath,
-      version: 11,
+      version: 12,
       onCreate: (db, version) => createPraiseSchema(db),
       onUpgrade: (db, oldVersion, newVersion) =>
           upgradePraiseSchema(db, oldVersion),
@@ -92,10 +92,24 @@ Future<void> createPraiseSchema(DatabaseExecutor db) async {
     image_source    TEXT,
     image_paths     TEXT,
     notes           TEXT,
-    background      TEXT
+    background      TEXT,
+    bible_sub_text  TEXT
   )
 ''');
+  await db.execute(_createSongTranslations);
 }
+
+/// 곡의 보조 언어 가사. 곡 id 가 아니라 **제목**을 키로 쓴다 —
+/// `replaceAllSongs` 가 전체 삭제 후 재삽입이라 id 는 임포트마다 바뀐다.
+/// '영어'는 `praise_songs.english_lyrics` 가 그대로 맡으므로 여기 없다.
+const _createSongTranslations = '''
+  CREATE TABLE IF NOT EXISTS song_translations (
+    song_title TEXT NOT NULL,
+    language   TEXT NOT NULL,
+    lyrics     TEXT NOT NULL,
+    PRIMARY KEY (song_title, language)
+  )
+''';
 
 /// [oldVersion] 에서 현재 스키마까지 올린다. 각 단계는 앞 단계가 이미 돈 것을 전제한다.
 Future<void> upgradePraiseSchema(DatabaseExecutor db, int oldVersion) async {
@@ -212,6 +226,13 @@ Future<void> upgradePraiseSchema(DatabaseExecutor db, int oldVersion) async {
     // 비어 있으면 전역 디자인의 배경을 그대로 쓴다.
     await db.execute(
       "ALTER TABLE worship_conti_items ADD COLUMN background TEXT",
+    );
+  }
+  if (oldVersion < 12) {
+    // 다국어: 곡의 보조 언어 가사 + 성경 보조 역본 본문.
+    await db.execute(_createSongTranslations);
+    await db.execute(
+      "ALTER TABLE worship_conti_items ADD COLUMN bible_sub_text TEXT",
     );
   }
 }

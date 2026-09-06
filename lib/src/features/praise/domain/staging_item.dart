@@ -19,10 +19,17 @@ class SongStagingItem extends StagingItem {
 }
 
 class BibleStagingItem extends StagingItem {
-  BibleStagingItem({required this.reference, required this.text});
+  BibleStagingItem({
+    required this.reference,
+    required this.text,
+    this.subText = '',
+  });
 
   final String reference;
   final String text;
+
+  /// 보조 역본 본문. 담을 때 확정되어 스냅샷처럼 남는다 (곡 가사와 같은 방식).
+  final String subText;
 
   @override
   String get displayTitle => reference;
