@@ -60,6 +60,8 @@ class ExportStyle {
     required this.bibleTextPosition,
     this.textOffsetY = 0,
     this.bibleTextOffsetY = 0,
+    this.titleOffsetY = 0,
+    this.bibleTitleOffsetY = 0,
     required this.lyricsTextAlign,
     required this.bibleTextAlign,
     required this.includeEnglishLyrics,
@@ -91,6 +93,10 @@ class ExportStyle {
   /// 가사/성경 본문 세로 미세 조정 (인치, + = 아래로)
   final double textOffsetY;
   final double bibleTextOffsetY;
+
+  /// 곡/성경 제목 세로 미세 조정 (인치, + = 아래로)
+  final double titleOffsetY;
+  final double bibleTitleOffsetY;
   final HorizontalPosition lyricsTextAlign;
   final HorizontalPosition bibleTextAlign;
   final bool includeEnglishLyrics;
@@ -121,6 +127,8 @@ class ExportStyle {
       'bible_text_position': bibleTextPosition.name,
       'text_offset_y': textOffsetY,
       'bible_text_offset_y': bibleTextOffsetY,
+      'title_offset_y': titleOffsetY,
+      'bible_title_offset_y': bibleTitleOffsetY,
       'lyrics_text_align': lyricsTextAlign.name,
       'bible_text_align': bibleTextAlign.name,
       'include_english_lyrics': includeEnglishLyrics,
@@ -173,6 +181,12 @@ class ExportStyle {
       bibleTextOffsetY: clampTextOffsetY(
         (json['bible_text_offset_y'] as num?)?.toDouble() ?? 0,
       ),
+      titleOffsetY: clampTextOffsetY(
+        (json['title_offset_y'] as num?)?.toDouble() ?? 0,
+      ),
+      bibleTitleOffsetY: clampTextOffsetY(
+        (json['bible_title_offset_y'] as num?)?.toDouble() ?? 0,
+      ),
       lyricsTextAlign: parseHorizontal(json['lyrics_text_align'] as String?),
       bibleTextAlign: parseHorizontal(json['bible_text_align'] as String?),
       includeEnglishLyrics:
@@ -223,6 +237,8 @@ class ExportStyle {
     VerticalTextPosition? bibleTextPosition,
     double? textOffsetY,
     double? bibleTextOffsetY,
+    double? titleOffsetY,
+    double? bibleTitleOffsetY,
     HorizontalPosition? lyricsTextAlign,
     HorizontalPosition? bibleTextAlign,
     bool? includeEnglishLyrics,
@@ -253,6 +269,10 @@ class ExportStyle {
       textOffsetY: clampTextOffsetY(textOffsetY ?? this.textOffsetY),
       bibleTextOffsetY: clampTextOffsetY(
         bibleTextOffsetY ?? this.bibleTextOffsetY,
+      ),
+      titleOffsetY: clampTextOffsetY(titleOffsetY ?? this.titleOffsetY),
+      bibleTitleOffsetY: clampTextOffsetY(
+        bibleTitleOffsetY ?? this.bibleTitleOffsetY,
       ),
       lyricsTextAlign: lyricsTextAlign ?? this.lyricsTextAlign,
       bibleTextAlign: bibleTextAlign ?? this.bibleTextAlign,

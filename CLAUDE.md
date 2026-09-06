@@ -21,7 +21,7 @@ python3 python/test_render.py    # render 명령 self-check (LibreOffice 없으�
 python3 python/test_animation.py # 애니메이션 단계 펼치기 self-check (LibreOffice 불필요)
 python3 python/test_export_background.py # 항목별 배경 오버라이드 self-check (LibreOffice 불필요)
 python3 python/test_export_text.py       # 가사 줄바꿈 self-check (LibreOffice 불필요)
-python3 python/test_export_position.py   # 본문 세로 미세 조정 self-check (LibreOffice 불필요)
+python3 python/test_export_position.py   # 본문·제목 세로 미세 조정 self-check (LibreOffice 불필요)
 
 # 배포용 전체 빌드 (PyInstaller + Flutter 릴리즈 + dist/ 구성)
 ./scripts/build.sh    # macOS
@@ -145,16 +145,24 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   성경 본문은 내어쓰기 때문에 원래 줄마다 문단을 만들므로 이 경로를 타지 않는다
 - **좌표계 일치**: 미리보기·발표 창·PPTX가 같게 보여야 한다. 기준은 슬라이드 높이 7.5인치 = 540pt,
   `fontScale = 높이 / 540`. Swift HTML은 `calc(N / 540 * 100vh)`로 맞춘다
-- **본문 세로 위치 = 기준선 + 미세 조정**: 상단/중단/하단(`text_position`)은 세 칸짜리 고정값이라
-  그 사이 높이를 못 맞춘다. 그래서 `text_offset_y`/`bible_text_offset_y`(인치, + = 아래, ±2.0,
-  0.05 단위)를 따로 둔다.
+- **세로 위치 = 기준선 + 미세 조정**: 상단/중단/하단(`text_position`, `title_vertical_position`)은
+  세 칸짜리 고정값이라 그 사이 높이를 못 맞춘다. 그래서 미세 조정 값(인치, + = 아래, ±2.0,
+  0.05 단위)을 따로 둔다. 본문은 `text_offset_y`/`bible_text_offset_y`,
+  제목은 `title_offset_y`/`bible_title_offset_y` 네 개가 서로 독립이다.
   - **상단 여백(`text_box_top`)은 본문 상자의 "높이"를, 미세 조정은 그 상자의 "위치"를 정한다.**
     미세 조정은 상자를 통째로 밀 뿐 높이를 건드리지 않으므로 상단/중단/하단 어느 기준을 골라도
     밀어 준 만큼 똑같이 움직인다 (상단 여백만 키우면 상자가 줄어들어 중단 기준은 절반만 내려간다)
+  - 제목은 상자 높이가 0.55인치로 고정이라 기준선에 그냥 더하면 된다
+    (`slide_render_view.dart`의 `titleTop`, `ppt_tool.py`의 `_add_title_textbox`,
+    `presentation_channel.cpp`의 `ty`). macOS 는 제목을 `top`/`bottom` 퍼센트로
+    붙이므로 `calc(1.5% ± Nvh)`로 넣는다 — **아래로 미는 값은 `top` 에는 더하고
+    `bottom` 에서는 뺀다**. 가운데+중단은 `translateX`/`translateY` 가 서로를 덮으므로
+    `translate()` 하나로 합쳐 쓴다
   - 계산하는 곳이 네 군데다. 하나만 고치면 미리보기와 실제 화면이 어긋난다 —
     `slide_render_view.dart`(미리보기), `MainFlutterWindow.swift`(macOS 발표),
     `presentation_channel.cpp`(Windows 발표), `ppt_tool.py`의
-    `_lyrics_box_vertical_layout`(PPTX). 허용 범위(±2.0)도 네 곳이 같아야 한다
+    `_lyrics_box_vertical_layout`·`_add_title_textbox`(PPTX).
+    허용 범위(±2.0)도 네 곳이 같아야 한다
   - 키가 없는 예전 설정·콘티는 0으로 읽혀 기존 동작 그대로다
 
 ## 발표 모드 단축키

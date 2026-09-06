@@ -167,6 +167,8 @@ void main() {
       bibleTextPosition: VerticalTextPosition.top,
       textOffsetY: 0.35,
       bibleTextOffsetY: -0.5,
+      titleOffsetY: -0.15,
+      bibleTitleOffsetY: 0.25,
       lyricsTextAlign: HorizontalPosition.center,
       bibleTextAlign: HorizontalPosition.left,
       includeEnglishLyrics: true,
@@ -195,6 +197,8 @@ void main() {
     expect(json['bible_text_position'], 'top');
     expect(json['text_offset_y'], 0.35);
     expect(json['bible_text_offset_y'], -0.5);
+    expect(json['title_offset_y'], -0.15);
+    expect(json['bible_title_offset_y'], 0.25);
     expect(json['lyrics_text_align'], 'center');
     expect(json['bible_text_align'], 'left');
     expect(json['include_english_lyrics'], true);
@@ -209,22 +213,43 @@ void main() {
 
   test('vertical fine-tune offset round-trips and stays in range', () {
     final json = _offsetStyle
-        .copyWith(textOffsetY: 0.35, bibleTextOffsetY: -0.5)
+        .copyWith(
+          textOffsetY: 0.35,
+          bibleTextOffsetY: -0.5,
+          titleOffsetY: -0.15,
+          bibleTitleOffsetY: 0.25,
+        )
         .toJson();
     final restored = ExportStyle.fromJson(json);
     expect(restored.textOffsetY, 0.35);
     expect(restored.bibleTextOffsetY, -0.5);
+    expect(restored.titleOffsetY, -0.15);
+    expect(restored.bibleTitleOffsetY, 0.25);
 
     // 예전 설정 파일에는 키가 없다 → 0(= 기존 동작 그대로)
     final legacy = Map<String, dynamic>.from(json)
       ..remove('text_offset_y')
-      ..remove('bible_text_offset_y');
-    expect(ExportStyle.fromJson(legacy).textOffsetY, 0.0);
-    expect(ExportStyle.fromJson(legacy).bibleTextOffsetY, 0.0);
+      ..remove('bible_text_offset_y')
+      ..remove('title_offset_y')
+      ..remove('bible_title_offset_y');
+    final fromLegacy = ExportStyle.fromJson(legacy);
+    expect(fromLegacy.textOffsetY, 0.0);
+    expect(fromLegacy.bibleTextOffsetY, 0.0);
+    expect(fromLegacy.titleOffsetY, 0.0);
+    expect(fromLegacy.bibleTitleOffsetY, 0.0);
+
+    // 본문과 제목은 서로 간섭하지 않는다
+    final onlyTitle = _offsetStyle.copyWith(titleOffsetY: 0.4);
+    expect(onlyTitle.titleOffsetY, 0.4);
+    expect(onlyTitle.textOffsetY, 0.0);
 
     // 범위 밖 값은 잘린다 (미리보기·발표 창·PPTX가 같은 범위를 쓴다)
     expect(_offsetStyle.copyWith(textOffsetY: 99).textOffsetY, kMaxTextOffsetY);
     expect(_offsetStyle.copyWith(textOffsetY: -99).textOffsetY, kMinTextOffsetY);
+    expect(
+      _offsetStyle.copyWith(titleOffsetY: 99).titleOffsetY,
+      kMaxTextOffsetY,
+    );
     expect(clampTextOffsetY(double.nan), 0.0);
   });
 

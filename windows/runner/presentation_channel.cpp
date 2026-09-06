@@ -278,6 +278,7 @@ void PresentationChannel::Apply(const flutter::EncodableMap& data) {
     slide_.ttlClr     = HexRgb(GetStr(s, "bible_title_text_color", "#ffffff"), RGB(255,255,255));
     slide_.ttlH       = HOf(GetStr(s, "bible_title_horizontal_position", "right"));
     slide_.ttlV       = VOf(GetStr(s, "bible_title_vertical_position", "bottom"));
+    slide_.ttlOffsetY = ClampOffsetY(GetDbl(s, "bible_title_offset_y", 0.0));
   } else {
     slide_.mainSz  = GetDbl(s, "font_size", 30.0);
     slide_.txt     = HexRgb(GetStr(s, "text_color", "#ffffff"), RGB(255,255,255));
@@ -290,6 +291,7 @@ void PresentationChannel::Apply(const flutter::EncodableMap& data) {
     slide_.ttlClr     = HexRgb(GetStr(s, "title_text_color", "#ffffff"), RGB(255,255,255));
     slide_.ttlH       = HOf(GetStr(s, "title_horizontal_position", "right"));
     slide_.ttlV       = VOf(GetStr(s, "title_vertical_position", "bottom"));
+    slide_.ttlOffsetY = ClampOffsetY(GetDbl(s, "title_offset_y", 0.0));
   }
 
   slide_.inclEng    = GetBool(s, "include_english_lyrics", true);
@@ -433,6 +435,8 @@ void PresentationChannel::Paint(HDC hdc, RECT cli) const {
       case 1: ty = (H - ttlBoxH) / 2; break;
       default: ty = H - ttlPad - ttlBoxH; break;
     }
+    // 기준선에서 미세 조정만큼 더 민다(인치 → 화면 픽셀).
+    ty += slide_.ttlOffsetY / 7.5 * H;
 
     RECT ttlBox;
     UINT tf;

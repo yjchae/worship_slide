@@ -349,6 +349,19 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
     let titleHPos = style[titleHPosKey] as? String ?? "right"
     let titleVPos = style[titleVPosKey] as? String ?? "bottom"
 
+    // 제목도 본문과 같다. 기준선(상단/중단/하단)에서 미세 조정만큼 더 민다.
+    // 화면 높이 = 슬라이드 7.5인치이므로 인치를 vh 로 바꿔 calc() 에 끼워 넣는다.
+    // 부호는 연산자로 내보낸다("+ -3vh" 같은 모양을 피한다).
+    let titleOffsetKey = isBible ? "bible_title_offset_y" : "title_offset_y"
+    let rawTitleOffsetY = (style[titleOffsetKey] as? Double) ?? 0
+    let titleOffsetY = rawTitleOffsetY.isNaN
+      ? 0 : min(max(rawTitleOffsetY, -2.0), 2.0)
+    let titleOffsetVh = String(format: "%.4fvh", abs(titleOffsetY / 7.5 * 100))
+    let down = titleOffsetY >= 0
+    // 아래로 밀면 top 은 커지고 bottom 은 작아진다.
+    let titleShiftTop = "\(down ? "+" : "-") \(titleOffsetVh)"
+    let titleShiftBottom = "\(down ? "-" : "+") \(titleOffsetVh)"
+
     let titleHorizCSS: String
     switch titleHPos {
     case "left": titleHorizCSS = "left:1.5%;text-align:left;"
@@ -357,19 +370,17 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
     }
     let titleVertCSS: String
     switch titleVPos {
-    case "top": titleVertCSS = "top:1.5%;"
-    case "middle": titleVertCSS = "top:50%;transform:translateY(-50%);"
-    default: titleVertCSS = "bottom:1.5%;"
+    case "top": titleVertCSS = "top:calc(1.5% \(titleShiftTop));"
+    case "middle":
+      titleVertCSS = "top:50%;transform:translateY(calc(-50% \(titleShiftTop)));"
+    default: titleVertCSS = "bottom:calc(1.5% \(titleShiftBottom));"
     }
 
+    // 가운데+중단은 transform 이 겹친다(뒤에 오는 쪽이 앞을 덮는다). 한 번에 쓴다.
     let titlePositionCSS: String
     if titleHPos == "center" && titleVPos == "middle" {
-      titlePositionCSS = "left:50%;top:50%;transform:translate(-50%,-50%);text-align:center;"
-    } else if titleHPos == "center" {
-      titlePositionCSS = "\(titleHorizCSS)\(titleVertCSS)"
-    } else if titleVPos == "middle" {
-      let h = "top:50%;transform:translateY(-50%);"
-      titlePositionCSS = "\(titleHorizCSS)\(h)"
+      titlePositionCSS = "left:50%;top:50%;text-align:center;"
+        + "transform:translate(-50%,calc(-50% \(titleShiftTop)));"
     } else {
       titlePositionCSS = "\(titleHorizCSS)\(titleVertCSS)"
     }

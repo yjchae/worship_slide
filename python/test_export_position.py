@@ -1,11 +1,13 @@
-"""가사 세로 미세 조정 self-check: python3 python/test_export_position.py
+"""세로 미세 조정 self-check: python3 python/test_export_position.py
 
 LibreOffice 없이 도는 단위 테스트. 상단/중단/하단 세 고정값만으로는 못 맞추는
-높이를 `text_offset_y`(인치, + = 아래로)로 밀 수 있는지 본다.
+높이를 미세 조정(인치, + = 아래로)으로 밀 수 있는지 본다.
+본문은 `text_offset_y`/`bible_text_offset_y`, 제목은 `title_offset_y`/
+`bible_title_offset_y` 를 쓴다.
 
 규칙: 상단 여백(text_box_top)은 본문 상자의 "높이"를 정하고, 미세 조정은 그
 상자를 통째로 위아래로 민다(높이는 그대로). 그래야 상단/중단/하단 어느 기준을
-골라도 밀어 준 만큼 똑같이 움직인다.
+골라도 밀어 준 만큼 똑같이 움직인다. 제목도 같은 규칙이다.
 """
 import json
 import os
@@ -73,11 +75,19 @@ def close(label, actual, expected, tol=1e-6):
 
 
 def body_box(slide):
-    """가사 텍스트 상자. 제목을 끈 상태라 첫 도형이 본문이다."""
+    """가사 텍스트 상자. 본문 상자를 먼저 만들므로 첫 도형이 본문이다."""
     for shape in slide.shapes:
         if shape.has_text_frame:
             return shape
     raise AssertionError("본문 상자가 없다")
+
+
+def title_box(slide):
+    """제목 텍스트 상자. 본문 다음에 붙으므로 두 번째 도형이다."""
+    boxes = [s for s in slide.shapes if s.has_text_frame]
+    if len(boxes) < 2:
+        raise AssertionError("제목 상자가 없다")
+    return boxes[1]
 
 
 def export(songs, style=None):
@@ -158,6 +168,57 @@ def test_export_moves_textbox():
     check("가로는 그대로", (moved.left, moved.width), (base.left, base.width))
 
 
+def test_title_offset():
+    print("제목 미세 조정")
+    song = {
+        "type": "song", "title": "찬양",
+        "lyrics": "한 줄",
+        "english_lyrics": "",
+        "background": None,
+    }
+    # 하단(기본) 기준: 7.5 - 0.2 - 0.55 = 6.75인치
+    titled = dict(_STYLE, show_song_title=True)
+    base = title_box(export([song], style=titled).slides[0])
+    check("기준 위치", base.top, Inches(6.75))
+
+    up = title_box(
+        export([song], style=dict(titled, title_offset_y=-0.4)).slides[0]
+    )
+    close("제목이 0.4인치 올라간다", up.top - base.top, -Inches(0.4), tol=2)
+    check("제목 높이는 그대로", up.height, base.height)
+
+    # 상단 기준에서도 같은 만큼 움직인다 (0.2 + 0.4 = 0.6인치)
+    top_anchor = title_box(export([song], style=dict(
+        titled, title_vertical_position="top", title_offset_y=0.4
+    )).slides[0])
+    close("상단 기준도 같은 만큼", top_anchor.top, Inches(0.6), tol=2)
+
+    # 본문 미세 조정과 서로 간섭하지 않는다
+    both = export([song], style=dict(
+        titled, text_offset_y=0.5, title_offset_y=-0.5
+    )).slides[0]
+    close("본문은 아래로", body_box(both).top, Inches(1.1), tol=2)
+    close("제목은 위로", title_box(both).top, Inches(6.25), tol=2)
+
+
+def test_bible_title_offset():
+    print("성경 제목은 자기 값을 쓴다")
+    verse = {
+        "type": "bible", "title": "롬 8:28",
+        "lyrics": "우리가 알거니와",
+        "english_lyrics": "",
+        "background": None,
+    }
+    style = dict(
+        _STYLE,
+        show_bible_title=True,
+        title_offset_y=0.9,       # 찬양 제목 값 — 성경은 따라가면 안 된다
+        bible_title_offset_y=-0.3,
+    )
+    box = title_box(export([verse], style=style).slides[0])
+    close("성경 제목 값만 적용", box.top, Inches(6.75 - 0.3), tol=2)
+
+
 def test_export_without_key():
     print("export (하위 호환)")
     legacy = dict(_STYLE)
@@ -170,12 +231,24 @@ def test_export_without_key():
     }], style=legacy)
     check("키가 없으면 기본 위치", body_box(prs.slides[0]).top, Inches(0.6))
 
+    legacy_titled = dict(legacy, show_song_title=True)
+    legacy_titled.pop("title_offset_y", None)
+    titled = export([{
+        "type": "song", "title": "찬양",
+        "lyrics": "한 줄",
+        "english_lyrics": "",
+        "background": None,
+    }], style=legacy_titled)
+    check("제목도 마찬가지", title_box(titled.slides[0]).top, Inches(6.75))
+
 
 if __name__ == "__main__":
     test_layout_shifts_box_only()
     test_bible_uses_own_offset()
     test_offset_is_clamped()
     test_export_moves_textbox()
+    test_title_offset()
+    test_bible_title_offset()
     test_export_without_key()
     if _failures:
         print(f"\n{len(_failures)}개 실패: {_failures}")

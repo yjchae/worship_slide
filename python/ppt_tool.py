@@ -1079,12 +1079,17 @@ def _lyrics_box_vertical_layout(style, is_bible):
 
 
 def _lyrics_offset_y(style, is_bible):
-    """세로 미세 조정 값(인치, + = 아래로). 숫자가 아니면 0."""
+    """본문 세로 미세 조정 값(인치, + = 아래로)."""
+    return _clamp_offset_y(style.get(
+        "bible_text_offset_y" if is_bible else "text_offset_y",
+        0.0,
+    ))
+
+
+def _clamp_offset_y(value):
+    """세로 미세 조정 값을 허용 범위로 자른다. 숫자가 아니면 0."""
     try:
-        offset = float(style.get(
-            "bible_text_offset_y" if is_bible else "text_offset_y",
-            0.0,
-        ))
+        offset = float(value)
     except (TypeError, ValueError):
         return 0.0
     if offset != offset:  # NaN
@@ -1129,6 +1134,10 @@ def _add_title_textbox(slide, song_title, style, is_bible=False, font_name="Pret
         title_top = (_SLIDE_H - _TITLE_BOX_HEIGHT) / 2
     else:
         title_top = _SLIDE_H - _TITLE_BOX_PADDING - _TITLE_BOX_HEIGHT
+    # 제목도 본문과 같다. 기준선에서 미세 조정만큼 더 민다.
+    title_top += _clamp_offset_y(style.get(
+        "bible_title_offset_y" if is_bible else "title_offset_y", 0.0
+    ))
 
     box = slide.shapes.add_textbox(
         Inches(title_left), Inches(title_top),

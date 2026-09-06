@@ -53,6 +53,14 @@ class ExportStyleStore {
             (json['text_offset_y'] as num?)?.toDouble() ??
             0,
       ),
+      titleOffsetY: clampTextOffsetY(
+        (json['title_offset_y'] as num?)?.toDouble() ?? 0,
+      ),
+      bibleTitleOffsetY: clampTextOffsetY(
+        (json['bible_title_offset_y'] as num?)?.toDouble() ??
+            (json['title_offset_y'] as num?)?.toDouble() ??
+            0,
+      ),
       lyricsTextAlign: HorizontalPosition.values.firstWhere(
         (pos) => pos.name == json['lyrics_text_align'],
         orElse: () => HorizontalPosition.center,

@@ -4151,8 +4151,10 @@ class _StyleTabControlsState extends State<_StyleTabControls>
   }
 
   /// 상단/중단/하단 기준선에서 위아래로 더 밀어 주는 미세 조정.
-  /// 슬라이더로 크게, +/- 버튼으로 한 칸(0.05인치)씩 움직인다.
+  /// 슬라이더로 크게, 위/아래 버튼으로 한 칸(0.05인치)씩 움직인다.
+  /// 본문과 제목이 같은 위젯을 쓴다(제목은 title 만 다르다).
   Widget _verticalOffsetSlider({
+    String title = '세로 미세 조정',
     required double value,
     required ValueChanged<double> onChanged,
   }) {
@@ -4180,7 +4182,7 @@ class _StyleTabControlsState extends State<_StyleTabControls>
       children: [
         Row(
           children: [
-            const Text('세로 미세 조정'),
+            Text(title),
             const SizedBox(width: 8),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
@@ -4323,6 +4325,7 @@ class _StyleTabControlsState extends State<_StyleTabControls>
                   ),
                 ),
                 _verticalOffsetSlider(
+                  title: '가사 세로 미세 조정',
                   value: widget.style.textOffsetY,
                   onChanged: (value) => widget.onStyleChanged(
                     widget.style.copyWith(textOffsetY: value),
@@ -4376,6 +4379,14 @@ class _StyleTabControlsState extends State<_StyleTabControls>
                       widget.style.copyWith(titleVerticalPosition: position),
                     ),
                   ),
+                if (widget.style.showSongTitle)
+                  _verticalOffsetSlider(
+                    title: '제목 세로 미세 조정',
+                    value: widget.style.titleOffsetY,
+                    onChanged: (value) => widget.onStyleChanged(
+                      widget.style.copyWith(titleOffsetY: value),
+                    ),
+                  ),
               ],
             ),
             _controlSection(
@@ -4410,6 +4421,7 @@ class _StyleTabControlsState extends State<_StyleTabControls>
                   ),
                 ),
                 _verticalOffsetSlider(
+                  title: '본문 세로 미세 조정',
                   value: widget.style.bibleTextOffsetY,
                   onChanged: (value) => widget.onStyleChanged(
                     widget.style.copyWith(bibleTextOffsetY: value),
@@ -4465,6 +4477,14 @@ class _StyleTabControlsState extends State<_StyleTabControls>
                       widget.style.copyWith(
                         bibleTitleVerticalPosition: position,
                       ),
+                    ),
+                  ),
+                if (widget.style.showBibleTitle)
+                  _verticalOffsetSlider(
+                    title: '제목 세로 미세 조정',
+                    value: widget.style.bibleTitleOffsetY,
+                    onChanged: (value) => widget.onStyleChanged(
+                      widget.style.copyWith(bibleTitleOffsetY: value),
                     ),
                   ),
               ],

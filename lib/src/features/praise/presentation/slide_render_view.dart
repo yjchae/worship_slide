@@ -106,6 +106,9 @@ class SlideRenderView extends StatelessWidget {
         isBible ? style.bibleTitleFontSize : style.titleFontSize;
     final titleTextColor =
         isBible ? style.bibleTitleTextColor : style.titleTextColor;
+    final titleOffsetY = clampTextOffsetY(
+      isBible ? style.bibleTitleOffsetY : style.titleOffsetY,
+    );
     final bodyTextColor = isBible ? style.bibleTextColor : style.textColor;
     final bodyTextAlign =
         isBible ? style.bibleTextAlign : style.lyricsTextAlign;
@@ -148,11 +151,14 @@ class SlideRenderView extends StatelessWidget {
             titleLeft = _slideW - _titlePad - _titleBoxWSide;
             titleAlign = TextAlign.right;
         }
-        final double titleTop = switch (titleVPos) {
-          VerticalTextPosition.top => _titlePad,
-          VerticalTextPosition.middle => (_slideH - _titleBoxH) / 2,
-          VerticalTextPosition.bottom => _slideH - _titlePad - _titleBoxH,
-        };
+        // 제목도 본문과 같다. 기준선(상단/중단/하단)에서 미세 조정만큼 더 민다.
+        final double titleTop =
+            switch (titleVPos) {
+              VerticalTextPosition.top => _titlePad,
+              VerticalTextPosition.middle => (_slideH - _titleBoxH) / 2,
+              VerticalTextPosition.bottom => _slideH - _titlePad - _titleBoxH,
+            } +
+            titleOffsetY;
 
         return Container(
           color: style.backgroundColor,
