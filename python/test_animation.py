@@ -13,7 +13,9 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from lxml import etree
+from PIL import Image
 from pptx import Presentation
+from pptx.enum.shapes import MSO_SHAPE_TYPE
 from pptx.util import Inches, Pt
 
 from ppt_tool import _A_NS, _P_NS, expand_animation_steps
@@ -133,17 +135,86 @@ def build_sample(path):
     return shape_ids, lyrics_id, exit_ids
 
 
+def shape_texts(shapes):
+    """그룹 안쪽까지 훑어서 문단 글자를 순서대로 모은다."""
+    lines = []
+    for shape in shapes:
+        if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+            lines.extend(shape_texts(shape.shapes))
+        elif shape.has_text_frame:
+            lines.extend(paragraph.text for paragraph in shape.text_frame.paragraphs)
+    return lines
+
+
 def slide_texts(path):
     """펼쳐진 pptx를 슬라이드 순서대로 [[문단 글자, ...], ...] 로 읽는다."""
-    presentation = Presentation(str(path))
-    pages = []
-    for slide in presentation.slides:
-        lines = []
-        for shape in slide.shapes:
-            if shape.has_text_frame:
-                lines.extend(p.text for p in shape.text_frame.paragraphs)
-        pages.append(lines)
-    return pages
+    return [shape_texts(slide.shapes) for slide in Presentation(str(path)).slides]
+
+
+def build_realistic_sample(path, image_path):
+    """실제 예배 PPT에 가까운 샘플: 배경 사진 + 그룹 도형 + 슬라이드 노트."""
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    slide.shapes.add_picture(
+        str(image_path), 0, 0, presentation.slide_width, presentation.slide_height
+    )
+    base = slide.shapes.add_textbox(Inches(1), Inches(2), Inches(11), Inches(1.2))
+    base.text_frame.text = "처음부터 보이는 줄"
+    base.text_frame.paragraphs[0].runs[0].font.size = Pt(40)
+
+    group = slide.shapes.add_group_shape()
+    inner = group.shapes.add_textbox(Inches(1), Inches(4.5), Inches(11), Inches(1.2))
+    inner.text_frame.text = "그룹째 나중에 등장"
+    inner.text_frame.paragraphs[0].runs[0].font.size = Pt(40)
+
+    slide.notes_slide.notes_text_frame.text = "1절 천천히"
+    presentation.save(path)
+
+    with zipfile.ZipFile(path) as archive:
+        parts = {name: archive.read(name) for name in archive.namelist()}
+    root = etree.fromstring(parts["ppt/slides/slide1.xml"])
+    root.append(etree.fromstring(_timing([_effect(10, group.shape_id)])))
+    parts["ppt/slides/slide1.xml"] = etree.tostring(
+        root, xml_declaration=True, encoding="UTF-8", standalone=True
+    )
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, data in parts.items():
+            archive.writestr(name, data)
+
+
+def check_realistic(work):
+    """복제한 슬라이드가 배경 사진을 잃지 않는지 — 실전에서 제일 크게 터질 부분."""
+    image_path = work / "bg.png"
+    Image.new("RGB", (320, 180), (18, 60, 52)).save(image_path)
+
+    source = work / "realistic.pptx"
+    build_realistic_sample(source, image_path)
+
+    expanded = expand_animation_steps(source, work / "realistic_expanded.pptx")
+    assert expanded is not None, "그룹 도형 애니메이션을 못 찾았다"
+
+    pages = slide_texts(expanded)
+    assert len(pages) == 2, f"1장 → 2단계여야 하는데 {len(pages)}장"
+    assert pages[0] == ["처음부터 보이는 줄"], pages[0]
+    assert pages[1] == ["처음부터 보이는 줄", "그룹째 나중에 등장"], pages[1]
+
+    with zipfile.ZipFile(expanded) as archive:
+        slide_rels = [
+            name for name in archive.namelist()
+            if name.startswith("ppt/slides/_rels/")
+        ]
+        with_image = [
+            name for name in slide_rels if b"../media/" in archive.read(name)
+        ]
+        with_notes = [
+            name for name in slide_rels if b"notesSlide" in archive.read(name)
+        ]
+    # 복제본이 배경 사진 관계를 물려받지 못하면 발표 화면이 하얗게 나온다.
+    assert len(with_image) == 2, f"배경 사진을 잃은 복제본이 있다: {with_image}"
+    # 슬라이드 노트는 1:1이라 복제본에 물려주면 안 된다.
+    assert len(with_notes) == 1, f"노트가 복제본까지 물려갔다: {with_notes}"
 
 
 def main():
@@ -182,7 +253,10 @@ def main():
         plain_presentation.save(plain)
         assert expand_animation_steps(plain, work / "plain_expanded.pptx") is None
 
+        check_realistic(work)
+
         print("ok: 3장 → 9장 (도형 단위 / 문단 단위 / 등장+사라짐 각 3단계)")
+        print("ok: 배경 사진 + 그룹 도형 + 노트 (복제본이 사진을 잃지 않음)")
 
 
 if __name__ == "__main__":
