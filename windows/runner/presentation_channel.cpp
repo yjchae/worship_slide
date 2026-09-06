@@ -60,6 +60,8 @@ PresentationChannel::~PresentationChannel() {
   // 캐시를 먼저 비워야 이미 내려간 GDI+ 를 건드리지 않는다.
   image_cache_.reset();
   image_cache_path_.clear();
+  bg_image_cache_.reset();
+  bg_image_cache_path_.clear();
   if (gdiplus_token_) {
     Gdiplus::GdiplusShutdown(gdiplus_token_);
     gdiplus_token_ = 0;
@@ -254,6 +256,9 @@ void PresentationChannel::Apply(const flutter::EncodableMap& data) {
   const flutter::EncodableMap& s = *style;
 
   slide_.bg = HexRgb(GetStr(s, "background_color", "#1b1b1b"), RGB(27,27,27));
+  // 항목별 배경이면 페이지마다 달라진다. style 이 통째로 오므로 매번 다시 읽는다.
+  const std::string* bg_img = Get<std::string>(s, "background_image_path");
+  slide_.bgImagePath = bg_img ? W(*bg_img) : std::wstring{};
 
   if (isBible) {
     slide_.mainSz  = GetDbl(s, "bible_font_size", 30.0);
@@ -298,20 +303,23 @@ void PresentationChannel::Paint(HDC hdc, RECT cli) const {
     return;
   }
 
-  // Background
+  // Background: 단색을 먼저 깔고(확대해도 빈 곳이 안 생긴다) 배경 이미지를 덮는다.
   HBRUSH bg = CreateSolidBrush(slide_.bg);
   FillRect(hdc, &cli, bg);
   DeleteObject(bg);
+  PaintBackgroundImage(hdc, W, H);
 
   // 이미지 슬라이드는 디자인 설정을 타지 않고 원본 그대로 보여준다.
+  // (비율 때문에 남는 여백에는 위에서 깐 배경이 그대로 보인다)
   if (!slide_.imagePath.empty()) {
     PaintImage(hdc, W, H);
     PaintPointer(hdc, W, H);
     return;
   }
 
-  // 확대: 글자까지 같이 커져야 하므로 GDI 월드 변환을 건다. 배경은 위에서 이미
-  // 변환 없이 칠했으므로 확대해도 빈 곳이 생기지 않는다.
+  // 확대: 글자까지 같이 커져야 하므로 GDI 월드 변환을 건다. 배경 단색은 위에서
+  // 변환 없이 칠했으므로 확대해도 빈 곳이 생기지 않는다(배경 이미지는 macOS 의
+  // #stage 와 마찬가지로 PaintBackgroundImage 안에서 같은 확대를 따라간다).
   XFORM saved_xform = {};
   float zs = 1.0f, ztx = 0.0f, zty = 0.0f;
   const bool zoom_applied = ZoomTransform(W, H, &zs, &ztx, &zty);
@@ -445,6 +453,46 @@ void PresentationChannel::Paint(HDC hdc, RECT cli) const {
   if (zoom_applied) SetWorldTransform(hdc, &saved_xform);
 
   PaintPointer(hdc, W, H);
+}
+
+// 배경 이미지를 화면에 꽉 채워 그린다 (CSS background-size: cover, Flutter BoxFit.cover와 동일).
+// 넘치는 부분은 HDC 경계에서 잘린다. 확대(zoom)는 macOS 의 #stage 와 마찬가지로 같이 따라간다.
+void PresentationChannel::PaintBackgroundImage(HDC hdc, int w, int h) const {
+  if (slide_.bgImagePath.empty() || w <= 0 || h <= 0) {
+    // 경로가 비면 캐시도 놓아 준다. 큰 배경을 계속 물고 있을 이유가 없다.
+    if (slide_.bgImagePath.empty() && bg_image_cache_) {
+      bg_image_cache_.reset();
+      bg_image_cache_path_.clear();
+    }
+    return;
+  }
+
+  if (!bg_image_cache_ || bg_image_cache_path_ != slide_.bgImagePath) {
+    bg_image_cache_ =
+        std::make_unique<Gdiplus::Image>(slide_.bgImagePath.c_str());
+    bg_image_cache_path_ = slide_.bgImagePath;
+  }
+  Gdiplus::Image& image = *bg_image_cache_;
+  // 파일이 지워졌거나 못 읽는 형식이면 조용히 단색 배경만 남긴다.
+  if (image.GetLastStatus() != Gdiplus::Ok) return;
+
+  const UINT iw = image.GetWidth();
+  const UINT ih = image.GetHeight();
+  if (iw == 0 || ih == 0) return;
+
+  const double scale = (std::max)(static_cast<double>(w) / iw,
+                                  static_cast<double>(h) / ih);
+  const int dw = static_cast<int>(iw * scale + 0.5);
+  const int dh = static_cast<int>(ih * scale + 0.5);
+
+  Gdiplus::Graphics graphics(hdc);
+  graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+  float zs = 1.0f, ztx = 0.0f, zty = 0.0f;
+  if (ZoomTransform(w, h, &zs, &ztx, &zty)) {
+    Gdiplus::Matrix m(zs, 0.0f, 0.0f, zs, ztx, zty);
+    graphics.SetTransform(&m);
+  }
+  graphics.DrawImage(&image, (w - dw) / 2, (h - dh) / 2, dw, dh);
 }
 
 // 비율을 유지한 채 화면 가운데에 그린다 (macOS의 object-fit: contain과 동일).

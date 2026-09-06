@@ -107,7 +107,10 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   - 적용은 `ExportStyle.withBackground()` 한 곳. 오버라이드가 있으면 배경 **색과 이미지를
     통째로** 대체하므로, 색만 담긴 오버라이드는 "전역 배경 이미지 위가 아니라 단색"이 된다
   - 발표 창(네이티브)은 페이지마다 style JSON을 통째로 받으므로 자동으로 따라온다.
-    단 **Windows 발표 창은 배경 이미지를 아직 못 그린다**(색만 반영, 전역 배경도 마찬가지)
+    macOS 는 WKWebView CSS(`background-size:cover`), Windows 는 GDI+ 로 같은 cover 규칙을
+    직접 그린다(`PaintBackgroundImage`). 확대(zoom)도 양쪽 다 배경까지 같이 따라간다
+  - **배경 이미지는 PNG/JPG 만** 고르게 막아 뒀다. 미리보기(Flutter)·Windows 발표 창(GDI+)·
+    PPTX 세 군데가 모두 확실히 읽는 형식이 이 둘이다 (GDI+ 는 WebP·HEIC 를 못 읽는다)
   - 항목이 만드는 모든 페이지 + 뒤에 자동으로 붙는 여백까지 같은 배경을 쓴다
     (Dart `_allSlides` 는 앞 항목의 uid 를, Python `export_presentation` 은 앞 항목의
     background 를 그대로 빌려 쓴다)

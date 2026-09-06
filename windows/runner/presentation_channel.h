@@ -28,6 +28,9 @@ class PresentationChannel {
     std::wstring main, english, title, fontFamily;
     // 외부 PPT에서 구운 페이지 이미지. 비어 있지 않으면 텍스트 대신 이 이미지만 그린다.
     std::wstring imagePath;
+    // 슬라이드 배경 이미지. 비어 있으면 bg 단색만 깔린다.
+    // 항목별 배경을 쓰면 페이지마다 달라질 수 있다(전역 디자인 값이 아니다).
+    std::wstring bgImagePath;
     bool    isBible  = false, showTitle = false, inclEng = true;
     bool    blackout = false;
     COLORREF bg      = RGB(27, 27, 27);
@@ -46,6 +49,8 @@ class PresentationChannel {
   void CloseWindow();
   void Apply(const flutter::EncodableMap& data);
   void Paint(HDC hdc, RECT cli) const;
+  // 단색 + (있으면) 배경 이미지. 이미지는 화면을 꽉 채운다(CSS background-size: cover).
+  void PaintBackgroundImage(HDC hdc, int w, int h) const;
   void PaintImage(HDC hdc, int w, int h) const;
   void PaintPointer(HDC hdc, int w, int h) const;
   // 확대 변환(px 기준). 확대가 꺼져 있으면 false. 이미지 슬라이드는 레터박스 안쪽
@@ -80,6 +85,9 @@ class PresentationChannel {
   // 디코딩하면 창이 버벅인다. 경로가 같으면 디코딩한 것을 재사용한다.
   mutable std::unique_ptr<Gdiplus::Image> image_cache_;
   mutable std::wstring image_cache_path_;
+  // 배경 이미지도 같은 이유로 캐시한다. 슬라이드 이미지와 동시에 쓰일 수 있어 따로 둔다.
+  mutable std::unique_ptr<Gdiplus::Image> bg_image_cache_;
+  mutable std::wstring bg_image_cache_path_;
   std::unique_ptr<Channel> cmd_;
   std::unique_ptr<Channel> main_;
 

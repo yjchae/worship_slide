@@ -5338,10 +5338,15 @@ class _BackgroundImagePicker extends StatelessWidget {
   final String? imagePath;
   final ValueChanged<String?> onChanged;
 
+  // PNG/JPG 로 제한한다. 세 군데(미리보기 Flutter · Windows 발표 창 GDI+ ·
+  // 내보낸 PPTX)가 모두 확실히 읽는 형식이 이 둘이다. WebP·HEIC 는 GDI+ 가 못 읽어
+  // 윈도우 발표 화면에서만 배경이 사라진다.
   Future<void> _pick() async {
     await FilePicker.skipEntitlementsChecks();
     final result = await FilePicker.pickFiles(
-      type: FileType.image,
+      dialogTitle: '배경 이미지 선택 (PNG / JPG)',
+      type: FileType.custom,
+      allowedExtensions: const ['png', 'jpg', 'jpeg'],
       allowMultiple: false,
     );
     if (result != null && result.files.single.path != null) {
