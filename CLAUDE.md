@@ -20,6 +20,7 @@ flutter test                  # test/widget_test.dart (페이지 파싱·슬라�
 python3 python/test_render.py    # render 명령 self-check (LibreOffice 없으면 skip)
 python3 python/test_animation.py # 애니메이션 단계 펼치기 self-check (LibreOffice 불필요)
 python3 python/test_export_background.py # 항목별 배경 오버라이드 self-check (LibreOffice 불필요)
+python3 python/test_export_text.py       # 가사 줄바꿈 self-check (LibreOffice 불필요)
 
 # 배포용 전체 빌드 (PyInstaller + Flutter 릴리즈 + dist/ 구성)
 ./scripts/build.sh    # macOS
@@ -136,6 +137,11 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   단, PyInstaller에는 **Pretendard만** 번들되어 있다
 - **PPTX 배경 XML 위치**: `p:bg` 는 `p:sld` 가 아니라 **`p:cSld` 의 첫 자식**이다.
   자리를 틀리면 PowerPoint 가 배경을 조용히 무시한다 (`_apply_slide_background` 참고)
+- **가사 줄바꿈은 `<a:br/>`**: 한 run 의 `<a:t>` 안에 날 줄바꿈 문자를 넣으면 OOXML 상
+  줄바꿈이 아니라서 뷰어마다 다르게 그려진다 (LibreOffice 는 가운데 정렬을 무시하고
+  줄을 양쪽으로 벌린다). `_add_text_run` 이 줄마다 run 을 만들고 사이에 `<a:br/>` 를 넣는다.
+  `<a:br>` 에도 크기·굵기·글꼴을 넣어야 줄 높이가 본문과 같아진다.
+  성경 본문은 내어쓰기 때문에 원래 줄마다 문단을 만들므로 이 경로를 타지 않는다
 - **좌표계 일치**: 미리보기·발표 창·PPTX가 같게 보여야 한다. 기준은 슬라이드 높이 7.5인치 = 540pt,
   `fontScale = 높이 / 540`. Swift HTML은 `calc(N / 540 * 100vh)`로 맞춘다
 

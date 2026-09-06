@@ -1135,13 +1135,49 @@ def _set_run_font(run, font_name="Pretendard"):
         font.set("typeface", font_name)
 
 
-def _add_text_run(paragraph, text, font_size, color, font_name="Pretendard"):
-    run = paragraph.add_run()
-    run.text = _normalize_ppt_text(text)
+def _style_run(run, font_size, color, font_name):
     _set_run_font(run, font_name)
     run.font.size = font_size
     run.font.bold = True
     run.font.color.rgb = color
+
+
+def _add_line_break(paragraph, font_size, color, font_name):
+    """문단 안 줄바꿈(<a:br/>).
+
+    <a:br> 에도 글꼴·크기를 넣는다. 비워 두면 줄 높이가 기본 18pt 로 잡혀서
+    본문 줄 간격이 들쭉날쭉해진다.
+    """
+    br = paragraph._p.add_br()
+    rpr = br.get_or_add_rPr()
+    rpr.set("sz", str(int(round(font_size.pt * 100))))
+    rpr.set("b", "1")
+    # CT_TextCharacterProperties 는 fill 이 latin/ea/cs 보다 먼저 와야 한다.
+    fill = OxmlElement("a:solidFill")
+    srgb = OxmlElement("a:srgbClr")
+    srgb.set("val", str(color))
+    fill.append(srgb)
+    rpr.append(fill)
+    for tag in ("a:latin", "a:ea", "a:cs"):
+        font = OxmlElement(tag)
+        font.set("typeface", font_name)
+        rpr.append(font)
+
+
+def _add_text_run(paragraph, text, font_size, color, font_name="Pretendard"):
+    """한 문단에 여러 줄을 넣는다.
+
+    줄바꿈은 반드시 <a:br/> 로 넣는다. 한 run 의 <a:t> 안에 날 줄바꿈 문자를
+    그대로 두면 OOXML 상 줄바꿈이 아니라서 뷰어마다 다르게 그려진다
+    (LibreOffice 는 가운데 정렬을 무시하고 줄을 양쪽으로 벌려 버린다).
+    """
+    lines = _normalize_ppt_text(text).split("\n")
+    for index, line in enumerate(lines):
+        if index:
+            _add_line_break(paragraph, font_size, color, font_name)
+        run = paragraph.add_run()
+        run.text = line
+        _style_run(run, font_size, color, font_name)
 
 
 def _format_bible_paragraph(paragraph, text_align, font_size):
