@@ -75,8 +75,6 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   static const ExportStyle _defaultStyle = ExportStyle(
     fontSize: 30,
     bibleFontSize: 30,
-    textBoxTop: 0.6,
-    bibleTextBoxTop: 0.6,
     backgroundColor: Color(0xFF1B1B1B),
     textColor: Colors.white,
     bibleTextColor: Colors.white,
@@ -4131,25 +4129,6 @@ class _StyleTabControlsState extends State<_StyleTabControls>
     );
   }
 
-  Widget _topMarginSlider({
-    required double value,
-    required ValueChanged<double> onChanged,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('본문 상단 여백 ${value.toStringAsFixed(1)}'),
-        Slider(
-          min: 0.3,
-          max: 2.2,
-          divisions: 19,
-          value: value.clamp(0.3, 2.2),
-          onChanged: onChanged,
-        ),
-      ],
-    );
-  }
-
   /// 상단/중단/하단 기준선에서 위아래로 더 밀어 주는 미세 조정.
   /// 슬라이더로 크게, 위/아래 버튼으로 한 칸(0.05인치)씩 움직인다.
   /// 본문과 제목이 같은 위젯을 쓴다(제목은 title 만 다르다).
@@ -4318,12 +4297,6 @@ class _StyleTabControlsState extends State<_StyleTabControls>
                     widget.style.copyWith(textPosition: position),
                   ),
                 ),
-                _topMarginSlider(
-                  value: widget.style.textBoxTop,
-                  onChanged: (value) => widget.onStyleChanged(
-                    widget.style.copyWith(textBoxTop: value),
-                  ),
-                ),
                 _verticalOffsetSlider(
                   title: '가사 세로 미세 조정',
                   value: widget.style.textOffsetY,
@@ -4412,12 +4385,6 @@ class _StyleTabControlsState extends State<_StyleTabControls>
                   selected: widget.style.bibleTextPosition,
                   onSelected: (position) => widget.onStyleChanged(
                     widget.style.copyWith(bibleTextPosition: position),
-                  ),
-                ),
-                _topMarginSlider(
-                  value: widget.style.bibleTextBoxTop,
-                  onChanged: (value) => widget.onStyleChanged(
-                    widget.style.copyWith(bibleTextBoxTop: value),
                   ),
                 ),
                 _verticalOffsetSlider(

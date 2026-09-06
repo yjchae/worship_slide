@@ -5,9 +5,14 @@ LibreOffice 없이 도는 단위 테스트. 상단/중단/하단 세 고정값�
 본문은 `text_offset_y`/`bible_text_offset_y`, 제목은 `title_offset_y`/
 `bible_title_offset_y` 를 쓴다.
 
-규칙: 상단 여백(text_box_top)은 본문 상자의 "높이"를 정하고, 미세 조정은 그
-상자를 통째로 위아래로 민다(높이는 그대로). 그래야 상단/중단/하단 어느 기준을
-골라도 밀어 준 만큼 똑같이 움직인다. 제목도 같은 규칙이다.
+규칙: 본문 상자는 크기가 고정이고 미세 조정이 그 상자를 통째로 위아래로 민다.
+그래야 상단/중단/하단 어느 기준을 골라도 밀어 준 만큼 똑같이 움직인다.
+제목도 같은 규칙이다.
+
+예전에는 "본문 상단 여백"(text_box_top)이 상자의 위쪽만 끌어내려 높이까지 같이
+줄였다. 상자 아래쪽이 항상 6.0인치에 붙어 있어서 하단 기준에서는 아무 효과가
+없었고 중단 기준에서는 절반만 움직였다. 미세 조정이 그 범위를 모두 덮으므로
+제거했고, 예전 키가 남아 있어도 무시한다(설정 파일은 ExportStyleStore 가 옮긴다).
 """
 import json
 import os
@@ -30,8 +35,6 @@ from ppt_tool import (
 _STYLE = {
     "font_size": 40,
     "bible_font_size": 30,
-    "text_box_top": 0.6,
-    "bible_text_box_top": 0.6,
     "background_color": "#1B1B1B",
     "text_color": "#FFFFFF",
     "bible_text_color": "#FFF8E1",
@@ -104,7 +107,8 @@ def export(songs, style=None):
 def test_layout_shifts_box_only():
     print("_lyrics_box_vertical_layout")
     base_top, base_height = _lyrics_box_vertical_layout(_STYLE, False)
-    close("기본값은 그대로", base_top, 0.6)
+    close("기본 위치", base_top, 0.6)
+    close("기본 높이", base_height, 5.4)
 
     down_top, down_height = _lyrics_box_vertical_layout(
         dict(_STYLE, text_offset_y=0.75), False
@@ -117,6 +121,22 @@ def test_layout_shifts_box_only():
     )
     close("위로 0.4", up_top, base_top - 0.4)
     close("높이는 그대로 (위)", up_height, base_height)
+
+
+def test_legacy_top_margin_ignored():
+    print("없어진 상단 여백")
+    # 예전 payload 가 그대로 와도 위치가 흔들리면 안 된다.
+    top, height = _lyrics_box_vertical_layout(
+        dict(_STYLE, text_box_top=2.2, bible_text_box_top=2.2), False
+    )
+    close("text_box_top 은 무시", top, 0.6)
+    close("높이도 고정", height, 5.4)
+
+    # 미세 조정만 듣는다.
+    moved, _ = _lyrics_box_vertical_layout(
+        dict(_STYLE, text_box_top=2.2, text_offset_y=0.5), False
+    )
+    close("미세 조정만 적용", moved, 1.1)
 
 
 def test_bible_uses_own_offset():
@@ -244,6 +264,7 @@ def test_export_without_key():
 
 if __name__ == "__main__":
     test_layout_shifts_box_only()
+    test_legacy_top_margin_ignored()
     test_bible_uses_own_offset()
     test_offset_is_clamped()
     test_export_moves_textbox()

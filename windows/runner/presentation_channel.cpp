@@ -269,7 +269,6 @@ void PresentationChannel::Apply(const flutter::EncodableMap& data) {
   if (isBible) {
     slide_.mainSz  = GetDbl(s, "bible_font_size", 30.0);
     slide_.txt     = HexRgb(GetStr(s, "bible_text_color", "#ffffff"), RGB(255,255,255));
-    slide_.boxTop  = GetDbl(s, "bible_text_box_top", 0.6);
     slide_.boxOffsetY = ClampOffsetY(GetDbl(s, "bible_text_offset_y", 0.0));
     slide_.vAlign  = VOf(GetStr(s, "bible_text_position", "middle"));
     slide_.hAlign  = HOf(GetStr(s, "bible_text_align", "center"));
@@ -282,7 +281,6 @@ void PresentationChannel::Apply(const flutter::EncodableMap& data) {
   } else {
     slide_.mainSz  = GetDbl(s, "font_size", 30.0);
     slide_.txt     = HexRgb(GetStr(s, "text_color", "#ffffff"), RGB(255,255,255));
-    slide_.boxTop  = GetDbl(s, "text_box_top", 0.6);
     slide_.boxOffsetY = ClampOffsetY(GetDbl(s, "text_offset_y", 0.0));
     slide_.vAlign  = VOf(GetStr(s, "text_position", "middle"));
     slide_.hAlign  = HOf(GetStr(s, "lyrics_text_align", "center"));
@@ -356,9 +354,9 @@ void PresentationChannel::Paint(HDC hdc, RECT cli) const {
   };
 
   // Body box (matches macOS HTML: left=5%, right=95%)
-  // 상단 여백이 상자 높이를 정하고, 미세 조정은 그 상자를 통째로 민다.
-  double boxH    = 7.5 - slide_.boxTop - 1.5;  // 1.5 = lyricsBoxBottom
-  double boxTop  = slide_.boxTop + slide_.boxOffsetY;
+  // 상자 크기는 고정이고, 미세 조정이 그 상자를 통째로 민다.
+  const double boxH = 5.4;
+  double boxTop  = 0.6 + slide_.boxOffsetY;
   int bodyLeft   = (int)(0.05 * W);
   int bodyRight  = (int)(0.95 * W);
   int bodyTop    = (int)(boxTop / 7.5 * H);

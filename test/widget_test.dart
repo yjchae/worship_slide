@@ -158,8 +158,6 @@ void main() {
     const style = ExportStyle(
       fontSize: 32,
       bibleFontSize: 36,
-      textBoxTop: 0.8,
-      bibleTextBoxTop: 1.1,
       backgroundColor: Color(0xFF0F4C5C),
       textColor: Colors.white,
       bibleTextColor: Color(0xFFFFF8E1),
@@ -188,8 +186,6 @@ void main() {
     final json = style.toJson();
     expect(json['font_size'], 32.0);
     expect(json['bible_font_size'], 36.0);
-    expect(json['text_box_top'], 0.8);
-    expect(json['bible_text_box_top'], 1.1);
     expect(json['background_color'], '#0F4C5C');
     expect(json['text_color'], '#FFFFFF');
     expect(json['bible_text_color'], '#FFF8E1');
@@ -253,6 +249,78 @@ void main() {
     expect(clampTextOffsetY(double.nan), 0.0);
   });
 
+  test('없어진 상단 여백이 같은 위치의 미세 조정으로 옮겨진다', () {
+    // 상단 기준: 여백만큼 그대로 내려가 있었다 → 그대로 옮긴다.
+    expect(
+      migrateLegacyTopMargin(
+        savedTopMargin: 1.6,
+        savedOffset: 0,
+        position: VerticalTextPosition.top,
+      ),
+      closeTo(1.0, 1e-9),
+    );
+
+    // 중단 기준: 가운데가 절반만 내려가 있었다 → 절반만 옮긴다.
+    expect(
+      migrateLegacyTopMargin(
+        savedTopMargin: 1.6,
+        savedOffset: 0,
+        position: VerticalTextPosition.middle,
+      ),
+      closeTo(0.5, 1e-9),
+    );
+
+    // 하단 기준: 상자 아래쪽이 늘 6.0인치라 아무 효과가 없었다 → 0.
+    expect(
+      migrateLegacyTopMargin(
+        savedTopMargin: 1.6,
+        savedOffset: 0,
+        position: VerticalTextPosition.bottom,
+      ),
+      0.0,
+    );
+
+    // 기본값(0.6)이면 위치를 건드린 적 없다 → 변화 없음.
+    expect(
+      migrateLegacyTopMargin(
+        savedTopMargin: kLegacyDefaultTopMargin,
+        savedOffset: 0,
+        position: VerticalTextPosition.top,
+      ),
+      0.0,
+    );
+
+    // 이미 저장된 미세 조정이 있으면 거기에 더한다.
+    expect(
+      migrateLegacyTopMargin(
+        savedTopMargin: 1.6,
+        savedOffset: 0.25,
+        position: VerticalTextPosition.top,
+      ),
+      closeTo(1.25, 1e-9),
+    );
+
+    // 여백 키가 없는(= 이미 옮겨진) 설정은 그대로 둔다.
+    expect(
+      migrateLegacyTopMargin(
+        savedTopMargin: null,
+        savedOffset: 0.4,
+        position: VerticalTextPosition.top,
+      ),
+      0.4,
+    );
+
+    // 합쳐서 범위를 넘으면 잘린다.
+    expect(
+      migrateLegacyTopMargin(
+        savedTopMargin: 2.2,
+        savedOffset: 2.0,
+        position: VerticalTextPosition.top,
+      ),
+      kMaxTextOffsetY,
+    );
+  });
+
   test('hex colors parse consistently', () {
     expect(colorToHex(const Color(0xFFFFF8E1)), '#FFF8E1');
     expect(tryParseHexColor('#0f4c5c'), const Color(0xFF0F4C5C));
@@ -268,8 +336,6 @@ void main() {
     const style = ExportStyle(
       fontSize: 54,
       bibleFontSize: 54,
-      textBoxTop: 0.6,
-      bibleTextBoxTop: 0.6,
       backgroundColor: Color(0xFF1B1B1B),
       textColor: Colors.white,
       bibleTextColor: Colors.white,
@@ -349,8 +415,6 @@ void main() {
   const baseStyle = ExportStyle(
     fontSize: 30,
     bibleFontSize: 30,
-    textBoxTop: 0.6,
-    bibleTextBoxTop: 0.6,
     backgroundColor: Color(0xFF1B1B1B),
     textColor: Colors.white,
     bibleTextColor: Colors.white,
@@ -530,8 +594,6 @@ void main() {
 const _offsetStyle = ExportStyle(
   fontSize: 30,
   bibleFontSize: 30,
-  textBoxTop: 0.6,
-  bibleTextBoxTop: 0.6,
   backgroundColor: Color(0xFF1B1B1B),
   textColor: Colors.white,
   bibleTextColor: Colors.white,

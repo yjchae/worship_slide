@@ -38,8 +38,7 @@ class PresentationChannel {
     COLORREF eng     = RGB(255, 241, 118);
     COLORREF ttlClr  = RGB(255, 255, 255);
     double   mainSz  = 30.0, engSz = 24.0, ttlSz = 14.0;
-    double   boxTop  = 0.6;   // slide units (0–7.5)
-    // 세로 미세 조정 (인치, + = 아래로). 상자를 통째로 민다(높이는 그대로).
+    // 본문 세로 미세 조정 (인치, + = 아래로). 고정 크기 상자를 통째로 민다.
     double   boxOffsetY = 0.0;
     int      vAlign  = 1;     // 0=top 1=center 2=bottom
     int      hAlign  = 1;     // 0=left 1=center 2=right

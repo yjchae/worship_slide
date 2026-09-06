@@ -20,8 +20,6 @@ from ppt_tool import export_presentation
 _STYLE = {
     "font_size": 40,
     "bible_font_size": 30,
-    "text_box_top": 0.6,
-    "bible_text_box_top": 0.6,
     "background_color": "#1B1B1B",
     "text_color": "#FFFFFF",
     "bible_text_color": "#FFF8E1",

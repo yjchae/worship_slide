@@ -26,7 +26,10 @@ enum VerticalTextPosition {
 }
 
 /// 상단/중단/하단 기준선에서 위아래로 더 밀어 주는 미세 조정 값(인치).
-/// 양수면 아래로, 음수면 위로 내려간다. 0이면 기존 동작 그대로.
+/// 양수면 아래로, 음수면 위로 올라간다. 0이면 기준선 그대로.
+/// 예전 "본문 상단 여백"(`text_box_top`)을 대체한다 — 상단 여백은 상자 높이까지
+/// 같이 바꿔서 기준마다 효과가 달랐고(하단 기준에서는 아예 효과가 없었다),
+/// 낼 수 있는 위치는 모두 이 값의 범위 안에 들어온다.
 const double kMinTextOffsetY = -2.0;
 const double kMaxTextOffsetY = 2.0;
 
@@ -36,6 +39,34 @@ const double kTextOffsetYStep = 0.05;
 double clampTextOffsetY(double value) {
   if (value.isNaN) return 0;
   return value.clamp(kMinTextOffsetY, kMaxTextOffsetY).toDouble();
+}
+
+/// 예전 "본문 상단 여백"의 기본값. 이 값이면 위치를 건드린 적 없다는 뜻이다.
+const double kLegacyDefaultTopMargin = 0.6;
+
+/// 없어진 "본문 상단 여백"(`text_box_top`)을 세로 미세 조정 값으로 옮긴다.
+///
+/// 상단 여백은 상자의 위쪽만 끌어내려 높이까지 같이 줄이던 값이라 기준선마다
+/// 효과가 달랐다. 상자 아래쪽은 항상 6.0인치에 붙어 있었기 때문에
+/// - 상단 기준: 여백만큼 그대로 내려갔고
+/// - 중단 기준: 가운데가 여백의 **절반**만 내려갔고
+/// - 하단 기준: 아무 효과가 없었다.
+///
+/// 예전 설정 파일을 열었을 때 글자가 튀지 않도록 기준선별로 같은 위치가 나오는
+/// 미세 조정 값으로 환산해 [savedOffset] 에 더한다. 여백 키가 없으면 그대로 둔다.
+double migrateLegacyTopMargin({
+  required num? savedTopMargin,
+  required double savedOffset,
+  required VerticalTextPosition position,
+}) {
+  if (savedTopMargin == null) return clampTextOffsetY(savedOffset);
+  final shift = savedTopMargin.toDouble() - kLegacyDefaultTopMargin;
+  final converted = switch (position) {
+    VerticalTextPosition.top => shift,
+    VerticalTextPosition.middle => shift / 2,
+    VerticalTextPosition.bottom => 0.0,
+  };
+  return clampTextOffsetY(savedOffset + converted);
 }
 
 enum HorizontalPosition {
@@ -51,8 +82,6 @@ class ExportStyle {
   const ExportStyle({
     required this.fontSize,
     required this.bibleFontSize,
-    required this.textBoxTop,
-    required this.bibleTextBoxTop,
     required this.backgroundColor,
     required this.textColor,
     required this.bibleTextColor,
@@ -82,8 +111,6 @@ class ExportStyle {
 
   final double fontSize;
   final double bibleFontSize;
-  final double textBoxTop;
-  final double bibleTextBoxTop;
   final Color backgroundColor;
   final Color textColor;
   final Color bibleTextColor;
@@ -118,8 +145,6 @@ class ExportStyle {
     return {
       'font_size': fontSize,
       'bible_font_size': bibleFontSize,
-      'text_box_top': textBoxTop,
-      'bible_text_box_top': bibleTextBoxTop,
       'background_color': colorToHex(backgroundColor),
       'text_color': colorToHex(textColor),
       'bible_text_color': colorToHex(bibleTextColor),
@@ -162,8 +187,6 @@ class ExportStyle {
     return ExportStyle(
       fontSize: (json['font_size'] as num).toDouble(),
       bibleFontSize: (json['bible_font_size'] as num).toDouble(),
-      textBoxTop: (json['text_box_top'] as num).toDouble(),
-      bibleTextBoxTop: (json['bible_text_box_top'] as num).toDouble(),
       backgroundColor: parseHexColor(
         json['background_color'] as String?,
         const Color(0xFF1B1B1B),
@@ -228,8 +251,6 @@ class ExportStyle {
   ExportStyle copyWith({
     double? fontSize,
     double? bibleFontSize,
-    double? textBoxTop,
-    double? bibleTextBoxTop,
     Color? backgroundColor,
     Color? textColor,
     Color? bibleTextColor,
@@ -259,8 +280,6 @@ class ExportStyle {
     return ExportStyle(
       fontSize: fontSize ?? this.fontSize,
       bibleFontSize: bibleFontSize ?? this.bibleFontSize,
-      textBoxTop: textBoxTop ?? this.textBoxTop,
-      bibleTextBoxTop: bibleTextBoxTop ?? this.bibleTextBoxTop,
       backgroundColor: backgroundColor ?? this.backgroundColor,
       textColor: textColor ?? this.textColor,
       bibleTextColor: bibleTextColor ?? this.bibleTextColor,
