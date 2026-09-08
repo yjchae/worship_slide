@@ -109,11 +109,11 @@ class PythonBridge {
             'lyrics': song.lyrics,
             'english_lyrics': song.englishLyrics,
           },
-          BibleStagingItem(:final reference, :final text) => {
+          BibleStagingItem(:final reference, :final text, :final subText) => {
             'type': 'bible',
             'title': reference,
             'lyrics': text,
-            'english_lyrics': '',
+            'english_lyrics': subText,
           },
           BlankStagingItem() => {
             'type': 'blank',

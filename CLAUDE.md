@@ -22,6 +22,7 @@ python3 python/test_animation.py # 애니메이션 단계 펼치기 self-check (
 python3 python/test_export_background.py # 항목별 배경 오버라이드 self-check (LibreOffice 불필요)
 python3 python/test_export_text.py       # 가사 줄바꿈 self-check (LibreOffice 불필요)
 python3 python/test_export_position.py   # 본문·제목 세로 미세 조정 self-check (LibreOffice 불필요)
+python3 python/test_split_language.py    # 한/보조 언어 줄 나누기 self-check (LibreOffice 불필요)
 
 # 배포용 전체 빌드 (PyInstaller + Flutter 릴리즈 + dist/ 구성)
 ./scripts/build.sh    # macOS
@@ -42,7 +43,7 @@ lib/
   src/app.dart                       -- MaterialApp (seed #1B6B5C, 배경 #F4F1EA)
   src/features/praise/
     data/
-      praise_database.dart           -- SQLite 스키마 + 마이그레이션 (현재 version 11)
+      praise_database.dart           -- SQLite 스키마 + 마이그레이션 (현재 version 12)
       praise_repository.dart         -- 곡 CRUD (searchSongs, replaceAllSongs, deleteSongsByIds ...)
       worship_conti_repository.dart  -- 콘티 저장/불러오기 (곡 가사 스냅샷까지 함께 보관)
       python_bridge.dart             -- Process.run으로 ppt_tool 실행 (import / render / export)
@@ -97,11 +98,30 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   **실행 1회당 약 10초**가 든다. onedir는 0.12초
 - **가사 페이지 구분자**: 빈 줄(`\n\n`). 예전 `###` 구분자는 DB version 6 마이그레이션에서 일괄 변환됨.
   선행 빈 줄은 "빈 페이지"로 보존된다 (`praise_song.dart` 참고)
-- **한/영 분리 기준** (`is_english_line`): 라틴 문자 비율 ≥ 60%면 영어 줄
+- **한/보조 언어 분리 기준** (`is_sub_line`): 한글이 없고 글자(alpha)가 있으면 보조 언어 줄.
+  예전엔 라틴 비율 ≥ 60% 였는데 그러면 일본어·중국어가 한국어 쪽에 섞였다.
+  숫자·기호만 있는 줄은 alpha 가 없어 예전처럼 본문 쪽에 남는다
 - **DB 위치**: 실행 파일 옆 (`worship_slides.db`). macOS는 `.app`에서 3단계 위. 앱 폴더를 통째로 옮겨도 데이터가 따라온다
 - **DB 갱신** (`replaceAllSongs`): 전체 삭제 후 재삽입 (증분 갱신 아님)
 - **콘티 저장 시 가사 스냅샷**: 곡 id만이 아니라 당시 가사(`song_lyrics`)까지 저장한다.
   나중에 곡을 지우거나 다시 임포트해도 저장한 콘티가 깨지지 않는다
+- **다국어 (보조 언어)**: 렌더러 네 곳(미리보기·macOS·Windows·PPTX)은 원래부터 본문 아래
+  `english_text` 한 줄을 그린다. 그래서 다국어는 **그 칸에 무엇을 넣을지**만 정하는 기능이고
+  렌더링 코드는 하나도 안 건드렸다.
+  - **찬양**: `praise_songs.english_lyrics` 가 기본 언어('영어')를 그대로 맡고, 그 밖의 언어만
+    `song_translations(song_title, language, lyrics)` 에 둔다. 키가 곡 id 가 아니라 **제목**인
+    이유 — `replaceAllSongs` 가 전체 삭제 후 재삽입이라 id 가 임포트마다 바뀐다
+  - **곡을 콘티에 담는 순간** 선택 언어 가사를 `englishLyrics` 슬롯에 확정해 넣는다
+    (`_withSubLyrics`). 가사 스냅샷과 같은 방식이라 슬라이드·미리보기·내보내기·발표·콘티 저장은
+    다국어를 전혀 모른다. 언어를 바꾸면 `_reapplySubLanguage` 가 담긴 곡들만 다시 입힌다
+  - **폴더 임포트 때 언어를 묻는다.** '영어'가 아니면 곡을 새로 만들지 않고 **제목 기준으로
+    가사만** 붙인다 — 같은 곡의 한글 가사가 파일마다 미묘하게 달라 중복 곡이 생기는 걸 막는다
+  - **성경**: `ExportStyle.bibleSubVersion` 에 역본 하나를 전역으로 고르면 절을 콘티에 담을 때
+    그 역본 본문을 `BibleStagingItem.subText` 에 함께 담는다 (DB `worship_conti_items.bible_sub_text`).
+    역본마다 책 이름이 다르므로(창세기/Genesis) `mapBookName` 이 이름 → 정경 순서 index 순으로
+    짝을 찾는다. 권 수가 다르면 포기하고 보조 본문 없이 담는다
+  - `subLanguage`·`bibleSubVersion` 은 `ExportStyle` 에 얹혀 `export_style.json` 에 저장된다.
+    렌더러는 둘 다 읽지 않는다 (담을 때 이미 결정되어 있다)
 - **항목별 배경 오버라이드**: "헌금송만 다른 배경"처럼 콘티 일부만 배경을 다르게 하는 기능.
   전역 `ExportStyle` 은 그대로 두고, 항목 uid → `SlideBackground`(색 + 이미지 경로) 맵
   (`_itemBackgrounds`)을 따로 들고 다닌다. 메모(`_slideNotes`)와 같은 방식이라 `StagingItem`

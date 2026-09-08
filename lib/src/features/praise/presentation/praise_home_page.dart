@@ -143,6 +143,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   int _storedCount = 0;
   int _bibleVerseCount = 0;
   int _bibleDataRevision = 0;
+  // 다국어 선택지. 곡 임포트·성경 임포트 때 다시 읽는다.
+  List<String> _subLanguages = const [PraiseRepository.defaultSubLanguage];
+  List<String> _bibleVersions = const [];
   int _importTotalCount = 0;
   int _importSavedCount = 0;
   String? _importStatusText;
@@ -199,6 +202,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _loadSongs();
     _loadSavedStyle();
     _loadBibleCount();
+    _loadSubLanguages();
     _searchController.addListener(_loadSongs);
     _checkForUpdates(isStartup: true);
     _mainPresentationChannel.setMethodCallHandler((call) async {
@@ -352,9 +356,63 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   }
 
   Future<void> _updateStyle(ExportStyle style) async {
+    final languageChanged = style.subLanguage != _style.subLanguage;
     setState(() => _style = style);
     await _styleStore.save(style);
+    if (languageChanged) await _reapplySubLanguage();
     await _sendCurrentSlide();
+  }
+
+  // ── 보조 언어 ────────────────────────────────────────────────────────
+  //
+  // 곡을 콘티에 담는 순간 선택한 언어의 가사를 englishLyrics 슬롯에 확정해 넣는다
+  // (가사 스냅샷과 같은 방식). 그래서 슬라이드·미리보기·내보내기·발표 창은
+  // 다국어를 전혀 몰라도 된다 — 원래 영어가 오던 자리에 그 언어가 올 뿐이다.
+
+  Future<PraiseSong> _withSubLyrics(PraiseSong song) async {
+    final sub = await _repository.subLyricsFor(song, _style.subLanguage);
+    if (sub == song.englishLyrics) return song;
+    return PraiseSong(
+      id: song.id,
+      fileName: song.fileName,
+      title: song.title,
+      lyrics: song.lyrics,
+      englishLyrics: sub,
+    );
+  }
+
+  /// 언어를 바꿨을 때 이미 담아 둔 곡들의 보조 가사를 다시 입힌다.
+  /// 본문(한글) 가사는 슬라이드에서 고쳤을 수 있으므로 그대로 둔다.
+  Future<void> _reapplySubLanguage() async {
+    final updated = <(int, StagingItem)>[];
+    for (var i = 0; i < _stagingItems.length; i++) {
+      final item = _stagingItems[i].item;
+      if (item is! SongStagingItem) continue;
+      final matches = _songs.where((s) => s.id == item.song.id);
+      if (matches.isEmpty) continue;
+      final base = matches.first;
+      final sub = await _repository.subLyricsFor(base, _style.subLanguage);
+      if (sub == item.song.englishLyrics) continue;
+      updated.add((
+        i,
+        SongStagingItem(
+          PraiseSong(
+            id: item.song.id,
+            fileName: item.song.fileName,
+            title: item.song.title,
+            lyrics: item.song.lyrics,
+            englishLyrics: sub,
+          ),
+        ),
+      ));
+    }
+    if (updated.isEmpty || !mounted) return;
+    setState(() {
+      for (final (index, item) in updated) {
+        _stagingItems[index] = (uid: _stagingItems[index].uid, item: item);
+      }
+      _clampCurrentSlideIndex();
+    });
   }
 
   // ── 발표 모드 ────────────────────────────────────────────────────────────
@@ -474,7 +532,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
           _SlideInfo(
             stagingUid: entry.uid,
             mainText: item.text,
-            englishText: '',
+            englishText: item.subText,
             title: item.reference,
             isBible: true,
             pageIndexInItem: 0,
@@ -718,7 +776,11 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         ),
       );
     } else if (item is BibleStagingItem) {
-      newItem = BibleStagingItem(reference: item.reference, text: newMain);
+      newItem = BibleStagingItem(
+        reference: item.reference,
+        text: newMain,
+        subText: newEnglish,
+      );
     } else if (item is BlankStagingItem) {
       newItem = BlankStagingItem(mainText: newMain, englishText: newEnglish);
     } else {
@@ -881,27 +943,29 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   // ── 스테이징 조작 ────────────────────────────────────────────────────
 
-  void _toggleSongSelection(PraiseSong song, bool isSelected) {
+  Future<void> _toggleSongSelection(PraiseSong song, bool isSelected) async {
+    if (isSelected) {
+      final alreadyAdded = _stagingItems.any(
+        (e) =>
+            e.item is SongStagingItem &&
+            (e.item as SongStagingItem).song.id == song.id,
+      );
+      if (alreadyAdded) return;
+      final staged = await _withSubLyrics(song);
+      if (!mounted) return;
+      setState(() {
+        _stagingItems.add((uid: _nextUid++, item: SongStagingItem(staged)));
+      });
+      return;
+    }
     setState(() {
-      if (isSelected) {
-        final alreadyAdded = _stagingItems.any(
-          (e) =>
-              e.item is SongStagingItem &&
-              (e.item as SongStagingItem).song.id == song.id,
-        );
-        if (!alreadyAdded) {
-          _stagingItems.add((uid: _nextUid++, item: SongStagingItem(song)));
-        }
-      } else {
-        _stagingItems.removeWhere((e) {
-          final item = e.item;
-          final matches =
-              item is SongStagingItem && item.song.id == song.id;
-          if (matches) _itemBackgrounds.remove(e.uid);
-          return matches;
-        });
-        _clampCurrentSlideIndex();
-      }
+      _stagingItems.removeWhere((e) {
+        final item = e.item;
+        final matches = item is SongStagingItem && item.song.id == song.id;
+        if (matches) _itemBackgrounds.remove(e.uid);
+        return matches;
+      });
+      _clampCurrentSlideIndex();
     });
   }
 
@@ -1074,6 +1138,22 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       dialogTitle: '찬양 PPT 폴더 선택',
     );
     if (folder == null) return;
+    if (!mounted) return;
+
+    // 이 폴더 PPT 의 한글이 아닌 줄을 어느 언어로 저장할지.
+    final language = await showDialog<String>(
+      context: context,
+      builder: (context) => _TextPromptDialog(
+        title: '이 폴더의 보조 언어',
+        label: '언어',
+        hintText: '예: 영어, 일본어, 중국어',
+        initialValue: PraiseRepository.defaultSubLanguage,
+      ),
+    );
+    if (language == null) return;
+    final subLanguage = language.trim().isEmpty
+        ? PraiseRepository.defaultSubLanguage
+        : language.trim();
 
     setState(() {
       _selectedFolder = folder;
@@ -1093,6 +1173,31 @@ class _PraiseHomePageState extends State<PraiseHomePage>
             ? '저장할 찬양이 없습니다.'
             : '가져온 찬양을 저장하는 중입니다.';
       });
+      // 영어가 아닌 언어는 곡을 새로 만들지 않고 제목에 가사만 붙인다.
+      // 같은 곡의 한글 가사가 파일마다 조금씩 달라 중복 곡이 생기는 걸 막는다.
+      if (subLanguage != PraiseRepository.defaultSubLanguage) {
+        await _repository.saveTranslations(subLanguage, {
+          for (final song in result.songs)
+            if (song.englishLyrics.trim().isNotEmpty)
+              song.title: song.englishLyrics,
+        });
+        await _loadSubLanguages();
+        final saved = await _repository.countTranslations(subLanguage);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              result.songs.isEmpty
+                  ? '가져올 PPT/PPTX 파일을 찾지 못했습니다.'
+                  : '$subLanguage 가사 $saved곡을 제목 기준으로 저장했습니다.',
+            ),
+          ),
+        );
+        if (result.libreofficeMissing && mounted) {
+          await _showLibreofficeDialog();
+        }
+        return;
+      }
       var insertedCount = 0;
       var duplicateCount = 0;
       if (result.songs.isNotEmpty) {
@@ -1158,8 +1263,18 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   Future<void> _loadBibleCount() async {
     final count = await _bibleRepository.countVerses();
+    final versions = await _bibleRepository.getVersions();
     if (!mounted) return;
-    setState(() => _bibleVerseCount = count);
+    setState(() {
+      _bibleVerseCount = count;
+      _bibleVersions = versions;
+    });
+  }
+
+  Future<void> _loadSubLanguages() async {
+    final languages = await _repository.getSubLanguages();
+    if (!mounted) return;
+    setState(() => _subLanguages = languages);
   }
 
   Future<void> _pickAndImportBible() async {
@@ -1185,8 +1300,11 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       );
       final totalCount = await _bibleRepository.countVerses();
       if (!mounted) return;
+      final versions = await _bibleRepository.getVersions();
+      if (!mounted) return;
       setState(() {
         _bibleVerseCount = totalCount;
+        _bibleVersions = versions;
         _bibleDataRevision += 1;
       });
       ScaffoldMessenger.of(
@@ -1508,16 +1626,32 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   }
 
   Future<void> _openSongEditor(PraiseSong? song) async {
-    final result = await showDialog<PraiseSong>(
+    final translations = song == null
+        ? const <String, String>{}
+        : await _repository.translationsForTitle(song.title);
+    if (!mounted) return;
+    final result = await showDialog<SongEditResult>(
       context: context,
-      builder: (context) => _SongEditDialog(song: song),
+      builder: (context) => _SongEditDialog(
+        song: song,
+        translations: translations,
+        languages: _subLanguages,
+      ),
     );
     if (result == null || !mounted) return;
+    final (edited, subLyrics) = result;
     if (song == null) {
-      await _repository.insertSong(result);
+      await _repository.insertSong(edited);
     } else {
-      await _repository.updateSong(result);
-      _replaceStagedSong(result);
+      await _repository.updateSong(edited);
+    }
+    for (final entry in subLyrics.entries) {
+      if (entry.key == PraiseRepository.defaultSubLanguage) continue;
+      await _repository.saveTranslations(entry.key, {edited.title: entry.value});
+    }
+    await _loadSubLanguages();
+    if (song != null && mounted) {
+      _replaceStagedSong(await _withSubLyrics(edited));
     }
     await _loadSongs();
   }
@@ -1790,6 +1924,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               bibleVerseCount: _bibleVerseCount,
                               bibleDataRevision: _bibleDataRevision,
                               onAddBibleItem: _addBibleItem,
+                              bibleSubVersion: _style.bibleSubVersion,
                               onCollapse: () =>
                                   setState(() => _isSearchCollapsed = true),
                               searchInTitle: _searchInTitle,
@@ -1872,6 +2007,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                                       textSwatches: _textSwatches,
                                       previewItem: previewItem,
                                       onStyleChanged: _updateStyle,
+                                      subLanguages: _subLanguages,
+                                      bibleVersions: _bibleVersions,
                                       onExportPressed: _exportPresentation,
                                       onCollapse: () => setState(
                                         () => _isDesignCollapsed = true,
@@ -2784,6 +2921,7 @@ class _SearchAndBiblePanel extends StatefulWidget {
     required this.bibleVerseCount,
     required this.bibleDataRevision,
     required this.onAddBibleItem,
+    required this.bibleSubVersion,
     required this.onCollapse,
     required this.searchInTitle,
     required this.searchInLyrics,
@@ -2803,6 +2941,7 @@ class _SearchAndBiblePanel extends StatefulWidget {
   final int bibleVerseCount;
   final int bibleDataRevision;
   final void Function(BibleStagingItem) onAddBibleItem;
+  final String bibleSubVersion;
   final VoidCallback onCollapse;
   final bool searchInTitle;
   final bool searchInLyrics;
@@ -2883,6 +3022,7 @@ class _SearchAndBiblePanelState extends State<_SearchAndBiblePanel>
                   bibleVerseCount: widget.bibleVerseCount,
                   bibleDataRevision: widget.bibleDataRevision,
                   onAddItem: widget.onAddBibleItem,
+                  subVersion: widget.bibleSubVersion,
                 ),
               ],
             ),
@@ -3096,12 +3236,16 @@ class _BibleSearchPanel extends StatefulWidget {
     required this.bibleVerseCount,
     required this.bibleDataRevision,
     required this.onAddItem,
+    required this.subVersion,
   });
 
   final BibleRepository bibleRepository;
   final int bibleVerseCount;
   final int bibleDataRevision;
   final void Function(BibleStagingItem) onAddItem;
+
+  /// 본문 아래 함께 담을 보조 역본. 빈 문자열이면 담지 않는다.
+  final String subVersion;
 
   @override
   State<_BibleSearchPanel> createState() => _BibleSearchPanelState();
@@ -3319,7 +3463,7 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
     }
   }
 
-  void _addSelected() {
+  Future<void> _addSelected() async {
     final version = _selectedVersion;
     if (_selectedVerseIds.isEmpty) return;
     if (version == null) return;
@@ -3336,6 +3480,9 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
       chunks.add(selected.sublist(i, end));
     }
 
+    // 보조 역본 본문을 절 번호로 찾아 쓸 수 있게 미리 한 장(章)을 통째로 읽는다.
+    final subTexts = await _loadSubVerses(version, selected.first.chapter);
+
     for (final chunk in chunks) {
       final verseNums = chunk.map((v) => v.verse).toList();
       final ref = _buildReference(
@@ -3345,13 +3492,40 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
         verseNums,
       );
       final text = chunk.map((v) => '${v.verse}. ${v.text}').join('\n');
-      widget.onAddItem(BibleStagingItem(reference: ref, text: text));
+      final subText = subTexts == null
+          ? ''
+          : chunk
+                .where((v) => subTexts.containsKey(v.verse))
+                .map((v) => '${v.verse}. ${subTexts[v.verse]}')
+                .join('\n');
+      widget.onAddItem(
+        BibleStagingItem(reference: ref, text: text, subText: subText),
+      );
     }
+    if (!mounted) return;
     setState(() => _selectedVerseIds.clear());
 
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text('${chunks.length}페이지 추가됨')));
+  }
+
+  /// 보조 역본의 같은 장을 {절 번호: 본문} 으로. 못 찾으면 null.
+  Future<Map<int, String>?> _loadSubVerses(String version, int chapter) async {
+    final sub = widget.subVersion;
+    if (sub.isEmpty || sub == version) return null;
+    final book = await widget.bibleRepository.mapBookName(
+      bookName: _selectedBook!,
+      fromVersion: version,
+      inVersion: sub,
+    );
+    if (book == null) return null;
+    final verses = await widget.bibleRepository.getVerses(
+      version: sub,
+      bookName: book,
+      chapter: chapter,
+    );
+    return {for (final v in verses) v.verse: v.text};
   }
 
   int get _selectedBiblePageCount {
@@ -3680,6 +3854,8 @@ class _DesignPanel extends StatelessWidget {
     required this.textSwatches,
     required this.previewItem,
     required this.onStyleChanged,
+    required this.subLanguages,
+    required this.bibleVersions,
     required this.onExportPressed,
     required this.onCollapse,
   });
@@ -3692,6 +3868,8 @@ class _DesignPanel extends StatelessWidget {
   final List<Color> textSwatches;
   final StagingItem? previewItem;
   final ValueChanged<ExportStyle> onStyleChanged;
+  final List<String> subLanguages;
+  final List<String> bibleVersions;
   final VoidCallback onExportPressed;
   final VoidCallback onCollapse;
 
@@ -3980,6 +4158,8 @@ class _DesignPanel extends StatelessWidget {
                           verticalPicker: _verticalPicker,
                           horizontalPicker: _horizontalPicker,
                           onStyleChanged: onStyleChanged,
+                          subLanguages: subLanguages,
+                          bibleVersions: bibleVersions,
                         ),
                         const SizedBox(height: 16),
                       ],
@@ -4004,6 +4184,8 @@ class _StyleTabControls extends StatefulWidget {
     required this.verticalPicker,
     required this.horizontalPicker,
     required this.onStyleChanged,
+    required this.subLanguages,
+    required this.bibleVersions,
   });
 
   final ExportStyle style;
@@ -4029,6 +4211,10 @@ class _StyleTabControls extends StatefulWidget {
   })
   horizontalPicker;
   final ValueChanged<ExportStyle> onStyleChanged;
+
+  /// 찬양 보조 가사로 고를 수 있는 언어 / 성경 보조로 고를 수 있는 역본.
+  final List<String> subLanguages;
+  final List<String> bibleVersions;
 
   @override
   State<_StyleTabControls> createState() => _StyleTabControlsState();
@@ -4229,6 +4415,54 @@ class _StyleTabControlsState extends State<_StyleTabControls>
     );
   }
 
+  /// 다국어 드롭다운. [items] 가 비면 안내만 띄운다.
+  Widget _languagePicker({
+    required String title,
+    required String? value,
+    required List<String> items,
+    required String emptyHint,
+    required ValueChanged<String?> onChanged,
+    String? noneLabel,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title),
+          const SizedBox(height: 6),
+          if (items.isEmpty && noneLabel == null)
+            Text(
+              emptyHint,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            )
+          else
+            DropdownButtonFormField<String>(
+              isExpanded: true,
+              initialValue: value,
+              decoration: const InputDecoration(
+                isDense: true,
+                border: OutlineInputBorder(),
+                contentPadding: EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 10,
+                ),
+              ),
+              items: [
+                if (noneLabel != null)
+                  DropdownMenuItem(value: '', child: Text(noneLabel)),
+                for (final item in items)
+                  DropdownMenuItem(value: item, child: Text(item)),
+              ],
+              onChanged: onChanged,
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _titleSizeSlider({
     required double value,
     required ValueChanged<double> onChanged,
@@ -4282,11 +4516,25 @@ class _StyleTabControlsState extends State<_StyleTabControls>
                   ),
                 ),
                 widget.colorPicker(
-                  title: '영어 가사 색상',
+                  title: '보조 언어 가사 색상',
                   selectedColor: widget.style.englishTextColor,
                   colors: widget.textSwatches,
                   onSelected: (color) => widget.onStyleChanged(
                     widget.style.copyWith(englishTextColor: color),
+                  ),
+                ),
+                _languagePicker(
+                  title: '보조 언어',
+                  value: widget.subLanguages.contains(widget.style.subLanguage)
+                      ? widget.style.subLanguage
+                      : PraiseRepository.defaultSubLanguage,
+                  items: widget.subLanguages,
+                  emptyHint: '',
+                  onChanged: (language) => widget.onStyleChanged(
+                    widget.style.copyWith(
+                      subLanguage:
+                          language ?? PraiseRepository.defaultSubLanguage,
+                    ),
                   ),
                 ),
                 _sectionDivider(context, '위치'),
@@ -4377,6 +4625,21 @@ class _StyleTabControlsState extends State<_StyleTabControls>
                   colors: widget.textSwatches,
                   onSelected: (color) => widget.onStyleChanged(
                     widget.style.copyWith(bibleTextColor: color),
+                  ),
+                ),
+                _languagePicker(
+                  title: '보조 역본 (본문 아래 함께 표시)',
+                  value:
+                      widget.bibleVersions.contains(
+                        widget.style.bibleSubVersion,
+                      )
+                      ? widget.style.bibleSubVersion
+                      : '',
+                  items: widget.bibleVersions,
+                  emptyHint: '성경을 먼저 가져와 주세요.',
+                  noneLabel: '표시 안 함',
+                  onChanged: (version) => widget.onStyleChanged(
+                    widget.style.copyWith(bibleSubVersion: version ?? ''),
                   ),
                 ),
                 _sectionDivider(context, '위치'),
@@ -4671,9 +4934,9 @@ class _PreviewBox extends StatelessWidget {
             : song.englishPages.first;
         titleText = song.title;
         isBible = false;
-      case BibleStagingItem(:final text, :final reference):
+      case BibleStagingItem(:final text, :final reference, :final subText):
         sampleText = text;
-        sampleEnglishText = '';
+        sampleEnglishText = subText;
         titleText = reference;
         isBible = true;
       case BlankStagingItem(:final mainText, :final englishText):
@@ -4786,10 +5049,23 @@ class _UpdateBanner extends StatelessWidget {
 
 // ── 곡 편집 다이얼로그 ─────────────────────────────────────────────────
 
+/// 곡 편집 결과: 곡 본체 + 언어별 보조 가사 ('영어' 는 song.englishLyrics).
+typedef SongEditResult = (PraiseSong song, Map<String, String> subLyrics);
+
 class _SongEditDialog extends StatefulWidget {
-  const _SongEditDialog({this.song});
+  const _SongEditDialog({
+    this.song,
+    this.translations = const {},
+    this.languages = const [PraiseRepository.defaultSubLanguage],
+  });
 
   final PraiseSong? song;
+
+  /// 영어를 뺀 언어별 가사 (DB 에서 읽어 온 것).
+  final Map<String, String> translations;
+
+  /// 드롭다운에 띄울 언어 목록.
+  final List<String> languages;
 
   @override
   State<_SongEditDialog> createState() => _SongEditDialogState();
@@ -4827,6 +5103,8 @@ class _SongEditDialogState extends State<_SongEditDialog> {
   late final TextEditingController _titleController;
   late final TextEditingController _lyricsController;
   late final TextEditingController _englishController;
+  late Map<String, String> _subLyrics;
+  late String _language;
 
   @override
   void initState() {
@@ -4835,9 +5113,46 @@ class _SongEditDialogState extends State<_SongEditDialog> {
     _lyricsController = TextEditingController(
       text: _toEditText(widget.song?.lyrics ?? ''),
     );
+    _subLyrics = {
+      PraiseRepository.defaultSubLanguage: widget.song?.englishLyrics ?? '',
+      for (final language in widget.languages)
+        if (language != PraiseRepository.defaultSubLanguage)
+          language: widget.translations[language] ?? '',
+      ...widget.translations,
+    };
+    _language = PraiseRepository.defaultSubLanguage;
     _englishController = TextEditingController(
-      text: _toEditText(widget.song?.englishLyrics ?? ''),
+      text: _toEditText(_subLyrics[_language] ?? ''),
     );
+  }
+
+  /// 편집 중인 언어의 내용을 맵에 되돌려 넣는다.
+  void _stashCurrent() {
+    _subLyrics[_language] = _normalizeLyrics(_englishController.text);
+  }
+
+  void _switchLanguage(String language) {
+    setState(() {
+      _stashCurrent();
+      _language = language;
+      _englishController.text = _toEditText(_subLyrics[language] ?? '');
+    });
+  }
+
+  Future<void> _addLanguage() async {
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) => const _TextPromptDialog(
+        title: '언어 추가',
+        label: '언어',
+        hintText: '예: 일본어, 중국어, 스페인어',
+        initialValue: '',
+      ),
+    );
+    final language = name?.trim() ?? '';
+    if (language.isEmpty || !mounted) return;
+    _subLyrics.putIfAbsent(language, () => '');
+    _switchLanguage(language);
   }
 
   @override
@@ -4857,15 +5172,18 @@ class _SongEditDialogState extends State<_SongEditDialog> {
   void _save() {
     final title = _titleController.text.trim();
     if (title.isEmpty) return;
-    Navigator.of(context).pop(
+    _stashCurrent();
+    Navigator.of(context).pop((
       PraiseSong(
         id: widget.song?.id,
         fileName: widget.song?.fileName ?? title,
         title: title,
         lyrics: _normalizeLyrics(_lyricsController.text),
-        englishLyrics: _normalizeLyrics(_englishController.text),
+        englishLyrics:
+            _subLyrics[PraiseRepository.defaultSubLanguage] ?? '',
       ),
-    );
+      Map<String, String>.from(_subLyrics),
+    ));
   }
 
   @override
@@ -4908,14 +5226,40 @@ class _SongEditDialogState extends State<_SongEditDialog> {
                 ),
               ),
               const SizedBox(height: 16),
+              Row(
+                children: [
+                  const Text('보조 언어'),
+                  const SizedBox(width: 12),
+                  DropdownButton<String>(
+                    value: _language,
+                    items: [
+                      for (final language in _subLyrics.keys)
+                        DropdownMenuItem(
+                          value: language,
+                          child: Text(language),
+                        ),
+                    ],
+                    onChanged: (language) {
+                      if (language != null) _switchLanguage(language);
+                    },
+                  ),
+                  const SizedBox(width: 8),
+                  TextButton.icon(
+                    onPressed: _addLanguage,
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text('언어 추가'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
               TextField(
                 controller: _englishController,
                 maxLines: 10,
                 textAlignVertical: TextAlignVertical.top,
-                decoration: const InputDecoration(
-                  labelText: '영어 가사',
+                decoration: InputDecoration(
+                  labelText: '$_language 가사',
                   hintText: '페이지 구분: 빈 줄 (또는 ### / ====)',
-                  border: OutlineInputBorder(),
+                  border: const OutlineInputBorder(),
                   alignLabelWithHint: true,
                 ),
               ),
@@ -5149,17 +5493,15 @@ class _SlideQuickEditDialogState extends State<_SlideQuickEditDialog> {
                 border: OutlineInputBorder(),
               ),
             ),
-            if (!widget.isBible) ...[
-              const SizedBox(height: 12),
-              TextField(
-                controller: _englishCtrl,
-                maxLines: 4,
-                decoration: const InputDecoration(
-                  labelText: '영어 가사 (선택)',
-                  border: OutlineInputBorder(),
-                ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _englishCtrl,
+              maxLines: 4,
+              decoration: InputDecoration(
+                labelText: widget.isBible ? '보조 역본 본문 (선택)' : '보조 언어 가사 (선택)',
+                border: const OutlineInputBorder(),
               ),
-            ],
+            ),
           ],
         ),
       ),

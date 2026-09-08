@@ -105,6 +105,28 @@ class BibleRepository {
         .toList();
   }
 
+  /// [version] 의 [bookName] 과 같은 책을 [inVersion] 에서 찾아 준다.
+  ///
+  /// 역본마다 책 이름이 다르다 (창세기 vs Genesis). 이름이 같으면 그대로 쓰고,
+  /// 아니면 삽입 순서(= 정경 순서) 상 같은 자리의 책을 쓴다.
+  ///
+  /// ponytail: 두 역본이 같은 순서로 전권을 담고 있다고 가정한다.
+  /// 권 수가 다르면 포기하고 null. 실제로 어긋나면 책 이름 별칭표가 필요하다.
+  Future<String?> mapBookName({
+    required String bookName,
+    required String fromVersion,
+    required String inVersion,
+  }) async {
+    if (fromVersion == inVersion) return bookName;
+    final target = await getBookNamesForVersion(inVersion);
+    if (target.contains(bookName)) return bookName;
+    final source = await getBookNamesForVersion(fromVersion);
+    if (source.length != target.length) return null;
+    final index = source.indexOf(bookName);
+    if (index < 0) return null;
+    return target[index];
+  }
+
   // JSON 임포트 — 기존 데이터 삭제 후 재삽입
   Future<int> importFromJson(
     String jsonString, {

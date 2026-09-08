@@ -166,34 +166,35 @@ def normalize_title(path):
     return re.sub(r'\s*\(\s*와이드 스크린\s*\)\s*', '', title, flags=re.IGNORECASE).strip()
 
 
-def is_english_line(line):
+def is_sub_line(line):
+    """보조 언어 줄인가 — 한글이 없고 글자가 하나라도 있으면 그렇다.
+
+    예전에는 라틴 문자 비율 60% 이상만 보조로 봤다. 그러면 일본어·중국어 가사가
+    한국어 쪽에 섞여 버려서 다국어를 못 쓴다. "1. 2." 같은 숫자 줄은 alpha 가 없어
+    예전처럼 한국어 쪽에 남는다.
+    """
     stripped = line.strip()
     if not stripped:
         return False
     if any("\uac00" <= char <= "\ud7a3" for char in stripped):
         return False
-
-    alpha_count = sum(char.isalpha() for char in stripped)
-    latin_count = sum(("A" <= char <= "Z") or ("a" <= char <= "z") for char in stripped)
-    if latin_count == 0:
-        return False
-    return latin_count / max(alpha_count, 1) >= 0.6
+    return any(char.isalpha() for char in stripped)
 
 
 def split_bilingual_page(text):
     korean_lines = []
-    english_lines = []
+    sub_lines = []
 
     for line in text.splitlines():
         stripped = line.strip()
         if not stripped:
             continue
-        if is_english_line(stripped):
-            english_lines.append(stripped)
+        if is_sub_line(stripped):
+            sub_lines.append(stripped)
         else:
             korean_lines.append(stripped)
 
-    return "\n".join(korean_lines), "\n".join(english_lines)
+    return "\n".join(korean_lines), "\n".join(sub_lines)
 
 
 def get_cache_root():

@@ -107,6 +107,8 @@ class ExportStyle {
     required this.bibleTitleVerticalPosition,
     this.fontFamily = 'Pretendard',
     this.backgroundImagePath,
+    this.subLanguage = '영어',
+    this.bibleSubVersion = '',
   });
 
   final double fontSize;
@@ -141,6 +143,14 @@ class ExportStyle {
   final String fontFamily;
   final String? backgroundImagePath;
 
+  /// 찬양 보조 가사로 쓸 언어. '영어'가 기본(= praise_songs.english_lyrics).
+  /// 렌더러는 이 값을 보지 않는다 — 콘티에 담을 때 이미 해당 언어 가사가
+  /// english_text 슬롯에 들어가 있다.
+  final String subLanguage;
+
+  /// 성경 본문 아래 함께 띄울 역본. 빈 문자열이면 표시하지 않는다.
+  final String bibleSubVersion;
+
   Map<String, dynamic> toJson() {
     return {
       'font_size': fontSize,
@@ -170,6 +180,8 @@ class ExportStyle {
       'bible_title_vertical_position': bibleTitleVerticalPosition.name,
       'font_family': fontFamily,
       'background_image_path': backgroundImagePath,
+      'sub_language': subLanguage,
+      'bible_sub_version': bibleSubVersion,
     };
   }
 
@@ -245,6 +257,8 @@ class ExportStyle {
       ),
       fontFamily: (json['font_family'] as String?) ?? 'Pretendard',
       backgroundImagePath: json['background_image_path'] as String?,
+      subLanguage: (json['sub_language'] as String?) ?? '영어',
+      bibleSubVersion: (json['bible_sub_version'] as String?) ?? '',
     );
   }
 
@@ -276,6 +290,8 @@ class ExportStyle {
     VerticalTextPosition? bibleTitleVerticalPosition,
     String? fontFamily,
     Object? backgroundImagePath = _sentinel,
+    String? subLanguage,
+    String? bibleSubVersion,
   }) {
     return ExportStyle(
       fontSize: fontSize ?? this.fontSize,
@@ -315,6 +331,8 @@ class ExportStyle {
       backgroundImagePath: identical(backgroundImagePath, _sentinel)
           ? this.backgroundImagePath
           : backgroundImagePath as String?,
+      subLanguage: subLanguage ?? this.subLanguage,
+      bibleSubVersion: bibleSubVersion ?? this.bibleSubVersion,
     );
   }
 
