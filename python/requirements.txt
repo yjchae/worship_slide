@@ -1,3 +1,4 @@
 python-pptx
 pymupdf
 pyinstaller
+pillow

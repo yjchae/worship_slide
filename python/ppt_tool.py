@@ -1419,9 +1419,288 @@ def export_presentation(payload_json):
     print(json.dumps({"output_path": str(output_path)}, ensure_ascii=True))
 
 
+# ── 악보 가사 추출 ────────────────────────────────────────────────────────
+#
+# 악보에서 "오선 아래"만 잘라 OCR 한다. 제목·작곡가(첫 단 위)와 코드 기호
+# (다음 단 바로 위)는 좌표로 먼저 잘라 내는 편이, 다 읽은 뒤에 글자 모양으로
+# 거르는 것보다 훨씬 정확하다.
+# 자른 띠를 통째로 넘기지 않고 글 줄 하나씩 잘라 넘기는 이유 — 가사는 음표에
+# 맞춰 띄엄띄엄 놓여서, 여러 줄 모드(psm 6)로 읽히면 한 줄을 두 줄로 쪼갠다.
+
+OCR_DPI = 200
+
+# 오선 한 줄로 볼 가로 검은 비율. 한글 텍스트 줄은 0.35를 잘 넘지 않는다.
+_STAFF_ROW_RATIO = 0.45
+# 글자가 있다고 볼 가로 검은 비율. 가사 한 줄은 폭의 1%도 안 되는 일이 있다.
+_TEXT_ROW_RATIO = 0.004
+
+_LYRIC_HYPHEN_RE = re.compile(
+    "[ \t\u00a0]*[-\u2010\u2011\u2012\u2013\u2014\u2015\uff0d][ \t\u00a0]*"
+)
+_LYRIC_LETTER_RE = re.compile(r"[A-Za-z\uac00-\ud7a3]")
+_CHORD_TOKEN_RE = re.compile(
+    r"^[A-G][#b\u266f\u266d]?(m|M|maj|min|sus|dim|aug|add)?[0-9]*(/[A-G][#b]?)?$"
+)
+
+
+def get_tesseract_executable():
+    candidates = [
+        shutil.which("tesseract"),
+        "/opt/homebrew/bin/tesseract",
+        "/usr/local/bin/tesseract",
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+    ]
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def get_tesseract_language(executable):
+    """설치된 언어 데이터에 맞춰 -l 값을 고른다. 한국어가 없으면 영어만."""
+    try:
+        result = subprocess.run(
+            [executable, "--list-langs"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "eng"
+    langs = {
+        line.strip()
+        for line in (result.stdout + "\n" + (result.stderr or "")).splitlines()
+    }
+    if "kor" in langs:
+        return "kor+eng" if "eng" in langs else "kor"
+    return "eng"
+
+
+def row_dark_ratios(image, threshold=160):
+    """행마다 '검은 픽셀 비율'을 돌려준다. 가로로 평균 내면 오선만 1에 가깝다."""
+    from PIL import Image
+
+    gray = image.convert("L")
+    dark = gray.point(lambda value: 255 if value < threshold else 0)
+    # 폭을 1로 줄이면 픽셀 하나가 그 행의 평균이 된다 (BOX = 단순 평균).
+    column = dark.resize((1, gray.height), Image.BOX)
+    # 폭이 1이라 tobytes() 가 행마다 한 바이트씩 준다 (getdata() 는 곧 없어진다).
+    return [value / 255 for value in column.tobytes()]
+
+
+def find_staff_systems(ratios, min_ratio=_STAFF_ROW_RATIO):
+    """가로 검은 비율 목록 → 오선 한 단마다 (윗선, 아랫선, 줄 간격)."""
+    rows = [index for index, ratio in enumerate(ratios) if ratio >= min_ratio]
+    if not rows:
+        return []
+
+    # 오선 한 줄은 두께가 1~3px 이라 연속된 행이 여러 개 나온다. 하나로 묶는다.
+    lines = [[rows[0]]]
+    for row in rows[1:]:
+        if row - lines[-1][-1] <= 2:
+            lines[-1].append(row)
+        else:
+            lines.append([row])
+    centers = [sum(line) / len(line) for line in lines]
+    if len(centers) < 4:
+        return []
+
+    gaps = sorted(later - earlier for earlier, later in zip(centers, centers[1:]))
+    # 한 단 안의 간격이 4개, 단 사이 간격이 1개라 중앙값은 늘 '줄 간격'이다.
+    spacing = gaps[len(gaps) // 2]
+    if spacing <= 0:
+        return []
+
+    groups = [[centers[0]]]
+    for previous, current in zip(centers, centers[1:]):
+        if current - previous <= spacing * 2.5:
+            groups[-1].append(current)
+        else:
+            groups.append([current])
+
+    return [
+        (group[0], group[-1], (group[-1] - group[0]) / (len(group) - 1))
+        for group in groups
+        # 한 줄쯤 흐려서 안 잡혀도 단으로 인정한다 (원래 5줄).
+        if len(group) >= 4
+    ]
+
+
+def text_row_groups(ratios, top, bottom, max_blank_gap=2, min_height=3):
+    """[top, bottom) 안에서 글자가 있는 행 덩어리를 찾는다. 한 덩어리 = 글 한 줄."""
+    groups = []
+    start = None
+    end = 0
+    blank = 0
+    for row in range(max(top, 0), min(bottom, len(ratios))):
+        if ratios[row] >= _TEXT_ROW_RATIO:
+            start = row if start is None else start
+            end = row
+            blank = 0
+        elif start is not None:
+            blank += 1
+            if blank > max_blank_gap:
+                groups.append((start, end))
+                start = None
+    if start is not None:
+        groups.append((start, end))
+    return [(top_row, end_row) for top_row, end_row in groups if end_row - top_row >= min_height]
+
+
+def lyric_line_boxes(systems, ratios):
+    """오선 단 목록 → 오선 아래 가사 한 줄씩의 (위, 아래) 목록."""
+    height = len(ratios)
+    boxes = []
+    for index, (_, bottom, spacing) in enumerate(systems):
+        top = int(bottom + spacing * 0.3)
+        next_top = systems[index + 1][0] if index + 1 < len(systems) else None
+        band_bottom = (
+            int(next_top - spacing * 0.2)
+            if next_top is not None
+            else int(min(height, bottom + spacing * 8))
+        )
+        groups = text_row_groups(ratios, top, band_bottom)
+        if next_top is not None and groups:
+            last_start, last_end = groups[-1]
+            above = last_start - (groups[-2][1] if len(groups) > 1 else bottom)
+            # 위쪽(가사 줄·오선)보다 아래 단에 더 붙어 있으면 그 단의 코드 기호다.
+            if next_top - last_end < above:
+                groups.pop()
+        boxes.extend(groups)
+    return boxes
+
+
+def clean_lyric_line(line):
+    """OCR 한 줄 → 가사 한 줄. 음절을 잇는 하이픈은 양옆 공백까지 지운다."""
+    text = unicodedata.normalize("NFC", line)
+    text = text.replace("|", " ")  # 마디선을 글자로 읽은 것
+    text = _LYRIC_HYPHEN_RE.sub("", text)
+    return re.sub("[ \t\u00a0]+", " ", text).strip()
+
+
+def is_lyric_line(text):
+    """글자가 두 자 미만이면 음표·숫자를 잘못 읽은 것으로 보고 버린다."""
+    return len(_LYRIC_LETTER_RE.findall(text)) >= 2
+
+
+def is_chord_line(text):
+    """C G7 Am/E 처럼 코드 기호만 있는 줄. 띠에 섞여 들어온 코드행을 버린다."""
+    tokens = text.split()
+    return bool(tokens) and all(_CHORD_TOKEN_RE.match(token) for token in tokens)
+
+
+def _ocr_lines(executable, image, language, work_dir, name, psm="7"):
+    from PIL import Image
+
+    # 작은 글씨는 2배로 키워야 인식률이 눈에 띄게 오른다.
+    if image.height < 60:
+        image = image.resize((image.width * 2, image.height * 2), Image.LANCZOS)
+    image_path = work_dir / f"{name}.png"
+    image.save(image_path)
+
+    result = subprocess.run(
+        [executable, str(image_path), "stdout", "-l", language, "--psm", psm],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if result.returncode != 0:
+        return []
+
+    lines = [clean_lyric_line(line) for line in (result.stdout or "").splitlines()]
+    return [line for line in lines if is_lyric_line(line) and not is_chord_line(line)]
+
+
+def _load_sheet_images(source_path, work_dir):
+    from PIL import Image
+
+    if source_path.suffix.lower() != ".pdf":
+        return [Image.open(source_path)]
+
+    import pymupdf
+
+    images = []
+    with pymupdf.open(str(source_path)) as document:
+        for index, page in enumerate(document):
+            page_path = work_dir / f"page_{index:03d}.png"
+            page.get_pixmap(dpi=OCR_DPI).save(str(page_path))
+            images.append(Image.open(page_path))
+    return images
+
+
+def extract_sheet_music_lyrics(file_path):
+    """악보 이미지(PDF 포함)에서 오선 아래 가사만 뽑아 낸다."""
+    source_path = Path(file_path)
+    if not source_path.exists():
+        raise RuntimeError(f"파일을 찾을 수 없습니다: {file_path}")
+
+    executable = get_tesseract_executable()
+    if executable is None:
+        return {"error": "tesseract_missing"}
+
+    language = get_tesseract_language(executable)
+    work_dir = Path(tempfile.mkdtemp(prefix="praise_sheet_ocr_"))
+    images = []
+    try:
+        lines = []
+        staff_count = 0
+        images = _load_sheet_images(source_path, work_dir)
+        for page_index, image in enumerate(images):
+            ratios = row_dark_ratios(image)
+            systems = find_staff_systems(ratios)
+            staff_count += len(systems)
+            boxes = lyric_line_boxes(systems, ratios)
+            if not boxes:
+                # 오선을 못 찾으면 페이지 전체를 한 번에 읽는다 (가사만 있는 스캔 등).
+                lines.extend(
+                    _ocr_lines(
+                        executable,
+                        image,
+                        language,
+                        work_dir,
+                        f"p{page_index:03d}",
+                        psm="6",
+                    )
+                )
+                continue
+            for box_index, (top, bottom) in enumerate(boxes):
+                # 글자에 딱 붙여 자르면 인식률이 떨어진다. 위아래로 조금 남긴다.
+                crop = image.crop(
+                    (0, max(top - 6, 0), image.width, min(bottom + 7, image.height))
+                )
+                lines.extend(
+                    _ocr_lines(
+                        executable,
+                        crop,
+                        language,
+                        work_dir,
+                        f"p{page_index:03d}_l{box_index:03d}",
+                    )
+                )
+    finally:
+        for image in images:
+            image.close()
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+    return {
+        "source_name": unicodedata.normalize("NFC", source_path.name),
+        "lyrics": "\n".join(lines),
+        "lines": lines,
+        "page_count": len(images),
+        "staff_count": staff_count,
+        "language": language,
+    }
+
+
+def extract_sheet_music(file_path):
+    print(json.dumps(extract_sheet_music_lyrics(file_path), ensure_ascii=True))
+
+
 def main():
     if len(sys.argv) < 3:
-        raise SystemExit("usage: ppt_tool.py [import|export] [payload]")
+        raise SystemExit("usage: ppt_tool.py [import|export|render|sheet] [payload]")
 
     command = sys.argv[1]
     payload = sys.argv[2]
@@ -1437,6 +1716,10 @@ def main():
     if command == "render":
         # --no-animation: 애니메이션을 펼치지 않고 슬라이드당 한 장만 굽는다.
         render_presentation(payload, expand_animation="--no-animation" not in sys.argv[3:])
+        return
+
+    if command == "sheet":
+        extract_sheet_music(payload)
         return
 
     raise SystemExit(f"unknown command: {command}")

@@ -17,6 +17,29 @@ class LibreOfficeMissingException implements Exception {
       'PPT를 이미지로 변환하려면 LibreOffice가 필요합니다. 설치 후 다시 시도해 주세요.';
 }
 
+class TesseractMissingException implements Exception {
+  const TesseractMissingException();
+
+  @override
+  String toString() =>
+      '악보에서 가사를 읽으려면 Tesseract OCR이 필요합니다. 설치 후 다시 시도해 주세요.';
+}
+
+/// 악보 한 장(또는 PDF 한 권)에서 뽑아낸 가사.
+class SheetLyricsResult {
+  const SheetLyricsResult({
+    required this.sourceName,
+    required this.lyrics,
+    required this.staffCount,
+  });
+
+  final String sourceName;
+  final String lyrics;
+
+  /// 찾아낸 오선 단 수. 0이면 오선을 못 찾아 이미지 전체를 읽었다는 뜻이다.
+  final int staffCount;
+}
+
 class ImportFailure {
   const ImportFailure({
     required this.fileName,
@@ -88,6 +111,20 @@ class PythonBridge {
     return ImageStagingItem(
       sourceName: json['source_name'] as String,
       imagePaths: (json['image_paths'] as List<dynamic>).cast<String>(),
+    );
+  }
+
+  /// 악보 이미지(PDF 포함)에서 오선 아래 가사만 읽어 온다.
+  Future<SheetLyricsResult> extractSheetLyrics(String filePath) async {
+    final result = await _runTool(['sheet', filePath]);
+    final json = jsonDecode(result.stdout as String) as Map<String, dynamic>;
+    if (json['error'] == 'tesseract_missing') {
+      throw const TesseractMissingException();
+    }
+    return SheetLyricsResult(
+      sourceName: json['source_name'] as String,
+      lyrics: json['lyrics'] as String,
+      staffCount: (json['staff_count'] as num?)?.toInt() ?? 0,
     );
   }
 
