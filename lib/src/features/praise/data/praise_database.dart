@@ -111,10 +111,29 @@ const _createSongTranslations = '''
   )
 ''';
 
+/// 이미 그 컬럼이 있으면 조용히 건너뛴다. `user_version`이 실제 스키마보다
+/// 뒤처진 DB(예: 예전 업그레이드가 중간에 실패해 롤백된 경우)를 다시 열어도
+/// "duplicate column name"으로 죽지 않고 스스로 맞춰진다.
+Future<void> _addColumnIfMissing(
+  DatabaseExecutor db,
+  String table,
+  String column,
+  String ddl,
+) async {
+  final columns = await db.rawQuery('PRAGMA table_info($table)');
+  final exists = columns.any((c) => c['name'] == column);
+  if (!exists) {
+    await db.execute(ddl);
+  }
+}
+
 /// [oldVersion] 에서 현재 스키마까지 올린다. 각 단계는 앞 단계가 이미 돈 것을 전제한다.
 Future<void> upgradePraiseSchema(DatabaseExecutor db, int oldVersion) async {
   if (oldVersion < 2) {
-    await db.execute(
+    await _addColumnIfMissing(
+      db,
+      'praise_songs',
+      'english_lyrics',
       "ALTER TABLE praise_songs ADD COLUMN english_lyrics TEXT NOT NULL DEFAULT ''",
     );
   }
@@ -194,44 +213,73 @@ Future<void> upgradePraiseSchema(DatabaseExecutor db, int oldVersion) async {
     }
   }
   if (oldVersion < 7) {
-    await db.execute(
+    await _addColumnIfMissing(
+      db,
+      'worship_conti_items',
+      'song_lyrics',
       "ALTER TABLE worship_conti_items ADD COLUMN song_lyrics TEXT",
     );
-    await db.execute(
+    await _addColumnIfMissing(
+      db,
+      'worship_conti_items',
+      'song_english_lyrics',
       "ALTER TABLE worship_conti_items ADD COLUMN song_english_lyrics TEXT",
     );
   }
   if (oldVersion < 8) {
-    await db.execute(
+    await _addColumnIfMissing(
+      db,
+      'worship_conti_items',
+      'blank_text',
       "ALTER TABLE worship_conti_items ADD COLUMN blank_text TEXT",
     );
-    await db.execute(
+    await _addColumnIfMissing(
+      db,
+      'worship_conti_items',
+      'blank_english_text',
       "ALTER TABLE worship_conti_items ADD COLUMN blank_english_text TEXT",
     );
   }
   if (oldVersion < 9) {
-    await db.execute(
+    await _addColumnIfMissing(
+      db,
+      'worship_conti_items',
+      'image_source',
       "ALTER TABLE worship_conti_items ADD COLUMN image_source TEXT",
     );
-    await db.execute(
+    await _addColumnIfMissing(
+      db,
+      'worship_conti_items',
+      'image_paths',
       "ALTER TABLE worship_conti_items ADD COLUMN image_paths TEXT",
     );
   }
   if (oldVersion < 10) {
     // 발표자 보기의 슬라이드 메모. {"페이지번호": "메모"} JSON.
-    await db.execute("ALTER TABLE worship_conti_items ADD COLUMN notes TEXT");
+    await _addColumnIfMissing(
+      db,
+      'worship_conti_items',
+      'notes',
+      "ALTER TABLE worship_conti_items ADD COLUMN notes TEXT",
+    );
   }
   if (oldVersion < 11) {
     // 항목별 배경 오버라이드. {"color": "#RRGGBB", "image_path": "..."} JSON.
     // 비어 있으면 전역 디자인의 배경을 그대로 쓴다.
-    await db.execute(
+    await _addColumnIfMissing(
+      db,
+      'worship_conti_items',
+      'background',
       "ALTER TABLE worship_conti_items ADD COLUMN background TEXT",
     );
   }
   if (oldVersion < 12) {
     // 다국어: 곡의 보조 언어 가사 + 성경 보조 역본 본문.
     await db.execute(_createSongTranslations);
-    await db.execute(
+    await _addColumnIfMissing(
+      db,
+      'worship_conti_items',
+      'bible_sub_text',
       "ALTER TABLE worship_conti_items ADD COLUMN bible_sub_text TEXT",
     );
   }
