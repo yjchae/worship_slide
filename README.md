@@ -9,6 +9,7 @@
 
 - **폴더 일괄 가져오기** — 지정 폴더의 `.ppt` / `.pptx`를 재귀 탐색해 가사를 추출하고 SQLite에 저장
 - **한/영 가사 자동 분리** — 한 슬라이드에 한국어·영어가 섞여 있어도 구분해서 저장
+- **악보 가사 추출** — 악보 이미지·PDF를 넣으면 오선 아래 가사만 읽어 새 곡으로 저장 (음절을 잇는 `-` 와 음표마다 벌어진 한 글자 토막은 붙임). 글자가 박힌 PDF는 OCR 없이 그대로 읽음
 - **검색** — 제목·가사 대상으로 실시간 검색 (검색 범위 선택 가능)
 - **성경** — 성경 JSON을 역본별로 가져와 `요 3:16` 같은 참조로 찾아 콘티에 추가
 - **콘티 구성** — 곡 / 성경 / 외부 PPT(페이지 이미지) / 빈 페이지를 드래그로 순서 조정, 슬라이드 단위 수정·삭제
@@ -36,6 +37,7 @@
 | 데이터베이스 | SQLite (`sqflite_common_ffi`) |
 | PPT 읽기/쓰기 | Python 3 + `python-pptx` (PyInstaller로 빌드해 서브프로세스 호출) |
 | PPT → 이미지 | LibreOffice(`soffice`) → PDF → PyMuPDF → PNG |
+| 악보 가사 읽기 | Pillow(오선 찾기) → PDF 글자층(PyMuPDF) 또는 Tesseract OCR(`kor+eng`) |
 | 발표 창 | macOS: WKWebView / Windows: GDI (네이티브 창, MethodChannel로 제어) |
 
 ## 사전 요구사항
@@ -43,6 +45,7 @@
 1. **Flutter SDK** (Dart SDK ^3.11)
 2. **Python 3**
 3. **LibreOffice** — `.ppt`(구형) 가져오기와 외부 PPT를 이미지로 넣을 때만 필요 (선택)
+4. **Tesseract OCR** — 그림 악보·스캔 PDF의 가사 추출에만 필요 (선택, 글자가 박힌 PDF는 없어도 됨). 한국어 가사를 읽으려면 `kor` 언어 데이터까지 설치 — macOS `brew install tesseract tesseract-lang`
 
 ## 개발 환경 준비
 
@@ -84,6 +87,7 @@ git push origin v1.1.9
 ```bash
 flutter test                    # 페이지 파싱 · 슬라이드 렌더링
 python3 python/test_render.py   # PPT → 이미지 변환 (LibreOffice 없으면 skip)
+python3 python/test_sheet_lyrics.py  # 악보 가사 추출 (Tesseract 없으면 OCR 부분만 skip)
 ```
 
 ## 데이터 저장 위치

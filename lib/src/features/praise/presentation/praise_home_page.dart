@@ -1037,33 +1037,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     if (paths.isEmpty || !mounted) return;
 
     final progress = ValueNotifier<String>('변환 중…');
-    unawaited(
-      showDialog<void>(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) => PopScope(
-          canPop: false,
-          child: AlertDialog(
-            content: Row(
-              children: [
-                const SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2.5),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: ValueListenableBuilder<String>(
-                    valueListenable: progress,
-                    builder: (_, text, _) => Text(text),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
+    _showProgressDialog(progress);
 
     final items = <ImageStagingItem>[];
     String? errorMessage;
@@ -1106,6 +1080,143 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         context,
       ).showSnackBar(SnackBar(content: Text(errorMessage)));
     }
+  }
+
+  /// 닫기는 호출한 쪽에서 `Navigator.of(context, rootNavigator: true).pop()`.
+  void _showProgressDialog(ValueNotifier<String> progress) {
+    unawaited(
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => PopScope(
+          canPop: false,
+          child: AlertDialog(
+            content: Row(
+              children: [
+                const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2.5),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: ValueListenableBuilder<String>(
+                    valueListenable: progress,
+                    builder: (_, text, _) => Text(text),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ── 악보 가사 추출 ──────────────────────────────────────────────────
+
+  /// 악보 파일(이미지·PDF)을 골라 오선 아래 가사만 읽어 오고, 그대로 새 곡으로 만든다.
+  Future<void> _importSheetMusic() async {
+    await FilePicker.skipEntitlementsChecks();
+    final picked = await FilePicker.pickFiles(
+      dialogTitle: '가사를 추출할 악보 파일 선택 (이미지 · PDF)',
+      type: FileType.custom,
+      allowedExtensions: ['png', 'jpg', 'jpeg', 'bmp', 'tif', 'tiff', 'pdf'],
+      allowMultiple: true,
+    );
+    final paths = picked?.paths.whereType<String>().toList() ?? const [];
+    if (paths.isEmpty || !mounted) return;
+
+    final progress = ValueNotifier<String>('가사 읽는 중…');
+    _showProgressDialog(progress);
+
+    final texts = <String>[];
+    String? errorMessage;
+    var tesseractMissing = false;
+    try {
+      for (var i = 0; i < paths.length; i++) {
+        progress.value = paths.length == 1
+            ? '${p.basename(paths[i])} 읽는 중…'
+            : '${paths.length}개 중 ${i + 1}번째 읽는 중…';
+        final result = await _pythonBridge.extractSheetLyrics(paths[i]);
+        if (result.lyrics.trim().isNotEmpty) {
+          texts.add(result.lyrics.trim());
+        }
+      }
+    } on TesseractMissingException {
+      tesseractMissing = true;
+    } catch (error, stack) {
+      await AppLogger.instance.error('악보 가사 추출 실패', error, stack);
+      errorMessage = '가사 추출 실패: $error';
+    }
+
+    progress.dispose();
+    if (!mounted) return;
+    Navigator.of(context, rootNavigator: true).pop();
+
+    if (tesseractMissing) {
+      await _showTesseractDialog();
+      return;
+    }
+    if (errorMessage != null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(errorMessage)));
+      return;
+    }
+    if (texts.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('악보에서 가사를 찾지 못했습니다.')),
+      );
+      return;
+    }
+
+    final title = p.basenameWithoutExtension(paths.first);
+    // 악보 여러 장이면 장마다 빈 줄로 나눠 붙인다 (빈 줄 = 페이지 구분).
+    final edited = await showDialog<String>(
+      context: context,
+      builder: (context) =>
+          _SheetLyricsDialog(title: title, lyrics: texts.join('\n\n')),
+    );
+    if (edited == null || !mounted) return;
+
+    await _openSongEditor(
+      PraiseSong(
+        id: null,
+        fileName: title,
+        title: title,
+        lyrics: edited,
+        englishLyrics: '',
+      ),
+    );
+  }
+
+  Future<void> _showTesseractDialog() async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Tesseract OCR이 필요합니다'),
+        content: const Text(
+          '악보에서 가사를 읽으려면 글자 인식기(Tesseract)가 설치되어 있어야 합니다.\n\n'
+          'macOS: 터미널에서 brew install tesseract tesseract-lang\n'
+          'Windows: 설치 프로그램에서 한국어(Korean) 언어 데이터를 함께 선택하세요.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('닫기'),
+          ),
+          FilledButton.icon(
+            onPressed: () {
+              _openUrl('https://github.com/tesseract-ocr/tesseract');
+              Navigator.of(context).pop();
+            },
+            icon: const Icon(Icons.download_rounded),
+            label: const Text('설치 안내 열기'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _removeFromStaging(int uid) {
@@ -1640,7 +1751,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     );
     if (result == null || !mounted) return;
     final (edited, subLyrics) = result;
-    if (song == null) {
+    // 악보에서 만든 초안은 song 이 있어도 id 가 없다 → 새 곡으로 넣는다.
+    if (edited.id == null) {
       await _repository.insertSong(edited);
     } else {
       await _repository.updateSong(edited);
@@ -1650,7 +1762,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       await _repository.saveTranslations(entry.key, {edited.title: entry.value});
     }
     await _loadSubLanguages();
-    if (song != null && mounted) {
+    if (edited.id != null && mounted) {
       _replaceStagedSong(await _withSubLyrics(edited));
     }
     await _loadSongs();
@@ -1808,6 +1920,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                           onImportPressed: _pickAndImportFolder,
                           onBibleImportPressed: _pickAndImportBible,
                           onImportPptPressed: _addPptImages,
+                          onImportSheetPressed: _importSheetMusic,
                           onExtractLogsPressed: _showExtractLogsDialog,
                           isCheckingUpdate: _isCheckingUpdate,
                           hasUpdate: _pendingUpdate != null,
@@ -2375,6 +2488,7 @@ class _TopBar extends StatelessWidget {
     required this.onImportPressed,
     required this.onBibleImportPressed,
     required this.onImportPptPressed,
+    required this.onImportSheetPressed,
     required this.onExtractLogsPressed,
     required this.isCheckingUpdate,
     required this.hasUpdate,
@@ -2392,6 +2506,7 @@ class _TopBar extends StatelessWidget {
   final VoidCallback onImportPressed;
   final VoidCallback onBibleImportPressed;
   final VoidCallback onImportPptPressed;
+  final VoidCallback onImportSheetPressed;
   final VoidCallback onExtractLogsPressed;
   final bool isCheckingUpdate;
   final bool hasUpdate;
@@ -2501,6 +2616,16 @@ class _TopBar extends StatelessWidget {
             onPressed: onImportPptPressed,
             icon: const Icon(Icons.slideshow_rounded, size: 18),
             label: const Text('PPT · PDF 가져오기'),
+          ),
+          const SizedBox(width: 8),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.white.withValues(alpha: 0.22),
+              foregroundColor: Colors.white,
+            ),
+            onPressed: onImportSheetPressed,
+            icon: const Icon(Icons.music_note_rounded, size: 16),
+            label: const Text('악보 가져오기'),
           ),
           const SizedBox(width: 8),
           FilledButton.icon(
@@ -5047,6 +5172,122 @@ class _UpdateBanner extends StatelessWidget {
   }
 }
 
+// ── 악보 가사 추출 결과 ────────────────────────────────────────────────────
+
+/// 악보에서 읽어 온 가사를 보여 주고 고칠 수 있게 한다.
+/// '곡으로 저장'을 누르면 고친 가사를 돌려주고, 닫으면 null.
+class _SheetLyricsDialog extends StatefulWidget {
+  const _SheetLyricsDialog({required this.title, required this.lyrics});
+
+  final String title;
+  final String lyrics;
+
+  @override
+  State<_SheetLyricsDialog> createState() => _SheetLyricsDialogState();
+}
+
+class _SheetLyricsDialogState extends State<_SheetLyricsDialog> {
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.lyrics,
+  );
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _copy() {
+    Clipboard.setData(ClipboardData(text: _controller.text));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('가사를 복사했습니다.')));
+  }
+
+  void _saveAsSong() {
+    final lyrics = _controller.text.trim();
+    if (lyrics.isEmpty) return;
+    Navigator.of(context).pop(lyrics);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Dialog(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 640),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    Icons.music_note_rounded,
+                    size: 22,
+                    color: theme.colorScheme.primary,
+                  ),
+                  const SizedBox(width: 8),
+                  const Text(
+                    '악보 가사 추출',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text(
+                widget.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 13,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _controller,
+                maxLines: 14,
+                textAlignVertical: TextAlignVertical.top,
+                decoration: const InputDecoration(
+                  labelText: '읽어 온 가사',
+                  hintText: '오선 아래 글자만 읽습니다. 잘못 읽은 곳은 고쳐서 쓰세요.',
+                  helperText: '빈 줄 = 페이지 구분',
+                  border: OutlineInputBorder(),
+                  alignLabelWithHint: true,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  TextButton.icon(
+                    onPressed: _copy,
+                    icon: const Icon(Icons.copy_rounded, size: 18),
+                    label: const Text('복사'),
+                  ),
+                  const Spacer(),
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: const Text('닫기'),
+                  ),
+                  const SizedBox(width: 8),
+                  FilledButton.icon(
+                    onPressed: _saveAsSong,
+                    icon: const Icon(Icons.library_add_rounded, size: 18),
+                    label: const Text('곡으로 저장'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 // ── 곡 편집 다이얼로그 ─────────────────────────────────────────────────
 
 /// 곡 편집 결과: 곡 본체 + 언어별 보조 가사 ('영어' 는 song.englishLyrics).
@@ -5188,7 +5429,7 @@ class _SongEditDialogState extends State<_SongEditDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final isNew = widget.song == null;
+    final isNew = widget.song?.id == null;
     return Dialog(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 620),

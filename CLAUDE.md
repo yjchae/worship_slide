@@ -4,7 +4,7 @@
 
 Flutter 데스크탑 앱(macOS/Windows) + Python 백엔드로 구성된 예배 슬라이드 도구.
 
-1. PPT/PPTX 폴더를 가져와 가사를 SQLite에 저장한다
+1. PPT/PPTX 폴더를 가져와 가사를 SQLite에 저장한다 (악보 이미지에서 OCR로 뽑아낼 수도 있다)
 2. 성경(JSON)을 가져와 절 단위로 검색한다
 3. 곡·성경·외부 PPT 이미지·빈 페이지를 "콘티"로 조립한다
 4. 조립한 콘티를 보조 모니터에 **직접 발표**하거나, PPTX로 **내보낸다**
@@ -23,6 +23,7 @@ python3 python/test_export_background.py # 항목별 배경 오버라이드 self
 python3 python/test_export_text.py       # 가사 줄바꿈 self-check (LibreOffice 불필요)
 python3 python/test_export_position.py   # 본문·제목 세로 미세 조정 self-check (LibreOffice 불필요)
 python3 python/test_split_language.py    # 한/보조 언어 줄 나누기 self-check (LibreOffice 불필요)
+python3 python/test_sheet_lyrics.py      # 악보 가사 추출 self-check (Tesseract 없으면 OCR 부분만 skip)
 
 # 배포용 전체 빌드 (PyInstaller + Flutter 릴리즈 + dist/ 구성)
 ./scripts/build.sh    # macOS
@@ -89,6 +90,9 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   (애니메이션 펼치기 → soffice → PDF → PyMuPDF → 페이지별 PNG).
   `.pdf`는 soffice 변환을 건너뛰므로 LibreOffice 없이도 된다
 - `export <JSON payload>` — 콘티 + 스타일로 새 PPTX 생성 (곡/성경/이미지/빈 페이지 슬라이드)
+- `sheet <파일>` — 악보(이미지·PDF)에서 오선 아래 가사만 →
+  `{source_name, lyrics, lines, page_count, staff_count, text_layer}`
+  (OCR 이 필요한데 Tesseract 가 없으면 `{"error": "tesseract_missing"}`)
 
 ## 중요 설계 결정
 
@@ -148,6 +152,31 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   - `.ppt`는 XML을 못 여니 pptx로 먼저 바꾼 뒤에 본다. 다만 **LibreOffice가 `.ppt`를 저장할 때
     애니메이션을 버리는 것은 확인됐고, 진짜 PowerPoint가 만든 `.ppt`를 읽을 때 타이밍이
     남는지는 미확인**이다. 안 남으면 그냥 예전처럼 한 장씩 구워진다
+- **악보 가사 추출**: 오선을 좌표로 먼저 찾아 "오선 아래"만 OCR 에 넘긴다. 제목·작곡가(첫 단 위)와
+  코드 기호(다음 단 바로 위)를 글자 모양으로 거르는 것보다 훨씬 정확하다.
+  - 오선 찾기는 이미지 처리 라이브러리 없이 **행별 검은 비율**(Pillow `resize((1, h), BOX)` = 가로 평균)
+    하나로 한다. 가로로 평균 내면 오선만 1에 가깝고 글자 줄은 0.35를 잘 안 넘는다.
+    줄 간격은 모든 선 간격의 **중앙값** — 한 단 안의 간격이 4개, 단 사이 간격이 1개라 늘 줄 간격이 된다
+  - **띠를 통째로 넘기지 않고 글 줄 하나씩** 잘라 `--psm 7`(한 줄 모드)로 넘긴다. 가사는 음표에 맞춰
+    띄엄띄엄 놓여서 여러 줄 모드(`--psm 6`)는 한 줄을 두 줄로 쪼갠다
+  - **코드 기호 거르기**: 오선 사이 글 줄 중 마지막 줄이 위쪽(가사·오선)보다 **아래 단에 더 붙어 있으면**
+    그 단의 코드다. 거리 비교라 악보마다 다른 여백에 영향을 안 받는다. `is_chord_line`(C, G7, Am/E 만
+    있는 줄)이 2차 그물
+  - **하이픈은 양옆 공백까지 지워 붙인다** (`할 - 렐 - 루 - 야` → `할렐루야`). 음절을 잇는 기호라
+    공백을 남기면 안 된다
+  - **한 글자 토막도 붙인다** (`주 의 인 자` → `주의인자`, `join_single_syllables`). 악보는 음표 하나에
+    음절 하나를 놓느라 띄어 쓴 것이라 단어 사이가 아니다. 단, **양쪽이 다 한글일 때만** 붙인다 —
+    영어 가사의 `I am a boy` 까지 붙으면 안 되고, 절 번호(`1.`)도 한글이 아니라 떨어져 남는다
+  - **글자가 박힌 PDF(악보 프로그램 출력본)는 OCR 을 아예 안 탄다.** PyMuPDF 로 낱말과 좌표를
+    꺼내 같은 띠 안의 낱말을 x 순서로 잇는다(`_words_to_lyric_lines`). 오인식이 없고 Tesseract 도
+    필요 없다. 오선 찾기는 그대로 구운 이미지로 하므로 **PDF 좌표(72dpi)를 이미지 배율로 맞춰야
+    한다**(`OCR_DPI / 72`). 낱말이 하나도 없는 쪽(그림·스캔본)만 OCR 로 넘어간다 →
+    그래서 `tesseract_missing` 판정은 파일을 연 **뒤에** 한다
+  - Tesseract 는 LibreOffice 와 같은 **선택 시스템 의존성**이다. 없으면 그 기능만 막고 설치 안내를 띄운다
+    (`TesseractMissingException` → `_showTesseractDialog`). `kor` 언어 데이터가 없으면 `eng` 로만 읽는다
+  - 읽어 온 가사는 `_SheetLyricsDialog` 에서 고친 뒤 **곡 편집 다이얼로그로 넘어간다**. 그래서
+    `_openSongEditor` 는 `song == null` 이 아니라 **`edited.id == null`** 로 새 곡 여부를 가린다
+    (악보 초안은 song 은 있고 id 만 없다)
 - **PPT 렌더 캐시 위치**: `~/Library/Application Support/worship_slides/ppt_slides/<해시>/`.
   Caches가 아닌 이유 — 저장한 콘티가 나중에 이미지 유실로 깨지면 안 되기 때문.
   (`.ppt`→`.pptx` 변환 캐시는 유실돼도 되므로 `~/Library/Caches/worship_slides/ppt_import_cache/`)
@@ -216,8 +245,9 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
 ## 의존성
 
 - Dart: `file_picker`, `sqflite_common_ffi`, `path`, `path_provider`, `package_info_plus`, `http`
-- Python: `python-pptx`, `pymupdf`, `pyinstaller`
+- Python: `python-pptx`, `pymupdf`, `pyinstaller`, `pillow`(악보 오선 찾기)
 - 시스템: LibreOffice(`soffice`) — `.ppt` 임포트와 PPT 이미지 렌더에 필요 (없으면 해당 기능만 비활성)
+- 시스템: Tesseract OCR — 악보 가사 추출에 필요. 한국어는 `kor` 언어 데이터까지 (없으면 해당 기능만 비활성)
 
 ## 기타
 
