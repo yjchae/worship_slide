@@ -1,12 +1,13 @@
 """악보 가사 추출 self-check.
 
-줄 찾기·하이픈 정리는 Tesseract 없이도 돌고,
-실제 OCR 검증은 Tesseract가 있을 때만 돈다."""
+줄 찾기·하이픈 정리와 글자가 박힌 PDF 는 Tesseract 없이도 돌고,
+그림 악보 OCR 검증만 Tesseract가 있을 때 돈다."""
 import sys
 import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+import ppt_tool
 from ppt_tool import (
     clean_lyric_line,
     extract_sheet_music_lyrics,
@@ -22,6 +23,9 @@ FONT_PATH = Path(__file__).parent.parent / "assets" / "fonts" / "NanumGothic-Reg
 
 STAFF_TOPS = [200, 500, 800]
 STAFF_SPACING = 12
+# PDF는 72dpi 포인트 좌표라 그림보다 촘촘하다.
+PDF_STAFF_TOPS = [140, 340, 540]
+PDF_STAFF_SPACING = 8
 # 첫 단은 2절까지, 나머지 단은 한 줄.
 SHEET_LYRICS = [
     ["1. 예 - 수 사 랑 하 심 은", "2. 거룩하신 주님께"],
@@ -100,6 +104,53 @@ def _draw_sheet(path):
     image.save(path)
 
 
+def _draw_pdf_sheet(path):
+    """같은 악보를 글자가 박힌 PDF로. 좌표 단위는 72dpi 포인트."""
+    import pymupdf
+
+    document = pymupdf.open()
+    page = document.new_page(width=600, height=740)
+    font = str(FONT_PATH)
+    page.insert_text((240, 60), "믿음의 노래", fontfile=font, fontname="NG", fontsize=18)
+    for index, top in enumerate(PDF_STAFF_TOPS):
+        for line in range(5):
+            y = top + line * PDF_STAFF_SPACING
+            page.draw_line((40, y), (560, y), width=0.8)
+        page.insert_text(
+            (45, top - 10), "G   D   Em   C", fontfile=font, fontname="NG", fontsize=9
+        )
+        for verse, text in enumerate(SHEET_LYRICS[index]):
+            y = top + 4 * PDF_STAFF_SPACING + 18 + verse * 22
+            page.insert_text((45, y), text, fontfile=font, fontname="NG", fontsize=11)
+    document.save(path)
+    document.close()
+
+
+def test_extract_pdf_with_text_layer():
+    """글자가 박힌 PDF는 Tesseract 없이, 오인식 없이 읽는다."""
+    original = ppt_tool.get_tesseract_executable
+    ppt_tool.get_tesseract_executable = lambda: None
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pdf_path = Path(temp_dir) / "sheet.pdf"
+            _draw_pdf_sheet(pdf_path)
+            result = ppt_tool.extract_sheet_music_lyrics(str(pdf_path))
+    finally:
+        ppt_tool.get_tesseract_executable = original
+
+    assert result.get("error") is None, result
+    assert result["text_layer"] is True, result
+    assert result["staff_count"] == 3, result
+    lines = result["lines"]
+    # 하이픈은 지워지고 앞뒤 음절이 붙는다. 2절도 같이 나온다.
+    assert lines[0].startswith("1. 예수"), lines
+    assert lines[1] == "2. 거룩하신 주님께", lines
+    assert lines[2].startswith("주님"), lines
+    assert lines[3] == "할렐루야 아멘", lines
+    # 오선 위(제목·코드)는 들어오면 안 된다.
+    assert not any("믿음" in line or "Em" in line for line in lines), lines
+
+
 def test_extract_sheet_music_lyrics():
     if get_tesseract_executable() is None:
         print("SKIP: Tesseract 없음")
@@ -130,5 +181,6 @@ if __name__ == "__main__":
     test_is_lyric_line()
     test_is_chord_line()
     test_find_staff_systems()
+    test_extract_pdf_with_text_layer()
     test_extract_sheet_music_lyrics()
     print("OK")

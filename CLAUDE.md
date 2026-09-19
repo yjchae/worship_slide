@@ -90,8 +90,9 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   (애니메이션 펼치기 → soffice → PDF → PyMuPDF → 페이지별 PNG).
   `.pdf`는 soffice 변환을 건너뛰므로 LibreOffice 없이도 된다
 - `export <JSON payload>` — 콘티 + 스타일로 새 PPTX 생성 (곡/성경/이미지/빈 페이지 슬라이드)
-- `sheet <파일>` — 악보 이미지(PDF 포함)에서 오선 아래 가사만 OCR →
-  `{source_name, lyrics, lines, page_count, staff_count}` (Tesseract 없으면 `{"error": "tesseract_missing"}`)
+- `sheet <파일>` — 악보(이미지·PDF)에서 오선 아래 가사만 →
+  `{source_name, lyrics, lines, page_count, staff_count, text_layer}`
+  (OCR 이 필요한데 Tesseract 가 없으면 `{"error": "tesseract_missing"}`)
 
 ## 중요 설계 결정
 
@@ -163,6 +164,14 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
     있는 줄)이 2차 그물
   - **하이픈은 양옆 공백까지 지워 붙인다** (`할 - 렐 - 루 - 야` → `할렐루야`). 음절을 잇는 기호라
     공백을 남기면 안 된다. 띄어쓰기만 있는 음절은 Tesseract 가 알아서 붙이는 편이다
+  - **글자가 박힌 PDF(악보 프로그램 출력본)는 OCR 을 아예 안 탄다.** PyMuPDF 로 낱말과 좌표를
+    꺼내 같은 띠 안의 낱말을 x 순서로 잇는다(`_words_to_lyric_lines`). 오인식이 없고 Tesseract 도
+    필요 없다. 오선 찾기는 그대로 구운 이미지로 하므로 **PDF 좌표(72dpi)를 이미지 배율로 맞춰야
+    한다**(`OCR_DPI / 72`). 낱말이 하나도 없는 쪽(그림·스캔본)만 OCR 로 넘어간다 →
+    그래서 `tesseract_missing` 판정은 파일을 연 **뒤에** 한다
+  - 음절 사이 띄어쓰기는 경로마다 다르다. OCR 은 Tesseract 가 붙여 주는 편이고(`주의인자하심이`),
+    PDF 글자 경로는 악보에 있는 그대로 남는다(`주 의 인 자 하 심 이`). 어느 쪽이 맞는지는
+    사전 없이 못 정하므로 손대지 않고 다이얼로그에서 고치게 둔다
   - Tesseract 는 LibreOffice 와 같은 **선택 시스템 의존성**이다. 없으면 그 기능만 막고 설치 안내를 띄운다
     (`TesseractMissingException` → `_showTesseractDialog`). `kor` 언어 데이터가 없으면 `eng` 로만 읽는다
   - 읽어 온 가사는 `_SheetLyricsDialog` 에서 고친 뒤 **곡 편집 다이얼로그로 넘어간다**. 그래서

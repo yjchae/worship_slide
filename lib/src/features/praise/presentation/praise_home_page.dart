@@ -1115,11 +1115,11 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   // ── 악보 가사 추출 ──────────────────────────────────────────────────
 
-  /// 악보 이미지를 골라 오선 아래 가사만 읽어 오고, 그대로 새 곡으로 만든다.
+  /// 악보 파일(이미지·PDF)을 골라 오선 아래 가사만 읽어 오고, 그대로 새 곡으로 만든다.
   Future<void> _importSheetMusic() async {
     await FilePicker.skipEntitlementsChecks();
     final picked = await FilePicker.pickFiles(
-      dialogTitle: '가사를 추출할 악보 이미지 선택',
+      dialogTitle: '가사를 추출할 악보 파일 선택 (이미지 · PDF)',
       type: FileType.custom,
       allowedExtensions: ['png', 'jpg', 'jpeg', 'bmp', 'tif', 'tiff', 'pdf'],
       allowMultiple: true,

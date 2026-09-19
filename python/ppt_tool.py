@@ -1613,21 +1613,52 @@ def _ocr_lines(executable, image, language, work_dir, name, psm="7"):
     return [line for line in lines if is_lyric_line(line) and not is_chord_line(line)]
 
 
-def _load_sheet_images(source_path, work_dir):
+def _pdf_page_words(page, scale):
+    """PDF에 박힌 낱말을 (x, 세로 중심, 글자)로. 좌표는 구운 이미지 픽셀 기준."""
+    return [
+        (x0 * scale, (y0 + y1) / 2 * scale, word)
+        for x0, y0, _x1, y1, word, *_ in page.get_text("words")
+    ]
+
+
+def _words_to_lyric_lines(words, boxes):
+    """글자가 박힌 PDF는 OCR 없이 띠 안의 낱말을 x 순서로 이어 붙인다."""
+    lines = []
+    for top, bottom in boxes:
+        inside = sorted(
+            (word for word in words if top <= word[1] <= bottom),
+            key=lambda word: word[0],
+        )
+        if not inside:
+            continue
+        text = clean_lyric_line(" ".join(word[2] for word in inside))
+        if is_lyric_line(text) and not is_chord_line(text):
+            lines.append(text)
+    return lines
+
+
+def _load_sheet_pages(source_path, work_dir):
+    """악보 한 쪽마다 (오선을 찾을 이미지, 낱말 목록).
+
+    낱말 목록이 비어 있으면 글자가 안 박힌 쪽이라 OCR로 읽어야 한다.
+    그림 파일과 스캔한 PDF가 여기 해당한다."""
     from PIL import Image
 
     if source_path.suffix.lower() != ".pdf":
-        return [Image.open(source_path)]
+        return [(Image.open(source_path), [])]
 
     import pymupdf
 
-    images = []
+    pages = []
     with pymupdf.open(str(source_path)) as document:
         for index, page in enumerate(document):
             page_path = work_dir / f"page_{index:03d}.png"
             page.get_pixmap(dpi=OCR_DPI).save(str(page_path))
-            images.append(Image.open(page_path))
-    return images
+            # PDF 좌표는 72dpi 기준이라 구운 이미지 배율로 맞춘다.
+            pages.append(
+                (Image.open(page_path), _pdf_page_words(page, OCR_DPI / 72))
+            )
+    return pages
 
 
 def extract_sheet_music_lyrics(file_path):
@@ -1636,24 +1667,34 @@ def extract_sheet_music_lyrics(file_path):
     if not source_path.exists():
         raise RuntimeError(f"파일을 찾을 수 없습니다: {file_path}")
 
-    executable = get_tesseract_executable()
-    if executable is None:
-        return {"error": "tesseract_missing"}
-
-    language = get_tesseract_language(executable)
     work_dir = Path(tempfile.mkdtemp(prefix="praise_sheet_ocr_"))
-    images = []
+    pages = []
     try:
+        pages = _load_sheet_pages(source_path, work_dir)
+        # 글자가 박힌 PDF는 OCR 없이 읽는다. 그림·스캔본만 Tesseract가 필요하다.
+        needs_ocr = any(not words for _image, words in pages)
+        executable = get_tesseract_executable() if needs_ocr else None
+        if needs_ocr and executable is None:
+            return {"error": "tesseract_missing"}
+        language = get_tesseract_language(executable) if executable else ""
+
         lines = []
         staff_count = 0
-        images = _load_sheet_images(source_path, work_dir)
-        for page_index, image in enumerate(images):
+        for page_index, (image, words) in enumerate(pages):
             ratios = row_dark_ratios(image)
             systems = find_staff_systems(ratios)
             staff_count += len(systems)
             boxes = lyric_line_boxes(systems, ratios)
+            if words:
+                # 오선을 못 찾으면 쪽 전체의 글 줄을 그대로 쓴다.
+                lines.extend(
+                    _words_to_lyric_lines(
+                        words, boxes or text_row_groups(ratios, 0, len(ratios))
+                    )
+                )
+                continue
             if not boxes:
-                # 오선을 못 찾으면 페이지 전체를 한 번에 읽는다 (가사만 있는 스캔 등).
+                # 오선을 못 찾으면 쪽 전체를 한 번에 읽는다 (가사만 있는 스캔 등).
                 lines.extend(
                     _ocr_lines(
                         executable,
@@ -1680,7 +1721,7 @@ def extract_sheet_music_lyrics(file_path):
                     )
                 )
     finally:
-        for image in images:
+        for image, _words in pages:
             image.close()
         shutil.rmtree(work_dir, ignore_errors=True)
 
@@ -1688,9 +1729,11 @@ def extract_sheet_music_lyrics(file_path):
         "source_name": unicodedata.normalize("NFC", source_path.name),
         "lyrics": "\n".join(lines),
         "lines": lines,
-        "page_count": len(images),
+        "page_count": len(pages),
         "staff_count": staff_count,
         "language": language,
+        # True 면 PDF에 박힌 글자를 그대로 읽은 것 (OCR 오인식이 없다).
+        "text_layer": any(bool(words) for _image, words in pages),
     }
 
 

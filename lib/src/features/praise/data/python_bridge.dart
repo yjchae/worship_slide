@@ -114,7 +114,8 @@ class PythonBridge {
     );
   }
 
-  /// 악보 이미지(PDF 포함)에서 오선 아래 가사만 읽어 온다.
+  /// 악보(이미지·PDF)에서 오선 아래 가사만 읽어 온다.
+  /// 글자가 박힌 PDF 는 Tesseract 없이도 읽는다.
   Future<SheetLyricsResult> extractSheetLyrics(String filePath) async {
     final result = await _runTool(['sheet', filePath]);
     final json = jsonDecode(result.stdout as String) as Map<String, dynamic>;
