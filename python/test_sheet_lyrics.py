@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import ppt_tool
 from ppt_tool import (
     clean_lyric_line,
+    join_single_syllables,
     extract_sheet_music_lyrics,
     find_staff_systems,
     get_tesseract_executable,
@@ -38,10 +39,23 @@ def test_clean_lyric_line():
     # 하이픈은 양옆 공백까지 지워 음절을 붙인다.
     assert clean_lyric_line("할 - 렐 - 루 - 야") == "할렐루야"
     assert clean_lyric_line("할-렐루야") == "할렐루야"
-    assert clean_lyric_line("주 님 의 사 랑 -") == "주 님 의 사 랑"
+    assert clean_lyric_line("주 님 의 사 랑 -") == "주님의사랑"
     assert clean_lyric_line("A – ma – zing") == "Amazing"
     # 마디선을 글자로 읽은 것은 공백으로
     assert clean_lyric_line("주님 | 사랑") == "주님 사랑"
+
+
+def test_join_single_syllables():
+    # 음표마다 떨어뜨려 놓은 한 글자 토막은 붙인다.
+    assert join_single_syllables("주 의 인 자 하 심 이") == "주의인자하심이"
+    assert join_single_syllables("주 님의 사랑") == "주님의 사랑"
+    # 절 번호는 한글이 아니라 안 붙는다.
+    assert join_single_syllables("1. 나 를 따 르 리 니") == "1. 나를따르리니"
+    # 두 글자 이상끼리는 그대로 (단어 사이 띄어쓰기)
+    assert join_single_syllables("거룩하신 주님께") == "거룩하신 주님께"
+    # 영어는 건드리지 않는다.
+    assert join_single_syllables("I am a boy") == "I am a boy"
+    assert join_single_syllables("주 의 love") == "주의 love"
 
 
 def test_is_lyric_line():
@@ -142,10 +156,10 @@ def test_extract_pdf_with_text_layer():
     assert result["text_layer"] is True, result
     assert result["staff_count"] == 3, result
     lines = result["lines"]
-    # 하이픈은 지워지고 앞뒤 음절이 붙는다. 2절도 같이 나온다.
-    assert lines[0].startswith("1. 예수"), lines
+    # 하이픈도 한 글자 토막도 붙는다. 2절도 같이 나온다.
+    assert lines[0] == "1. 예수사랑하심은", lines
     assert lines[1] == "2. 거룩하신 주님께", lines
-    assert lines[2].startswith("주님"), lines
+    assert lines[2] == "주님의사랑", lines
     assert lines[3] == "할렐루야 아멘", lines
     # 오선 위(제목·코드)는 들어오면 안 된다.
     assert not any("믿음" in line or "Em" in line for line in lines), lines
@@ -178,6 +192,7 @@ def test_extract_sheet_music_lyrics():
 
 if __name__ == "__main__":
     test_clean_lyric_line()
+    test_join_single_syllables()
     test_is_lyric_line()
     test_is_chord_line()
     test_find_staff_systems()

@@ -1438,6 +1438,7 @@ _LYRIC_HYPHEN_RE = re.compile(
     "[ \t\u00a0]*[-\u2010\u2011\u2012\u2013\u2014\u2015\uff0d][ \t\u00a0]*"
 )
 _LYRIC_LETTER_RE = re.compile(r"[A-Za-z\uac00-\ud7a3]")
+_HANGUL_RE = re.compile(r"[\uac00-\ud7a3]")
 _CHORD_TOKEN_RE = re.compile(
     r"^[A-G][#b\u266f\u266d]?(m|M|maj|min|sus|dim|aug|add)?[0-9]*(/[A-G][#b]?)?$"
 )
@@ -1571,12 +1572,37 @@ def lyric_line_boxes(systems, ratios):
     return boxes
 
 
+def _is_single_syllable(token):
+    return len(token) == 1 and _HANGUL_RE.match(token) is not None
+
+
+def join_single_syllables(text):
+    """음표마다 떨어뜨려 놓은 한 글자 토막을 붙인다 (`주 의 인 자` → `주의인자`).
+
+    악보는 음표 하나에 음절 하나를 놓느라 띄어 쓴 것이라, 단어 사이가 아니다.
+    한글끼리만 붙인다 — 영어 가사의 `I am a boy` 까지 붙으면 안 된다."""
+    tokens = text.split()
+    if not tokens:
+        return text
+    parts = [tokens[0]]
+    for previous, current in zip(tokens, tokens[1:]):
+        both_hangul = _HANGUL_RE.search(previous) and _HANGUL_RE.search(current)
+        if both_hangul and (
+            _is_single_syllable(previous) or _is_single_syllable(current)
+        ):
+            parts[-1] += current
+        else:
+            parts.append(current)
+    return " ".join(parts)
+
+
 def clean_lyric_line(line):
     """OCR 한 줄 → 가사 한 줄. 음절을 잇는 하이픈은 양옆 공백까지 지운다."""
     text = unicodedata.normalize("NFC", line)
     text = text.replace("|", " ")  # 마디선을 글자로 읽은 것
     text = _LYRIC_HYPHEN_RE.sub("", text)
-    return re.sub("[ \t\u00a0]+", " ", text).strip()
+    text = re.sub("[ \t\u00a0]+", " ", text).strip()
+    return join_single_syllables(text)
 
 
 def is_lyric_line(text):
