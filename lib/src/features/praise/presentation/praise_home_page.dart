@@ -796,6 +796,76 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     }
   }
 
+  /// 콘티에 담긴 항목의 본문을 통째로 고친다. 이 콘티에서만 유효하고
+  /// 저장된 곡(DB)은 건드리지 않는다 — 담을 때 만든 스냅샷만 바뀐다.
+  Future<void> _editStagingItemText(int uid) async {
+    final index = _stagingItems.indexWhere((e) => e.uid == uid);
+    if (index == -1) return;
+    final item = _stagingItems[index].item;
+    if (item is ImageStagingItem) return;
+
+    final (mainText, subText, isBible) = switch (item) {
+      SongStagingItem(:final song) => (song.lyrics, song.englishLyrics, false),
+      BibleStagingItem(:final text, :final subText) => (text, subText, true),
+      BlankStagingItem(:final mainText, :final englishText) => (
+        mainText,
+        englishText,
+        false,
+      ),
+      _ => ('', '', false),
+    };
+
+    final result = await showDialog<(String, String)?>(
+      context: context,
+      builder: (_) => _SlideQuickEditDialog(
+        mainText: mainText,
+        englishText: subText,
+        isBible: isBible,
+        title: item.displayTitle,
+        heading: '이 콘티에서만 수정',
+        helper: '빈 줄 1개 = 페이지 구분. 저장된 곡은 그대로 두고 이번 콘티에만 적용됩니다.',
+        // 콘티에 담을 때 언어가 이미 확정되므로 여기서 언어를 고르지는 않는다.
+        // 대신 지금 어느 언어 칸인지 이름으로 보여 준다 (바꾸려면 디자인 탭 '보조 언어').
+        subLabel: isBible
+            ? '보조 역본 본문 (비워도 됩니다)'
+            : '${_style.subLanguage} 가사 (비워도 됩니다)',
+        mainMaxLines: 12,
+      ),
+    );
+    if (result == null || !mounted) return;
+    final (newMain, newSub) = result;
+
+    final StagingItem newItem = switch (item) {
+      SongStagingItem(:final song) => SongStagingItem(
+        PraiseSong(
+          id: song.id,
+          fileName: song.fileName,
+          title: song.title,
+          lyrics: normalizeEditableLyrics(newMain),
+          englishLyrics: normalizeEditableLyrics(newSub),
+        ),
+      ),
+      BibleStagingItem(:final reference) => BibleStagingItem(
+        reference: reference,
+        text: newMain,
+        subText: newSub,
+      ),
+      BlankStagingItem() => BlankStagingItem(
+        mainText: newMain,
+        englishText: newSub,
+      ),
+      _ => item,
+    };
+
+    setState(() {
+      _stagingItems[index] = (uid: uid, item: newItem);
+      // 페이지 수가 달라지면 "발표 중 삭제" 표시가 엉뚱한 페이지를 가리킨다.
+      _deletedSlideKeys.removeWhere((k) => k.startsWith('$uid:'));
+      _clampCurrentSlideIndex();
+    });
+    if (_isPresentationOpen) await _sendCurrentSlide();
+  }
+
   Future<void> _goToSlide(int index) async {
     final slides = _allSlides;
     if (index < 0 || index >= slides.length) return;
@@ -1935,6 +2005,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               selectedUid: _previewStagingUid,
                               backgrounds: _itemBackgrounds,
                               onEditBackground: _editItemBackground,
+                              onEditText: _editStagingItemText,
                               onReorder: _onStagingReorder,
                               onRemove: _removeFromStaging,
                               isCollapsed: _isStagingCollapsed,
@@ -2691,6 +2762,7 @@ class _StagingPanel extends StatelessWidget {
     required this.selectedUid,
     required this.backgrounds,
     required this.onEditBackground,
+    required this.onEditText,
     required this.onReorder,
     required this.onRemove,
     required this.onSelect,
@@ -2706,6 +2778,7 @@ class _StagingPanel extends StatelessWidget {
   // 항목별 배경 오버라이드. 키가 있는 항목만 전역 배경 대신 이 배경으로 나간다.
   final Map<int, SlideBackground> backgrounds;
   final ValueChanged<int> onEditBackground;
+  final ValueChanged<int> onEditText;
   final void Function(int oldIndex, int newIndex) onReorder;
   final void Function(int uid) onRemove;
   final ValueChanged<int> onSelect;
@@ -2977,7 +3050,17 @@ class _StagingPanel extends StatelessWidget {
                                       ],
                                     ),
                                   ),
-                                  // 버튼이 셋이라 기본 48px 탭 타깃이면 제목이 밀린다.
+                                  // 버튼이 여럿이라 기본 48px 탭 타깃이면 제목이 밀린다.
+                                  if (item is! ImageStagingItem)
+                                    IconButton(
+                                      icon: const Icon(
+                                        Icons.edit_note_rounded,
+                                        size: 20,
+                                      ),
+                                      tooltip: '이 콘티에서만 내용 수정',
+                                      style: compactIcon,
+                                      onPressed: () => onEditText(entry.uid),
+                                    ),
                                   IconButton(
                                     icon: Icon(
                                       background == null
@@ -4129,14 +4212,20 @@ class _DesignPanel extends StatelessWidget {
       children: [
         Text(title, overflow: TextOverflow.ellipsis),
         const SizedBox(height: 6),
-        SegmentedButton<T>(
-          segments: _segments(values, labelOf),
-          selected: {selected},
-          style: const ButtonStyle(
-            visualDensity: VisualDensity(horizontal: -2, vertical: -2),
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        // SegmentedButton 은 고유 너비 아래로 안 줄어든다. 패널이 좁으면
+        // 오른쪽으로 넘치고 글자도 '상/단' 으로 쪼개지므로 통째로 축소한다.
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: SegmentedButton<T>(
+            segments: _segments(values, labelOf),
+            selected: {selected},
+            style: const ButtonStyle(
+              visualDensity: VisualDensity(horizontal: -2, vertical: -2),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            onSelectionChanged: (selection) => onSelected(selection.first),
           ),
-          onSelectionChanged: (selection) => onSelected(selection.first),
         ),
       ],
     );
@@ -4472,7 +4561,7 @@ class _StyleTabControlsState extends State<_StyleTabControls>
       children: [
         Row(
           children: [
-            Text(title),
+            Flexible(child: Text(title, overflow: TextOverflow.ellipsis)),
             const SizedBox(width: 8),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
@@ -5683,12 +5772,21 @@ class _SlideQuickEditDialog extends StatefulWidget {
     required this.englishText,
     required this.isBible,
     this.title,
+    this.heading = '슬라이드 수정',
+    this.helper,
+    this.subLabel,
+    this.mainMaxLines = 7,
   });
 
   final String mainText;
   final String englishText;
   final bool isBible;
   final String? title;
+  final String heading;
+  final String? helper;
+  // 보조 칸 라벨. 콘티 임시 수정은 어느 언어 칸인지 이름으로 알려 준다.
+  final String? subLabel;
+  final int mainMaxLines;
 
   @override
   State<_SlideQuickEditDialog> createState() => _SlideQuickEditDialogState();
@@ -5715,35 +5813,43 @@ class _SlideQuickEditDialogState extends State<_SlideQuickEditDialog> {
   @override
   Widget build(BuildContext context) {
     final titleLabel = widget.title != null
-        ? '슬라이드 수정 — ${widget.title}'
-        : '슬라이드 수정';
+        ? '${widget.heading} — ${widget.title}'
+        : widget.heading;
     return AlertDialog(
       title: Text(titleLabel),
+      // 창이 낮으면 긴 본문 칸이 다이얼로그 높이를 넘긴다. 스크롤로 받아 준다.
       content: SizedBox(
         width: 520,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            TextField(
-              controller: _mainCtrl,
-              maxLines: 7,
-              autofocus: true,
-              decoration: const InputDecoration(
-                labelText: '본문',
-                border: OutlineInputBorder(),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextField(
+                controller: _mainCtrl,
+                maxLines: widget.mainMaxLines,
+                autofocus: true,
+                decoration: InputDecoration(
+                  labelText: '본문',
+                  helperText: widget.helper,
+                  border: const OutlineInputBorder(),
+                ),
               ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _englishCtrl,
-              maxLines: 4,
-              decoration: InputDecoration(
-                labelText: widget.isBible ? '보조 역본 본문 (선택)' : '보조 언어 가사 (선택)',
-                border: const OutlineInputBorder(),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _englishCtrl,
+                maxLines: 4,
+                decoration: InputDecoration(
+                  labelText:
+                      widget.subLabel ??
+                      (widget.isBible
+                          ? '보조 역본 본문 (선택)'
+                          : '보조 언어 가사 (선택)'),
+                  border: const OutlineInputBorder(),
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
       actions: [

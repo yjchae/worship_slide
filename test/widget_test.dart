@@ -4,6 +4,7 @@ import 'package:worship_slides/src/features/praise/data/worship_conti_repository
 import 'package:worship_slides/src/features/praise/domain/export_style.dart';
 import 'package:worship_slides/src/features/praise/domain/praise_song.dart';
 import 'package:worship_slides/src/features/praise/domain/slide_background.dart';
+import 'package:worship_slides/src/features/praise/domain/staging_item.dart';
 import 'package:worship_slides/src/features/praise/presentation/praise_home_page.dart';
 import 'package:worship_slides/src/features/praise/presentation/slide_page_data.dart';
 import 'package:worship_slides/src/features/praise/presentation/slide_render_view.dart';
@@ -110,6 +111,37 @@ void main() {
 
   test('후행 빈 페이지가 제거된다', () {
     expect(normalizeEditableLyrics('첫 가사\n\n'), '첫 가사');
+  });
+
+  // ── 콘티 항목 임시 수정 (_editStagingItemText) ─────────────────────────────
+
+  test('콘티 항목만 고치면 페이지가 빠지고 더해진다 (원본 곡은 그대로)', () {
+    const staged = PraiseSong(
+      id: 7,
+      fileName: 'a.pptx',
+      title: '주의 은혜',
+      lyrics: '1절\n\n2절\n\n3절',
+      englishLyrics: 'verse 1\n\nverse 2\n\nverse 3',
+    );
+
+    // _SlideQuickEditDialog 가 돌려주는 텍스트: 2절을 빼고 4절을 더했다.
+    const editedMain = '1절\n\n3절\n\n4절';
+    const editedSub = 'verse 1\n\nverse 3\n\nverse 4';
+
+    final item = SongStagingItem(
+      PraiseSong(
+        id: staged.id,
+        fileName: staged.fileName,
+        title: staged.title,
+        lyrics: normalizeEditableLyrics(editedMain),
+        englishLyrics: normalizeEditableLyrics(editedSub),
+      ),
+    );
+
+    expect(item.song.pages, ['1절', '3절', '4절']);
+    expect(item.song.englishPages, ['verse 1', 'verse 3', 'verse 4']);
+    // 콘티 안의 스냅샷만 바뀌고 원본 곡은 손대지 않는다.
+    expect(staged.pages, ['1절', '2절', '3절']);
   });
 
   // ── lyricsToEditText / encodePages round-trip ─────────────────────────────
