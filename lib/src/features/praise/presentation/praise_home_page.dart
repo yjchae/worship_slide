@@ -13,14 +13,20 @@ import '../../../features/bible/domain/bible_verse.dart';
 import '../../../features/update/update_service.dart';
 import '../data/app_logger.dart';
 import '../data/export_style_store.dart';
+import '../data/offering_background_composer.dart';
+import '../data/offering_design_store.dart';
+import '../data/offering_image_library.dart';
 import '../data/praise_repository.dart';
 import '../data/python_bridge.dart';
 import '../data/worship_conti_repository.dart';
 import '../domain/worship_conti.dart';
 import '../domain/export_style.dart';
+import '../domain/offering_design.dart';
 import '../domain/praise_song.dart';
 import '../domain/slide_background.dart';
 import '../domain/staging_item.dart';
+import 'offering_dialog.dart';
+import 'offering_overlay_painter.dart';
 import 'slide_page_data.dart';
 import 'slide_render_view.dart';
 
@@ -99,6 +105,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   final PraiseRepository _repository = PraiseRepository();
   final PythonBridge _pythonBridge = PythonBridge();
   final ExportStyleStore _styleStore = ExportStyleStore();
+  final OfferingDesignStore _offeringStore = OfferingDesignStore();
+  final OfferingBackgroundComposer _offeringComposer =
+      OfferingBackgroundComposer();
+  final OfferingImageLibrary _offeringImages = OfferingImageLibrary();
   final BibleRepository _bibleRepository = BibleRepository();
   final WorshipContiRepository _contiRepository = WorshipContiRepository();
   final TextEditingController _searchController = TextEditingController();
@@ -125,6 +135,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   // 콘티 항목별 배경 오버라이드. 키는 항목 uid. 없는 항목은 전역 배경을 쓴다.
   // (헌금송만 다른 배경으로 띄우는 등 "일부만 다르게" 하기 위한 것)
   final Map<int, SlideBackground> _itemBackgrounds = {};
+  // 헌금송 기본 디자인(배경·은행·계좌). 항목에 적용할 때 여기서 시작해 높낮이만 곡마다 맞춘다.
+  OfferingDesign _offeringDesign = const OfferingDesign();
   PresenterPointerMode _pointerMode = PresenterPointerMode.off;
   double _pointerSize = 100;
   // 관객 화면 확대. 확대 영역은 슬라이드와 같은 비율이라 크기 하나(가로 비율)면 된다.
@@ -201,6 +213,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     )..addListener(_onMainTabChanged);
     _loadSongs();
     _loadSavedStyle();
+    _loadOfferingDesign();
     _loadBibleCount();
     _loadSubLanguages();
     _searchController.addListener(_loadSongs);
@@ -353,6 +366,12 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     final savedStyle = await _styleStore.load();
     if (!mounted || savedStyle == null) return;
     setState(() => _style = savedStyle);
+  }
+
+  Future<void> _loadOfferingDesign() async {
+    final saved = await _offeringStore.load();
+    if (!mounted || saved == null) return;
+    setState(() => _offeringDesign = saved);
   }
 
   Future<void> _updateStyle(ExportStyle style) async {
@@ -1093,6 +1112,151 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     await _sendCurrentSlide();
   }
 
+  // ── 헌금송 ──────────────────────────────────────────────────────────
+
+  /// 콘티 항목 [uid] 가 만드는 가사 페이지들. 헌금송 다이얼로그에서 띠와 겹쳐 본다.
+  List<OfferingPreviewPage> _offeringPreviewPages(int? uid) {
+    if (uid == null) return const [];
+    return [
+      for (final slide in _allSlides)
+        if (slide.stagingUid == uid && !slide.isAutoSpacer)
+          (
+            mainText: slide.mainText,
+            englishText: slide.englishText,
+            title: slide.title,
+          ),
+    ];
+  }
+
+  /// 헌금송 기본 디자인 등록(배경 이미지·은행·계좌·색·크기·기본 높낮이).
+  Future<void> _editOfferingDesign() async {
+    final result = await showDialog<({OfferingDesign? design})>(
+      context: context,
+      builder: (ctx) => OfferingDialog(
+        mode: OfferingDialogMode.defaults,
+        initial: _offeringDesign,
+        globalStyle: _style,
+        imageLibrary: _offeringImages,
+        previewPages: _offeringPreviewPages(_previewStagingUid),
+      ),
+    );
+    final design = result?.design;
+    if (design == null || !mounted) return;
+    setState(() => _offeringDesign = design);
+    await _offeringStore.save(design);
+    // 배경 이미지는 한 장만 둔다. 새로 등록했으면 이전 이미지를 지운다.
+    unawaited(_offeringImages.keepOnly(design.backgroundImagePath));
+  }
+
+  /// 콘티 항목 하나를 헌금송으로 표시한다.
+  ///
+  /// 헌금송 디자인을 PNG 한 장으로 구워 그 항목의 배경 오버라이드로 건다. 가사는
+  /// 평소처럼 그 위에 그려지므로 미리보기·발표 창·PPTX 가 모두 그대로 따라온다.
+  Future<void> _applyOffering(int uid) async {
+    final index = _stagingItems.indexWhere((e) => e.uid == uid);
+    if (index < 0) return;
+    final entry = _stagingItems[index];
+    final current = _itemBackgrounds[uid]?.offering;
+
+    // 이미 헌금송이면 그 곡의 높낮이 그대로, 아니면 기본 디자인에서 시작한다.
+    // 배경·계좌 등은 늘 최신 기본값을 따르게 한다(지난주에 계좌를 바꿨을 수 있다).
+    final initial = current == null
+        ? _offeringDesign
+        : _offeringDesign.copyWith(bandCenterY: current.bandCenterY);
+
+    final result = await showDialog<({OfferingDesign? design})>(
+      context: context,
+      builder: (ctx) => OfferingDialog(
+        mode: OfferingDialogMode.item,
+        initial: initial,
+        globalStyle: _style,
+        imageLibrary: _offeringImages,
+        itemTitle: entry.item is BlankStagingItem
+            ? '빈 페이지'
+            : entry.item.displayTitle,
+        previewPages: _offeringPreviewPages(uid),
+        canRemove: current != null,
+      ),
+    );
+    if (result == null || !mounted) return;
+
+    final design = result.design;
+    if (design == null) {
+      setState(() {
+        _itemBackgrounds.remove(uid);
+        _previewStagingUid = uid;
+      });
+      await _sendCurrentSlide();
+      return;
+    }
+
+    // 높낮이는 곡마다 다르므로 기본값에는 높낮이를 빼고 나머지만 남긴다.
+    final newDefaults = design.copyWith(
+      bandCenterY: _offeringDesign.bandCenterY,
+    );
+
+    final String imagePath;
+    try {
+      imagePath = await _offeringComposer.compose(design);
+    } catch (e, st) {
+      await AppLogger.instance.error('헌금송 배경 생성 실패', e, st);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('헌금송 배경을 만들지 못했습니다: $e')));
+      return;
+    }
+    if (!mounted) return;
+
+    if (newDefaults != _offeringDesign) {
+      _offeringDesign = newDefaults;
+      await _offeringStore.save(newDefaults);
+      // 배경 이미지는 한 장만 둔다. PNG 를 다 구운 뒤라 이전 이미지를 지워도 된다.
+      unawaited(_offeringImages.keepOnly(newDefaults.backgroundImagePath));
+      if (!mounted) return;
+    }
+
+    // "가사는 띠 위쪽"이면 이 항목만 가사를 하단 기준 + 띠 윗선까지 올린 위치로 낸다.
+    final placement = OfferingOverlayPainter.lyricsPlacement(design);
+    setState(() {
+      _itemBackgrounds[uid] = SlideBackground(
+        color: design.backgroundColor,
+        imagePath: imagePath,
+        offering: design,
+        lyricsPosition: placement.position,
+        lyricsOffsetY: placement.offsetY,
+      );
+      _previewStagingUid = uid;
+    });
+    await _sendCurrentSlide();
+  }
+
+  /// 불러온 콘티의 헌금송 배경 PNG 가 사라졌으면(다른 PC·설정 폴더 정리 등) 저장된
+  /// 디자인으로 다시 굽는다. 배경 이미지 원본까지 없으면 단색 위에 띠만 그려진다.
+  Future<void> _restoreOfferingBackgrounds() async {
+    final missing = _itemBackgrounds.entries
+        .where(
+          (e) =>
+              e.value.isOffering &&
+              !(e.value.hasImage && File(e.value.imagePath!).existsSync()),
+        )
+        .toList();
+    if (missing.isEmpty) return;
+
+    final restored = <int, SlideBackground>{};
+    for (final entry in missing) {
+      try {
+        final path = await _offeringComposer.compose(entry.value.offering!);
+        restored[entry.key] = entry.value.copyWith(imagePath: path);
+      } catch (e, st) {
+        await AppLogger.instance.error('헌금송 배경 복원 실패', e, st);
+      }
+    }
+    if (!mounted || restored.isEmpty) return;
+    setState(() => _itemBackgrounds.addAll(restored));
+    await _sendCurrentSlide();
+  }
+
   /// 로컬 PPT/PPTX를 골라 페이지별 이미지로 변환한 뒤 콘티에 넣는다.
   Future<void> _addPptImages() async {
     await FilePicker.skipEntitlementsChecks();
@@ -1696,6 +1860,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       _previewStagingUid = result.items.isEmpty ? null : result.items.first.uid;
       _currentSlideIndex = 0;
     });
+    unawaited(_restoreOfferingBackgrounds());
 
     if (result.missingCount > 0) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -2002,6 +2167,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               selectedUid: _previewStagingUid,
                               backgrounds: _itemBackgrounds,
                               onEditBackground: _editItemBackground,
+                              onOffering: _applyOffering,
                               onEditText: _editStagingItemText,
                               onReorder: _onStagingReorder,
                               onRemove: _removeFromStaging,
@@ -2174,6 +2340,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                                     ),
                               isExporting: _isExporting,
                               onExportPressed: _exportPresentation,
+                              offeringDesign: _offeringDesign,
+                              onEditOffering: _editOfferingDesign,
                             );
 
                             // ── 콘티 + 검색 (가로 크기 조절 가능) ──
@@ -2765,6 +2933,7 @@ class _StagingPanel extends StatelessWidget {
     required this.selectedUid,
     required this.backgrounds,
     required this.onEditBackground,
+    required this.onOffering,
     required this.onEditText,
     required this.onReorder,
     required this.onRemove,
@@ -2781,6 +2950,8 @@ class _StagingPanel extends StatelessWidget {
   // 항목별 배경 오버라이드. 키가 있는 항목만 전역 배경 대신 이 배경으로 나간다.
   final Map<int, SlideBackground> backgrounds;
   final ValueChanged<int> onEditBackground;
+  // 찬양(또는 빈 페이지)을 헌금송 배경으로 표시
+  final ValueChanged<int> onOffering;
   final ValueChanged<int> onEditText;
   final void Function(int oldIndex, int newIndex) onReorder;
   final void Function(int uid) onRemove;
@@ -3063,6 +3234,25 @@ class _StagingPanel extends StatelessWidget {
                                       tooltip: '이 콘티에서만 내용 수정',
                                       style: compactIcon,
                                       onPressed: () => onEditText(entry.uid),
+                                    ),
+                                  if (item is SongStagingItem ||
+                                      item is BlankStagingItem)
+                                    IconButton(
+                                      icon: Icon(
+                                        background?.isOffering == true
+                                            ? Icons.volunteer_activism
+                                            : Icons
+                                                  .volunteer_activism_outlined,
+                                        size: 18,
+                                        color: background?.isOffering == true
+                                            ? cs.primary
+                                            : cs.onSurfaceVariant,
+                                      ),
+                                      tooltip: background?.isOffering == true
+                                          ? '헌금송 높낮이·디자인 수정'
+                                          : '헌금송으로 표시',
+                                      style: compactIcon,
+                                      onPressed: () => onOffering(entry.uid),
                                     ),
                                   IconButton(
                                     icon: Icon(
@@ -4094,6 +4284,8 @@ class _DesignRibbon extends StatefulWidget {
     required this.preview,
     required this.isExporting,
     required this.onExportPressed,
+    required this.offeringDesign,
+    required this.onEditOffering,
   });
 
   final ExportStyle style;
@@ -4116,6 +4308,10 @@ class _DesignRibbon extends StatefulWidget {
 
   final bool isExporting;
   final VoidCallback onExportPressed;
+
+  /// 등록된 헌금송 디자인(계좌 등). '공통' 탭의 헌금송 묶음에서 연다.
+  final OfferingDesign offeringDesign;
+  final VoidCallback onEditOffering;
 
   @override
   State<_DesignRibbon> createState() => _DesignRibbonState();
@@ -4274,10 +4470,10 @@ class _DesignRibbonState extends State<_DesignRibbon> {
     );
   }
 
-  /// 최대 3줄짜리 설정 열.
-  Widget _column(List<Widget> rows) {
+  /// 최대 3줄짜리 설정 열. 긴 글(계좌 번호 등)을 보여 줄 열만 [width] 를 넓힌다.
+  Widget _column(List<Widget> rows, {double width = _columnWidth}) {
     return SizedBox(
-      width: _columnWidth,
+      width: width,
       child: Column(
         children: [
           for (var i = 0; i < rows.length; i++) ...[
@@ -4331,6 +4527,20 @@ class _DesignRibbonState extends State<_DesignRibbon> {
               ),
             ),
           ]),
+        ],
+      ),
+      _RibbonGroup(
+        label: '헌금송',
+        columns: [
+          _column([
+            _PropertyRow(
+              label: '계좌',
+              child: _OfferingDesignButton(
+                design: widget.offeringDesign,
+                onPressed: widget.onEditOffering,
+              ),
+            ),
+          ], width: 320),
         ],
       ),
     ];
@@ -6466,6 +6676,50 @@ class _BackgroundImagePicker extends StatelessWidget {
   }
 }
 
+// ── 헌금송 ───────────────────────────────────────────────────────────────
+
+/// 리본 '공통' 탭의 "헌금송 디자인 등록" 칸. 등록된 계좌를 한 줄로 보여준다.
+class _OfferingDesignButton extends StatelessWidget {
+  const _OfferingDesignButton({required this.design, required this.onPressed});
+
+  final OfferingDesign design;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final account = design.accountLine;
+    return Tooltip(
+      message: '헌금송 디자인 등록',
+      child: _FieldBox(
+        onTap: onPressed,
+        child: Row(
+          children: [
+            Icon(
+              Icons.volunteer_activism_outlined,
+              size: 16,
+              color: cs.primary,
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                account.isEmpty ? '미등록 (눌러서 등록)' : account,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12.5,
+                  color: account.isEmpty ? cs.onSurfaceVariant : cs.onSurface,
+                  fontWeight: account.isEmpty ? null : FontWeight.w600,
+                ),
+              ),
+            ),
+            Icon(Icons.edit_outlined, size: 15, color: cs.onSurfaceVariant),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 // ── 항목별 배경 ───────────────────────────────────────────────────────────
 
 /// 콘티 목록에서 "이 항목은 배경이 다르다"를 한눈에 보여주는 작은 칩.
@@ -6498,7 +6752,11 @@ class _BackgroundBadge extends StatelessWidget {
           ),
           const SizedBox(width: 4),
           Text(
-            background.hasImage ? '배경 이미지' : '배경',
+            background.isOffering
+                ? '헌금송'
+                : background.hasImage
+                ? '배경 이미지'
+                : '배경',
             style: TextStyle(
               fontSize: 11,
               color: cs.primary,
@@ -6664,7 +6922,17 @@ class _ItemBackgroundDialogState extends State<_ItemBackgroundDialog> {
         ),
         FilledButton(
           onPressed: () => Navigator.of(context).pop((
-            background: _useCustom ? _background : null,
+            background: !_useCustom
+                ? null
+                // 손대지 않았으면 헌금송 정보를 그대로 두고, 색·이미지를 바꿨으면
+                // 더는 헌금송 배경이 아니므로 떼어 낸다.
+                : _background == widget.initial
+                ? _background
+                : _background.copyWith(
+                    offering: null,
+                    lyricsPosition: null,
+                    lyricsOffsetY: null,
+                  ),
           )),
           child: const Text('적용'),
         ),

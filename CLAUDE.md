@@ -16,7 +16,7 @@ flutter pub get
 flutter run -d macos          # 실행
 flutter build macos           # 빌드
 flutter analyze
-flutter test                  # test/widget_test.dart (페이지 파싱·슬라이드 렌더 단위 테스트)
+flutter test                  # test/ (페이지 파싱·슬라이드 렌더·헌금송 배경 굽기 등 단위 테스트)
 python3 python/test_render.py    # render 명령 self-check (LibreOffice 없으면 skip)
 python3 python/test_animation.py # 애니메이션 단계 펼치기 self-check (LibreOffice 불필요)
 python3 python/test_export_background.py # 항목별 배경 오버라이드 self-check (LibreOffice 불필요)
@@ -49,17 +49,23 @@ lib/
       worship_conti_repository.dart  -- 콘티 저장/불러오기 (곡 가사 스냅샷까지 함께 보관)
       python_bridge.dart             -- Process.run으로 ppt_tool 실행 (import / render / export)
       export_style_store.dart        -- 스타일을 Application Support/export_style.json에 저장
+      offering_design_store.dart     -- 헌금송 기본 디자인 → offering_design.json
+      offering_background_composer.dart -- 헌금송 디자인을 배경 PNG 한 장으로 굽는다
+      offering_image_library.dart    -- 헌금송 배경 이미지 한 장 보관(등록 = 앱 폴더로 복사)
       app_logger.dart                -- Application Support/logs/app.log (앱 내 "로그 보기"용)
     domain/
       praise_song.dart               -- PraiseSong; 페이지 구분자는 빈 줄(\n\n)
       export_style.dart              -- ExportStyle (가사/성경 각각의 색·크기·정렬·제목 표시 등)
       slide_background.dart          -- SlideBackground (콘티 항목 하나만 배경을 다르게)
+      offering_design.dart           -- OfferingDesign (헌금송 배경·계좌·색·크기·띠 높낮이)
       staging_item.dart              -- sealed StagingItem: Song / Bible / Image / Blank
       worship_conti.dart             -- 콘티 모델
     presentation/
       praise_home_page.dart          -- 단일 화면(5,700줄). 검색·성경·디자인·콘티·발표 제어 전부 여기
       slide_page_data.dart           -- 발표 창에 보낼 한 페이지의 JSON 표현
       slide_render_view.dart         -- 미리보기/썸네일용 Flutter 슬라이드 렌더러
+      offering_dialog.dart           -- 헌금송 디자인 등록 / 항목에 적용(높낮이) 다이얼로그
+      offering_overlay_painter.dart  -- 헌금송 띠(라인 + 헌금 + 계좌) painter. 미리보기·PNG 공용
   src/features/bible/
     data/bible_repository.dart       -- 역본·책·장·절 조회, JSON 임포트
     domain/bible_verse.dart
@@ -141,6 +147,32 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
     (Dart `_allSlides` 는 앞 항목의 uid 를, Python `export_presentation` 은 앞 항목의
     background 를 그대로 빌려 쓴다)
   - 저장은 `worship_conti_items.background` 한 칸(JSON, DB version 11)
+- **헌금송**: 찬양을 "배경 이미지 + 노란 '헌금' · '은행 계좌' 두 줄 + 위아래 라인" 위에 띄우는 기능.
+  **항목별 배경 오버라이드 위에 얹었다** — 띠까지 그린 그림을 1920x1080 PNG 한 장으로 구워
+  (`OfferingBackgroundComposer`) 그 항목의 `SlideBackground.imagePath` 로 건다. 그래서 렌더러 네 곳은
+  헌금송을 전혀 모르고, 가사는 평소처럼 그 위에 그려진다.
+  - 기본 디자인(배경·은행·계좌·색·크기)은 `OfferingDesign` → `offering_design.json`.
+    디자인 리본 '공통' 탭의 헌금송 묶음("헌금송 디자인 등록")에서 고친다
+  - 콘티 항목(찬양·빈 페이지)의 헌금송 버튼 → `OfferingDialog`. **띠 높낮이(`bandCenterY`, 인치)는
+    곡마다 다르다** — 가사가 긴 곡은 띠를 위/아래로 비킨다. 여기서 바꾼 배경·계좌 등은 기본값에도
+    반영하지만 높낮이는 그 항목에만 남긴다
+  - 미리보기와 PNG 굽기가 같은 `OfferingOverlayPainter` 를 쓴다. 미리보기에서 맞춘 위치가 곧 실제 위치
+  - `SlideBackground.offering` 에 구운 디자인(높낮이 포함)을 함께 저장한다(DB `background` JSON 한 칸,
+    마이그레이션 없음). 다시 열어 높낮이만 고치거나, 콘티를 불러왔는데 PNG 가 없으면 다시 굽는 데 쓴다
+  - PNG 는 `Application Support/offering_backgrounds/offering_<해시>.png`. 키 = 디자인 JSON + 배경
+    원본의 수정 시각·크기. 그리는 방식이 바뀌면 `_renderVersion` 을 올린다. 예전 파일은 지우지 않는다
+  - **가사는 띠 위쪽** (`OfferingDesign.lyricsAboveBand`, 기본 켬): 그 항목만 가사를 하단 기준 +
+    "상자 아래쪽이 띠 윗선 `lyricsGap`(기본 0.4인치, 다이얼로그에서 0~1.5 조절) 위"가 되는 미세 조정으로 낸다(`OfferingOverlayPainter.lyricsPlacement`).
+    가사가 길면 위로 자란다. 값은 `SlideBackground.lyricsPosition`/`lyricsOffsetY`(JSON `text_position`/
+    `text_offset_y`)에 실리고 `withBackground()` 가 찬양 가사 키만 덮어쓴다(성경 키는 그대로).
+    발표 창은 페이지마다 style 을 받으니 자동, PPTX 는 `ppt_tool.py` `_style_for_item` 이 같은 키를 덮어쓴다.
+    미세 조정 범위(±2.0)를 넘는 높이면 잘리므로 다이얼로그가 "띠를 내려 달라"고 알린다.
+    그래서 기본 높낮이는 가운데가 아니라 아래쪽(5.9인치)이다
+  - **배경 이미지는 한 장만** (`OfferingImageLibrary`): 등록하면 `Application Support/offering_images/` 로
+    복사한다(원본이 옮겨져도 안 깨지게). 이전 이미지는 등록 순간이 아니라 **디자인을 저장/적용한 뒤**
+    `keepOnly()` 로 지운다 — 등록만 하고 취소하면 예전 이미지가 그대로 쓰여야 하기 때문.
+    이미 구운 PNG 는 영향 없다
+  - "항목 배경" 다이얼로그에서 색·이미지를 손으로 바꾸면 헌금송 정보와 가사 위치는 떨어져 나간다(일반 배경이 된다)
 - **외부 PPT 애니메이션**: LibreOffice가 PDF로 굽는 순간 애니메이션은 사라지고 "다 나타난 마지막
   상태" 한 장만 남는다. 그래서 PDF로 넘기기 전에 pptx의 `<p:timing>`(메인 시퀀스)을 읽어
   **클릭 한 번 = 페이지 한 장**으로 슬라이드를 복제해 둔다 (`expand_animation_steps`).
