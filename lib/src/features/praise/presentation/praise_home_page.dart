@@ -17,6 +17,7 @@ import '../data/export_style_store.dart';
 import '../data/offering_background_composer.dart';
 import '../data/offering_design_store.dart';
 import '../data/background_image_library.dart';
+import '../data/font_library.dart';
 import '../data/praise_repository.dart';
 import '../data/python_bridge.dart';
 import '../data/worship_conti_repository.dart';
@@ -6641,10 +6642,15 @@ class _FontFamilyPicker extends StatelessWidget {
   final String selected;
   final ValueChanged<String> onChanged;
 
-  static const _fonts = [
+  static const _bundled = [
     ('Pretendard', 'Pretendard'),
     ('NanumGothic', '나눔고딕'),
     ('NanumMyeongjo', '나눔명조'),
+  ];
+
+  List<(String, String)> get _fonts => [
+    ..._bundled,
+    for (final f in FontLibrary.fonts) (f.family, f.displayName),
   ];
 
   String get _displayName =>

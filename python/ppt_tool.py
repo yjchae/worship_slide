@@ -58,10 +58,14 @@ def _get_font_path(filename):
     return os.path.join(script_dir, "..", "assets", "fonts", filename)
 
 
-def _ensure_fonts_installed(font_family="Pretendard"):
+def _ensure_fonts_installed(font_family="Pretendard", font_files=()):
+    """내보낸 PPTX 를 PowerPoint 에서 열 때 폰트가 있도록 사용자 폰트 폴더에 깐다.
+
+    font_files: 앱에서 추가한 폰트(FontLibrary)의 [{path, weight}]. 없으면 번들 폰트.
+    """
     import platform
-    system = platform.system()
-    if system == "Windows":
+    windows = platform.system() == "Windows"
+    if windows:
         local_appdata = os.environ.get("LOCALAPPDATA", "")
         if not local_appdata:
             return
@@ -69,12 +73,38 @@ def _ensure_fonts_installed(font_family="Pretendard"):
     else:
         fonts_dir = os.path.expanduser("~/Library/Fonts")
     os.makedirs(fonts_dir, exist_ok=True)
-    for filename in _FONT_FILES.get(font_family, _FONT_FILES["Pretendard"]):
-        dest = os.path.join(fonts_dir, filename)
-        if not os.path.exists(dest):
-            src = _get_font_path(filename)
-            if os.path.exists(src):
-                shutil.copy2(src, dest)
+    if font_files:
+        sources = [f["path"] for f in font_files if f.get("path")]
+    else:
+        sources = [_get_font_path(n)
+                   for n in _FONT_FILES.get(font_family, _FONT_FILES["Pretendard"])]
+    for src in sources:
+        dest = os.path.join(fonts_dir, os.path.basename(src))
+        if os.path.exists(dest) or not os.path.exists(src):
+            continue
+        shutil.copy2(src, dest)
+        if windows:
+            _register_windows_font(dest)
+
+
+def _register_windows_font(path):
+    """사용자 폰트 폴더에 복사만 하면 Windows 는 폰트로 안 본다.
+    레지스트리에 적어야 다음 로그인부터, AddFontResource 까지 해야 지금 바로 보인다.
+    실패해도 내보내기는 계속한다 (PPTX 는 이미 폰트 이름만 담고 있다)."""
+    try:
+        import ctypes
+        import winreg
+        name = os.path.splitext(os.path.basename(path))[0] + " (TrueType)"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            r"Software\Microsoft\Windows NT\CurrentVersion\Fonts",
+                            0, winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, name, 0, winreg.REG_SZ, path)
+        ctypes.windll.gdi32.AddFontResourceW(path)
+        HWND_BROADCAST, WM_FONTCHANGE = 0xFFFF, 0x001D
+        ctypes.windll.user32.SendMessageTimeoutW(
+            HWND_BROADCAST, WM_FONTCHANGE, 0, 0, 0x0002, 1000, None)
+    except Exception:
+        pass
 
 
 def extract_text_from_shape(shape):
@@ -1401,7 +1431,8 @@ def export_presentation(payload_json):
         output_path = output_path.with_suffix(".pptx")
     songs = payload["songs"]
     style = payload["style"]
-    _ensure_fonts_installed(style.get("font_family", "Pretendard"))
+    _ensure_fonts_installed(style.get("font_family", "Pretendard"),
+                            style.get("font_files") or ())
 
     prs = Presentation()
     if len(prs.slides) == 0:

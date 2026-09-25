@@ -53,6 +53,7 @@ lib/
       offering_background_composer.dart -- 헌금송 디자인을 배경 PNG 한 장으로 굽는다
       background_image_library.dart  -- 공통 배경 이미지 모음(등록 = 앱 폴더로 복사). 헌금송·항목 배경이 같이 쓴다
       app_logger.dart                -- Application Support/logs/app.log (앱 내 "로그 보기"용)
+      font_library.dart              -- 내장 무료 폰트를 Application Support/fonts 로 복사해 올린다
     domain/
       praise_song.dart               -- PraiseSong; 페이지 구분자는 빈 줄(\n\n)
       export_style.dart              -- ExportStyle (가사/성경 각각의 색·크기·정렬·제목 표시 등)
@@ -219,6 +220,16 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
 - **폰트**: 앱은 번들 폰트(Pretendard/NanumGothic/NanumMyeongjo)를 쓰지만, 내보낸 PPTX를 PowerPoint에서
   열 때 필요하므로 `_ensure_fonts_installed`가 사용자 폰트 폴더에 복사한다.
   단, PyInstaller에는 **Pretendard만** 번들되어 있다
+- **내장 무료 폰트** (`FontLibrary`): 무료(OFL) 폰트 몇 종을 `assets/fonts/free/`(라이선스 txt 포함)에
+  넣어 두고 **pubspec `fonts:` 가 아니라** 첫 실행 때 `Application Support/fonts/` 로 복사해 올린다 —
+  발표 창·PPTX 가 실제 파일 경로를 알아야 해서다. **사용자가 폰트를 직접 추가하는 기능은 라이선스
+  책임 문제로 일부러 뺐다.** 폰트를 더 넣을 땐 OFL 등 재배포 가능한 것만, 가변(variable) 폰트는 피한다
+  - family 이름은 파일의 name 테이블(name ID 1, 영어)에서 읽는다(`readFontInfo`). Windows GDI 와
+    PowerPoint 가 이 이름으로 찾으므로 Flutter `loadFontFromList` 이름도 똑같이 맞춘다
+  - Dart 는 style JSON 을 보낼 때(`SlidePageData.toJson`, `PythonBridge.export`) `font_files`
+    `[{path, weight}]` 를 붙인다. `export_style.json` 에는 저장하지 않는다.
+    macOS 는 data URI `@font-face`, Windows 는 `AddFontResourceExW(FR_PRIVATE)`,
+    Python 은 사용자 폰트 폴더에 복사(+ Windows 레지스트리·`AddFontResourceW`)
 - **PPTX 배경 XML 위치**: `p:bg` 는 `p:sld` 가 아니라 **`p:cSld` 의 첫 자식**이다.
   자리를 틀리면 PowerPoint 가 배경을 조용히 무시한다 (`_apply_slide_background` 참고)
 - **가사 줄바꿈은 `<a:br/>`**: 한 run 의 `<a:t>` 안에 날 줄바꿈 문자를 넣으면 OOXML 상

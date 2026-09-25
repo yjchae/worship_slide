@@ -131,7 +131,27 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
   // Flutter _PreviewBox 좌표계: slideH=7.5, fontScale = h/(slideH*72) = h/540
   // CSS: font-size: calc(N / 540 * 100vh)
 
-  private func fontFaceCSS(family: String) -> String {
+  private var customFontKey = ""
+  private var customFontCSS = ""
+
+  private func fontFaceCSS(family: String, files: [[String: Any]]) -> String {
+    // 사용자가 추가한 폰트(FontLibrary): Dart 가 파일 경로와 굵기를 같이 보낸다.
+    // 배경 이미지처럼 data URI 로 박는다 — WebKit 은 사용자 설치 폰트를 안 보여 줄 수 있다.
+    if !files.isEmpty {
+      // 페이지마다 HTML 을 새로 굽으므로 인코딩한 CSS 를 한 벌 기억해 둔다.
+      // ponytail: 슬라이드 넘길 때마다 수 MB 를 WebKit 이 다시 파싱한다. 느리면 HTML 을 파일로 쓰고 loadFileURL 로.
+      let key = family + files.map { ($0["path"] as? String) ?? "" }.joined(separator: "|")
+      if key == customFontKey { return customFontCSS }
+      customFontKey = key
+      customFontCSS = files.compactMap { f -> String? in
+        guard let path = f["path"] as? String,
+              let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return nil }
+        let weight = (f["weight"] as? Int) ?? 400
+        let format = path.lowercased().hasSuffix(".otf") ? "opentype" : "truetype"
+        return "@font-face{font-family:'\(family)';src:url('data:font/\(format);base64,\(data.base64EncodedString())') format('\(format)');font-weight:\(weight);}\n"
+      }.joined()
+      return customFontCSS
+    }
     let map: [String: [String]] = [
       "Pretendard":    ["Pretendard-Regular.ttf", "Pretendard-Bold.ttf"],
       "NanumGothic":   ["NanumGothic-Regular.ttf", "NanumGothic-Bold.ttf"],
@@ -395,7 +415,7 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
     return """
     <!DOCTYPE html><html><head><meta charset="utf-8">
     <style>
-      \(fontFaceCSS(family: fontFamily))
+      \(fontFaceCSS(family: fontFamily, files: (style["font_files"] as? [[String: Any]]) ?? []))
       *{margin:0;padding:0;box-sizing:border-box;}
       body{width:100vw;height:100vh;background:\(bgColor);position:relative;
            overflow:hidden;font-family:'\(fontFamily)',sans-serif;}

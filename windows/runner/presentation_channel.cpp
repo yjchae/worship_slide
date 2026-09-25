@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <set>
 #include <stdexcept>
 #include <string>
 
@@ -297,6 +298,19 @@ void PresentationChannel::Apply(const flutter::EncodableMap& data) {
   double baseSz     = GetDbl(s, "font_size", 30.0);
   slide_.engSz      = baseSz * 0.8;
   slide_.fontFamily = W(GetStr(s, "font_family", ""));
+
+  // 사용자가 추가한 폰트(FontLibrary). 이 프로세스에만 올려 두면 CreateFontW 가
+  // family 이름으로 찾는다. 한 번 올린 파일은 다시 올리지 않는다.
+  static std::set<std::wstring> loaded_fonts;
+  if (const auto* files = Get<flutter::EncodableList>(s, "font_files")) {
+    for (const auto& v : *files) {
+      const auto* f = std::get_if<flutter::EncodableMap>(&v);
+      if (!f) continue;
+      std::wstring path = W(GetStr(*f, "path"));
+      if (!path.empty() && loaded_fonts.insert(path).second)
+        AddFontResourceExW(path.c_str(), FR_PRIVATE, 0);
+    }
+  }
 }
 
 // ── rendering ─────────────────────────────────────────────────────────────────

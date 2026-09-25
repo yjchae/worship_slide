@@ -8,6 +8,7 @@ import '../domain/praise_song.dart';
 import '../domain/slide_background.dart';
 import '../domain/staging_item.dart';
 import 'app_logger.dart';
+import 'font_library.dart';
 
 class LibreOfficeMissingException implements Exception {
   const LibreOfficeMissingException();
@@ -170,7 +171,10 @@ class PythonBridge {
         json['background'] = entry.background?.toJson();
         return json;
       }).toList(),
-      'style': style.toJson(),
+      'style': {
+        ...style.toJson(),
+        'font_files': FontLibrary.filesFor(style.fontFamily),
+      },
     });
 
     final result = await _runTool(['export', payload]);

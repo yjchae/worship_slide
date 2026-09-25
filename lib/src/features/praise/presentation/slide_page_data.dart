@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import '../data/font_library.dart';
 import '../domain/export_style.dart';
 
 class SlidePageData {
@@ -31,7 +32,10 @@ class SlidePageData {
     'is_bible': isBible,
     'page_index': pageIndex,
     'total_pages': totalPages,
-    'style': style.toJson(),
+    'style': {
+      ...style.toJson(),
+      'font_files': FontLibrary.filesFor(style.fontFamily),
+    },
     'image_path': imagePath,
   };
 
