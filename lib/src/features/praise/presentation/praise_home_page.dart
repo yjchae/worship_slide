@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -1632,6 +1633,80 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     setState(() => _subLanguages = languages);
   }
 
+  // ── 곡 모음 내보내기/가져오기 (다른 PC 와 합치기) ─────────────────────
+
+  Future<void> _exportSongBundle() async {
+    final stamp = DateTime.now().toIso8601String().substring(0, 10);
+    await FilePicker.skipEntitlementsChecks();
+    var path = await FilePicker.saveFile(
+      dialogTitle: '곡 모음 내보내기',
+      fileName: '곡모음_$stamp.json',
+      type: FileType.custom,
+      allowedExtensions: ['json'],
+    );
+    if (path == null) return;
+    if (p.extension(path).toLowerCase() != '.json') {
+      path = p.setExtension(path, '.json');
+    }
+    try {
+      final bundle = await _repository.exportSongBundle();
+      await File(path).writeAsString(jsonEncode(bundle));
+      if (!mounted) return;
+      final count = (bundle['songs'] as List).length;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('곡 $count개를 내보냈습니다: ${p.basename(path)}')),
+      );
+    } catch (error, stack) {
+      await AppLogger.instance.error('곡 모음 내보내기 실패', error, stack);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('내보내기 실패: $error')));
+    }
+  }
+
+  /// 다른 PC 에서 내보낸 곡 모음을 합친다. 같은 제목의 곡은 새로 넣지 않는다.
+  Future<void> _importSongBundle() async {
+    await FilePicker.skipEntitlementsChecks();
+    final picked = await FilePicker.pickFiles(
+      dialogTitle: '곡 모음 가져오기 (.json)',
+      type: FileType.custom,
+      allowedExtensions: ['json'],
+    );
+    final path = picked?.files.single.path;
+    if (path == null) return;
+    try {
+      final bundle = jsonDecode(await File(path).readAsString());
+      if (bundle is! Map<String, Object?>) {
+        throw const FormatException('곡 모음 파일이 아닙니다.');
+      }
+      final result = await _repository.importSongBundle(bundle);
+      await _loadSongs();
+      await _loadSubLanguages();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '곡 ${result.addedCount}개 추가 · 같은 제목 ${result.skippedCount}개 건너뜀'
+            '${result.subLyricsAddedCount > 0 ? ' · 번역 가사 ${result.subLyricsAddedCount}개 채움' : ''}',
+          ),
+        ),
+      );
+    } catch (error, stack) {
+      await AppLogger.instance.error('곡 모음 가져오기 실패', error, stack);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            error is FormatException
+                ? '곡 모음 파일이 아닙니다. "곡 모음 내보내기"로 만든 .json 을 골라 주세요.'
+                : '가져오기 실패: $error',
+          ),
+        ),
+      );
+    }
+  }
+
   Future<void> _pickAndImportBible() async {
     await FilePicker.skipEntitlementsChecks();
     final result = await FilePicker.pickFiles(
@@ -2165,6 +2240,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                           onBibleImportPressed: _pickAndImportBible,
                           onImportPptPressed: _addPptImages,
                           onImportSheetPressed: _importSheetMusic,
+                          onExportSongsPressed: _exportSongBundle,
+                          onImportSongsPressed: _importSongBundle,
                           onExtractLogsPressed: _showExtractLogsDialog,
                           isCheckingUpdate: _isCheckingUpdate,
                           hasUpdate: _pendingUpdate != null,
@@ -2743,6 +2820,8 @@ class _TopBar extends StatelessWidget {
     required this.onBibleImportPressed,
     required this.onImportPptPressed,
     required this.onImportSheetPressed,
+    required this.onExportSongsPressed,
+    required this.onImportSongsPressed,
     required this.onExtractLogsPressed,
     required this.isCheckingUpdate,
     required this.hasUpdate,
@@ -2761,6 +2840,8 @@ class _TopBar extends StatelessWidget {
   final VoidCallback onBibleImportPressed;
   final VoidCallback onImportPptPressed;
   final VoidCallback onImportSheetPressed;
+  final VoidCallback onExportSongsPressed;
+  final VoidCallback onImportSongsPressed;
   final VoidCallback onExtractLogsPressed;
   final bool isCheckingUpdate;
   final bool hasUpdate;
@@ -2880,6 +2961,46 @@ class _TopBar extends StatelessWidget {
             onPressed: onImportSheetPressed,
             icon: const Icon(Icons.music_note_rounded, size: 16),
             label: const Text('악보 가져오기'),
+          ),
+          const SizedBox(width: 8),
+          // 다른 PC 의 곡과 합치기. 같은 제목은 중복으로 넣지 않는다.
+          PopupMenuButton<VoidCallback>(
+            tooltip: '다른 PC 와 곡 합치기',
+            onSelected: (action) => action(),
+            itemBuilder: (context) => [
+              PopupMenuItem(
+                value: onExportSongsPressed,
+                child: const ListTile(
+                  dense: true,
+                  leading: Icon(Icons.file_upload_outlined),
+                  title: Text('곡 모음 내보내기'),
+                ),
+              ),
+              PopupMenuItem(
+                value: onImportSongsPressed,
+                child: const ListTile(
+                  dense: true,
+                  leading: Icon(Icons.file_download_outlined),
+                  title: Text('곡 모음 가져오기'),
+                  subtitle: Text('같은 제목은 건너뜁니다'),
+                ),
+              ),
+            ],
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.22),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.sync_alt_rounded, size: 16, color: Colors.white),
+                  SizedBox(width: 6),
+                  Text('곡 모음', style: TextStyle(color: Colors.white)),
+                ],
+              ),
+            ),
           ),
           const SizedBox(width: 8),
           FilledButton.icon(

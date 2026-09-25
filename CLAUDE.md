@@ -69,7 +69,7 @@ lib/
   src/features/bible/
     data/bible_repository.dart       -- 역본·책·장·절 조회, JSON 임포트
     domain/bible_verse.dart
-  src/features/update/update_service.dart -- GitHub Releases(yjchae/make_ppt-releases) 확인·다운로드
+  src/features/update/update_service.dart -- GitHub Releases(yjchae/worship_slide) 확인·다운로드
 ```
 
 ### 발표 창 (네이티브)
@@ -283,7 +283,9 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   (뒤에 `\*` 를 붙이면 내용물만 담긴다), macOS 는 `ditto --keepParent`
 - 업데이트는 폴더를 지우지 않고 **덮어쓰기**다. 실행 파일 옆 `worship_slides.db` 가 살아남아야 하기 때문.
   수동으로 새 빌드를 받아 갈아끼울 때도 폴더째 교체하지 말고 덮어써야 곡·콘티가 유지된다
-- 앱은 시작 시 `yjchae/make_ppt-releases`의 최신 릴리즈를 확인해 업데이트 배너를 띄운다.
+- 앱은 시작 시 `yjchae/worship_slide`(이 레포)의 최신 릴리즈를 확인해 업데이트 배너를 띄운다.
+  v1.1.14 까지는 별도 공개 레포 `yjchae/make_ppt-releases` 를 봤다(당시 이 레포가 private).
+  그 버전들은 여전히 그쪽만 보므로, 옮긴 뒤 첫 릴리즈 zip 은 `make_ppt-releases` 에도 한 번 올려야 옛 설치본이 넘어온다
   **릴리즈 태그와 `pubspec.yaml`의 version이 같아야 한다**
 
 ## 의존성
