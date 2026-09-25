@@ -51,7 +51,7 @@ lib/
       export_style_store.dart        -- 스타일을 Application Support/export_style.json에 저장
       offering_design_store.dart     -- 헌금송 기본 디자인 → offering_design.json
       offering_background_composer.dart -- 헌금송 디자인을 배경 PNG 한 장으로 굽는다
-      offering_image_library.dart    -- 헌금송 배경 이미지 한 장 보관(등록 = 앱 폴더로 복사)
+      background_image_library.dart  -- 공통 배경 이미지 모음(등록 = 앱 폴더로 복사). 헌금송·항목 배경이 같이 쓴다
       app_logger.dart                -- Application Support/logs/app.log (앱 내 "로그 보기"용)
     domain/
       praise_song.dart               -- PraiseSong; 페이지 구분자는 빈 줄(\n\n)
@@ -154,8 +154,9 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   - 기본 디자인(배경·은행·계좌·색·크기)은 `OfferingDesign` → `offering_design.json`.
     디자인 리본 '공통' 탭의 헌금송 묶음("헌금송 디자인 등록")에서 고친다
   - 콘티 항목(찬양·빈 페이지)의 헌금송 버튼 → `OfferingDialog`. **띠 높낮이(`bandCenterY`, 인치)는
-    곡마다 다르다** — 가사가 긴 곡은 띠를 위/아래로 비킨다. 여기서 바꾼 배경·계좌 등은 기본값에도
-    반영하지만 높낮이는 그 항목에만 남긴다
+    곡마다 다르다** — 가사가 긴 곡은 띠를 위/아래로 비킨다. 항목 다이얼로그에는 높낮이·가사 위치만
+    있고 배경·계좌·글자·라인은 리본 '공통' 탭에서만 고친다(공통 설정). 아직 등록 전이면 항목 버튼이
+    등록 다이얼로그부터 연다
   - 미리보기와 PNG 굽기가 같은 `OfferingOverlayPainter` 를 쓴다. 미리보기에서 맞춘 위치가 곧 실제 위치
   - `SlideBackground.offering` 에 구운 디자인(높낮이 포함)을 함께 저장한다(DB `background` JSON 한 칸,
     마이그레이션 없음). 다시 열어 높낮이만 고치거나, 콘티를 불러왔는데 PNG 가 없으면 다시 굽는 데 쓴다
@@ -168,10 +169,11 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
     발표 창은 페이지마다 style 을 받으니 자동, PPTX 는 `ppt_tool.py` `_style_for_item` 이 같은 키를 덮어쓴다.
     미세 조정 범위(±2.0)를 넘는 높이면 잘리므로 다이얼로그가 "띠를 내려 달라"고 알린다.
     그래서 기본 높낮이는 가운데가 아니라 아래쪽(5.9인치)이다
-  - **배경 이미지는 한 장만** (`OfferingImageLibrary`): 등록하면 `Application Support/offering_images/` 로
-    복사한다(원본이 옮겨져도 안 깨지게). 이전 이미지는 등록 순간이 아니라 **디자인을 저장/적용한 뒤**
-    `keepOnly()` 로 지운다 — 등록만 하고 취소하면 예전 이미지가 그대로 쓰여야 하기 때문.
-    이미 구운 PNG 는 영향 없다
+  - **배경 이미지는 공통 모음에서 고른다** (`BackgroundImageLibrary`, 격자 UI `BackgroundImageGallery`):
+    여러 장 등록해 두고 리본 '공통' 탭의 전체 배경·헌금송 디자인 등록·"항목 배경" 다이얼로그 세 곳에서 한 장씩 고른다.
+    등록하면 `Application Support/offering_images/`(헌금송 전용 시절 이름 그대로) 로 복사하고, 폴더가 곧 목록이다.
+    모음에서 지우면 그 파일을 직접 쓰는 일반 항목 배경(저장한 콘티 포함)은 색만 남는다 — 삭제 전에 확인을 받는다.
+    헌금송은 따로 구운 PNG 라 영향 없다
   - "항목 배경" 다이얼로그에서 색·이미지를 손으로 바꾸면 헌금송 정보와 가사 위치는 떨어져 나간다(일반 배경이 된다)
 - **외부 PPT 애니메이션**: LibreOffice가 PDF로 굽는 순간 애니메이션은 사라지고 "다 나타난 마지막
   상태" 한 장만 남는다. 그래서 PDF로 넘기기 전에 pptx의 `<p:timing>`(메인 시퀀스)을 읽어

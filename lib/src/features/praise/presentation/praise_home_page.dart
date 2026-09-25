@@ -15,7 +15,7 @@ import '../data/app_logger.dart';
 import '../data/export_style_store.dart';
 import '../data/offering_background_composer.dart';
 import '../data/offering_design_store.dart';
-import '../data/offering_image_library.dart';
+import '../data/background_image_library.dart';
 import '../data/praise_repository.dart';
 import '../data/python_bridge.dart';
 import '../data/worship_conti_repository.dart';
@@ -25,6 +25,7 @@ import '../domain/offering_design.dart';
 import '../domain/praise_song.dart';
 import '../domain/slide_background.dart';
 import '../domain/staging_item.dart';
+import 'background_image_gallery.dart';
 import 'offering_dialog.dart';
 import 'offering_overlay_painter.dart';
 import 'slide_page_data.dart';
@@ -108,7 +109,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   final OfferingDesignStore _offeringStore = OfferingDesignStore();
   final OfferingBackgroundComposer _offeringComposer =
       OfferingBackgroundComposer();
-  final OfferingImageLibrary _offeringImages = OfferingImageLibrary();
+  final BackgroundImageLibrary _backgroundImages = BackgroundImageLibrary();
   final BibleRepository _bibleRepository = BibleRepository();
   final WorshipContiRepository _contiRepository = WorshipContiRepository();
   final TextEditingController _searchController = TextEditingController();
@@ -1097,6 +1098,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         initial: _itemBackgrounds[uid],
         globalStyle: _style,
         swatches: _swatches,
+        imageLibrary: _backgroundImages,
       ),
     );
     if (result == null || !mounted) return;
@@ -1136,7 +1138,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         mode: OfferingDialogMode.defaults,
         initial: _offeringDesign,
         globalStyle: _style,
-        imageLibrary: _offeringImages,
+        imageLibrary: _backgroundImages,
         previewPages: _offeringPreviewPages(_previewStagingUid),
       ),
     );
@@ -1145,7 +1147,6 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     setState(() => _offeringDesign = design);
     await _offeringStore.save(design);
     // 배경 이미지는 한 장만 둔다. 새로 등록했으면 이전 이미지를 지운다.
-    unawaited(_offeringImages.keepOnly(design.backgroundImagePath));
   }
 
   /// 콘티 항목 하나를 헌금송으로 표시한다.
@@ -1157,6 +1158,17 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     if (index < 0) return;
     final entry = _stagingItems[index];
     final current = _itemBackgrounds[uid]?.offering;
+
+    // 배경·계좌는 공통 설정이다. 아직 등록 전이면 등록부터 받는다.
+    if (_offeringDesign.accountLine.isEmpty &&
+        _offeringDesign.backgroundImagePath == null) {
+      await _editOfferingDesign();
+      if (!mounted ||
+          (_offeringDesign.accountLine.isEmpty &&
+              _offeringDesign.backgroundImagePath == null)) {
+        return;
+      }
+    }
 
     // 이미 헌금송이면 그 곡의 높낮이 그대로, 아니면 기본 디자인에서 시작한다.
     // 배경·계좌 등은 늘 최신 기본값을 따르게 한다(지난주에 계좌를 바꿨을 수 있다).
@@ -1170,7 +1182,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         mode: OfferingDialogMode.item,
         initial: initial,
         globalStyle: _style,
-        imageLibrary: _offeringImages,
+        imageLibrary: _backgroundImages,
         itemTitle: entry.item is BlankStagingItem
             ? '빈 페이지'
             : entry.item.displayTitle,
@@ -1211,8 +1223,6 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     if (newDefaults != _offeringDesign) {
       _offeringDesign = newDefaults;
       await _offeringStore.save(newDefaults);
-      // 배경 이미지는 한 장만 둔다. PNG 를 다 구운 뒤라 이전 이미지를 지워도 된다.
-      unawaited(_offeringImages.keepOnly(newDefaults.backgroundImagePath));
       if (!mounted) return;
     }
 
@@ -1399,9 +1409,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       return;
     }
     if (texts.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('악보에서 가사를 찾지 못했습니다.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('악보에서 가사를 찾지 못했습니다.')));
       return;
     }
 
@@ -1994,7 +2004,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     }
     for (final entry in subLyrics.entries) {
       if (entry.key == PraiseRepository.defaultSubLanguage) continue;
-      await _repository.saveTranslations(entry.key, {edited.title: entry.value});
+      await _repository.saveTranslations(entry.key, {
+        edited.title: entry.value,
+      });
     }
     await _loadSubLanguages();
     if (edited.id != null && mounted) {
@@ -2342,6 +2354,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               onExportPressed: _exportPresentation,
                               offeringDesign: _offeringDesign,
                               onEditOffering: _editOfferingDesign,
+                              imageLibrary: _backgroundImages,
                             );
 
                             // ── 콘티 + 검색 (가로 크기 조절 가능) ──
@@ -2447,11 +2460,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                                         // 숨은 탭은 그려지지 않을 뿐 살아 있다.
                                         // 검색창/메모창에 포커스가 남으면 발표 단축키가
                                         // 안 보이는 입력칸으로 빨려 들어가므로 잘라낸다.
-                                        for (final (i, child)
-                                            in [
-                                              workspace,
-                                              presenterConsole,
-                                            ].indexed)
+                                        for (final (i, child) in [
+                                          workspace,
+                                          presenterConsole,
+                                        ].indexed)
                                           ExcludeFocus(
                                             excluding:
                                                 i != _mainTabController.index,
@@ -3241,8 +3253,7 @@ class _StagingPanel extends StatelessWidget {
                                       icon: Icon(
                                         background?.isOffering == true
                                             ? Icons.volunteer_activism
-                                            : Icons
-                                                  .volunteer_activism_outlined,
+                                            : Icons.volunteer_activism_outlined,
                                         size: 18,
                                         color: background?.isOffering == true
                                             ? cs.primary
@@ -4286,6 +4297,7 @@ class _DesignRibbon extends StatefulWidget {
     required this.onExportPressed,
     required this.offeringDesign,
     required this.onEditOffering,
+    required this.imageLibrary,
   });
 
   final ExportStyle style;
@@ -4312,6 +4324,9 @@ class _DesignRibbon extends StatefulWidget {
   /// 등록된 헌금송 디자인(계좌 등). '공통' 탭의 헌금송 묶음에서 연다.
   final OfferingDesign offeringDesign;
   final VoidCallback onEditOffering;
+
+  /// 공통 배경 이미지 모음. '공통' 탭의 전체 배경 이미지를 여기서 고른다.
+  final BackgroundImageLibrary imageLibrary;
 
   @override
   State<_DesignRibbon> createState() => _DesignRibbonState();
@@ -4520,7 +4535,7 @@ class _DesignRibbonState extends State<_DesignRibbon> {
             _PropertyRow(
               label: '배경 이미지',
               child: _BackgroundImagePicker(
-                dense: true,
+                library: widget.imageLibrary,
                 imagePath: _style.backgroundImagePath,
                 onChanged: (path) =>
                     _update(_style.copyWith(backgroundImagePath: path)),
@@ -4534,7 +4549,7 @@ class _DesignRibbonState extends State<_DesignRibbon> {
         columns: [
           _column([
             _PropertyRow(
-              label: '계좌',
+              label: '디자인 등록',
               child: _OfferingDesignButton(
                 design: widget.offeringDesign,
                 onPressed: widget.onEditOffering,
@@ -5964,8 +5979,7 @@ class _SongEditDialogState extends State<_SongEditDialog> {
         fileName: widget.song?.fileName ?? title,
         title: title,
         lyrics: _normalizeLyrics(_lyricsController.text),
-        englishLyrics:
-            _subLyrics[PraiseRepository.defaultSubLanguage] ?? '',
+        englishLyrics: _subLyrics[PraiseRepository.defaultSubLanguage] ?? '',
       ),
       Map<String, String>.from(_subLyrics),
     ));
@@ -6297,9 +6311,7 @@ class _SlideQuickEditDialogState extends State<_SlideQuickEditDialog> {
                 decoration: InputDecoration(
                   labelText:
                       widget.subLabel ??
-                      (widget.isBible
-                          ? '보조 역본 본문 (선택)'
-                          : '보조 언어 가사 (선택)'),
+                      (widget.isBible ? '보조 역본 본문 (선택)' : '보조 언어 가사 (선택)'),
                   border: const OutlineInputBorder(),
                 ),
               ),
@@ -6567,109 +6579,86 @@ class _FontFamilyPicker extends StatelessWidget {
 
 class _BackgroundImagePicker extends StatelessWidget {
   const _BackgroundImagePicker({
+    required this.library,
     required this.imagePath,
     required this.onChanged,
-    this.dense = false,
   });
 
+  final BackgroundImageLibrary library;
   final String? imagePath;
   final ValueChanged<String?> onChanged;
 
-  /// 디자인 패널의 한 줄짜리 칸(라벨은 바깥 `_PropertyRow` 가 단다).
-  /// false 면 다이얼로그용으로 '배경 이미지' 라벨을 안에 넣은 큰 버튼.
-  final bool dense;
-
-  // PNG/JPG 로 제한한다. 세 군데(미리보기 Flutter · Windows 발표 창 GDI+ ·
-  // 내보낸 PPTX)가 모두 확실히 읽는 형식이 이 둘이다. WebP·HEIC 는 GDI+ 가 못 읽어
-  // 윈도우 발표 화면에서만 배경이 사라진다.
-  Future<void> _pick() async {
-    await FilePicker.skipEntitlementsChecks();
-    final result = await FilePicker.pickFiles(
-      dialogTitle: '배경 이미지 선택 (PNG / JPG)',
-      type: FileType.custom,
-      allowedExtensions: const ['png', 'jpg', 'jpeg'],
-      allowMultiple: false,
+  /// 공통 배경 이미지 모음에서 고른다(헌금송·항목 배경과 같은 모음).
+  Future<void> _pick(BuildContext context) async {
+    final result = await showDialog<({String? path})>(
+      context: context,
+      builder: (ctx) {
+        var selected = imagePath;
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) => AlertDialog(
+            title: const Text('전체 배경 이미지'),
+            content: SizedBox(
+              width: 440,
+              child: SingleChildScrollView(
+                child: BackgroundImageGallery(
+                  library: library,
+                  selected: selected,
+                  onChanged: (path) => setDialogState(() => selected = path),
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('취소'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(ctx).pop((path: selected)),
+                child: const Text('적용'),
+              ),
+            ],
+          ),
+        );
+      },
     );
-    if (result != null && result.files.single.path != null) {
-      onChanged(result.files.single.path);
-    }
+    if (result != null) onChanged(result.path);
   }
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final hasImage = imagePath != null;
-    final fileName = hasImage ? p.basename(imagePath!) : null;
 
-    if (dense) {
-      return _FieldBox(
-        onTap: _pick,
-        child: Row(
-          children: [
-            Icon(Icons.image_outlined, size: 16, color: cs.onSurfaceVariant),
-            const SizedBox(width: 6),
-            Expanded(
-              child: Text(
-                fileName ?? '없음 (눌러서 선택)',
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 12.5,
-                  color: hasImage ? cs.onSurface : cs.onSurfaceVariant,
-                  fontWeight: hasImage ? FontWeight.w600 : FontWeight.w400,
-                ),
-              ),
-            ),
-            if (hasImage)
-              InkWell(
-                borderRadius: BorderRadius.circular(10),
-                onTap: () => onChanged(null),
-                child: Tooltip(
-                  message: '배경 이미지 지우기',
-                  child: Icon(
-                    Icons.close_rounded,
-                    size: 16,
-                    color: cs.onSurfaceVariant,
-                  ),
-                ),
-              ),
-          ],
-        ),
-      );
-    }
-
-    return OutlinedButton(
-      style: OutlinedButton.styleFrom(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      ),
-      onPressed: _pick,
+    return _FieldBox(
+      onTap: () => _pick(context),
       child: Row(
         children: [
+          Icon(Icons.image_outlined, size: 16, color: cs.onSurfaceVariant),
+          const SizedBox(width: 6),
           Expanded(
-            child: Text('배경 이미지', style: TextStyle(color: cs.onSurface)),
+            child: Text(
+              hasImage ? p.basename(imagePath!) : '없음 (눌러서 선택)',
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 12.5,
+                color: hasImage ? cs.onSurface : cs.onSurfaceVariant,
+                fontWeight: hasImage ? FontWeight.w600 : FontWeight.w400,
+              ),
+            ),
           ),
-          if (hasImage) ...[
-            Flexible(
-              child: Text(
-                fileName!,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: cs.primary,
-                  fontWeight: FontWeight.w600,
+          if (hasImage)
+            InkWell(
+              borderRadius: BorderRadius.circular(10),
+              onTap: () => onChanged(null),
+              child: Tooltip(
+                message: '배경 이미지 지우기',
+                child: Icon(
+                  Icons.close_rounded,
+                  size: 16,
+                  color: cs.onSurfaceVariant,
                 ),
               ),
             ),
-            const SizedBox(width: 4),
-            GestureDetector(
-              onTap: () => onChanged(null),
-              child: Icon(
-                Icons.close_rounded,
-                size: 16,
-                color: cs.onSurfaceVariant,
-              ),
-            ),
-          ] else
-            Text('없음', style: TextStyle(color: cs.onSurfaceVariant)),
         ],
       ),
     );
@@ -6781,12 +6770,14 @@ class _ItemBackgroundDialog extends StatefulWidget {
     required this.initial,
     required this.globalStyle,
     required this.swatches,
+    required this.imageLibrary,
   });
 
   final StagingItem item;
   final SlideBackground? initial;
   final ExportStyle globalStyle;
   final List<Color> swatches;
+  final BackgroundImageLibrary imageLibrary;
 
   @override
   State<_ItemBackgroundDialog> createState() => _ItemBackgroundDialogState();
@@ -6899,8 +6890,18 @@ class _ItemBackgroundDialogState extends State<_ItemBackgroundDialog> {
                         ),
                       ),
                       const SizedBox(height: 8),
-                      _BackgroundImagePicker(
-                        imagePath: _background.imagePath,
+                      Text(
+                        '배경 이미지 (공통 모음)',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: cs.onSurfaceVariant,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      BackgroundImageGallery(
+                        library: widget.imageLibrary,
+                        selected: _background.imagePath,
+                        emptyColor: _background.color,
                         onChanged: (path) => setState(
                           () => _background = _background.copyWith(
                             imagePath: path,

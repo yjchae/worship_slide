@@ -1,12 +1,12 @@
 import 'dart:io';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../data/offering_image_library.dart';
+import '../data/background_image_library.dart';
 import '../domain/export_style.dart';
 import '../domain/offering_design.dart';
+import 'background_image_gallery.dart';
 import 'offering_overlay_painter.dart';
 import 'slide_page_data.dart';
 import 'slide_render_view.dart';
@@ -51,8 +51,8 @@ class OfferingDialog extends StatefulWidget {
   /// 가사를 겹쳐 그릴 때 쓰는 전역 디자인(글자 색·크기·위치). 배경은 헌금송 것으로 바꿔 그린다.
   final ExportStyle globalStyle;
 
-  /// 헌금송 배경 이미지 보관소(한 장). 다이얼로그에서 등록·변경한다.
-  final OfferingImageLibrary imageLibrary;
+  /// 공통 배경 이미지 모음. 여기서 한 장을 골라 헌금송 배경으로 쓴다.
+  final BackgroundImageLibrary imageLibrary;
   final String? itemTitle;
   final List<OfferingPreviewPage> previewPages;
 
@@ -127,28 +127,6 @@ class _OfferingDialogState extends State<OfferingDialog> {
 
   void _moveBand(double deltaInches) =>
       _update(_design.copyWith(bandCenterY: _design.bandCenterY + deltaInches));
-
-  /// 이미지를 골라 등록한다(한 장만). 저장/적용을 눌러야 이전 이미지를 대체한다.
-  Future<void> _registerBackgroundImage() async {
-    await FilePicker.skipEntitlementsChecks();
-    final result = await FilePicker.pickFiles(
-      dialogTitle: '헌금송 배경 이미지 등록 (PNG / JPG)',
-      type: FileType.custom,
-      allowedExtensions: OfferingImageLibrary.allowedExtensions,
-      allowMultiple: false,
-    );
-    final source = result?.files.single.path;
-    if (source == null) return;
-    try {
-      final registered = await widget.imageLibrary.register(source);
-      if (mounted) _update(_design.copyWith(backgroundImagePath: registered));
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.maybeOf(
-        context,
-      )?.showSnackBar(SnackBar(content: Text('이미지를 등록하지 못했습니다: $e')));
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -386,8 +364,9 @@ class _OfferingDialogState extends State<OfferingDialog> {
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: Text(
-                '배경·계좌·디자인을 바꾸면 다음 헌금송에도 그대로 쓰입니다. '
-                '높낮이는 이 곡에만 적용됩니다.',
+                '배경·계좌·글자·라인은 공통 설정입니다. '
+                '디자인 리본 \'공통\' 탭의 \'헌금송\'에서 한 번만 등록하면 '
+                '모든 헌금송에 쓰입니다. 여기서는 이 곡의 높낮이와 가사 위치만 맞춥니다.',
                 style: TextStyle(
                   fontSize: 12,
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -418,200 +397,145 @@ class _OfferingDialogState extends State<OfferingDialog> {
               onChanged: (v) =>
                   _update(_design.copyWith(lyricsGap: (v * 20).round() / 20)),
             ),
-          const SizedBox(height: 12),
-          const _SectionLabel('배경 이미지'),
-          _buildBackgroundImageCard(context),
-          const SizedBox(height: 8),
-          _SwatchRow(
-            label: '배경 색',
-            selected: _design.backgroundColor,
-            colors: _backgroundSwatches,
-            onSelected: (c) => _update(_design.copyWith(backgroundColor: c)),
-          ),
-          const SizedBox(height: 16),
-          const _SectionLabel('문구'),
-          _textField(
-            controller: _labelController,
-            label: '윗줄 (예: 헌금)',
-            onChanged: (v) => _update(_design.copyWith(label: v)),
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              SizedBox(
-                width: 100,
-                child: _textField(
-                  controller: _bankController,
-                  label: '은행명',
-                  onChanged: (v) => _update(_design.copyWith(bankName: v)),
+          // 배경·계좌·디자인은 공통 설정이라 기본 디자인 등록에서만 고친다.
+          if (widget.mode == OfferingDialogMode.defaults) ...[
+            const SizedBox(height: 12),
+            const _SectionLabel('배경 이미지'),
+            BackgroundImageGallery(
+              library: widget.imageLibrary,
+              selected: _design.backgroundImagePath,
+              emptyColor: _design.backgroundColor,
+              onChanged: (path) =>
+                  _update(_design.copyWith(backgroundImagePath: path)),
+            ),
+            const SizedBox(height: 8),
+            _SwatchRow(
+              label: '배경 색',
+              selected: _design.backgroundColor,
+              colors: _backgroundSwatches,
+              onSelected: (c) => _update(_design.copyWith(backgroundColor: c)),
+            ),
+            const SizedBox(height: 16),
+            const _SectionLabel('문구'),
+            _textField(
+              controller: _labelController,
+              label: '윗줄 (예: 헌금)',
+              onChanged: (v) => _update(_design.copyWith(label: v)),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                SizedBox(
+                  width: 100,
+                  child: _textField(
+                    controller: _bankController,
+                    label: '은행명',
+                    onChanged: (v) => _update(_design.copyWith(bankName: v)),
+                  ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _textField(
-                  controller: _accountController,
-                  label: '계좌번호',
-                  keyboardType: TextInputType.number,
-                  inputFormatters: [
-                    FilteringTextInputFormatter.allow(RegExp(r'[0-9\- ]')),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _textField(
+                    controller: _accountController,
+                    label: '계좌번호',
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(RegExp(r'[0-9\- ]')),
+                    ],
+                    onChanged: (v) =>
+                        _update(_design.copyWith(accountNumber: v)),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            const _SectionLabel('글자'),
+            _SwatchRow(
+              label: '글자 색',
+              selected: _design.textColor,
+              colors: _accentSwatches,
+              onSelected: (c) => _update(_design.copyWith(textColor: c)),
+            ),
+            _LabeledSlider(
+              label: '윗줄 크기',
+              value: _design.labelFontSize,
+              min: 16,
+              max: 72,
+              format: (v) => '${v.round()}pt',
+              onChanged: (v) =>
+                  _update(_design.copyWith(labelFontSize: v.roundToDouble())),
+            ),
+            _LabeledSlider(
+              label: '계좌 크기',
+              value: _design.accountFontSize,
+              min: 16,
+              max: 72,
+              format: (v) => '${v.round()}pt',
+              onChanged: (v) =>
+                  _update(_design.copyWith(accountFontSize: v.roundToDouble())),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                const Expanded(child: _SectionLabel('라인')),
+                Switch(
+                  value: _design.showLines,
+                  onChanged: (v) => _update(_design.copyWith(showLines: v)),
+                ),
+              ],
+            ),
+            AnimatedOpacity(
+              opacity: _design.showLines ? 1 : 0.4,
+              duration: const Duration(milliseconds: 150),
+              child: IgnorePointer(
+                ignoring: !_design.showLines,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _SwatchRow(
+                      label: '라인 색',
+                      selected: _design.lineColor,
+                      colors: _accentSwatches,
+                      onSelected: (c) =>
+                          _update(_design.copyWith(lineColor: c)),
+                    ),
+                    _LabeledSlider(
+                      label: '길이',
+                      value: _design.lineWidth,
+                      min: 2,
+                      max: OfferingDesign.slideWidth - 1,
+                      format: (v) => '${v.toStringAsFixed(1)}in',
+                      onChanged: (v) => _update(
+                        _design.copyWith(lineWidth: (v * 10).round() / 10),
+                      ),
+                    ),
+                    _LabeledSlider(
+                      label: '굵기',
+                      value: _design.lineThickness,
+                      min: 1,
+                      max: 8,
+                      format: (v) => '${v.toStringAsFixed(1)}pt',
+                      onChanged: (v) => _update(
+                        _design.copyWith(lineThickness: (v * 2).round() / 2),
+                      ),
+                    ),
+                    _LabeledSlider(
+                      label: '글자와 간격',
+                      value: _design.linePadding,
+                      min: 0,
+                      max: 1,
+                      format: (v) => '${v.toStringAsFixed(2)}in',
+                      onChanged: (v) => _update(
+                        _design.copyWith(linePadding: (v * 20).round() / 20),
+                      ),
+                    ),
                   ],
-                  onChanged: (v) => _update(_design.copyWith(accountNumber: v)),
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          const _SectionLabel('글자'),
-          _SwatchRow(
-            label: '글자 색',
-            selected: _design.textColor,
-            colors: _accentSwatches,
-            onSelected: (c) => _update(_design.copyWith(textColor: c)),
-          ),
-          _LabeledSlider(
-            label: '윗줄 크기',
-            value: _design.labelFontSize,
-            min: 16,
-            max: 72,
-            format: (v) => '${v.round()}pt',
-            onChanged: (v) =>
-                _update(_design.copyWith(labelFontSize: v.roundToDouble())),
-          ),
-          _LabeledSlider(
-            label: '계좌 크기',
-            value: _design.accountFontSize,
-            min: 16,
-            max: 72,
-            format: (v) => '${v.round()}pt',
-            onChanged: (v) =>
-                _update(_design.copyWith(accountFontSize: v.roundToDouble())),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              const Expanded(child: _SectionLabel('라인')),
-              Switch(
-                value: _design.showLines,
-                onChanged: (v) => _update(_design.copyWith(showLines: v)),
-              ),
-            ],
-          ),
-          AnimatedOpacity(
-            opacity: _design.showLines ? 1 : 0.4,
-            duration: const Duration(milliseconds: 150),
-            child: IgnorePointer(
-              ignoring: !_design.showLines,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _SwatchRow(
-                    label: '라인 색',
-                    selected: _design.lineColor,
-                    colors: _accentSwatches,
-                    onSelected: (c) => _update(_design.copyWith(lineColor: c)),
-                  ),
-                  _LabeledSlider(
-                    label: '길이',
-                    value: _design.lineWidth,
-                    min: 2,
-                    max: OfferingDesign.slideWidth - 1,
-                    format: (v) => '${v.toStringAsFixed(1)}in',
-                    onChanged: (v) => _update(
-                      _design.copyWith(lineWidth: (v * 10).round() / 10),
-                    ),
-                  ),
-                  _LabeledSlider(
-                    label: '굵기',
-                    value: _design.lineThickness,
-                    min: 1,
-                    max: 8,
-                    format: (v) => '${v.toStringAsFixed(1)}pt',
-                    onChanged: (v) => _update(
-                      _design.copyWith(lineThickness: (v * 2).round() / 2),
-                    ),
-                  ),
-                  _LabeledSlider(
-                    label: '글자와 간격',
-                    value: _design.linePadding,
-                    min: 0,
-                    max: 1,
-                    format: (v) => '${v.toStringAsFixed(2)}in',
-                    onChanged: (v) => _update(
-                      _design.copyWith(linePadding: (v * 20).round() / 20),
-                    ),
-                  ),
-                ],
               ),
             ),
-          ),
+          ],
         ],
       ),
-    );
-  }
-
-  /// 등록한 배경 이미지 한 장. 썸네일 + 등록(변경) / 삭제 버튼.
-  Widget _buildBackgroundImageCard(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final path = _design.backgroundImagePath;
-    final file = path == null ? null : File(path);
-    final hasImage = file != null && file.existsSync();
-
-    return Row(
-      children: [
-        Container(
-          width: 128,
-          height: 72,
-          clipBehavior: Clip.antiAlias,
-          decoration: BoxDecoration(
-            color: _design.backgroundColor,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: Theme.of(context).dividerColor),
-          ),
-          child: hasImage
-              ? Image.file(
-                  file,
-                  fit: BoxFit.cover,
-                  cacheWidth: 256,
-                  errorBuilder: (_, _, _) =>
-                      const Icon(Icons.broken_image_outlined, size: 18),
-                )
-              : const Center(
-                  child: Text(
-                    '이미지 없음',
-                    style: TextStyle(fontSize: 11, color: Colors.white70),
-                  ),
-                ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              FilledButton.tonalIcon(
-                onPressed: _registerBackgroundImage,
-                icon: const Icon(Icons.add_photo_alternate_outlined, size: 18),
-                label: Text(hasImage ? '이미지 변경' : '이미지 등록'),
-              ),
-              const SizedBox(height: 6),
-              TextButton.icon(
-                onPressed: path == null
-                    ? null
-                    : () =>
-                          _update(_design.copyWith(backgroundImagePath: null)),
-                icon: Icon(
-                  Icons.delete_outline_rounded,
-                  size: 18,
-                  color: path == null ? null : cs.error,
-                ),
-                label: Text(
-                  '이미지 삭제',
-                  style: TextStyle(color: path == null ? null : cs.error),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
     );
   }
 
