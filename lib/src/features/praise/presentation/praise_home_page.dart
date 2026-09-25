@@ -117,7 +117,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   int _nextUid = 0;
   int? _previewStagingUid;
   bool _isSearchCollapsed = false;
-  bool _isDesignCollapsed = false;
+  bool _isRibbonCollapsed = false;
   bool _isStagingCollapsed = false;
   // 최상위 탭: 0 편집(콘티·검색·디자인), 1 발표 보기
   late final TabController _mainTabController;
@@ -1959,11 +1959,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                 padding: const EdgeInsets.all(24),
                 child: LayoutBuilder(
                   builder: (context, constraints) {
-                    final isWide = constraints.maxWidth >= 1120;
-                    final gap = SizedBox(
-                      width: isWide ? 20 : 0,
-                      height: isWide ? 0 : 20,
-                    );
+                    // 디자인은 위쪽 리본으로 올라갔으므로 콘티·검색 두 열만 들어가면 된다.
+                    final isWide = constraints.maxWidth >= 900;
                     return Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -2130,85 +2127,81 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                                   setState(() => _isSearchCollapsed = false),
                             );
 
-                            final designPanel = _DesignPanel(
+                            // 리본이 따라갈 항목 종류. 편집 탭은 콘티에서 고른 항목,
+                            // 발표 보기는 지금 나가는 슬라이드를 기준으로 한다.
+                            final isPresenterTab =
+                                _mainTabController.index == 1;
+                            final _RibbonTab? ribbonContext;
+                            if (isPresenterTab && slides.isNotEmpty) {
+                              final slide =
+                                  slides[_currentSlideIndex.clamp(
+                                    0,
+                                    slides.length - 1,
+                                  )];
+                              ribbonContext =
+                                  slide.imagePath != null || slide.isBlank
+                                  ? null
+                                  : slide.isBible
+                                  ? _RibbonTab.bible
+                                  : _RibbonTab.song;
+                            } else {
+                              ribbonContext = switch (previewItem) {
+                                SongStagingItem() => _RibbonTab.song,
+                                BibleStagingItem() => _RibbonTab.bible,
+                                _ => null,
+                              };
+                            }
+
+                            final designRibbon = _DesignRibbon(
                               style: _style,
-                              previewBackground: previewBackground,
-                              isExporting: _isExporting,
                               swatches: _swatches,
                               textSwatches: _textSwatches,
-                              previewItem: previewItem,
-                              onStyleChanged: _updateStyle,
                               subLanguages: _subLanguages,
                               bibleVersions: _bibleVersions,
+                              onStyleChanged: _updateStyle,
+                              isCollapsed: _isRibbonCollapsed,
+                              onCollapsedChanged: (v) =>
+                                  setState(() => _isRibbonCollapsed = v),
+                              contextTab: ribbonContext,
+                              // 발표 보기는 현재 슬라이드가 이미 크게 보인다.
+                              preview: isPresenterTab
+                                  ? null
+                                  : _PreviewBox(
+                                      style: _style.withBackground(
+                                        previewBackground,
+                                      ),
+                                      previewItem: previewItem,
+                                    ),
+                              isExporting: _isExporting,
                               onExportPressed: _exportPresentation,
-                              onCollapse: () =>
-                                  setState(() => _isDesignCollapsed = true),
                             );
 
-                            final workspace = Flex(
-                              direction: isWide
-                                  ? Axis.horizontal
-                                  : Axis.vertical,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                // ── 발표·콘티 + 검색 (가로 크기 조절 가능) ──
-                                Expanded(
-                                  flex: 7,
-                                  child: isWide
-                                      ? _ResizableColumnSplit(
-                                          ratio: _workColumnRatio,
-                                          onRatioChanged: (v) => setState(
-                                            () => _workColumnRatio = v,
-                                          ),
-                                          first: presentationAndStagingColumn,
-                                          second: searchColumn,
-                                          isSecondCollapsed: _isSearchCollapsed,
-                                          collapsedSecond: collapsedSearchStrip,
-                                        )
-                                      : Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Expanded(
-                                              flex: 3,
-                                              child:
-                                                  presentationAndStagingColumn,
-                                            ),
-                                            const SizedBox(height: 20),
-                                            if (_isSearchCollapsed)
-                                              collapsedSearchStrip
-                                            else
-                                              Expanded(
-                                                flex: 4,
-                                                child: searchColumn,
-                                              ),
-                                          ],
-                                        ),
-                                ),
-                                gap,
-                                // ── PPTX 디자인 ──
-                                if (_isDesignCollapsed)
-                                  _CollapsedPanelStrip(
-                                    label: 'PPTX 디자인',
-                                    isVertical: isWide,
-                                    onExpand: () => setState(
-                                      () => _isDesignCollapsed = false,
-                                    ),
+                            // ── 콘티 + 검색 (가로 크기 조절 가능) ──
+                            final workspace = isWide
+                                ? _ResizableColumnSplit(
+                                    ratio: _workColumnRatio,
+                                    onRatioChanged: (v) =>
+                                        setState(() => _workColumnRatio = v),
+                                    first: presentationAndStagingColumn,
+                                    second: searchColumn,
+                                    isSecondCollapsed: _isSearchCollapsed,
+                                    collapsedSecond: collapsedSearchStrip,
                                   )
-                                else if (isWide)
-                                  // 넓은 화면에서는 창이 커져도 설정 패널은 일정 폭만
-                                  // 쓰고, 남는 공간은 콘티·검색 쪽으로 돌린다.
-                                  SizedBox(
-                                    width: (constraints.maxWidth * 0.22).clamp(
-                                      300.0,
-                                      340.0,
-                                    ),
-                                    child: designPanel,
-                                  )
-                                else
-                                  Expanded(flex: 2, child: designPanel),
-                              ],
-                            );
+                                : Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Expanded(
+                                        flex: 3,
+                                        child: presentationAndStagingColumn,
+                                      ),
+                                      const SizedBox(height: 20),
+                                      if (_isSearchCollapsed)
+                                        collapsedSearchStrip
+                                      else
+                                        Expanded(flex: 4, child: searchColumn),
+                                    ],
+                                  );
 
                             return Expanded(
                               child: Column(
@@ -2271,6 +2264,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                                         ),
                                     ],
                                   ),
+                                  const SizedBox(height: 8),
+                                  designRibbon,
                                   const SizedBox(height: 12),
                                   // TabBarView 가 아니라 IndexedStack 인 이유:
                                   // 드래그 전환은 어차피 막아 뒀고, PageView 스크롤을
@@ -4061,214 +4056,78 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
 
 // ── DesignPanel ───────────────────────────────────────────────────────────
 
-/// 오른쪽 "PPTX 디자인" 패널.
-///
-/// 한 줄 = 한 설정(`_PropertyRow`: 왼쪽 라벨 + 오른쪽 컨트롤)으로 세로 공간을 아끼고,
-/// 설정을 성격별 묶음(`_DesignGroup`)으로 나눈다.
-///   - 공통: 폰트 · 배경 색 · 배경 이미지 (찬양/성경 모두에 적용)
-///   - 찬양/성경 전환 후: 글자 · 본문 위치 · 제목
-class _DesignPanel extends StatelessWidget {
-  const _DesignPanel({
-    required this.style,
-    required this.previewBackground,
-    required this.isExporting,
-    required this.swatches,
-    required this.textSwatches,
-    required this.previewItem,
-    required this.onStyleChanged,
-    required this.subLanguages,
-    required this.bibleVersions,
-    required this.onExportPressed,
-    required this.onCollapse,
-  });
+// 색 입력 다이얼로그(리본·항목 배경)가 같이 쓰는 hex 입력 규칙.
+final TextInputFormatter _hexInputFormatter = FilteringTextInputFormatter.allow(
+  RegExp(r'[0-9a-fA-F#]'),
+);
 
-  final ExportStyle style;
-  // 선택한 콘티 항목의 배경 오버라이드. 미리보기에만 반영한다(설정값은 전역 그대로).
-  final SlideBackground? previewBackground;
-  final bool isExporting;
-  final List<Color> swatches;
-  final List<Color> textSwatches;
-  final StagingItem? previewItem;
-  final ValueChanged<ExportStyle> onStyleChanged;
-  final List<String> subLanguages;
-  final List<String> bibleVersions;
-  final VoidCallback onExportPressed;
-  final VoidCallback onCollapse;
+/// 리본 탭. 찬양/성경은 콘티에서 고른 항목(발표 보기에서는 현재 슬라이드)에 따라
+/// 자동으로 전환된다.
+enum _RibbonTab {
+  common('공통', Icons.wallpaper_outlined),
+  song('찬양', Icons.music_note_rounded),
+  bible('성경 본문', Icons.menu_book_rounded);
 
-  // 배경 다이얼로그에서도 같은 hex 입력 규칙을 쓴다.
-  static final TextInputFormatter hexInputFormatter =
-      FilteringTextInputFormatter.allow(RegExp(r'[0-9a-fA-F#]'));
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Card(
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final showPreview = constraints.maxHeight >= 320;
-          final previewMaxHeight = constraints.maxHeight < 520 ? 118.0 : 170.0;
-
-          return Padding(
-            padding: const EdgeInsets.fromLTRB(14, 8, 8, 14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // ── 헤더 ──
-                Row(
-                  children: [
-                    Icon(Icons.palette_outlined, size: 18, color: cs.primary),
-                    const SizedBox(width: 6),
-                    const Expanded(
-                      child: Text(
-                        'PPTX 디자인',
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.chevron_right_rounded),
-                      tooltip: '디자인 패널 접기',
-                      visualDensity: VisualDensity.compact,
-                      color: cs.onSurfaceVariant,
-                      onPressed: onCollapse,
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Padding(
-                  // 스크롤 영역의 스크롤바 자리만큼 오른쪽을 비워 두 영역 폭을 맞춘다.
-                  padding: const EdgeInsets.only(right: 6),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      FilledButton.icon(
-                        style: FilledButton.styleFrom(
-                          visualDensity: VisualDensity.compact,
-                        ),
-                        onPressed: isExporting ? null : onExportPressed,
-                        icon: isExporting
-                            ? const SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Icon(Icons.slideshow_rounded, size: 18),
-                        label: Text(isExporting ? '생성 중' : '선택한 항목으로 PPTX 저장'),
-                      ),
-                      if (showPreview) ...[
-                        const SizedBox(height: 10),
-                        ConstrainedBox(
-                          constraints: BoxConstraints(
-                            maxHeight: previewMaxHeight,
-                          ),
-                          child: _PreviewBox(
-                            style: style.withBackground(previewBackground),
-                            previewItem: previewItem,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 10),
-                // ── 설정 (스크롤) ──
-                Expanded(
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.only(right: 6),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        _DesignGroup(
-                          icon: Icons.wallpaper_outlined,
-                          title: '공통',
-                          children: [
-                            _PropertyRow(
-                              label: '폰트',
-                              child: _FontFamilyPicker(
-                                selected: style.fontFamily,
-                                onChanged: (family) => onStyleChanged(
-                                  style.copyWith(fontFamily: family),
-                                ),
-                              ),
-                            ),
-                            _PropertyRow(
-                              label: '배경 색',
-                              child: _ColorField(
-                                dialogTitle: '배경 색상',
-                                color: style.backgroundColor,
-                                colors: swatches,
-                                onSelected: (color) => onStyleChanged(
-                                  style.copyWith(backgroundColor: color),
-                                ),
-                              ),
-                            ),
-                            _PropertyRow(
-                              label: '배경 이미지',
-                              child: _BackgroundImagePicker(
-                                dense: true,
-                                imagePath: style.backgroundImagePath,
-                                onChanged: (path) => onStyleChanged(
-                                  style.copyWith(backgroundImagePath: path),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        _StyleTabControls(
-                          style: style,
-                          previewItem: previewItem,
-                          textSwatches: textSwatches,
-                          onStyleChanged: onStyleChanged,
-                          subLanguages: subLanguages,
-                          bibleVersions: bibleVersions,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-  }
+  const _RibbonTab(this.label, this.icon);
+  final String label;
+  final IconData icon;
 }
 
-/// 찬양 / 성경 본문 각각의 글자·위치·제목 설정.
-/// 콘티에서 곡이나 성경을 고르면 해당 쪽으로 자동 전환된다.
-class _StyleTabControls extends StatefulWidget {
-  const _StyleTabControls({
+/// 상단 "디자인" 리본 (PowerPoint 리본처럼 접을 수 있다).
+///
+/// 편집·발표 보기 두 탭이 같이 쓴다. 스타일을 바꾸면 `_updateStyle` 이 발표 창에
+/// 현재 페이지를 다시 보내므로 발표 중에도 바로 반영된다.
+///
+/// 한 묶음(`_RibbonGroup`) = 최대 3줄짜리 열 여러 개 + 아래쪽 묶음 이름.
+/// 한 줄 = `_PropertyRow`(왼쪽 라벨 + 오른쪽 컨트롤).
+class _DesignRibbon extends StatefulWidget {
+  const _DesignRibbon({
     required this.style,
-    required this.previewItem,
+    required this.swatches,
     required this.textSwatches,
-    required this.onStyleChanged,
     required this.subLanguages,
     required this.bibleVersions,
+    required this.onStyleChanged,
+    required this.isCollapsed,
+    required this.onCollapsedChanged,
+    required this.contextTab,
+    required this.preview,
+    required this.isExporting,
+    required this.onExportPressed,
   });
 
   final ExportStyle style;
-  final StagingItem? previewItem;
+  final List<Color> swatches;
   final List<Color> textSwatches;
-  final ValueChanged<ExportStyle> onStyleChanged;
 
   /// 찬양 보조 가사로 고를 수 있는 언어 / 성경 보조로 고를 수 있는 역본.
   final List<String> subLanguages;
   final List<String> bibleVersions;
+  final ValueChanged<ExportStyle> onStyleChanged;
+
+  final bool isCollapsed;
+  final ValueChanged<bool> onCollapsedChanged;
+
+  /// 지금 다루는 항목의 종류. 바뀌면 그 탭으로 넘어간다. null 이면 그대로 둔다.
+  final _RibbonTab? contextTab;
+
+  /// 리본 왼쪽에 둘 미리보기. 발표 보기에서는 현재 슬라이드가 이미 크게 보이므로 null.
+  final Widget? preview;
+
+  final bool isExporting;
+  final VoidCallback onExportPressed;
 
   @override
-  State<_StyleTabControls> createState() => _StyleTabControlsState();
+  State<_DesignRibbon> createState() => _DesignRibbonState();
 }
 
-enum _StyleTarget { song, bible }
+class _DesignRibbonState extends State<_DesignRibbon> {
+  // 3줄 + 줄 사이 + 묶음 이름. 리본 내용 높이가 이 값으로 고정된다.
+  static const double _contentHeight = 118;
+  static const double _columnWidth = 236;
+  static const double _rowGap = 4;
 
-class _StyleTabControlsState extends State<_StyleTabControls> {
-  late _StyleTarget _target;
+  late _RibbonTab _tab;
 
   ExportStyle get _style => widget.style;
   void _update(ExportStyle next) => widget.onStyleChanged(next);
@@ -4276,75 +4135,215 @@ class _StyleTabControlsState extends State<_StyleTabControls> {
   @override
   void initState() {
     super.initState();
-    _target = _targetForItem(widget.previewItem) ?? _StyleTarget.song;
+    _tab = widget.contextTab ?? _RibbonTab.song;
   }
 
   @override
-  void didUpdateWidget(_StyleTabControls oldWidget) {
+  void didUpdateWidget(_DesignRibbon oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (identical(widget.previewItem, oldWidget.previewItem)) return;
-    final next = _targetForItem(widget.previewItem);
-    if (next == null || next == _target) return;
-    setState(() => _target = next);
+    final next = widget.contextTab;
+    // '공통' 탭을 보고 있을 때는 곡/성경을 오가도 끌고 가지 않는다.
+    if (next == null || next == oldWidget.contextTab) return;
+    if (_tab == _RibbonTab.common) return;
+    setState(() => _tab = next);
   }
 
-  _StyleTarget? _targetForItem(StagingItem? item) {
-    return switch (item) {
-      SongStagingItem() => _StyleTarget.song,
-      BibleStagingItem() => _StyleTarget.bible,
-      BlankStagingItem() => null,
-      ImageStagingItem() => null,
-      null => null,
-    };
+  void _selectTab(_RibbonTab tab) {
+    // 접힌 상태에서 탭을 누르면 펼치고, 펼친 상태에서 같은 탭을 누르면 접는다.
+    if (widget.isCollapsed) {
+      setState(() => _tab = tab);
+      widget.onCollapsedChanged(false);
+    } else if (tab == _tab) {
+      widget.onCollapsedChanged(true);
+    } else {
+      setState(() => _tab = tab);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Column(
+    final cs = Theme.of(context).colorScheme;
+    // 발표 중 단축키(←/→/Space)를 슬라이더·세그먼트가 가로채지 않도록
+    // 리본 안의 컨트롤은 키보드 포커스를 받지 않는다. 마우스 조작은 그대로 된다.
+    return ExcludeFocus(
+      child: Card(
+        margin: EdgeInsets.zero,
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _header(cs),
+            if (!widget.isCollapsed) ...[
+              Divider(height: 1, color: cs.outlineVariant),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(10, 8, 10, 6),
+                child: SizedBox(height: _contentHeight, child: _content(cs)),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _header(ColorScheme cs) {
+    return SizedBox(
+      height: 40,
+      child: Row(
+        children: [
+          const SizedBox(width: 12),
+          Icon(Icons.palette_outlined, size: 16, color: cs.primary),
+          const SizedBox(width: 6),
+          const Text(
+            '디자인',
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(width: 14),
+          for (final tab in _RibbonTab.values)
+            _RibbonTabButton(
+              tab: tab,
+              isSelected: !widget.isCollapsed && tab == _tab,
+              onTap: () => _selectTab(tab),
+            ),
+          const Spacer(),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+              textStyle: Theme.of(
+                context,
+              ).textTheme.labelLarge?.copyWith(fontSize: 12.5),
+            ),
+            onPressed: widget.isExporting ? null : widget.onExportPressed,
+            icon: widget.isExporting
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.slideshow_rounded, size: 16),
+            label: Text(widget.isExporting ? '생성 중' : 'PPTX 저장'),
+          ),
+          IconButton(
+            tooltip: widget.isCollapsed ? '리본 펼치기' : '리본 접기',
+            visualDensity: VisualDensity.compact,
+            color: cs.onSurfaceVariant,
+            onPressed: () => widget.onCollapsedChanged(!widget.isCollapsed),
+            icon: Icon(
+              widget.isCollapsed
+                  ? Icons.expand_more_rounded
+                  : Icons.expand_less_rounded,
+            ),
+          ),
+          const SizedBox(width: 4),
+        ],
+      ),
+    );
+  }
+
+  Widget _content(ColorScheme cs) {
+    final groups = switch (_tab) {
+      _RibbonTab.common => _commonGroups(),
+      _RibbonTab.song => _songGroups(),
+      _RibbonTab.bible => _bibleGroups(),
+    };
+    return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        SegmentedButton<_StyleTarget>(
-          segments: const [
-            ButtonSegment(
-              value: _StyleTarget.song,
-              icon: Icon(Icons.music_note_rounded, size: 16),
-              label: Text('찬양'),
+        if (widget.preview != null) ...[
+          SizedBox(width: _contentHeight * 13.333 / 7.5, child: widget.preview),
+          VerticalDivider(width: 21, color: cs.outlineVariant),
+        ],
+        // 창이 좁으면 묶음들만 가로로 스크롤한다.
+        Expanded(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (var i = 0; i < groups.length; i++) ...[
+                  if (i > 0)
+                    VerticalDivider(width: 21, color: cs.outlineVariant),
+                  groups[i],
+                ],
+              ],
             ),
-            ButtonSegment(
-              value: _StyleTarget.bible,
-              icon: Icon(Icons.menu_book_rounded, size: 16),
-              label: Text('성경 본문'),
-            ),
-          ],
-          selected: {_target},
-          showSelectedIcon: false,
-          style: const ButtonStyle(
-            visualDensity: VisualDensity(horizontal: -2, vertical: -2),
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
           ),
-          onSelectionChanged: (selection) =>
-              setState(() => _target = selection.first),
-        ),
-        const SizedBox(height: 12),
-        // 드롭다운 등 내부 상태를 잃지 않도록 두 쪽을 모두 살려 둔다.
-        IndexedStack(
-          index: _target.index,
-          children: [_songControls(), _bibleControls()],
         ),
       ],
     );
   }
 
+  /// 최대 3줄짜리 설정 열.
+  Widget _column(List<Widget> rows) {
+    return SizedBox(
+      width: _columnWidth,
+      child: Column(
+        children: [
+          for (var i = 0; i < rows.length; i++) ...[
+            if (i > 0) const SizedBox(height: _rowGap),
+            rows[i],
+          ],
+        ],
+      ),
+    );
+  }
+
+  // ── 공통 ──
+
+  List<Widget> _commonGroups() {
+    return [
+      _RibbonGroup(
+        label: '글꼴',
+        columns: [
+          _column([
+            _PropertyRow(
+              label: '폰트',
+              child: _FontFamilyPicker(
+                selected: _style.fontFamily,
+                onChanged: (family) =>
+                    _update(_style.copyWith(fontFamily: family)),
+              ),
+            ),
+          ]),
+        ],
+      ),
+      _RibbonGroup(
+        label: '배경',
+        columns: [
+          _column([
+            _PropertyRow(
+              label: '배경 색',
+              child: _ColorField(
+                dialogTitle: '배경 색상',
+                color: _style.backgroundColor,
+                colors: widget.swatches,
+                onSelected: (c) => _update(_style.copyWith(backgroundColor: c)),
+              ),
+            ),
+            _PropertyRow(
+              label: '배경 이미지',
+              child: _BackgroundImagePicker(
+                dense: true,
+                imagePath: _style.backgroundImagePath,
+                onChanged: (path) =>
+                    _update(_style.copyWith(backgroundImagePath: path)),
+              ),
+            ),
+          ]),
+        ],
+      ),
+    ];
+  }
+
   // ── 찬양 ──
 
-  Widget _songControls() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _DesignGroup(
-          icon: Icons.text_fields_rounded,
-          title: '가사',
-          children: [
+  List<Widget> _songGroups() {
+    return [
+      _RibbonGroup(
+        label: '가사',
+        columns: [
+          _column([
             _PropertyRow(
               label: '크기',
               child: _ValueSlider(
@@ -4356,22 +4355,30 @@ class _StyleTabControlsState extends State<_StyleTabControls> {
               ),
             ),
             _PropertyRow(
-              label: '한글 색',
-              child: _ColorField(
-                dialogTitle: '한글 가사 색상',
-                color: _style.textColor,
-                colors: widget.textSwatches,
-                onSelected: (c) => _update(_style.copyWith(textColor: c)),
-              ),
-            ),
-            _PropertyRow(
-              label: '보조 언어 색',
-              child: _ColorField(
-                dialogTitle: '보조 언어 가사 색상',
-                color: _style.englishTextColor,
-                colors: widget.textSwatches,
-                onSelected: (c) =>
-                    _update(_style.copyWith(englishTextColor: c)),
+              label: '색상',
+              child: Row(
+                children: [
+                  Expanded(
+                    child: _ColorField(
+                      caption: '한글',
+                      dialogTitle: '한글 가사 색상',
+                      color: _style.textColor,
+                      colors: widget.textSwatches,
+                      onSelected: (c) => _update(_style.copyWith(textColor: c)),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: _ColorField(
+                      caption: '보조',
+                      dialogTitle: '보조 언어 가사 색상',
+                      color: _style.englishTextColor,
+                      colors: widget.textSwatches,
+                      onSelected: (c) =>
+                          _update(_style.copyWith(englishTextColor: c)),
+                    ),
+                  ),
+                ],
               ),
             ),
             _PropertyRow(
@@ -4389,48 +4396,44 @@ class _StyleTabControlsState extends State<_StyleTabControls> {
                 ),
               ),
             ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        _positionGroup(
-          title: '가사 위치',
-          vertical: _style.textPosition,
-          offsetY: _style.textOffsetY,
-          align: _style.lyricsTextAlign,
-          onVertical: (v) => _update(_style.copyWith(textPosition: v)),
-          onOffsetY: (v) => _update(_style.copyWith(textOffsetY: v)),
-          onAlign: (v) => _update(_style.copyWith(lyricsTextAlign: v)),
-        ),
-        const SizedBox(height: 12),
-        _titleGroup(
-          visible: _style.showSongTitle,
-          fontSize: _style.titleFontSize,
-          color: _style.titleTextColor,
-          horizontal: _style.titleHorizontalPosition,
-          vertical: _style.titleVerticalPosition,
-          offsetY: _style.titleOffsetY,
-          onVisible: (v) => _update(_style.copyWith(showSongTitle: v)),
-          onFontSize: (v) => _update(_style.copyWith(titleFontSize: v)),
-          onColor: (c) => _update(_style.copyWith(titleTextColor: c)),
-          onHorizontal: (v) =>
-              _update(_style.copyWith(titleHorizontalPosition: v)),
-          onVertical: (v) => _update(_style.copyWith(titleVerticalPosition: v)),
-          onOffsetY: (v) => _update(_style.copyWith(titleOffsetY: v)),
-        ),
-      ],
-    );
+          ]),
+        ],
+      ),
+      _positionGroup(
+        label: '가사 위치',
+        vertical: _style.textPosition,
+        offsetY: _style.textOffsetY,
+        align: _style.lyricsTextAlign,
+        onVertical: (v) => _update(_style.copyWith(textPosition: v)),
+        onOffsetY: (v) => _update(_style.copyWith(textOffsetY: v)),
+        onAlign: (v) => _update(_style.copyWith(lyricsTextAlign: v)),
+      ),
+      _titleGroup(
+        visible: _style.showSongTitle,
+        fontSize: _style.titleFontSize,
+        color: _style.titleTextColor,
+        horizontal: _style.titleHorizontalPosition,
+        vertical: _style.titleVerticalPosition,
+        offsetY: _style.titleOffsetY,
+        onVisible: (v) => _update(_style.copyWith(showSongTitle: v)),
+        onFontSize: (v) => _update(_style.copyWith(titleFontSize: v)),
+        onColor: (c) => _update(_style.copyWith(titleTextColor: c)),
+        onHorizontal: (v) =>
+            _update(_style.copyWith(titleHorizontalPosition: v)),
+        onVertical: (v) => _update(_style.copyWith(titleVerticalPosition: v)),
+        onOffsetY: (v) => _update(_style.copyWith(titleOffsetY: v)),
+      ),
+    ];
   }
 
   // ── 성경 본문 ──
 
-  Widget _bibleControls() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _DesignGroup(
-          icon: Icons.text_fields_rounded,
-          title: '본문',
-          children: [
+  List<Widget> _bibleGroups() {
+    return [
+      _RibbonGroup(
+        label: '본문',
+        columns: [
+          _column([
             _PropertyRow(
               label: '크기',
               child: _ValueSlider(
@@ -4466,44 +4469,42 @@ class _StyleTabControlsState extends State<_StyleTabControls> {
                       ),
                     ),
             ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        _positionGroup(
-          title: '본문 위치',
-          vertical: _style.bibleTextPosition,
-          offsetY: _style.bibleTextOffsetY,
-          align: _style.bibleTextAlign,
-          onVertical: (v) => _update(_style.copyWith(bibleTextPosition: v)),
-          onOffsetY: (v) => _update(_style.copyWith(bibleTextOffsetY: v)),
-          onAlign: (v) => _update(_style.copyWith(bibleTextAlign: v)),
-        ),
-        const SizedBox(height: 12),
-        _titleGroup(
-          visible: _style.showBibleTitle,
-          fontSize: _style.bibleTitleFontSize,
-          color: _style.bibleTitleTextColor,
-          horizontal: _style.bibleTitleHorizontalPosition,
-          vertical: _style.bibleTitleVerticalPosition,
-          offsetY: _style.bibleTitleOffsetY,
-          onVisible: (v) => _update(_style.copyWith(showBibleTitle: v)),
-          onFontSize: (v) => _update(_style.copyWith(bibleTitleFontSize: v)),
-          onColor: (c) => _update(_style.copyWith(bibleTitleTextColor: c)),
-          onHorizontal: (v) =>
-              _update(_style.copyWith(bibleTitleHorizontalPosition: v)),
-          onVertical: (v) =>
-              _update(_style.copyWith(bibleTitleVerticalPosition: v)),
-          onOffsetY: (v) => _update(_style.copyWith(bibleTitleOffsetY: v)),
-        ),
-      ],
-    );
+          ]),
+        ],
+      ),
+      _positionGroup(
+        label: '본문 위치',
+        vertical: _style.bibleTextPosition,
+        offsetY: _style.bibleTextOffsetY,
+        align: _style.bibleTextAlign,
+        onVertical: (v) => _update(_style.copyWith(bibleTextPosition: v)),
+        onOffsetY: (v) => _update(_style.copyWith(bibleTextOffsetY: v)),
+        onAlign: (v) => _update(_style.copyWith(bibleTextAlign: v)),
+      ),
+      _titleGroup(
+        visible: _style.showBibleTitle,
+        fontSize: _style.bibleTitleFontSize,
+        color: _style.bibleTitleTextColor,
+        horizontal: _style.bibleTitleHorizontalPosition,
+        vertical: _style.bibleTitleVerticalPosition,
+        offsetY: _style.bibleTitleOffsetY,
+        onVisible: (v) => _update(_style.copyWith(showBibleTitle: v)),
+        onFontSize: (v) => _update(_style.copyWith(bibleTitleFontSize: v)),
+        onColor: (c) => _update(_style.copyWith(bibleTitleTextColor: c)),
+        onHorizontal: (v) =>
+            _update(_style.copyWith(bibleTitleHorizontalPosition: v)),
+        onVertical: (v) =>
+            _update(_style.copyWith(bibleTitleVerticalPosition: v)),
+        onOffsetY: (v) => _update(_style.copyWith(bibleTitleOffsetY: v)),
+      ),
+    ];
   }
 
   // ── 찬양/성경 공용 묶음 ──
 
   /// 본문 상자의 세로 기준 + 미세 조정 + 가로 정렬.
   Widget _positionGroup({
-    required String title,
+    required String label,
     required VerticalTextPosition vertical,
     required double offsetY,
     required HorizontalPosition align,
@@ -4511,37 +4512,39 @@ class _StyleTabControlsState extends State<_StyleTabControls> {
     required ValueChanged<double> onOffsetY,
     required ValueChanged<HorizontalPosition> onAlign,
   }) {
-    return _DesignGroup(
-      icon: Icons.open_with_rounded,
-      title: title,
-      children: [
-        _PropertyRow(
-          label: '세로 기준',
-          child: _OptionSegments<VerticalTextPosition>(
-            values: VerticalTextPosition.values,
-            selected: vertical,
-            labelOf: (v) => v.label,
-            onSelected: onVertical,
+    return _RibbonGroup(
+      label: label,
+      columns: [
+        _column([
+          _PropertyRow(
+            label: '세로 기준',
+            child: _OptionSegments<VerticalTextPosition>(
+              values: VerticalTextPosition.values,
+              selected: vertical,
+              labelOf: (v) => v.label,
+              onSelected: onVertical,
+            ),
           ),
-        ),
-        _PropertyRow(
-          label: '미세 조정',
-          child: _OffsetSlider(value: offsetY, onChanged: onOffsetY),
-        ),
-        _PropertyRow(
-          label: '가로 정렬',
-          child: _OptionSegments<HorizontalPosition>(
-            values: HorizontalPosition.values,
-            selected: align,
-            labelOf: (v) => v.label,
-            onSelected: onAlign,
+          _PropertyRow(
+            label: '미세 조정',
+            child: _OffsetSlider(value: offsetY, onChanged: onOffsetY),
           ),
-        ),
+          _PropertyRow(
+            label: '가로 정렬',
+            child: _OptionSegments<HorizontalPosition>(
+              values: HorizontalPosition.values,
+              selected: align,
+              labelOf: (v) => v.label,
+              onSelected: onAlign,
+            ),
+          ),
+        ]),
       ],
     );
   }
 
-  /// 제목 표시 스위치(묶음 머리) + 켰을 때만 나오는 크기·색·위치.
+  /// 제목: 왼쪽 열(표시·크기·색) + 오른쪽 열(위치 셋).
+  /// 제목을 끄면 나머지는 흐리게 잠근다(자리를 유지해서 리본이 출렁이지 않게).
   Widget _titleGroup({
     required bool visible,
     required double fontSize,
@@ -4556,116 +4559,171 @@ class _StyleTabControlsState extends State<_StyleTabControls> {
     required ValueChanged<VerticalTextPosition> onVertical,
     required ValueChanged<double> onOffsetY,
   }) {
-    return _DesignGroup(
-      icon: Icons.title_rounded,
-      title: '제목',
-      trailing: Transform.scale(
-        scale: 0.75,
-        alignment: Alignment.centerRight,
-        child: Switch(value: visible, onChanged: onVisible),
-      ),
-      children: [
-        if (visible) ...[
+    Widget lockable(Widget child) => IgnorePointer(
+      ignoring: !visible,
+      child: Opacity(opacity: visible ? 1 : 0.38, child: child),
+    );
+
+    return _RibbonGroup(
+      label: '제목',
+      columns: [
+        _column([
           _PropertyRow(
-            label: '크기',
-            child: _ValueSlider(
-              value: fontSize,
-              min: 8,
-              max: 28,
-              divisions: 10,
-              onChanged: onFontSize,
+            label: '제목 표시',
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: SizedBox(
+                height: 26,
+                child: FittedBox(
+                  child: Switch(
+                    value: visible,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    onChanged: onVisible,
+                  ),
+                ),
+              ),
             ),
           ),
-          _PropertyRow(
-            label: '색상',
-            child: _ColorField(
-              dialogTitle: '제목 색상',
-              color: color,
-              colors: widget.textSwatches,
-              onSelected: onColor,
+          lockable(
+            _PropertyRow(
+              label: '크기',
+              child: _ValueSlider(
+                value: fontSize,
+                min: 8,
+                max: 28,
+                divisions: 10,
+                onChanged: onFontSize,
+              ),
             ),
           ),
-          _PropertyRow(
-            label: '가로 위치',
-            child: _OptionSegments<HorizontalPosition>(
-              values: HorizontalPosition.values,
-              selected: horizontal,
-              labelOf: (v) => v.label,
-              onSelected: onHorizontal,
+          lockable(
+            _PropertyRow(
+              label: '색상',
+              child: _ColorField(
+                dialogTitle: '제목 색상',
+                color: color,
+                colors: widget.textSwatches,
+                onSelected: onColor,
+              ),
             ),
           ),
-          _PropertyRow(
-            label: '세로 기준',
-            child: _OptionSegments<VerticalTextPosition>(
-              values: VerticalTextPosition.values,
-              selected: vertical,
-              labelOf: (v) => v.label,
-              onSelected: onVertical,
+        ]),
+        lockable(
+          _column([
+            _PropertyRow(
+              label: '가로 위치',
+              child: _OptionSegments<HorizontalPosition>(
+                values: HorizontalPosition.values,
+                selected: horizontal,
+                labelOf: (v) => v.label,
+                onSelected: onHorizontal,
+              ),
             ),
-          ),
-          _PropertyRow(
-            label: '미세 조정',
-            child: _OffsetSlider(value: offsetY, onChanged: onOffsetY),
-          ),
-        ],
+            _PropertyRow(
+              label: '세로 기준',
+              child: _OptionSegments<VerticalTextPosition>(
+                values: VerticalTextPosition.values,
+                selected: vertical,
+                labelOf: (v) => v.label,
+                onSelected: onVertical,
+              ),
+            ),
+            _PropertyRow(
+              label: '미세 조정',
+              child: _OffsetSlider(value: offsetY, onChanged: onOffsetY),
+            ),
+          ]),
+        ),
       ],
     );
   }
 }
 
-// ── 디자인 패널 공용 조각 ─────────────────────────────────────────────────
+// ── 리본 공용 조각 ────────────────────────────────────────────────────────
 
-/// 아이콘 + 제목 머리를 단 옅은 배경 묶음. [trailing] 은 머리 오른쪽(예: 표시 스위치).
-class _DesignGroup extends StatelessWidget {
-  const _DesignGroup({
-    required this.icon,
-    required this.title,
-    required this.children,
-    this.trailing,
+/// 리본 머리의 탭 버튼. 선택되면 밑줄이 생긴다.
+class _RibbonTabButton extends StatelessWidget {
+  const _RibbonTabButton({
+    required this.tab,
+    required this.isSelected,
+    required this.onTap,
   });
 
-  final IconData icon;
-  final String title;
-  final List<Widget> children;
-  final Widget? trailing;
+  final _RibbonTab tab;
+  final bool isSelected;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.fromLTRB(10, 6, 10, 8),
-      decoration: BoxDecoration(
-        color: cs.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.6)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          SizedBox(
-            height: 28,
-            child: Row(
-              children: [
-                Icon(icon, size: 15, color: cs.primary),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    title,
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.3,
-                      color: cs.primary,
-                    ),
-                  ),
-                ),
-                ?trailing,
-              ],
+    final color = isSelected ? cs.primary : cs.onSurfaceVariant;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        height: 40,
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        decoration: BoxDecoration(
+          border: Border(
+            bottom: BorderSide(
+              color: isSelected ? cs.primary : Colors.transparent,
+              width: 2,
             ),
           ),
-          for (final child in children) ...[const SizedBox(height: 6), child],
-        ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(tab.icon, size: 15, color: color),
+            const SizedBox(width: 5),
+            Text(
+              tab.label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                color: color,
+              ),
+            ),
+          ],
+        ),
       ),
+    );
+  }
+}
+
+/// 리본의 한 묶음: 설정 열들 + 아래쪽 가운데 묶음 이름 (PowerPoint 리본과 같은 배치).
+class _RibbonGroup extends StatelessWidget {
+  const _RibbonGroup({required this.label, required this.columns});
+
+  final String label;
+  final List<Widget> columns;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Column(
+      children: [
+        Expanded(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (var i = 0; i < columns.length; i++) ...[
+                if (i > 0) const SizedBox(width: 16),
+                columns[i],
+              ],
+            ],
+          ),
+        ),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.3,
+            color: cs.onSurfaceVariant,
+          ),
+        ),
+      ],
     );
   }
 }
@@ -4674,7 +4732,7 @@ class _DesignGroup extends StatelessWidget {
 class _PropertyRow extends StatelessWidget {
   const _PropertyRow({required this.label, required this.child});
 
-  static const double labelWidth = 76;
+  static const double labelWidth = 64;
 
   final String label;
   final Widget child;
@@ -4682,7 +4740,7 @@ class _PropertyRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ConstrainedBox(
-      constraints: const BoxConstraints(minHeight: 32),
+      constraints: const BoxConstraints(minHeight: 30),
       child: Row(
         children: [
           SizedBox(
@@ -4725,7 +4783,7 @@ class _FieldBox extends StatelessWidget {
         borderRadius: radius,
         onTap: onTap,
         child: SizedBox(
-          height: 32,
+          height: 30,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8),
             child: child,
@@ -4743,9 +4801,13 @@ class _ColorField extends StatelessWidget {
     required this.color,
     required this.colors,
     required this.onSelected,
+    this.caption,
   });
 
   final String dialogTitle;
+
+  /// 있으면 hex 대신 이 짧은 이름을 보여 준다(한 줄에 색 두 개를 놓을 때). hex 는 툴팁으로.
+  final String? caption;
   final Color color;
   final List<Color> colors;
   final ValueChanged<Color> onSelected;
@@ -4757,7 +4819,7 @@ class _ColorField extends StatelessWidget {
         title: dialogTitle,
         initialColor: color,
         colors: colors,
-        inputFormatter: _DesignPanel.hexInputFormatter,
+        inputFormatter: _hexInputFormatter,
       ),
     );
     if (selected != null) onSelected(selected);
@@ -4766,7 +4828,7 @@ class _ColorField extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return _FieldBox(
+    final field = _FieldBox(
       onTap: () => _open(context),
       child: Row(
         children: [
@@ -4782,7 +4844,9 @@ class _ColorField extends StatelessWidget {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              colorToHex(color),
+              caption ?? colorToHex(color),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: TextStyle(
                 fontSize: 12.5,
                 color: cs.onSurface,
@@ -4791,10 +4855,13 @@ class _ColorField extends StatelessWidget {
               ),
             ),
           ),
-          Icon(Icons.palette_outlined, size: 15, color: cs.onSurfaceVariant),
+          if (caption == null)
+            Icon(Icons.palette_outlined, size: 15, color: cs.onSurfaceVariant),
         ],
       ),
     );
+    if (caption == null) return field;
+    return Tooltip(message: '$dialogTitle ${colorToHex(color)}', child: field);
   }
 }
 
@@ -5081,7 +5148,7 @@ class _DenseDropdown extends StatelessWidget {
         isDense: true,
         filled: true,
         fillColor: cs.surface,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(8),
           borderSide: BorderSide(color: cs.outlineVariant),
@@ -6482,7 +6549,7 @@ class _ItemBackgroundDialogState extends State<_ItemBackgroundDialog> {
         title: '이 항목의 배경 색상',
         initialColor: _background.color,
         colors: widget.swatches,
-        inputFormatter: _DesignPanel.hexInputFormatter,
+        inputFormatter: _hexInputFormatter,
       ),
     );
     if (selected != null && mounted) {
@@ -6614,6 +6681,8 @@ class PresenterViewState {
   bool isPaused = false;
   int targetMinutes = 20;
   double splitRatio = 0.68;
+  // 아래 썸네일 줄 높이. 현재 슬라이드와 썸네일 사이 막대를 끌어 바꾼다.
+  double stripHeight = _PresenterConsoleState._defaultStripHeight;
   bool showAllPages = false;
   double gridThumbW = 140;
 }
@@ -6692,8 +6761,19 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
   PresenterViewState get _view => widget.viewState;
 
   static const double _thumbAspect = 13.333 / 7.5;
-  static const double _stripHeight = 104;
+  static const double _defaultStripHeight = 104;
+  static const double _minStripHeight = 80;
+  // 썸네일을 키워도 현재 슬라이드 쪽에 이만큼은 남긴다.
+  static const double _minStageHeight = 180;
+  static const double _stripHandleHeight = 14;
   static const double _stripSpacing = 8;
+
+  // 마지막으로 그린 썸네일 줄 높이(창 크기에 맞춰 줄어든 값). 자동 스크롤이 쓴다.
+  double _renderedStripHeight = _defaultStripHeight;
+
+  // 썸네일 아래 번호 줄(26) 을 뺀 높이가 슬라이드 높이다.
+  static double _thumbWidthFor(double stripHeight) =>
+      (stripHeight - 26) * _thumbAspect;
 
   @override
   void initState() {
@@ -6736,7 +6816,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
 
   void _scrollStripToCurrent() {
     if (!_stripScrollController.hasClients || widget.slides.isEmpty) return;
-    final tw = (_stripHeight - 26) * _thumbAspect;
+    final tw = _thumbWidthFor(_renderedStripHeight);
     final target = widget.currentIndex * (tw + _stripSpacing);
     final viewport = _stripScrollController.position.viewportDimension;
     _stripScrollController.animateTo(
@@ -6788,45 +6868,80 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
-      child: Column(
-        children: [
-          _header(cs),
-          const SizedBox(height: 10),
-          Expanded(
-            child: _view.showAllPages
-                ? _allPagesGrid(cs)
-                : LayoutBuilder(
-                    builder: (context, constraints) {
-                      // 좁으면 옆 패널을 아래로 내린다.
-                      final isWide = constraints.maxWidth >= 620;
-                      final current = _currentStage(cs);
-                      final side = _sidePanel(cs);
-                      return isWide
-                          ? _ResizableColumnSplit(
-                              ratio: _view.splitRatio,
-                              onRatioChanged: (v) =>
-                                  setState(() => _view.splitRatio = v),
-                              first: current,
-                              second: side,
-                              isSecondCollapsed: false,
-                              collapsedSecond: const SizedBox.shrink(),
-                            )
-                          : Column(
-                              children: [
-                                Expanded(flex: 3, child: current),
-                                const SizedBox(height: 12),
-                                Expanded(flex: 2, child: side),
-                              ],
-                            );
-                    },
-                  ),
-          ),
-          if (!_view.showAllPages) ...[
-            const SizedBox(height: 10),
-            SizedBox(height: _stripHeight, child: _thumbStrip(cs)),
-          ],
-        ],
+      child: LayoutBuilder(
+        builder: (context, constraints) => _consoleBody(cs, constraints),
       ),
+    );
+  }
+
+  /// 썸네일 줄이 가질 수 있는 가장 큰 높이. 헤더와 현재 슬라이드 최소 높이를 뺀 나머지.
+  double _maxStripHeight(BoxConstraints constraints) {
+    const headerHeight = 58.0; // 헤더 + 아래 여백
+    final room =
+        constraints.maxHeight -
+        headerHeight -
+        _minStageHeight -
+        _stripHandleHeight;
+    return room < _minStripHeight ? _minStripHeight : room;
+  }
+
+  Widget _consoleBody(ColorScheme cs, BoxConstraints constraints) {
+    final maxStrip = _maxStripHeight(constraints);
+    // 창을 줄이면 저장해 둔 높이가 넘칠 수 있다. 값은 두고 그릴 때만 줄인다.
+    final stripHeight = _view.stripHeight.clamp(_minStripHeight, maxStrip);
+    _renderedStripHeight = stripHeight;
+    return Column(
+      children: [
+        _header(cs),
+        const SizedBox(height: 10),
+        Expanded(
+          child: _view.showAllPages
+              ? _allPagesGrid(cs)
+              : LayoutBuilder(
+                  builder: (context, constraints) {
+                    // 좁으면 옆 패널을 아래로 내린다.
+                    final isWide = constraints.maxWidth >= 620;
+                    final current = _currentStage(cs);
+                    final side = _sidePanel(cs);
+                    return isWide
+                        ? _ResizableColumnSplit(
+                            ratio: _view.splitRatio,
+                            onRatioChanged: (v) =>
+                                setState(() => _view.splitRatio = v),
+                            first: current,
+                            second: side,
+                            isSecondCollapsed: false,
+                            collapsedSecond: const SizedBox.shrink(),
+                          )
+                        : Column(
+                            children: [
+                              Expanded(flex: 3, child: current),
+                              const SizedBox(height: 12),
+                              Expanded(flex: 2, child: side),
+                            ],
+                          );
+                  },
+                ),
+        ),
+        if (!_view.showAllPages) ...[
+          // 끌어서 썸네일 줄 높이를 바꾼다(위로 끌면 커진다).
+          _PanelResizeHandle(
+            crossExtent: _stripHandleHeight,
+            color: cs.outlineVariant,
+            onDrag: (dy) {
+              final next = (stripHeight - dy)
+                  .clamp(_minStripHeight, maxStrip)
+                  .toDouble();
+              if (next == _view.stripHeight) return;
+              setState(() => _view.stripHeight = next);
+              WidgetsBinding.instance.addPostFrameCallback(
+                (_) => _scrollStripToCurrent(),
+              );
+            },
+          ),
+          SizedBox(height: stripHeight, child: _thumbStrip(cs, stripHeight)),
+        ],
+      ],
     );
   }
 
@@ -7212,8 +7327,8 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
     );
   }
 
-  Widget _thumbStrip(ColorScheme cs) {
-    final thumbW = (_stripHeight - 26) * _thumbAspect;
+  Widget _thumbStrip(ColorScheme cs, double stripHeight) {
+    final thumbW = _thumbWidthFor(stripHeight);
     return Container(
       decoration: BoxDecoration(
         color: cs.surfaceContainerHighest.withValues(alpha: 0.4),
