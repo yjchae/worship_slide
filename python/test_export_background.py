@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from pptx import Presentation
 from pptx.oxml.ns import qn
 
-from ppt_tool import _resolve_background, export_presentation
+from ppt_tool import _resolve_background, _style_for_item, export_presentation
 
 # 1x1 투명 PNG. python-pptx가 크기를 읽을 수 있는 최소 이미지.
 _PNG_1X1 = base64.b64decode(
@@ -193,10 +193,63 @@ def test_export_without_background_key():
         check("배경 키가 없으면 전역 배경", slide_bg_hex(slides[0]), GLOBAL_BG)
 
 
+def test_per_item_lyrics_position():
+    """헌금송: 그 항목만 가사를 헌금 띠 위쪽(하단 기준 + 위로 민 값)으로 낸다."""
+    print("export (항목별 가사 위치)")
+    check("오버라이드 없음 → 같은 style", _style_for_item(_STYLE, None) is _STYLE, True)
+    item_style = _style_for_item(
+        _STYLE, {"color": OFFERING_BG, "text_position": "bottom", "text_offset_y": -1.2}
+    )
+    check("가사 기준선 덮어쓰기", item_style["text_position"], "bottom")
+    check("가사 미세 조정 덮어쓰기", item_style["text_offset_y"], -1.2)
+    check("성경 기준선은 그대로", item_style["bible_text_position"], "middle")
+    check("전역 style 은 안 바뀐다", _STYLE["text_position"], "middle")
+    check(
+        "잘못된 기준선 값은 무시",
+        _style_for_item(_STYLE, {"text_position": "left"})["text_position"],
+        "middle",
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        output = Path(tmp) / "offering.pptx"
+        payload = {
+            "output_path": str(output),
+            "style": _STYLE,
+            "songs": [
+                {
+                    "type": "song",
+                    "title": "헌금송",
+                    "lyrics": "헌금송 1절",
+                    "english_lyrics": "",
+                    "background": {
+                        "color": OFFERING_BG,
+                        "text_position": "bottom",
+                        "text_offset_y": -1.2,
+                    },
+                },
+                {
+                    "type": "song",
+                    "title": "일반 찬양",
+                    "lyrics": "일반 1절",
+                    "english_lyrics": "",
+                },
+            ],
+        }
+        export_presentation(json.dumps(payload))
+        slides = Presentation(str(output)).slides
+        offering_box = slides[0].shapes[0]
+        normal_box = slides[2].shapes[0]
+        # 상자 위쪽 = 0.6 + 미세 조정. 헌금송만 1.2인치 위로 밀린다.
+        check("헌금송 가사 상자 위치", round(offering_box.top.inches, 2), round(0.6 - 1.2, 2))
+        check("헌금송 가사는 아래 붙임", str(offering_box.text_frame.vertical_anchor), "BOTTOM (4)")
+        check("일반 찬양 상자 위치", round(normal_box.top.inches, 2), 0.6)
+
+
 if __name__ == "__main__":
     test_resolve_background()
     test_export_per_item_background()
     test_export_without_background_key()
+    test_per_item_lyrics_position()
     if _failures:
         print(f"\n{len(_failures)}개 실패: {_failures}")
         raise SystemExit(1)
