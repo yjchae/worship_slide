@@ -25,6 +25,7 @@ class OfferingDesign {
     this.accountFontSize = 38,
     this.bandCenterY = defaultBandCenterY,
     this.lyricsAboveBand = true,
+    this.lyricsGap = defaultLyricsGap,
     this.showLines = true,
     this.lineWidth = 5.6,
     this.lineThickness = 2,
@@ -38,6 +39,10 @@ class OfferingDesign {
   /// 높낮이(띠 중심) 허용 범위. 띠가 화면 밖으로 나가지 않을 만큼만 연다.
   static const double minBandCenterY = 0.6;
   static const double maxBandCenterY = slideHeight - 0.6;
+
+  /// 가사 마지막 줄과 띠 윗선 사이 기본 여백(인치)과 조절 범위.
+  static const double defaultLyricsGap = 0.4;
+  static const double maxLyricsGap = 1.5;
 
   /// 기본 높낮이. 가사를 띠 위쪽에 놓으려면 띠가 아래쪽에 있어야 자리가 넉넉하다.
   static const double defaultBandCenterY = 5.9;
@@ -66,6 +71,9 @@ class OfferingDesign {
   /// 가사를 띠 위쪽에 붙여 놓는다(가사 아래쪽 끝 = 띠 윗선 바로 위, 길면 위로 자란다).
   /// 끄면 가사는 전역 디자인 위치 그대로 띠 위에 겹쳐 그려진다.
   final bool lyricsAboveBand;
+
+  /// 가사 마지막 줄과 띠 윗선 사이 여백(인치). [lyricsAboveBand] 일 때만 쓴다.
+  final double lyricsGap;
 
   final bool showLines;
 
@@ -102,6 +110,7 @@ class OfferingDesign {
     double? accountFontSize,
     double? bandCenterY,
     bool? lyricsAboveBand,
+    double? lyricsGap,
     bool? showLines,
     double? lineWidth,
     double? lineThickness,
@@ -122,6 +131,7 @@ class OfferingDesign {
       accountFontSize: accountFontSize ?? this.accountFontSize,
       bandCenterY: clampBandCenterY(bandCenterY ?? this.bandCenterY),
       lyricsAboveBand: lyricsAboveBand ?? this.lyricsAboveBand,
+      lyricsGap: (lyricsGap ?? this.lyricsGap).clamp(0.0, maxLyricsGap),
       showLines: showLines ?? this.showLines,
       lineWidth: lineWidth ?? this.lineWidth,
       lineThickness: lineThickness ?? this.lineThickness,
@@ -142,6 +152,7 @@ class OfferingDesign {
     'account_font_size': accountFontSize,
     'band_center_y': bandCenterY,
     'lyrics_above_band': lyricsAboveBand,
+    'lyrics_gap': lyricsGap,
     'show_lines': showLines,
     'line_width': lineWidth,
     'line_thickness': lineThickness,
@@ -170,6 +181,7 @@ class OfferingDesign {
       accountFontSize: num_('account_font_size', d.accountFontSize),
       bandCenterY: clampBandCenterY(num_('band_center_y', d.bandCenterY)),
       lyricsAboveBand: json['lyrics_above_band'] as bool? ?? d.lyricsAboveBand,
+      lyricsGap: num_('lyrics_gap', d.lyricsGap).clamp(0.0, maxLyricsGap),
       showLines: json['show_lines'] as bool? ?? d.showLines,
       lineWidth: num_('line_width', d.lineWidth),
       lineThickness: num_('line_thickness', d.lineThickness),
@@ -192,6 +204,7 @@ class OfferingDesign {
       other.accountFontSize == accountFontSize &&
       other.bandCenterY == bandCenterY &&
       other.lyricsAboveBand == lyricsAboveBand &&
+      other.lyricsGap == lyricsGap &&
       other.showLines == showLines &&
       other.lineWidth == lineWidth &&
       other.lineThickness == lineThickness &&
@@ -211,6 +224,7 @@ class OfferingDesign {
     accountFontSize,
     bandCenterY,
     lyricsAboveBand,
+    lyricsGap,
     showLines,
     lineWidth,
     lineThickness,

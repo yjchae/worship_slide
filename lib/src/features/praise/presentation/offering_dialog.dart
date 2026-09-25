@@ -408,6 +408,16 @@ class _OfferingDialogState extends State<OfferingDialog> {
             ),
             onChanged: (v) => _update(_design.copyWith(lyricsAboveBand: v)),
           ),
+          if (_design.lyricsAboveBand)
+            _LabeledSlider(
+              label: '띠와 간격',
+              value: _design.lyricsGap,
+              min: 0,
+              max: OfferingDesign.maxLyricsGap,
+              format: (v) => '${v.toStringAsFixed(2)}in',
+              onChanged: (v) =>
+                  _update(_design.copyWith(lyricsGap: (v * 20).round() / 20)),
+            ),
           const SizedBox(height: 12),
           const _SectionLabel('배경 이미지'),
           _buildBackgroundImageCard(context),

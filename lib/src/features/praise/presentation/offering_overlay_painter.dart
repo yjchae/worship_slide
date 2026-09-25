@@ -19,9 +19,6 @@ class OfferingOverlayPainter extends CustomPainter {
   // (slide_render_view.dart · ppt_tool.py 의 _LYRICS_BOX_TOP/HEIGHT 와 같은 값).
   static const double _lyricsBoxBottom = 0.6 + 5.4;
 
-  // 가사 마지막 줄과 띠 윗선 사이 여백(인치).
-  static const double _lyricsGap = 0.15;
-
   /// 띠(윗선 ~ 아랫선)가 차지하는 세로 범위, 인치.
   static ({double top, double bottom}) bandBounds(OfferingDesign design) {
     // 글자 높이는 화면 크기에 비례하므로 아무 크기에서 재어 인치로 바꾸면 된다.
@@ -63,7 +60,7 @@ class OfferingOverlayPainter extends CustomPainter {
       _rawLyricsOffset(design) >= kMinTextOffsetY;
 
   static double _rawLyricsOffset(OfferingDesign design) {
-    final raw = bandBounds(design).top - _lyricsGap - _lyricsBoxBottom;
+    final raw = bandBounds(design).top - design.lyricsGap - _lyricsBoxBottom;
     // 저장·비교가 흔들리지 않게 0.01인치로 맞춘다.
     return (raw * 100).floor() / 100;
   }

@@ -94,7 +94,13 @@ void main() {
     // 가사 상자 아래쪽 = 0.6 + 5.4 + 미세 조정
     final lyricsBottom = 6.0 + placement.offsetY!;
     expect(lyricsBottom, lessThan(band.top));
-    expect(band.top - lyricsBottom, closeTo(0.15, 0.02));
+    expect(band.top - lyricsBottom, closeTo(design.lyricsGap, 0.02));
+
+    // 간격을 넓히면 가사가 그만큼 더 위로 올라간다
+    final wider = OfferingOverlayPainter.lyricsPlacement(
+      design.copyWith(lyricsGap: design.lyricsGap + 0.3),
+    );
+    expect(placement.offsetY! - wider.offsetY!, closeTo(0.3, 0.02));
     expect(OfferingOverlayPainter.fitsLyricsAbove(design), isTrue);
 
     // 띠를 내리면 가사도 같이 내려온다
