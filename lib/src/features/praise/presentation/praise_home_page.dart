@@ -1144,6 +1144,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     if (design == null || !mounted) return;
     setState(() => _offeringDesign = design);
     await _offeringStore.save(design);
+    // 배경 이미지는 한 장만 둔다. 새로 등록했으면 이전 이미지를 지운다.
+    unawaited(_offeringImages.keepOnly(design.backgroundImagePath));
   }
 
   /// 콘티 항목 하나를 헌금송으로 표시한다.
@@ -1192,10 +1194,6 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     final newDefaults = design.copyWith(
       bandCenterY: _offeringDesign.bandCenterY,
     );
-    if (newDefaults != _offeringDesign) {
-      _offeringDesign = newDefaults;
-      unawaited(_offeringStore.save(newDefaults));
-    }
 
     final String imagePath;
     try {
@@ -1209,6 +1207,14 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       return;
     }
     if (!mounted) return;
+
+    if (newDefaults != _offeringDesign) {
+      _offeringDesign = newDefaults;
+      await _offeringStore.save(newDefaults);
+      // 배경 이미지는 한 장만 둔다. PNG 를 다 구운 뒤라 이전 이미지를 지워도 된다.
+      unawaited(_offeringImages.keepOnly(newDefaults.backgroundImagePath));
+      if (!mounted) return;
+    }
 
     // "가사는 띠 위쪽"이면 이 항목만 가사를 하단 기준 + 띠 윗선까지 올린 위치로 낸다.
     final placement = OfferingOverlayPainter.lyricsPlacement(design);

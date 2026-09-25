@@ -51,7 +51,7 @@ lib/
       export_style_store.dart        -- 스타일을 Application Support/export_style.json에 저장
       offering_design_store.dart     -- 헌금송 기본 디자인 → offering_design.json
       offering_background_composer.dart -- 헌금송 디자인을 배경 PNG 한 장으로 굽는다
-      offering_image_library.dart    -- 헌금송 배경 이미지 모음(등록 = 앱 폴더로 복사)
+      offering_image_library.dart    -- 헌금송 배경 이미지 한 장 보관(등록 = 앱 폴더로 복사)
       app_logger.dart                -- Application Support/logs/app.log (앱 내 "로그 보기"용)
     domain/
       praise_song.dart               -- PraiseSong; 페이지 구분자는 빈 줄(\n\n)
@@ -168,8 +168,10 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
     발표 창은 페이지마다 style 을 받으니 자동, PPTX 는 `ppt_tool.py` `_style_for_item` 이 같은 키를 덮어쓴다.
     미세 조정 범위(±2.0)를 넘는 높이면 잘리므로 다이얼로그가 "띠를 내려 달라"고 알린다.
     그래서 기본 높낮이는 가운데가 아니라 아래쪽(5.9인치)이다
-  - **배경 이미지 모음** (`OfferingImageLibrary`): 등록하면 `Application Support/offering_images/` 로
-    복사한다(원본이 옮겨져도 안 깨지게). 목록 = 폴더 안 파일. 지워도 이미 구운 PNG 는 영향 없다
+  - **배경 이미지는 한 장만** (`OfferingImageLibrary`): 등록하면 `Application Support/offering_images/` 로
+    복사한다(원본이 옮겨져도 안 깨지게). 이전 이미지는 등록 순간이 아니라 **디자인을 저장/적용한 뒤**
+    `keepOnly()` 로 지운다 — 등록만 하고 취소하면 예전 이미지가 그대로 쓰여야 하기 때문.
+    이미 구운 PNG 는 영향 없다
   - "항목 배경" 다이얼로그에서 색·이미지를 손으로 바꾸면 헌금송 정보와 가사 위치는 떨어져 나간다(일반 배경이 된다)
 - **외부 PPT 애니메이션**: LibreOffice가 PDF로 굽는 순간 애니메이션은 사라지고 "다 나타난 마지막
   상태" 한 장만 남는다. 그래서 PDF로 넘기기 전에 pptx의 `<p:timing>`(메인 시퀀스)을 읽어

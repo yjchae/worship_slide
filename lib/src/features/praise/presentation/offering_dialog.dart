@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:path/path.dart' as p;
 
 import '../data/offering_image_library.dart';
 import '../domain/export_style.dart';
@@ -52,7 +51,7 @@ class OfferingDialog extends StatefulWidget {
   /// 가사를 겹쳐 그릴 때 쓰는 전역 디자인(글자 색·크기·위치). 배경은 헌금송 것으로 바꿔 그린다.
   final ExportStyle globalStyle;
 
-  /// 등록해 둔 배경 이미지 모음. 다이얼로그에서 등록·선택·삭제한다.
+  /// 헌금송 배경 이미지 보관소(한 장). 다이얼로그에서 등록·변경한다.
   final OfferingImageLibrary imageLibrary;
   final String? itemTitle;
   final List<OfferingPreviewPage> previewPages;
@@ -67,7 +66,6 @@ class OfferingDialog extends StatefulWidget {
 class _OfferingDialogState extends State<OfferingDialog> {
   late OfferingDesign _design = widget.initial;
   late int _pageIndex = _longestPageIndex(widget.previewPages);
-  List<String> _registeredImages = const [];
 
   late final TextEditingController _labelController = TextEditingController(
     text: widget.initial.label,
@@ -118,21 +116,6 @@ class _OfferingDialogState extends State<OfferingDialog> {
   }
 
   @override
-  void initState() {
-    super.initState();
-    _loadRegisteredImages();
-  }
-
-  Future<void> _loadRegisteredImages() async {
-    try {
-      final images = await widget.imageLibrary.list();
-      if (mounted) setState(() => _registeredImages = images);
-    } catch (_) {
-      // 목록을 못 읽어도 새로 등록·색 배경은 되어야 한다.
-    }
-  }
-
-  @override
   void dispose() {
     _labelController.dispose();
     _bankController.dispose();
@@ -145,7 +128,7 @@ class _OfferingDialogState extends State<OfferingDialog> {
   void _moveBand(double deltaInches) =>
       _update(_design.copyWith(bandCenterY: _design.bandCenterY + deltaInches));
 
-  /// 이미지를 골라 모음에 등록하고, 등록한 이미지를 바로 배경으로 고른다.
+  /// 이미지를 골라 등록한다(한 장만). 저장/적용을 눌러야 이전 이미지를 대체한다.
   Future<void> _registerBackgroundImage() async {
     await FilePicker.skipEntitlementsChecks();
     final result = await FilePicker.pickFiles(
@@ -158,7 +141,6 @@ class _OfferingDialogState extends State<OfferingDialog> {
     if (source == null) return;
     try {
       final registered = await widget.imageLibrary.register(source);
-      await _loadRegisteredImages();
       if (mounted) _update(_design.copyWith(backgroundImagePath: registered));
     } catch (e) {
       if (!mounted) return;
@@ -166,36 +148,6 @@ class _OfferingDialogState extends State<OfferingDialog> {
         context,
       )?.showSnackBar(SnackBar(content: Text('이미지를 등록하지 못했습니다: $e')));
     }
-  }
-
-  Future<void> _removeRegisteredImage(String path) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('등록한 이미지 삭제'),
-        content: const Text(
-          '이 이미지를 목록에서 지울까요?\n'
-          '이미 헌금송으로 적용한 곡·저장한 콘티의 화면은 그대로 유지됩니다.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('취소'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('삭제'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-    await widget.imageLibrary.remove(path);
-    if (!mounted) return;
-    if (_design.backgroundImagePath == path) {
-      _update(_design.copyWith(backgroundImagePath: null));
-    }
-    await _loadRegisteredImages();
   }
 
   @override
@@ -458,7 +410,7 @@ class _OfferingDialogState extends State<OfferingDialog> {
           ),
           const SizedBox(height: 12),
           const _SectionLabel('배경 이미지'),
-          _buildImageGallery(context),
+          _buildBackgroundImageCard(context),
           const SizedBox(height: 8),
           _SwatchRow(
             label: '배경 색',
@@ -587,73 +539,66 @@ class _OfferingDialogState extends State<OfferingDialog> {
     );
   }
 
-  /// 등록한 배경 이미지 썸네일. 누르면 배경으로 고르고, ✕ 로 목록에서 지운다.
-  /// 맨 앞 칸은 "이미지 없음(단색)", 맨 뒤 칸은 "이미지 등록".
-  Widget _buildImageGallery(BuildContext context) {
-    final selected = _design.backgroundImagePath;
-    // 예전에 모음 밖에서 직접 고른 이미지도 선택된 채로 보이게 앞에 끼워 둔다.
-    final images = [
-      if (selected != null && !_registeredImages.contains(selected)) selected,
-      ..._registeredImages,
-    ];
+  /// 등록한 배경 이미지 한 장. 썸네일 + 등록(변경) / 삭제 버튼.
+  Widget _buildBackgroundImageCard(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final path = _design.backgroundImagePath;
+    final file = path == null ? null : File(path);
+    final hasImage = file != null && file.existsSync();
 
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
+    return Row(
       children: [
-        _GalleryTile(
-          selected: selected == null,
-          tooltip: '이미지 없음 (배경 색만)',
-          onTap: () => _update(_design.copyWith(backgroundImagePath: null)),
-          child: ColoredBox(
+        Container(
+          width: 128,
+          height: 72,
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
             color: _design.backgroundColor,
-            child: const Center(
-              child: Icon(
-                Icons.format_color_fill_rounded,
-                size: 18,
-                color: Colors.white70,
-              ),
-            ),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Theme.of(context).dividerColor),
           ),
-        ),
-        for (final path in images)
-          _GalleryTile(
-            selected: path == selected,
-            tooltip: p.basename(path),
-            onTap: () => _update(_design.copyWith(backgroundImagePath: path)),
-            onRemove: _registeredImages.contains(path)
-                ? () => _removeRegisteredImage(path)
-                : null,
-            child: Image.file(
-              File(path),
-              fit: BoxFit.cover,
-              cacheWidth: 192,
-              errorBuilder: (_, _, _) =>
-                  const Icon(Icons.broken_image_outlined, size: 18),
-            ),
-          ),
-        _GalleryTile(
-          selected: false,
-          tooltip: 'PNG / JPG 이미지 등록',
-          onTap: _registerBackgroundImage,
-          child: Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.add_photo_alternate_outlined,
-                  size: 18,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-                Text(
-                  '이미지 등록',
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: Theme.of(context).colorScheme.primary,
+          child: hasImage
+              ? Image.file(
+                  file,
+                  fit: BoxFit.cover,
+                  cacheWidth: 256,
+                  errorBuilder: (_, _, _) =>
+                      const Icon(Icons.broken_image_outlined, size: 18),
+                )
+              : const Center(
+                  child: Text(
+                    '이미지 없음',
+                    style: TextStyle(fontSize: 11, color: Colors.white70),
                   ),
                 ),
-              ],
-            ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              FilledButton.tonalIcon(
+                onPressed: _registerBackgroundImage,
+                icon: const Icon(Icons.add_photo_alternate_outlined, size: 18),
+                label: Text(hasImage ? '이미지 변경' : '이미지 등록'),
+              ),
+              const SizedBox(height: 6),
+              TextButton.icon(
+                onPressed: path == null
+                    ? null
+                    : () =>
+                          _update(_design.copyWith(backgroundImagePath: null)),
+                icon: Icon(
+                  Icons.delete_outline_rounded,
+                  size: 18,
+                  color: path == null ? null : cs.error,
+                ),
+                label: Text(
+                  '이미지 삭제',
+                  style: TextStyle(color: path == null ? null : cs.error),
+                ),
+              ),
+            ],
           ),
         ),
       ],
@@ -734,79 +679,6 @@ class OfferingSlidePreview extends StatelessWidget {
 }
 
 // ── 작은 부품들 ─────────────────────────────────────────────────────────
-
-/// 배경 이미지 모음의 한 칸(16:9 썸네일).
-class _GalleryTile extends StatelessWidget {
-  const _GalleryTile({
-    required this.selected,
-    required this.tooltip,
-    required this.onTap,
-    required this.child,
-    this.onRemove,
-  });
-
-  final bool selected;
-  final String tooltip;
-  final VoidCallback onTap;
-  final VoidCallback? onRemove;
-  final Widget child;
-
-  static const double _width = 96;
-  static const double _height = 54;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Tooltip(
-      message: tooltip,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          InkWell(
-            onTap: onTap,
-            borderRadius: BorderRadius.circular(8),
-            child: Container(
-              width: _width,
-              height: _height,
-              clipBehavior: Clip.antiAlias,
-              decoration: BoxDecoration(
-                color: cs.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: selected ? cs.primary : Theme.of(context).dividerColor,
-                  width: selected ? 3 : 1,
-                ),
-              ),
-              child: child,
-            ),
-          ),
-          if (onRemove != null)
-            Positioned(
-              top: -6,
-              right: -6,
-              child: Material(
-                color: cs.surface,
-                shape: const CircleBorder(),
-                elevation: 1,
-                child: InkWell(
-                  customBorder: const CircleBorder(),
-                  onTap: onRemove,
-                  child: Padding(
-                    padding: const EdgeInsets.all(2),
-                    child: Icon(
-                      Icons.close_rounded,
-                      size: 14,
-                      color: cs.onSurfaceVariant,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}
 
 class _SectionLabel extends StatelessWidget {
   const _SectionLabel(this.text);
