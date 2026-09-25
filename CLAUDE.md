@@ -51,6 +51,7 @@ lib/
       export_style_store.dart        -- 스타일을 Application Support/export_style.json에 저장
       offering_design_store.dart     -- 헌금송 기본 디자인 → offering_design.json
       offering_background_composer.dart -- 헌금송 디자인을 배경 PNG 한 장으로 굽는다
+      offering_image_library.dart    -- 헌금송 배경 이미지 모음(등록 = 앱 폴더로 복사)
       app_logger.dart                -- Application Support/logs/app.log (앱 내 "로그 보기"용)
     domain/
       praise_song.dart               -- PraiseSong; 페이지 구분자는 빈 줄(\n\n)
@@ -160,7 +161,16 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
     마이그레이션 없음). 다시 열어 높낮이만 고치거나, 콘티를 불러왔는데 PNG 가 없으면 다시 굽는 데 쓴다
   - PNG 는 `Application Support/offering_backgrounds/offering_<해시>.png`. 키 = 디자인 JSON + 배경
     원본의 수정 시각·크기. 그리는 방식이 바뀌면 `_renderVersion` 을 올린다. 예전 파일은 지우지 않는다
-  - "항목 배경" 다이얼로그에서 색·이미지를 손으로 바꾸면 헌금송 정보는 떨어져 나간다(일반 배경이 된다)
+  - **가사는 띠 위쪽** (`OfferingDesign.lyricsAboveBand`, 기본 켬): 그 항목만 가사를 하단 기준 +
+    "상자 아래쪽이 띠 윗선 0.15인치 위"가 되는 미세 조정으로 낸다(`OfferingOverlayPainter.lyricsPlacement`).
+    가사가 길면 위로 자란다. 값은 `SlideBackground.lyricsPosition`/`lyricsOffsetY`(JSON `text_position`/
+    `text_offset_y`)에 실리고 `withBackground()` 가 찬양 가사 키만 덮어쓴다(성경 키는 그대로).
+    발표 창은 페이지마다 style 을 받으니 자동, PPTX 는 `ppt_tool.py` `_style_for_item` 이 같은 키를 덮어쓴다.
+    미세 조정 범위(±2.0)를 넘는 높이면 잘리므로 다이얼로그가 "띠를 내려 달라"고 알린다.
+    그래서 기본 높낮이는 가운데가 아니라 아래쪽(5.9인치)이다
+  - **배경 이미지 모음** (`OfferingImageLibrary`): 등록하면 `Application Support/offering_images/` 로
+    복사한다(원본이 옮겨져도 안 깨지게). 목록 = 폴더 안 파일. 지워도 이미 구운 PNG 는 영향 없다
+  - "항목 배경" 다이얼로그에서 색·이미지를 손으로 바꾸면 헌금송 정보와 가사 위치는 떨어져 나간다(일반 배경이 된다)
 - **외부 PPT 애니메이션**: LibreOffice가 PDF로 굽는 순간 애니메이션은 사라지고 "다 나타난 마지막
   상태" 한 장만 남는다. 그래서 PDF로 넘기기 전에 pptx의 `<p:timing>`(메인 시퀀스)을 읽어
   **클릭 한 번 = 페이지 한 장**으로 슬라이드를 복제해 둔다 (`expand_animation_steps`).

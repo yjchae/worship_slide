@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 
+import '../data/offering_image_library.dart';
 import '../domain/export_style.dart';
 import '../domain/offering_design.dart';
 import 'offering_overlay_painter.dart';
@@ -39,6 +40,7 @@ class OfferingDialog extends StatefulWidget {
     required this.mode,
     required this.initial,
     required this.globalStyle,
+    required this.imageLibrary,
     this.itemTitle,
     this.previewPages = const [],
     this.canRemove = false,
@@ -49,6 +51,9 @@ class OfferingDialog extends StatefulWidget {
 
   /// 가사를 겹쳐 그릴 때 쓰는 전역 디자인(글자 색·크기·위치). 배경은 헌금송 것으로 바꿔 그린다.
   final ExportStyle globalStyle;
+
+  /// 등록해 둔 배경 이미지 모음. 다이얼로그에서 등록·선택·삭제한다.
+  final OfferingImageLibrary imageLibrary;
   final String? itemTitle;
   final List<OfferingPreviewPage> previewPages;
 
@@ -62,6 +67,7 @@ class OfferingDialog extends StatefulWidget {
 class _OfferingDialogState extends State<OfferingDialog> {
   late OfferingDesign _design = widget.initial;
   late int _pageIndex = _longestPageIndex(widget.previewPages);
+  List<String> _registeredImages = const [];
 
   late final TextEditingController _labelController = TextEditingController(
     text: widget.initial.label,
@@ -112,6 +118,21 @@ class _OfferingDialogState extends State<OfferingDialog> {
   }
 
   @override
+  void initState() {
+    super.initState();
+    _loadRegisteredImages();
+  }
+
+  Future<void> _loadRegisteredImages() async {
+    try {
+      final images = await widget.imageLibrary.list();
+      if (mounted) setState(() => _registeredImages = images);
+    } catch (_) {
+      // 목록을 못 읽어도 새로 등록·색 배경은 되어야 한다.
+    }
+  }
+
+  @override
   void dispose() {
     _labelController.dispose();
     _bankController.dispose();
@@ -124,19 +145,57 @@ class _OfferingDialogState extends State<OfferingDialog> {
   void _moveBand(double deltaInches) =>
       _update(_design.copyWith(bandCenterY: _design.bandCenterY + deltaInches));
 
-  Future<void> _pickBackgroundImage() async {
+  /// 이미지를 골라 모음에 등록하고, 등록한 이미지를 바로 배경으로 고른다.
+  Future<void> _registerBackgroundImage() async {
     await FilePicker.skipEntitlementsChecks();
-    // 항목별 배경과 같은 이유로 PNG/JPG 만 받는다.
     final result = await FilePicker.pickFiles(
-      dialogTitle: '헌금송 배경 이미지 선택 (PNG / JPG)',
+      dialogTitle: '헌금송 배경 이미지 등록 (PNG / JPG)',
       type: FileType.custom,
-      allowedExtensions: const ['png', 'jpg', 'jpeg'],
+      allowedExtensions: OfferingImageLibrary.allowedExtensions,
       allowMultiple: false,
     );
-    final path = result?.files.single.path;
-    if (path != null && mounted) {
-      _update(_design.copyWith(backgroundImagePath: path));
+    final source = result?.files.single.path;
+    if (source == null) return;
+    try {
+      final registered = await widget.imageLibrary.register(source);
+      await _loadRegisteredImages();
+      if (mounted) _update(_design.copyWith(backgroundImagePath: registered));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.maybeOf(
+        context,
+      )?.showSnackBar(SnackBar(content: Text('이미지를 등록하지 못했습니다: $e')));
     }
+  }
+
+  Future<void> _removeRegisteredImage(String path) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('등록한 이미지 삭제'),
+        content: const Text(
+          '이 이미지를 목록에서 지울까요?\n'
+          '이미 헌금송으로 적용한 곡·저장한 콘티의 화면은 그대로 유지됩니다.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('삭제'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await widget.imageLibrary.remove(path);
+    if (!mounted) return;
+    if (_design.backgroundImagePath == path) {
+      _update(_design.copyWith(backgroundImagePath: null));
+    }
+    await _loadRegisteredImages();
   }
 
   @override
@@ -264,6 +323,7 @@ class _OfferingDialogState extends State<OfferingDialog> {
 
   Widget _buildPositionCard(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final fits = OfferingOverlayPainter.fitsLyricsAbove(_design);
     final fromCenter = _design.bandCenterY - OfferingDesign.slideHeight / 2;
     final String positionText;
     if (fromCenter.abs() < 0.005) {
@@ -312,9 +372,11 @@ class _OfferingDialogState extends State<OfferingDialog> {
               ),
               TextButton(
                 onPressed: () => _update(
-                  _design.copyWith(bandCenterY: OfferingDesign.slideHeight / 2),
+                  _design.copyWith(
+                    bandCenterY: OfferingDesign.defaultBandCenterY,
+                  ),
                 ),
-                child: const Text('가운데'),
+                child: const Text('기본 위치'),
               ),
             ],
           ),
@@ -339,6 +401,23 @@ class _OfferingDialogState extends State<OfferingDialog> {
               const SizedBox(width: 6),
             ],
           ),
+          if (_design.lyricsAboveBand && !fits)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(0, 0, 6, 6),
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline_rounded, size: 16, color: cs.error),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      '띠가 너무 위에 있어 가사를 띠 위쪽에 다 놓을 수 없습니다. '
+                      '띠를 조금 더 내려 주세요.',
+                      style: TextStyle(fontSize: 12, color: cs.error),
+                    ),
+                  ),
+                ],
+              ),
+            ),
         ],
       ),
     );
@@ -363,8 +442,23 @@ class _OfferingDialogState extends State<OfferingDialog> {
                 ),
               ),
             ),
-          const _SectionLabel('배경'),
-          _buildBackgroundImageButton(context),
+          const _SectionLabel('가사 위치'),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            value: _design.lyricsAboveBand,
+            title: const Text('가사를 헌금 띠 위쪽에 표시'),
+            subtitle: Text(
+              _design.lyricsAboveBand
+                  ? '가사 마지막 줄이 띠 바로 위에 붙고, 길면 위로 늘어납니다.'
+                  : '가사는 디자인 패널의 위치 그대로 띠 위에 겹쳐 나옵니다.',
+              style: const TextStyle(fontSize: 12),
+            ),
+            onChanged: (v) => _update(_design.copyWith(lyricsAboveBand: v)),
+          ),
+          const SizedBox(height: 12),
+          const _SectionLabel('배경 이미지'),
+          _buildImageGallery(context),
           const SizedBox(height: 8),
           _SwatchRow(
             label: '배경 색',
@@ -493,40 +587,76 @@ class _OfferingDialogState extends State<OfferingDialog> {
     );
   }
 
-  Widget _buildBackgroundImageButton(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final path = _design.backgroundImagePath;
-    return OutlinedButton(
-      style: OutlinedButton.styleFrom(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      ),
-      onPressed: _pickBackgroundImage,
-      child: Row(
-        children: [
-          Icon(Icons.image_outlined, size: 18, color: cs.onSurfaceVariant),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              path == null ? '배경 이미지 선택' : p.basename(path),
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: path == null ? cs.onSurface : cs.primary,
-                fontWeight: path == null ? null : FontWeight.w600,
+  /// 등록한 배경 이미지 썸네일. 누르면 배경으로 고르고, ✕ 로 목록에서 지운다.
+  /// 맨 앞 칸은 "이미지 없음(단색)", 맨 뒤 칸은 "이미지 등록".
+  Widget _buildImageGallery(BuildContext context) {
+    final selected = _design.backgroundImagePath;
+    // 예전에 모음 밖에서 직접 고른 이미지도 선택된 채로 보이게 앞에 끼워 둔다.
+    final images = [
+      if (selected != null && !_registeredImages.contains(selected)) selected,
+      ..._registeredImages,
+    ];
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        _GalleryTile(
+          selected: selected == null,
+          tooltip: '이미지 없음 (배경 색만)',
+          onTap: () => _update(_design.copyWith(backgroundImagePath: null)),
+          child: ColoredBox(
+            color: _design.backgroundColor,
+            child: const Center(
+              child: Icon(
+                Icons.format_color_fill_rounded,
+                size: 18,
+                color: Colors.white70,
               ),
             ),
           ),
-          if (path != null)
-            GestureDetector(
-              onTap: () => _update(_design.copyWith(backgroundImagePath: null)),
-              child: Icon(
-                Icons.close_rounded,
-                size: 16,
-                color: cs.onSurfaceVariant,
-              ),
+        ),
+        for (final path in images)
+          _GalleryTile(
+            selected: path == selected,
+            tooltip: p.basename(path),
+            onTap: () => _update(_design.copyWith(backgroundImagePath: path)),
+            onRemove: _registeredImages.contains(path)
+                ? () => _removeRegisteredImage(path)
+                : null,
+            child: Image.file(
+              File(path),
+              fit: BoxFit.cover,
+              cacheWidth: 192,
+              errorBuilder: (_, _, _) =>
+                  const Icon(Icons.broken_image_outlined, size: 18),
             ),
-        ],
-      ),
+          ),
+        _GalleryTile(
+          selected: false,
+          tooltip: 'PNG / JPG 이미지 등록',
+          onTap: _registerBackgroundImage,
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.add_photo_alternate_outlined,
+                  size: 18,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+                Text(
+                  '이미지 등록',
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -572,6 +702,7 @@ class OfferingSlidePreview extends StatelessWidget {
     final path = design.backgroundImagePath;
     final imageFile = path == null ? null : File(path);
     final page = this.page;
+    final placement = OfferingOverlayPainter.lyricsPlacement(design);
 
     return Stack(
       fit: StackFit.expand,
@@ -592,6 +723,8 @@ class OfferingSlidePreview extends StatelessWidget {
               style: globalStyle.copyWith(
                 backgroundColor: Colors.transparent,
                 backgroundImagePath: null,
+                textPosition: placement.position,
+                textOffsetY: placement.offsetY,
               ),
             ),
           ),
@@ -601,6 +734,79 @@ class OfferingSlidePreview extends StatelessWidget {
 }
 
 // ── 작은 부품들 ─────────────────────────────────────────────────────────
+
+/// 배경 이미지 모음의 한 칸(16:9 썸네일).
+class _GalleryTile extends StatelessWidget {
+  const _GalleryTile({
+    required this.selected,
+    required this.tooltip,
+    required this.onTap,
+    required this.child,
+    this.onRemove,
+  });
+
+  final bool selected;
+  final String tooltip;
+  final VoidCallback onTap;
+  final VoidCallback? onRemove;
+  final Widget child;
+
+  static const double _width = 96;
+  static const double _height = 54;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Tooltip(
+      message: tooltip,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              width: _width,
+              height: _height,
+              clipBehavior: Clip.antiAlias,
+              decoration: BoxDecoration(
+                color: cs.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: selected ? cs.primary : Theme.of(context).dividerColor,
+                  width: selected ? 3 : 1,
+                ),
+              ),
+              child: child,
+            ),
+          ),
+          if (onRemove != null)
+            Positioned(
+              top: -6,
+              right: -6,
+              child: Material(
+                color: cs.surface,
+                shape: const CircleBorder(),
+                elevation: 1,
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: onRemove,
+                  child: Padding(
+                    padding: const EdgeInsets.all(2),
+                    child: Icon(
+                      Icons.close_rounded,
+                      size: 14,
+                      color: cs.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
 
 class _SectionLabel extends StatelessWidget {
   const _SectionLabel(this.text);

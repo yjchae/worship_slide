@@ -23,7 +23,8 @@ class OfferingDesign {
     this.lineColor = const Color(0xFFFFE600),
     this.labelFontSize = 34,
     this.accountFontSize = 38,
-    this.bandCenterY = slideHeight / 2,
+    this.bandCenterY = defaultBandCenterY,
+    this.lyricsAboveBand = true,
     this.showLines = true,
     this.lineWidth = 5.6,
     this.lineThickness = 2,
@@ -37,6 +38,9 @@ class OfferingDesign {
   /// 높낮이(띠 중심) 허용 범위. 띠가 화면 밖으로 나가지 않을 만큼만 연다.
   static const double minBandCenterY = 0.6;
   static const double maxBandCenterY = slideHeight - 0.6;
+
+  /// 기본 높낮이. 가사를 띠 위쪽에 놓으려면 띠가 아래쪽에 있어야 자리가 넉넉하다.
+  static const double defaultBandCenterY = 5.9;
 
   /// 배경 이미지. null 이면 [backgroundColor] 단색 위에 그린다.
   final String? backgroundImagePath;
@@ -58,6 +62,10 @@ class OfferingDesign {
 
   /// 띠(라인 + 두 줄 글씨) 중심의 세로 위치, 인치. 가사가 길면 위나 아래로 비킨다.
   final double bandCenterY;
+
+  /// 가사를 띠 위쪽에 붙여 놓는다(가사 아래쪽 끝 = 띠 윗선 바로 위, 길면 위로 자란다).
+  /// 끄면 가사는 전역 디자인 위치 그대로 띠 위에 겹쳐 그려진다.
+  final bool lyricsAboveBand;
 
   final bool showLines;
 
@@ -93,6 +101,7 @@ class OfferingDesign {
     double? labelFontSize,
     double? accountFontSize,
     double? bandCenterY,
+    bool? lyricsAboveBand,
     bool? showLines,
     double? lineWidth,
     double? lineThickness,
@@ -112,6 +121,7 @@ class OfferingDesign {
       labelFontSize: labelFontSize ?? this.labelFontSize,
       accountFontSize: accountFontSize ?? this.accountFontSize,
       bandCenterY: clampBandCenterY(bandCenterY ?? this.bandCenterY),
+      lyricsAboveBand: lyricsAboveBand ?? this.lyricsAboveBand,
       showLines: showLines ?? this.showLines,
       lineWidth: lineWidth ?? this.lineWidth,
       lineThickness: lineThickness ?? this.lineThickness,
@@ -131,6 +141,7 @@ class OfferingDesign {
     'label_font_size': labelFontSize,
     'account_font_size': accountFontSize,
     'band_center_y': bandCenterY,
+    'lyrics_above_band': lyricsAboveBand,
     'show_lines': showLines,
     'line_width': lineWidth,
     'line_thickness': lineThickness,
@@ -158,6 +169,7 @@ class OfferingDesign {
       labelFontSize: num_('label_font_size', d.labelFontSize),
       accountFontSize: num_('account_font_size', d.accountFontSize),
       bandCenterY: clampBandCenterY(num_('band_center_y', d.bandCenterY)),
+      lyricsAboveBand: json['lyrics_above_band'] as bool? ?? d.lyricsAboveBand,
       showLines: json['show_lines'] as bool? ?? d.showLines,
       lineWidth: num_('line_width', d.lineWidth),
       lineThickness: num_('line_thickness', d.lineThickness),
@@ -179,6 +191,7 @@ class OfferingDesign {
       other.labelFontSize == labelFontSize &&
       other.accountFontSize == accountFontSize &&
       other.bandCenterY == bandCenterY &&
+      other.lyricsAboveBand == lyricsAboveBand &&
       other.showLines == showLines &&
       other.lineWidth == lineWidth &&
       other.lineThickness == lineThickness &&
@@ -197,6 +210,7 @@ class OfferingDesign {
     labelFontSize,
     accountFontSize,
     bandCenterY,
+    lyricsAboveBand,
     showLines,
     lineWidth,
     lineThickness,

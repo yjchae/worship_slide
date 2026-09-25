@@ -15,6 +15,7 @@ import '../data/app_logger.dart';
 import '../data/export_style_store.dart';
 import '../data/offering_background_composer.dart';
 import '../data/offering_design_store.dart';
+import '../data/offering_image_library.dart';
 import '../data/praise_repository.dart';
 import '../data/python_bridge.dart';
 import '../data/worship_conti_repository.dart';
@@ -25,6 +26,7 @@ import '../domain/praise_song.dart';
 import '../domain/slide_background.dart';
 import '../domain/staging_item.dart';
 import 'offering_dialog.dart';
+import 'offering_overlay_painter.dart';
 import 'slide_page_data.dart';
 import 'slide_render_view.dart';
 
@@ -106,6 +108,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   final OfferingDesignStore _offeringStore = OfferingDesignStore();
   final OfferingBackgroundComposer _offeringComposer =
       OfferingBackgroundComposer();
+  final OfferingImageLibrary _offeringImages = OfferingImageLibrary();
   final BibleRepository _bibleRepository = BibleRepository();
   final WorshipContiRepository _contiRepository = WorshipContiRepository();
   final TextEditingController _searchController = TextEditingController();
@@ -1133,6 +1136,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         mode: OfferingDialogMode.defaults,
         initial: _offeringDesign,
         globalStyle: _style,
+        imageLibrary: _offeringImages,
         previewPages: _offeringPreviewPages(_previewStagingUid),
       ),
     );
@@ -1164,6 +1168,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         mode: OfferingDialogMode.item,
         initial: initial,
         globalStyle: _style,
+        imageLibrary: _offeringImages,
         itemTitle: entry.item is BlankStagingItem
             ? '빈 페이지'
             : entry.item.displayTitle,
@@ -1205,11 +1210,15 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     }
     if (!mounted) return;
 
+    // "가사는 띠 위쪽"이면 이 항목만 가사를 하단 기준 + 띠 윗선까지 올린 위치로 낸다.
+    final placement = OfferingOverlayPainter.lyricsPlacement(design);
     setState(() {
       _itemBackgrounds[uid] = SlideBackground(
         color: design.backgroundColor,
         imagePath: imagePath,
         offering: design,
+        lyricsPosition: placement.position,
+        lyricsOffsetY: placement.offsetY,
       );
       _previewStagingUid = uid;
     });
@@ -6623,7 +6632,11 @@ class _ItemBackgroundDialogState extends State<_ItemBackgroundDialog> {
                 // 더는 헌금송 배경이 아니므로 떼어 낸다.
                 : _background == widget.initial
                 ? _background
-                : _background.copyWith(offering: null),
+                : _background.copyWith(
+                    offering: null,
+                    lyricsPosition: null,
+                    lyricsOffsetY: null,
+                  ),
           )),
           child: const Text('적용'),
         ),

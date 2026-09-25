@@ -1241,6 +1241,25 @@ def _resolve_background(style, background):
     return style.get("background_image_path"), style["background_color"]
 
 
+def _style_for_item(style, background):
+    """항목별 오버라이드에 실린 가사 세로 위치를 전역 style 위에 덮어쓴 style.
+
+    헌금송은 "가사는 헌금 띠 위쪽"을 위해 그 항목만 가사 기준선(text_position)과
+    미세 조정(text_offset_y)을 바꾼다. 찬양 가사에만 해당하고 성경 키는 건드리지 않는다.
+    발표 창·미리보기(Dart)는 ExportStyle.withBackground 가 같은 일을 한다.
+    """
+    if not background:
+        return style
+    overrides = {
+        key: background[key]
+        for key in ("text_position", "text_offset_y")
+        if background.get(key) is not None
+    }
+    if overrides.get("text_position") not in (None, "top", "middle", "bottom"):
+        overrides.pop("text_position")
+    return {**style, **overrides} if overrides else style
+
+
 def _apply_slide_background(slide, style, background=None):
     bg_image_path, bg_color = _resolve_background(style, background)
     if bg_image_path and os.path.isfile(bg_image_path):
@@ -1403,7 +1422,9 @@ def export_presentation(payload_json):
             if song.get("type") == "image":
                 add_image_slides(prs, song, style, background)
             else:
-                add_song_slides(prs, song, style, background)
+                add_song_slides(
+                    prs, song, _style_for_item(style, background), background
+                )
             is_last = index == len(songs) - 1
             next_is_blank = not is_last and songs[index + 1].get("type") == "blank"
             if not is_last and not next_is_blank:
