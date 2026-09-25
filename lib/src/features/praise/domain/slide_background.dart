@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 
 import 'export_style.dart';
+import 'offering_design.dart';
 
 /// 콘티 항목 하나에만 적용되는 배경.
 ///
@@ -13,13 +14,20 @@ import 'export_style.dart';
 /// 오버라이드가 없는 항목은 이 객체 자체가 `null` 이고, 전역 배경이 그대로 쓰인다.
 @immutable
 class SlideBackground {
-  const SlideBackground({required this.color, this.imagePath});
+  const SlideBackground({required this.color, this.imagePath, this.offering});
 
   /// 이 항목의 배경 색. 이미지가 없거나 파일이 사라졌을 때 그대로 보인다.
   final Color color;
 
   /// 이 항목의 배경 이미지 경로. null 이면 [color] 단색 배경.
   final String? imagePath;
+
+  /// 헌금송 배경이면 [imagePath] 를 구워 낸 디자인(이 항목의 높낮이 포함).
+  /// 다시 열어 높낮이만 고치거나, PNG 가 사라졌을 때 다시 굽는 데 쓴다.
+  /// 렌더러는 이 값을 보지 않는다 — 그들에겐 그냥 배경 이미지 한 장이다.
+  final OfferingDesign? offering;
+
+  bool get isOffering => offering != null;
 
   /// 전역 스타일의 배경을 그대로 복사한 오버라이드 시작값.
   factory SlideBackground.fromStyle(ExportStyle style) => SlideBackground(
@@ -29,27 +37,39 @@ class SlideBackground {
 
   bool get hasImage => imagePath != null && imagePath!.isNotEmpty;
 
-  SlideBackground copyWith({Color? color, Object? imagePath = _sentinel}) {
+  SlideBackground copyWith({
+    Color? color,
+    Object? imagePath = _sentinel,
+    Object? offering = _sentinel,
+  }) {
     return SlideBackground(
       color: color ?? this.color,
       imagePath: identical(imagePath, _sentinel)
           ? this.imagePath
           : imagePath as String?,
+      offering: identical(offering, _sentinel)
+          ? this.offering
+          : offering as OfferingDesign?,
     );
   }
 
   Map<String, dynamic> toJson() => {
     'color': colorToHex(color),
     if (hasImage) 'image_path': imagePath,
+    if (offering != null) 'offering': offering!.toJson(),
   };
 
   static SlideBackground? fromJson(Map<String, dynamic> json) {
     final color = tryParseHexColor(json['color'] as String?);
     if (color == null) return null;
     final path = json['image_path'] as String?;
+    final offering = json['offering'];
     return SlideBackground(
       color: color,
       imagePath: (path == null || path.isEmpty) ? null : path,
+      offering: offering is Map
+          ? OfferingDesign.fromJson(offering.cast<String, dynamic>())
+          : null,
     );
   }
 
@@ -73,10 +93,11 @@ class SlideBackground {
   bool operator ==(Object other) =>
       other is SlideBackground &&
       other.color == color &&
-      other.imagePath == imagePath;
+      other.imagePath == imagePath &&
+      other.offering == offering;
 
   @override
-  int get hashCode => Object.hash(color, imagePath);
+  int get hashCode => Object.hash(color, imagePath, offering);
 
   static const Object _sentinel = Object();
 }
