@@ -277,7 +277,7 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
 
 ## 발표 모드 단축키
 
-`praise_home_page.dart` `_handleKeyEvent` — →/↓/Space 다음, ←/↑ 이전, 숫자+Enter 해당 슬라이드로 점프, ESC 발표 종료.
+`praise_home_page.dart` `_handleKeyEvent` — F5 발표 시작(`_handleStartKey`, 전역 핸들러), →/↓/Space 다음, ←/↑ 이전, 숫자+Enter 해당 슬라이드로 점프, ESC 발표 종료.
 
 ## 배포
 

@@ -223,6 +223,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _loadSubLanguages();
     _searchController.addListener(_loadSongs);
     _checkForUpdates(isStartup: true);
+    HardwareKeyboard.instance.addHandler(_handleStartKey);
     _mainPresentationChannel.setMethodCallHandler((call) async {
       if (call.method == 'presentationClosed' && mounted) {
         setState(_resetPresentationState);
@@ -237,6 +238,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleStartKey);
     _mainTabController
       ..removeListener(_onMainTabChanged)
       ..dispose();
@@ -943,6 +945,20 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     final ctx = FocusManager.instance.primaryFocus?.context;
     return ctx != null &&
         ctx.findAncestorWidgetOfExactType<EditableText>() != null;
+  }
+
+  /// F5 = 발표 시작 (PowerPoint 와 같다). 발표 전에는 포커스가 발표 FocusScope 밖
+  /// (검색창·리본 등)에 있을 수 있어 FocusScope 가 아니라 전역 키 핸들러로 받는다.
+  /// 다이얼로그가 떠 있을 땐 무시한다.
+  bool _handleStartKey(KeyEvent event) {
+    if (event is! KeyDownEvent ||
+        event.logicalKey != LogicalKeyboardKey.f5 ||
+        _isPresentationOpen ||
+        ModalRoute.of(context)?.isCurrent == false) {
+      return false;
+    }
+    _openPresentation();
+    return true;
   }
 
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
