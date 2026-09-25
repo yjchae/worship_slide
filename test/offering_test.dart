@@ -49,7 +49,7 @@ void main() {
     expect(design.bankName, '국민');
     expect(design.bandCenterY, OfferingDesign.defaultBandCenterY);
     expect(design.showLines, isTrue);
-    expect(design.lyricsAboveBand, isTrue);
+    expect(design.lyricsAboveBand, isFalse);
   });
 
   test('높낮이는 화면 밖으로 나가지 않게 잘린다', () {
@@ -86,7 +86,11 @@ void main() {
   });
 
   test('가사는 띠 윗선 바로 위에서 끝난다(하단 기준 + 위로 민 값)', () {
-    const design = OfferingDesign(bankName: '농협', accountNumber: '02-325');
+    const design = OfferingDesign(
+      bankName: '농협',
+      accountNumber: '02-325',
+      lyricsAboveBand: true,
+    );
     final band = OfferingOverlayPainter.bandBounds(design);
     final placement = OfferingOverlayPainter.lyricsPlacement(design);
 
@@ -111,7 +115,7 @@ void main() {
   });
 
   test('띠가 너무 위면 가사를 다 올릴 수 없다고 알려 준다', () {
-    const design = OfferingDesign(bandCenterY: 1.0);
+    const design = OfferingDesign(bandCenterY: 1.0, lyricsAboveBand: true);
 
     expect(OfferingOverlayPainter.fitsLyricsAbove(design), isFalse);
     // 미세 조정 허용 범위(±2.0)를 넘지 않는다 — 네 렌더러가 모두 같은 범위로 자른다

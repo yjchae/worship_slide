@@ -162,7 +162,7 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
     마이그레이션 없음). 다시 열어 높낮이만 고치거나, 콘티를 불러왔는데 PNG 가 없으면 다시 굽는 데 쓴다
   - PNG 는 `Application Support/offering_backgrounds/offering_<해시>.png`. 키 = 디자인 JSON + 배경
     원본의 수정 시각·크기. 그리는 방식이 바뀌면 `_renderVersion` 을 올린다. 예전 파일은 지우지 않는다
-  - **가사는 띠 위쪽** (`OfferingDesign.lyricsAboveBand`, 기본 켬): 그 항목만 가사를 하단 기준 +
+  - **가사는 띠 위쪽** (`OfferingDesign.lyricsAboveBand`, 기본 **끔** — 켜 두면 찬양 디자인에서 맞춘 가사 위치가 헌금송에서만 확 바뀌어서 껐다. JSON 키 `lyrics_above_band_v2`): 그 항목만 가사를 하단 기준 +
     "상자 아래쪽이 띠 윗선 `lyricsGap`(기본 0.4인치, 다이얼로그에서 0~1.5 조절) 위"가 되는 미세 조정으로 낸다(`OfferingOverlayPainter.lyricsPlacement`).
     가사가 길면 위로 자란다. 값은 `SlideBackground.lyricsPosition`/`lyricsOffsetY`(JSON `text_position`/
     `text_offset_y`)에 실리고 `withBackground()` 가 찬양 가사 키만 덮어쓴다(성경 키는 그대로).

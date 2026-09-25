@@ -24,7 +24,7 @@ class OfferingDesign {
     this.labelFontSize = 34,
     this.accountFontSize = 38,
     this.bandCenterY = defaultBandCenterY,
-    this.lyricsAboveBand = true,
+    this.lyricsAboveBand = false,
     this.lyricsGap = defaultLyricsGap,
     this.showLines = true,
     this.lineWidth = 5.6,
@@ -69,7 +69,9 @@ class OfferingDesign {
   final double bandCenterY;
 
   /// 가사를 띠 위쪽에 붙여 놓는다(가사 아래쪽 끝 = 띠 윗선 바로 위, 길면 위로 자란다).
-  /// 끄면 가사는 전역 디자인 위치 그대로 띠 위에 겹쳐 그려진다.
+  /// 끄면(기본) 가사는 전역 찬양 디자인 위치 그대로 띠 위에 겹쳐 그려진다.
+  /// JSON 키가 `lyrics_above_band` 가 아닌 이유: 예전엔 기본이 켬이라 저장된 true 가
+  /// 사용자가 고른 값인지 알 수 없다. 옛 키는 무시하고 기본(끔)에서 다시 시작한다.
   final bool lyricsAboveBand;
 
   /// 가사 마지막 줄과 띠 윗선 사이 여백(인치). [lyricsAboveBand] 일 때만 쓴다.
@@ -151,7 +153,7 @@ class OfferingDesign {
     'label_font_size': labelFontSize,
     'account_font_size': accountFontSize,
     'band_center_y': bandCenterY,
-    'lyrics_above_band': lyricsAboveBand,
+    'lyrics_above_band_v2': lyricsAboveBand,
     'lyrics_gap': lyricsGap,
     'show_lines': showLines,
     'line_width': lineWidth,
@@ -180,7 +182,7 @@ class OfferingDesign {
       labelFontSize: num_('label_font_size', d.labelFontSize),
       accountFontSize: num_('account_font_size', d.accountFontSize),
       bandCenterY: clampBandCenterY(num_('band_center_y', d.bandCenterY)),
-      lyricsAboveBand: json['lyrics_above_band'] as bool? ?? d.lyricsAboveBand,
+      lyricsAboveBand: json['lyrics_above_band_v2'] as bool? ?? d.lyricsAboveBand,
       lyricsGap: num_('lyrics_gap', d.lyricsGap).clamp(0.0, maxLyricsGap),
       showLines: json['show_lines'] as bool? ?? d.showLines,
       lineWidth: num_('line_width', d.lineWidth),

@@ -139,6 +139,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   final Map<int, SlideBackground> _itemBackgrounds = {};
   // 헌금송 기본 디자인(배경·은행·계좌). 항목에 적용할 때 여기서 시작해 높낮이만 곡마다 맞춘다.
   OfferingDesign _offeringDesign = const OfferingDesign();
+  // offering_design.json 이 있으면(한 번이라도 등록했으면) true. 배경·계좌 없이 등록해도 된다.
+  bool _offeringRegistered = false;
   PresenterPointerMode _pointerMode = PresenterPointerMode.off;
   double _pointerSize = 100;
   // 관객 화면 확대. 확대 영역은 슬라이드와 같은 비율이라 크기 하나(가로 비율)면 된다.
@@ -373,7 +375,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   Future<void> _loadOfferingDesign() async {
     final saved = await _offeringStore.load();
     if (!mounted || saved == null) return;
-    setState(() => _offeringDesign = saved);
+    setState(() {
+      _offeringDesign = saved;
+      _offeringRegistered = true;
+    });
   }
 
   Future<void> _updateStyle(ExportStyle style) async {
@@ -1145,7 +1150,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     );
     final design = result?.design;
     if (design == null || !mounted) return;
-    setState(() => _offeringDesign = design);
+    setState(() {
+      _offeringDesign = design;
+      _offeringRegistered = true;
+    });
     await _offeringStore.save(design);
     // 배경 이미지는 한 장만 둔다. 새로 등록했으면 이전 이미지를 지운다.
   }
@@ -1161,14 +1169,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     final current = _itemBackgrounds[uid]?.offering;
 
     // 배경·계좌는 공통 설정이다. 아직 등록 전이면 등록부터 받는다.
-    if (_offeringDesign.accountLine.isEmpty &&
-        _offeringDesign.backgroundImagePath == null) {
+    if (!_offeringRegistered) {
       await _editOfferingDesign();
-      if (!mounted ||
-          (_offeringDesign.accountLine.isEmpty &&
-              _offeringDesign.backgroundImagePath == null)) {
-        return;
-      }
+      if (!mounted || !_offeringRegistered) return;
     }
 
     // 이미 헌금송이면 그 곡의 높낮이 그대로, 아니면 기본 디자인에서 시작한다.
