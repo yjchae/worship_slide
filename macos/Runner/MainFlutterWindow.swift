@@ -500,15 +500,16 @@ class MainFlutterWindow: NSWindow {
       let arguments = call.arguments as? [String: Any]
       let panel = NSSavePanel()
       panel.title = arguments?["title"] as? String ?? "Save PPTX"
-      panel.nameFieldStringValue = arguments?["fileName"] as? String ?? "worship_slides.pptx"
-      panel.allowedFileTypes = ["pptx"]
+      let ext = arguments?["extension"] as? String ?? "pptx"
+      panel.nameFieldStringValue = arguments?["fileName"] as? String ?? "worship_slides.\(ext)"
+      panel.allowedFileTypes = [ext]
       panel.allowsOtherFileTypes = false
       panel.isExtensionHidden = false
       panel.canCreateDirectories = true
       let finish: (NSApplication.ModalResponse) -> Void = { response in
         guard response == .OK, let url = panel.url else { result(nil); return }
-        if url.pathExtension.lowercased() == "pptx" { result(url.path); return }
-        result(url.deletingPathExtension().appendingPathExtension("pptx").path)
+        if url.pathExtension.lowercased() == ext { result(url.path); return }
+        result(url.deletingPathExtension().appendingPathExtension(ext).path)
       }
       if let window = self { panel.beginSheetModal(for: window, completionHandler: finish) }
       else { finish(panel.runModal()) }

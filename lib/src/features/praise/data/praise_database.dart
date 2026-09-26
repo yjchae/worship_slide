@@ -29,7 +29,7 @@ class PraiseDatabase {
     final dbPath = p.join(_dbDirectory, 'worship_slides.db');
     _database = await openDatabase(
       dbPath,
-      version: 12,
+      version: 13,
       onCreate: (db, version) => createPraiseSchema(db),
       onUpgrade: (db, oldVersion, newVersion) =>
           upgradePraiseSchema(db, oldVersion),
@@ -93,7 +93,8 @@ Future<void> createPraiseSchema(DatabaseExecutor db) async {
     image_paths     TEXT,
     notes           TEXT,
     background      TEXT,
-    bible_sub_text  TEXT
+    bible_sub_text  TEXT,
+    song_title      TEXT
   )
 ''');
   await db.execute(_createSongTranslations);
@@ -281,6 +282,15 @@ Future<void> upgradePraiseSchema(DatabaseExecutor db, int oldVersion) async {
       'worship_conti_items',
       'bible_sub_text',
       "ALTER TABLE worship_conti_items ADD COLUMN bible_sub_text TEXT",
+    );
+  }
+  if (oldVersion < 13) {
+    // 곡 제목 스냅샷. 다른 PC 로 옮긴 콘티는 song_id 가 그쪽 DB 와 안 맞아 제목을 여기서 읽는다.
+    await _addColumnIfMissing(
+      db,
+      'worship_conti_items',
+      'song_title',
+      "ALTER TABLE worship_conti_items ADD COLUMN song_title TEXT",
     );
   }
 }

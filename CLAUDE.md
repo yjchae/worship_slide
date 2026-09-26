@@ -44,7 +44,7 @@ lib/
   src/app.dart                       -- MaterialApp (seed #1B6B5C, 배경 #F4F1EA)
   src/features/praise/
     data/
-      praise_database.dart           -- SQLite 스키마 + 마이그레이션 (현재 version 12)
+      praise_database.dart           -- SQLite 스키마 + 마이그레이션 (현재 version 13)
       praise_repository.dart         -- 곡 CRUD (searchSongs, replaceAllSongs, deleteSongsByIds ...)
       worship_conti_repository.dart  -- 콘티 저장/불러오기 (곡 가사 스냅샷까지 함께 보관)
       python_bridge.dart             -- Process.run으로 ppt_tool 실행 (import / render / export)
@@ -116,6 +116,11 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
 - **DB 갱신** (`replaceAllSongs`): 전체 삭제 후 재삽입 (증분 갱신 아님)
 - **콘티 저장 시 가사 스냅샷**: 곡 id만이 아니라 당시 가사(`song_lyrics`)까지 저장한다.
   나중에 곡을 지우거나 다시 임포트해도 저장한 콘티가 깨지지 않는다
+- **콘티 파일 내보내기/가져오기** (`.wsconti`, 다른 PC 로 옮기기): 불러오기 다이얼로그의 항목별 내보내기 버튼 /
+  "파일에서 가져오기". `exportContiFile` 이 DB 행을 그대로 JSON 에 담고, 행이 가리키는 이미지(PPT 페이지·항목 배경·
+  헌금송 PNG 와 그 원본)는 base64 로 같이 넣어 경로 자리를 키로 바꾼다. `importContiFile` 은
+  `Application Support/imported_contis/<시각>/` 에 풀고 경로를 되돌려 **로컬 콘티 목록에 새 콘티로 넣는다**.
+  `song_id` 는 받는 쪽 DB 와 안 맞으므로 빼고, 곡 제목은 `worship_conti_items.song_title`(DB version 13) 스냅샷으로 간다
 - **다국어 (보조 언어)**: 렌더러 네 곳(미리보기·macOS·Windows·PPTX)은 원래부터 본문 아래
   `english_text` 한 줄을 그린다. 그래서 다국어는 **그 칸에 무엇을 넣을지**만 정하는 기능이고
   렌더링 코드는 하나도 안 건드렸다.

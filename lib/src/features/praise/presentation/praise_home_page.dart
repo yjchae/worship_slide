@@ -1902,16 +1902,75 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     }
   }
 
+  // 다른 PC 로 옮길 콘티 파일(.wsconti). 이미지까지 한 파일에 담긴다.
+  Future<void> _exportContiFile(WorshipConti conti) async {
+    const ext = WorshipContiRepository.contiFileExtension;
+    final fileName = '${conti.name}.$ext';
+    String? outPath;
+    if (Platform.isMacOS) {
+      try {
+        outPath = await _savePanelChannel.invokeMethod<String>(
+          'showPptxSavePanel',
+          {'title': '콘티 내보내기', 'fileName': fileName, 'extension': ext},
+        );
+      } on MissingPluginException {
+        outPath = null;
+      }
+    } else {
+      await FilePicker.skipEntitlementsChecks();
+      outPath = await FilePicker.saveFile(
+        dialogTitle: '콘티 내보내기',
+        fileName: fileName,
+        type: FileType.custom,
+        allowedExtensions: [ext],
+      );
+    }
+    if (outPath == null || !mounted) return;
+    if (p.extension(outPath).toLowerCase() != '.$ext') {
+      outPath = p.setExtension(outPath, '.$ext');
+    }
+    try {
+      await _contiRepository.exportContiFile(conti.id, outPath);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('콘티 내보내기 완료: $outPath')));
+    } catch (error, stack) {
+      await AppLogger.instance.error('콘티 내보내기 실패', error, stack);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('콘티 내보내기 실패: $error')));
+    }
+  }
+
+  /// 콘티 파일을 이 PC 의 콘티 목록에 넣는다. 성공하면 새 목록을 돌려준다.
+  Future<List<WorshipConti>?> _importContiFile() async {
+    await FilePicker.skipEntitlementsChecks();
+    final picked = await FilePicker.pickFiles(
+      dialogTitle: '가져올 콘티 파일 선택',
+      type: FileType.custom,
+      allowedExtensions: [WorshipContiRepository.contiFileExtension],
+    );
+    final path = picked?.paths.firstOrNull;
+    if (path == null || !mounted) return null;
+    try {
+      await _contiRepository.importContiFile(path);
+      return await _contiRepository.listContis();
+    } catch (error, stack) {
+      await AppLogger.instance.error('콘티 가져오기 실패', error, stack);
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('콘티 가져오기 실패: $error')));
+      }
+      return null;
+    }
+  }
+
   Future<void> _loadContiDialog() async {
     final contis = await _contiRepository.listContis();
     if (!mounted) return;
-
-    if (contis.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('저장된 예배 콘티가 없습니다.')));
-      return;
-    }
 
     final selected = await showDialog<WorshipConti>(
       context: context,
@@ -1920,6 +1979,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         onDelete: (conti) async {
           await _contiRepository.deleteConti(conti.id);
         },
+        onExport: _exportContiFile,
+        onImport: _importContiFile,
       ),
     );
     if (selected == null || !mounted) return;
@@ -6478,10 +6539,17 @@ class _SlideQuickEditDialogState extends State<_SlideQuickEditDialog> {
 // ── ContiListDialog ───────────────────────────────────────────────────────
 
 class _ContiListDialog extends StatefulWidget {
-  const _ContiListDialog({required this.contis, required this.onDelete});
+  const _ContiListDialog({
+    required this.contis,
+    required this.onDelete,
+    required this.onExport,
+    required this.onImport,
+  });
 
   final List<WorshipConti> contis;
   final Future<void> Function(WorshipConti) onDelete;
+  final Future<void> Function(WorshipConti) onExport;
+  final Future<List<WorshipConti>?> Function() onImport;
 
   @override
   State<_ContiListDialog> createState() => _ContiListDialogState();
@@ -6527,6 +6595,16 @@ class _ContiListDialogState extends State<_ContiListDialog> {
     setState(() => _contis.removeWhere((c) => c.id == conti.id));
   }
 
+  Future<void> _import() async {
+    final contis = await widget.onImport();
+    if (contis == null || !mounted) return;
+    setState(
+      () => _contis
+        ..clear()
+        ..addAll(contis),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
@@ -6558,11 +6636,24 @@ class _ContiListDialogState extends State<_ContiListDialog> {
                       '${_formatDate(conti.createdAt)}  ·  ${conti.itemCount}개',
                       style: const TextStyle(fontSize: 12),
                     ),
-                    trailing: IconButton(
-                      icon: const Icon(Icons.delete_outline_rounded, size: 20),
-                      tooltip: '삭제',
-                      color: Colors.red.shade300,
-                      onPressed: () => _delete(conti),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.ios_share_rounded, size: 20),
+                          tooltip: '파일로 내보내기 (다른 PC 로 옮기기)',
+                          onPressed: () => widget.onExport(conti),
+                        ),
+                        IconButton(
+                          icon: const Icon(
+                            Icons.delete_outline_rounded,
+                            size: 20,
+                          ),
+                          tooltip: '삭제',
+                          color: Colors.red.shade300,
+                          onPressed: () => _delete(conti),
+                        ),
+                      ],
                     ),
                     onTap: () => Navigator.of(context).pop(conti),
                   );
@@ -6570,6 +6661,11 @@ class _ContiListDialogState extends State<_ContiListDialog> {
               ),
       ),
       actions: [
+        TextButton.icon(
+          onPressed: _import,
+          icon: const Icon(Icons.file_open_outlined, size: 18),
+          label: const Text('파일에서 가져오기'),
+        ),
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('취소'),
