@@ -1480,6 +1480,7 @@ def export_presentation(payload_json):
 # 맞춰 띄엄띄엄 놓여서, 여러 줄 모드(psm 6)로 읽히면 한 줄을 두 줄로 쪼갠다.
 
 OCR_DPI = 200
+_SHEET_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".pdf"}
 
 # 오선 한 줄로 볼 가로 검은 비율. 한글 텍스트 줄은 0.35를 잘 넘지 않는다.
 _STAFF_ROW_RATIO = 0.45
@@ -1614,12 +1615,17 @@ def lyric_line_boxes(systems, ratios):
             else int(min(height, bottom + spacing * 8))
         )
         groups = text_row_groups(ratios, top, band_bottom)
-        if next_top is not None and groups:
+        # 위쪽(가사 줄·오선)보다 아래 단에 더 붙어 있으면 그 단의 것이다
+        # (코드 기호, 오선 위로 삐져나온 음표). 둘 다 붙을 수 있어 끝에서부터 걷어 낸다.
+        while next_top is not None and groups:
             last_start, last_end = groups[-1]
             above = last_start - (groups[-2][1] if len(groups) > 1 else bottom)
-            # 위쪽(가사 줄·오선)보다 아래 단에 더 붙어 있으면 그 단의 코드 기호다.
-            if next_top - last_end < above:
-                groups.pop()
+            if next_top - last_end >= above:
+                break
+            groups.pop()
+        # 띠 첫 행부터 검으면 오선에 붙은 덧줄 음표다. 그 아래 줄이 가사다.
+        if len(groups) > 1 and groups[0][0] == top:
+            groups.pop(0)
         boxes.extend(groups)
     return boxes
 
@@ -1668,15 +1674,7 @@ def is_chord_line(text):
     return bool(tokens) and all(_CHORD_TOKEN_RE.match(token) for token in tokens)
 
 
-def _ocr_lines(executable, image, language, work_dir, name, psm="7"):
-    from PIL import Image
-
-    # 작은 글씨는 2배로 키워야 인식률이 눈에 띄게 오른다.
-    if image.height < 60:
-        image = image.resize((image.width * 2, image.height * 2), Image.LANCZOS)
-    image_path = work_dir / f"{name}.png"
-    image.save(image_path)
-
+def _run_tesseract(executable, image_path, language, psm):
     result = subprocess.run(
         [executable, str(image_path), "stdout", "-l", language, "--psm", psm],
         capture_output=True,
@@ -1684,10 +1682,26 @@ def _ocr_lines(executable, image, language, work_dir, name, psm="7"):
         encoding="utf-8",
         errors="replace",
     )
-    if result.returncode != 0:
-        return []
+    return result.stdout or "" if result.returncode == 0 else ""
 
-    lines = [clean_lyric_line(line) for line in (result.stdout or "").splitlines()]
+
+def _ocr_lines(executable, image, language, work_dir, name, psm="7"):
+    from PIL import Image
+
+    # 아주 작은 글씨만 키운다. 글자 높이 17px 쯤을 2배로 키우면 오히려
+    # '은혜를' → 'false' 처럼 엉뚱하게 읽는다.
+    if image.height < 24:
+        image = image.resize((image.width * 2, image.height * 2), Image.LANCZOS)
+    image_path = work_dir / f"{name}.png"
+    image.save(image_path)
+
+    text = _run_tesseract(executable, image_path, language, psm)
+    # kor+eng 는 한글 줄 속 음절 몇 개를 영어로 읽는다 ('예배' → 'of mh').
+    # 한글 줄이면 한국어만으로 다시 읽는다.
+    if "+" in language and _HANGUL_RE.search(text):
+        text = _run_tesseract(executable, image_path, "kor", psm) or text
+
+    lines = [clean_lyric_line(line) for line in text.splitlines()]
     return [line for line in lines if is_lyric_line(line) and not is_chord_line(line)]
 
 
@@ -1723,7 +1737,16 @@ def _load_sheet_pages(source_path, work_dir):
     from PIL import Image
 
     if source_path.suffix.lower() != ".pdf":
-        return [(Image.open(source_path), [])]
+        image = Image.open(source_path)
+        if image.mode in ("RGBA", "LA", "P"):
+            # 투명 배경(캡처·붙여넣은 그림)은 흰 바탕에 얹는다. 그대로 회색으로
+            # 바꾸면 투명한 곳이 검게 되어 오선·글자를 못 찾는다.
+            image = image.convert("RGBA")
+            flat = Image.new("RGB", image.size, "white")
+            flat.paste(image, mask=image.getchannel("A"))
+            image.close()
+            image = flat
+        return [(image, [])]
 
     import pymupdf
 
@@ -1816,7 +1839,36 @@ def extract_sheet_music_lyrics(file_path):
 
 
 def extract_sheet_music(file_path):
-    print(json.dumps(extract_sheet_music_lyrics(file_path), ensure_ascii=True))
+    if file_path != "--clipboard":
+        print(json.dumps(extract_sheet_music_lyrics(file_path), ensure_ascii=True))
+        return
+    print(json.dumps(extract_clipboard_sheet_music(), ensure_ascii=True))
+
+
+def extract_clipboard_sheet_music():
+    """클립보드의 그림(캡처·복사한 이미지)이나 복사한 파일을 악보로 읽는다."""
+    from PIL import Image, ImageGrab
+
+    try:
+        clip = ImageGrab.grabclipboard()
+    except Exception:  # 클립보드 형식에 따라 OS 쪽에서 실패하기도 한다
+        clip = None
+    # Finder/탐색기에서 파일을 복사하면 경로 목록이 온다.
+    if isinstance(clip, list):
+        paths = [path for path in clip if Path(path).suffix.lower() in _SHEET_SUFFIXES]
+        if not paths:
+            return {"error": "clipboard_empty"}
+        return extract_sheet_music_lyrics(paths[0])
+    if not isinstance(clip, Image.Image):
+        return {"error": "clipboard_empty"}
+
+    work_dir = Path(tempfile.mkdtemp(prefix="praise_sheet_clip_"))
+    try:
+        image_path = work_dir / "클립보드.png"
+        clip.save(image_path)
+        return extract_sheet_music_lyrics(str(image_path))
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def main():

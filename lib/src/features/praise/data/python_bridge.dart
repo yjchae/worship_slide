@@ -18,6 +18,13 @@ class LibreOfficeMissingException implements Exception {
       'PPT를 이미지로 변환하려면 LibreOffice가 필요합니다. 설치 후 다시 시도해 주세요.';
 }
 
+class ClipboardEmptyException implements Exception {
+  const ClipboardEmptyException();
+
+  @override
+  String toString() => '클립보드에 악보 그림이 없습니다. 악보를 캡처하거나 복사한 뒤 다시 시도해 주세요.';
+}
+
 class TesseractMissingException implements Exception {
   const TesseractMissingException();
 
@@ -117,11 +124,15 @@ class PythonBridge {
 
   /// 악보(이미지·PDF)에서 오선 아래 가사만 읽어 온다.
   /// 글자가 박힌 PDF 는 Tesseract 없이도 읽는다.
-  Future<SheetLyricsResult> extractSheetLyrics(String filePath) async {
-    final result = await _runTool(['sheet', filePath]);
+  /// [filePath] 가 null 이면 클립보드의 그림(캡처·복사한 이미지)을 읽는다.
+  Future<SheetLyricsResult> extractSheetLyrics(String? filePath) async {
+    final result = await _runTool(['sheet', filePath ?? '--clipboard']);
     final json = jsonDecode(result.stdout as String) as Map<String, dynamic>;
     if (json['error'] == 'tesseract_missing') {
       throw const TesseractMissingException();
+    }
+    if (json['error'] == 'clipboard_empty') {
+      throw const ClipboardEmptyException();
     }
     return SheetLyricsResult(
       sourceName: json['source_name'] as String,

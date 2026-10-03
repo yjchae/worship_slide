@@ -140,6 +140,18 @@ def _draw_pdf_sheet(path):
     document.close()
 
 
+def test_lyric_line_boxes_skips_notes_and_chords():
+    # 오선 바로 아래 덧줄 음표 / 가사 / 다음 단 코드 / 다음 단 위로 삐진 음표
+    ratios = [0.0] * 400
+    for row in (100, 110, 120, 130, 140, 300, 310, 320, 330, 340):
+        ratios[row] = 1.0
+    for start, end in ((142, 150), (165, 180), (260, 275), (285, 295)):
+        for row in range(start, end):
+            ratios[row] = 0.02
+    boxes = lyric_line_boxes(find_staff_systems(ratios), ratios)
+    assert boxes == [(165, 179)], boxes
+
+
 def test_extract_pdf_with_text_layer():
     """글자가 박힌 PDF는 Tesseract 없이, 오인식 없이 읽는다."""
     original = ppt_tool.get_tesseract_executable
@@ -196,6 +208,7 @@ if __name__ == "__main__":
     test_is_lyric_line()
     test_is_chord_line()
     test_find_staff_systems()
+    test_lyric_line_boxes_skips_notes_and_chords()
     test_extract_pdf_with_text_layer()
     test_extract_sheet_music_lyrics()
     print("OK")

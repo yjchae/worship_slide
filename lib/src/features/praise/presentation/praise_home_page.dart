@@ -1381,15 +1381,22 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   // ── 악보 가사 추출 ──────────────────────────────────────────────────
 
   /// 악보 파일(이미지·PDF)을 골라 오선 아래 가사만 읽어 오고, 그대로 새 곡으로 만든다.
-  Future<void> _importSheetMusic() async {
-    await FilePicker.skipEntitlementsChecks();
-    final picked = await FilePicker.pickFiles(
-      dialogTitle: '가사를 추출할 악보 파일 선택 (이미지 · PDF)',
-      type: FileType.custom,
-      allowedExtensions: ['png', 'jpg', 'jpeg', 'bmp', 'tif', 'tiff', 'pdf'],
-      allowMultiple: true,
-    );
-    final paths = picked?.paths.whereType<String>().toList() ?? const [];
+  /// [fromClipboard] 면 파일 대신 클립보드의 그림을 읽는다.
+  Future<void> _importSheetMusic({bool fromClipboard = false}) async {
+    // null = 클립보드
+    final List<String?> paths;
+    if (fromClipboard) {
+      paths = const [null];
+    } else {
+      await FilePicker.skipEntitlementsChecks();
+      final picked = await FilePicker.pickFiles(
+        dialogTitle: '가사를 추출할 악보 파일 선택 (이미지 · PDF)',
+        type: FileType.custom,
+        allowedExtensions: ['png', 'jpg', 'jpeg', 'bmp', 'tif', 'tiff', 'pdf'],
+        allowMultiple: true,
+      );
+      paths = picked?.paths.whereType<String>().toList() ?? const [];
+    }
     if (paths.isEmpty || !mounted) return;
 
     final progress = ValueNotifier<String>('가사 읽는 중…');
@@ -1401,7 +1408,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     try {
       for (var i = 0; i < paths.length; i++) {
         progress.value = paths.length == 1
-            ? '${p.basename(paths[i])} 읽는 중…'
+            ? '${p.basename(paths[i] ?? '클립보드')} 읽는 중…'
             : '${paths.length}개 중 ${i + 1}번째 읽는 중…';
         final result = await _pythonBridge.extractSheetLyrics(paths[i]);
         if (result.lyrics.trim().isNotEmpty) {
@@ -1410,6 +1417,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       }
     } on TesseractMissingException {
       tesseractMissing = true;
+    } on ClipboardEmptyException catch (error) {
+      errorMessage = error.toString();
     } catch (error, stack) {
       await AppLogger.instance.error('악보 가사 추출 실패', error, stack);
       errorMessage = '가사 추출 실패: $error';
@@ -1436,7 +1445,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       return;
     }
 
-    final title = p.basenameWithoutExtension(paths.first);
+    final title = paths.first == null
+        ? '붙여넣은 악보'
+        : p.basenameWithoutExtension(paths.first!);
     // 악보 여러 장이면 장마다 빈 줄로 나눠 붙인다 (빈 줄 = 페이지 구분).
     final edited = await showDialog<String>(
       context: context,
@@ -2321,6 +2332,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                           onBibleImportPressed: _pickAndImportBible,
                           onImportPptPressed: _addPptImages,
                           onImportSheetPressed: _importSheetMusic,
+                          onPasteSheetPressed: () =>
+                              _importSheetMusic(fromClipboard: true),
                           onExportSongsPressed: _exportSongBundle,
                           onImportSongsPressed: _importSongBundle,
                           onExtractLogsPressed: _showExtractLogsDialog,
@@ -2901,6 +2914,7 @@ class _TopBar extends StatelessWidget {
     required this.onBibleImportPressed,
     required this.onImportPptPressed,
     required this.onImportSheetPressed,
+    required this.onPasteSheetPressed,
     required this.onExportSongsPressed,
     required this.onImportSongsPressed,
     required this.onExtractLogsPressed,
@@ -2921,6 +2935,7 @@ class _TopBar extends StatelessWidget {
   final VoidCallback onBibleImportPressed;
   final VoidCallback onImportPptPressed;
   final VoidCallback onImportSheetPressed;
+  final VoidCallback onPasteSheetPressed;
   final VoidCallback onExportSongsPressed;
   final VoidCallback onImportSongsPressed;
   final VoidCallback onExtractLogsPressed;
@@ -3042,6 +3057,12 @@ class _TopBar extends StatelessWidget {
             onPressed: onImportSheetPressed,
             icon: const Icon(Icons.music_note_rounded, size: 16),
             label: const Text('악보 가져오기'),
+          ),
+          IconButton(
+            tooltip: '클립보드의 악보 붙여넣기 (캡처·복사한 그림)',
+            color: Colors.white,
+            onPressed: onPasteSheetPressed,
+            icon: const Icon(Icons.content_paste_rounded, size: 18),
           ),
           const SizedBox(width: 8),
           // 다른 PC 의 곡과 합치기. 같은 제목은 중복으로 넣지 않는다.

@@ -97,7 +97,7 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   (애니메이션 펼치기 → soffice → PDF → PyMuPDF → 페이지별 PNG).
   `.pdf`는 soffice 변환을 건너뛰므로 LibreOffice 없이도 된다
 - `export <JSON payload>` — 콘티 + 스타일로 새 PPTX 생성 (곡/성경/이미지/빈 페이지 슬라이드)
-- `sheet <파일>` — 악보(이미지·PDF)에서 오선 아래 가사만 →
+- `sheet <파일 | --clipboard>` — 악보(이미지·PDF·클립보드 그림)에서 오선 아래 가사만 →
   `{source_name, lyrics, lines, page_count, staff_count, text_layer}`
   (OCR 이 필요한데 Tesseract 가 없으면 `{"error": "tesseract_missing"}`)
 
@@ -212,6 +212,13 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
     필요 없다. 오선 찾기는 그대로 구운 이미지로 하므로 **PDF 좌표(72dpi)를 이미지 배율로 맞춰야
     한다**(`OCR_DPI / 72`). 낱말이 하나도 없는 쪽(그림·스캔본)만 OCR 로 넘어간다 →
     그래서 `tesseract_missing` 판정은 파일을 연 **뒤에** 한다
+  - **업스케일은 아주 작은 글씨(줄 높이 < 24px)만.** 글자 17px 쯤을 2배로 키우면 오히려 엉뚱하게 읽는다.
+    `kor+eng` 은 한글 음절 몇 개를 영어로 읽어서(`예배` → `of mh`) 한글이 나온 줄은 `kor` 로만 다시 읽는다
+  - 오선 사이 띠에서 **끝에서부터** 아래 단에 더 붙은 덩어리(코드·위로 삐진 음표)를 걷어 내고,
+    띠 첫 행부터 검은 첫 덩어리(오선에 붙은 덧줄 음표)도 버린다
+  - **클립보드 붙여넣기** (`sheet --clipboard`, '악보 가져오기' 옆 붙여넣기 버튼): Pillow `ImageGrab.grabclipboard()`
+    라 Dart 쪽 클립보드 패키지가 필요 없다. 복사한 파일 경로 목록도 받는다. 없으면 `{"error": "clipboard_empty"}`.
+    투명 배경 그림은 흰 바탕에 얹어서 읽는다
   - Tesseract 는 LibreOffice 와 같은 **선택 시스템 의존성**이다. 없으면 그 기능만 막고 설치 안내를 띄운다
     (`TesseractMissingException` → `_showTesseractDialog`). `kor` 언어 데이터가 없으면 `eng` 로만 읽는다
   - 읽어 온 가사는 `_SheetLyricsDialog` 에서 고친 뒤 **곡 편집 다이얼로그로 넘어간다**. 그래서
