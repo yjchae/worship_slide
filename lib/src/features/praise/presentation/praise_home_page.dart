@@ -3055,20 +3055,44 @@ class _TopBar extends StatelessWidget {
             label: const Text('PPT · PDF 가져오기'),
           ),
           const SizedBox(width: 8),
-          FilledButton.icon(
-            style: FilledButton.styleFrom(
-              backgroundColor: Colors.white.withValues(alpha: 0.22),
-              foregroundColor: Colors.white,
+          // 파일 / 클립보드 두 갈래. 버튼을 따로 두면 상단 바가 넘친다.
+          PopupMenuButton<VoidCallback>(
+            tooltip: '악보에서 가사 읽기',
+            onSelected: (action) => action(),
+            itemBuilder: (context) => [
+              PopupMenuItem(
+                value: onImportSheetPressed,
+                child: const ListTile(
+                  dense: true,
+                  leading: Icon(Icons.folder_open_rounded),
+                  title: Text('파일에서 가져오기'),
+                ),
+              ),
+              PopupMenuItem(
+                value: onPasteSheetPressed,
+                child: const ListTile(
+                  dense: true,
+                  leading: Icon(Icons.content_paste_rounded),
+                  title: Text('클립보드 붙여넣기'),
+                  subtitle: Text('캡처·복사한 악보 그림'),
+                ),
+              ),
+            ],
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.22),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.music_note_rounded, size: 16, color: Colors.white),
+                  SizedBox(width: 6),
+                  Text('악보 가져오기', style: TextStyle(color: Colors.white)),
+                ],
+              ),
             ),
-            onPressed: onImportSheetPressed,
-            icon: const Icon(Icons.music_note_rounded, size: 16),
-            label: const Text('악보 가져오기'),
-          ),
-          IconButton(
-            tooltip: '클립보드의 악보 붙여넣기 (캡처·복사한 그림)',
-            color: Colors.white,
-            onPressed: onPasteSheetPressed,
-            icon: const Icon(Icons.content_paste_rounded, size: 18),
           ),
           const SizedBox(width: 8),
           // 다른 PC 의 곡과 합치기. 같은 제목은 중복으로 넣지 않는다.
