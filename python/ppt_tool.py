@@ -107,15 +107,43 @@ def _register_windows_font(path):
         pass
 
 
-def extract_text_from_shape(shape):
+# 색 이름(prstClr)으로 쓴 흰색·검은색을 RGB 와 같은 값으로 본다.
+_PRESET_COLORS = {"white": "FFFFFF", "black": "000000"}
+
+
+def _paragraph_color(paragraph):
+    """문단의 첫 글자 색. 직접 지정한 색이 없으면(상속) None."""
+    from pptx.oxml.ns import qn
+
+    for run in paragraph.runs:
+        if not run.text.strip():
+            continue
+        rpr = run._r.find(qn("a:rPr"))
+        fill = rpr.find(qn("a:solidFill")) if rpr is not None else None
+        if fill is None or len(fill) == 0:
+            return None
+        color = fill[0]
+        value = color.get("val")
+        if color.tag == qn("a:prstClr"):
+            value = _PRESET_COLORS.get(value, value)
+        return f"{color.tag.rsplit('}', 1)[-1]}:{value}".replace("prstClr:", "srgbClr:")
+    return None
+
+
+def extract_lines_from_shape(shape):
+    """shape 의 (줄, 색) 목록."""
     if not hasattr(shape, "text_frame") or shape.text_frame is None:
-        return ""
+        return []
     lines = []
     for paragraph in shape.text_frame.paragraphs:
         text = "".join(run.text for run in paragraph.runs).strip()
         if text:
-            lines.append(text)
-    return "\n".join(lines)
+            lines.append((text, _paragraph_color(paragraph)))
+    return lines
+
+
+def extract_text_from_shape(shape):
+    return "\n".join(text for text, _ in extract_lines_from_shape(shape))
 
 
 def _find_title_texts(prs):
@@ -161,33 +189,48 @@ def _shape_max_font_pt(shape):
 
 
 def slide_lyrics(slide, title_texts=None):
+    """슬라이드의 가사 (줄, 색) 목록."""
     shapes_info = []
     for shape in slide.shapes:
-        text = extract_text_from_shape(shape)
-        if not text:
+        lines = extract_lines_from_shape(shape)
+        if not lines:
             continue
         # shape 전체 텍스트가 반복 제목과 완전히 일치하는 shape만 제외
+        text = "\n".join(line for line, _ in lines)
         if title_texts and text.strip() in title_texts:
             continue
-        shapes_info.append((text, _shape_max_font_pt(shape)))
-
-    if not shapes_info:
-        return ""
-    if len(shapes_info) == 1:
-        return shapes_info[0][0]
+        shapes_info.append((lines, _shape_max_font_pt(shape)))
 
     # 보조 필터: 명시적 폰트 크기가 최댓값의 60% 미만인 박스도 제목/캡션으로 간주
     explicit_sizes = [size for _, size in shapes_info if size is not None]
-    if explicit_sizes:
+    if len(shapes_info) > 1 and explicit_sizes:
         max_size = max(explicit_sizes)
         kept = [
-            text for text, size in shapes_info
-            if size is None or size >= max_size * 0.6
+            info for info in shapes_info
+            if info[1] is None or info[1] >= max_size * 0.6
         ]
-        if kept:
-            return "\n".join(kept).strip()
+        shapes_info = kept or shapes_info
 
-    return "\n".join(text for text, _ in shapes_info).strip()
+    return [line for lines, _ in shapes_info for line in lines]
+
+
+def _main_lyrics_color(slides_lines):
+    """원본 가사 색. 한글 줄에 가장 많이 쓴 색이고, 한글 줄이 없으면(영어 원곡)
+    흰색, 흰 줄도 없으면 가장 많이 쓴 색. 줄이 하나도 없으면 _NO_MAIN_COLOR."""
+    hangul_counts = {}
+    all_counts = {}
+    for lines in slides_lines:
+        for text, color in lines:
+            all_counts[color] = all_counts.get(color, 0) + 1
+            if _HANGUL_RE.search(text):
+                hangul_counts[color] = hangul_counts.get(color, 0) + 1
+    if hangul_counts:
+        return max(hangul_counts, key=hangul_counts.get)
+    if _WHITE in all_counts:
+        return _WHITE
+    if all_counts:
+        return max(all_counts, key=all_counts.get)
+    return _NO_MAIN_COLOR
 
 
 def normalize_title(path):
@@ -211,15 +254,27 @@ def is_sub_line(line):
     return any(char.isalpha() for char in stripped)
 
 
-def split_bilingual_page(text):
+_WHITE = "srgbClr:FFFFFF"
+# 원본 가사 색을 모를 때(줄이 없음, 문자열 입력) — 어떤 색과도 같지 않다.
+_NO_MAIN_COLOR = object()
+
+
+def split_bilingual_page(lines, main_color=_NO_MAIN_COLOR):
+    """(줄, 색) 목록(또는 줄바꿈 문자열) → (본문, 보조 언어).
+
+    PPT 는 번역 가사를 다른 색(주로 주황)으로 칠해 둔다. 그래서 한글이 없는 줄이라도
+    원본 가사 색([main_color])과 같으면 원곡에 있는 영어(`How great is our God`, `(x2)`)로 보고
+    원본 가사에 남긴다."""
+    if isinstance(lines, str):
+        lines = [(line, None) for line in lines.splitlines()]
     korean_lines = []
     sub_lines = []
 
-    for line in text.splitlines():
+    for line, color in lines:
         stripped = line.strip()
         if not stripped:
             continue
-        if is_sub_line(stripped):
+        if is_sub_line(stripped) and color != main_color:
             sub_lines.append(stripped)
         else:
             korean_lines.append(stripped)
@@ -348,13 +403,16 @@ def process_presentation_file(file_path, presentation_path):
         title_texts = _find_title_texts(prs)
         korean_pages = []
         english_pages = []
-        for slide in prs.slides:
-            page = slide_lyrics(slide, title_texts=title_texts)
+        slides_lines = [
+            slide_lyrics(slide, title_texts=title_texts) for slide in prs.slides
+        ]
+        main_color = _main_lyrics_color(slides_lines)
+        for page in slides_lines:
             if not page:
                 korean_pages.append("")
                 english_pages.append("")
                 continue
-            korean_page, english_page = split_bilingual_page(page)
+            korean_page, english_page = split_bilingual_page(page, main_color)
             korean_pages.append(korean_page)
             english_pages.append(english_page)
 

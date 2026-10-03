@@ -27,7 +27,37 @@ def test_split():
     assert sub == "主の恵み\nAmazing", sub
 
 
+def test_split_by_color():
+    # 원본 가사 색(흰색)과 같은 영어 줄은 원곡 가사라 본문에 남는다.
+    lines = [
+        ("위대하신 주", "srgbClr:FFFFFF"),
+        ("How great is our God", "srgbClr:FFFFFF"),
+        ("(x2)", "srgbClr:FFFFFF"),
+        ("Great is the Lord", "srgbClr:FFC000"),
+    ]
+    korean, sub = split_bilingual_page(lines, main_color="srgbClr:FFFFFF")
+    assert korean == "위대하신 주\nHow great is our God\n(x2)", korean
+    assert sub == "Great is the Lord", sub
+
+
+def test_main_color_without_hangul():
+    from ppt_tool import _main_lyrics_color
+
+    # 영어 원곡: 흰 줄이 원본, 주황 줄은 번역
+    white, orange = "srgbClr:FFFFFF", "srgbClr:FFC000"
+    slides = [[("Amazing grace", white), ("주 은혜", orange)], [("How sweet", white)]]
+    assert _main_lyrics_color([[("Amazing grace", white)], [("x", orange), ("y", orange)]]) == white
+    # 한글 줄이 있으면 한글 줄 색
+    assert _main_lyrics_color(slides) == orange
+    korean, sub = split_bilingual_page(
+        [("Amazing grace", white), ("Gracia", orange)], main_color=white
+    )
+    assert korean == "Amazing grace" and sub == "Gracia", (korean, sub)
+
+
 if __name__ == "__main__":
     test_is_sub_line()
     test_split()
+    test_split_by_color()
+    test_main_color_without_hangul()
     print("OK")

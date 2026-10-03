@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../domain/praise_song.dart';
@@ -7,11 +8,24 @@ class ImportSongsResult {
   const ImportSongsResult({
     required this.insertedCount,
     required this.skippedCount,
+    this.updatedCount = 0,
   });
 
   final int insertedCount;
   final int skippedCount;
+
+  /// 같은 곡인데 원본/보조 가사 나누기만 달라져서 기존 곡을 고친 수.
+  final int updatedCount;
 }
+
+/// 원본 + 보조 가사의 줄 모음(순서·빈 줄 무시). 나누기만 다른 같은 곡이면 같다.
+List<String> _allLyricLines(String lyrics, String englishLyrics) =>
+    '$lyrics\n$englishLyrics'
+        .split('\n')
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty)
+        .toList()
+      ..sort();
 
 class PraiseRepository {
   PraiseRepository({PraiseDatabase? database})
@@ -45,16 +59,36 @@ class PraiseRepository {
     return db.transaction((txn) async {
       var insertedCount = 0;
       var skippedCount = 0;
+      var updatedCount = 0;
       for (final song in songs) {
         final existing = await txn.query(
           'praise_songs',
-          columns: ['id'],
-          where: 'title = ? AND lyrics = ?',
-          whereArgs: [song.title, song.lyrics],
-          limit: 1,
+          columns: ['id', 'lyrics', 'english_lyrics'],
+          where: 'title = ?',
+          whereArgs: [song.title],
         );
-        if (existing.isNotEmpty) {
+        final newLines = _allLyricLines(song.lyrics, song.englishLyrics);
+        // 가사 줄은 그대로인데 원본/보조로 나눈 결과만 다르면(가져오기 규칙이 바뀜)
+        // 새 곡을 만들지 않고 기존 곡을 고친다.
+        final resplit = existing.where(
+          (row) => listEquals(
+            _allLyricLines(
+              row['lyrics'] as String,
+              (row['english_lyrics'] as String?) ?? '',
+            ),
+            newLines,
+          ),
+        );
+        if (existing.any((row) => row['lyrics'] == song.lyrics)) {
           skippedCount += 1;
+        } else if (resplit.isNotEmpty) {
+          await txn.update(
+            'praise_songs',
+            {'lyrics': song.lyrics, 'english_lyrics': song.englishLyrics},
+            where: 'id = ?',
+            whereArgs: [resplit.first['id']],
+          );
+          updatedCount += 1;
         } else {
           await txn.insert('praise_songs', song.toMap()..remove('id'));
           insertedCount += 1;
@@ -66,6 +100,7 @@ class PraiseRepository {
       return ImportSongsResult(
         insertedCount: insertedCount,
         skippedCount: skippedCount,
+        updatedCount: updatedCount,
       );
     });
   }

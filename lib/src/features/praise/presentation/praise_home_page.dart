@@ -1587,6 +1587,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       }
       var insertedCount = 0;
       var duplicateCount = 0;
+      var updatedCount = 0;
       if (result.songs.isNotEmpty) {
         final saveResult = await _repository.addNewSongs(
           result.songs,
@@ -1605,6 +1606,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         );
         insertedCount = saveResult.insertedCount;
         duplicateCount = saveResult.skippedCount;
+        updatedCount = saveResult.updatedCount;
       }
       await _loadSongs();
       if (!mounted) return;
@@ -1624,9 +1626,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
           '$insertedCount개 추가, 중복 $duplicateCount개, 실패 ${result.failedCount}개 '
               '(총 ${result.processedCount}개 검사)',
       };
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(message)));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            updatedCount == 0 ? message : '$message (가사 나누기 고침 $updatedCount개)',
+          ),
+        ),
+      );
       if (result.libreofficeMissing && mounted) {
         await _showLibreofficeDialog();
       }
@@ -4808,8 +4814,8 @@ class _DesignRibbonState extends State<_DesignRibbon> {
                 children: [
                   Expanded(
                     child: _ColorField(
-                      caption: '한글',
-                      dialogTitle: '한글 가사 색상',
+                      caption: '원본',
+                      dialogTitle: '원본 가사 색상',
                       color: _style.textColor,
                       colors: widget.textSwatches,
                       onSelected: (c) => _update(_style.copyWith(textColor: c)),
@@ -6241,7 +6247,7 @@ class _SongEditDialogState extends State<_SongEditDialog> {
                 maxLines: 10,
                 textAlignVertical: TextAlignVertical.top,
                 decoration: const InputDecoration(
-                  labelText: '한글 가사',
+                  labelText: '원본 가사',
                   hintText: '페이지 구분: 빈 줄 (또는 ### / ====)',
                   border: OutlineInputBorder(),
                   alignLabelWithHint: true,
