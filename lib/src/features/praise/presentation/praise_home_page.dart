@@ -2532,6 +2532,63 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               offeringDesign: _offeringDesign,
                               onEditOffering: _editOfferingDesign,
                               imageLibrary: _backgroundImages,
+                              // 편집/발표 보기 탭과 발표 시작 버튼을 디자인 리본
+                              // 머리줄에 함께 둬서 한 줄을 아낀다.
+                              leading: SizedBox(
+                                width: 180,
+                                child: TabBar(
+                                  controller: _mainTabController,
+                                  tabs: const [
+                                    Tab(text: '편집'),
+                                    Tab(text: '발표 보기'),
+                                  ],
+                                ),
+                              ),
+                              trailing: [
+                                if (_isPresentationOpen) ...[
+                                  Text(
+                                    _slideJumpBuffer.isEmpty
+                                        ? '발표 중 ${_currentSlideIndex + 1} / ${slides.length}'
+                                        : '이동 → $_slideJumpBuffer',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w700,
+                                      color: _slideJumpBuffer.isEmpty
+                                          ? null
+                                          : Theme.of(
+                                              context,
+                                            ).colorScheme.primary,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  FilledButton.tonalIcon(
+                                    onPressed: _closePresentation,
+                                    icon: const Icon(
+                                      Icons.stop_rounded,
+                                      size: 17,
+                                    ),
+                                    label: const Text('발표 종료'),
+                                    style: FilledButton.styleFrom(
+                                      backgroundColor: Theme.of(
+                                        context,
+                                      ).colorScheme.errorContainer,
+                                      foregroundColor: Theme.of(
+                                        context,
+                                      ).colorScheme.onErrorContainer,
+                                    ),
+                                  ),
+                                ] else
+                                  FilledButton.icon(
+                                    onPressed: slides.isEmpty
+                                        ? null
+                                        : _openPresentation,
+                                    icon: const Icon(
+                                      Icons.play_arrow_rounded,
+                                      size: 18,
+                                    ),
+                                    label: const Text('발표 시작'),
+                                  ),
+                              ],
                             );
 
                             // ── 콘티 + 검색 (가로 크기 조절 가능) ──
@@ -2564,65 +2621,6 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                             return Expanded(
                               child: Column(
                                 children: [
-                                  Row(
-                                    children: [
-                                      Expanded(
-                                        child: TabBar(
-                                          controller: _mainTabController,
-                                          isScrollable: true,
-                                          tabAlignment: TabAlignment.start,
-                                          tabs: const [
-                                            Tab(text: '편집'),
-                                            Tab(text: '발표 보기'),
-                                          ],
-                                        ),
-                                      ),
-                                      if (_isPresentationOpen) ...[
-                                        Text(
-                                          _slideJumpBuffer.isEmpty
-                                              ? '발표 중 ${_currentSlideIndex + 1} / ${slides.length}'
-                                              : '이동 → $_slideJumpBuffer',
-                                          style: TextStyle(
-                                            fontSize: 13,
-                                            fontWeight: FontWeight.w700,
-                                            color: _slideJumpBuffer.isEmpty
-                                                ? null
-                                                : Theme.of(
-                                                    context,
-                                                  ).colorScheme.primary,
-                                          ),
-                                        ),
-                                        const SizedBox(width: 10),
-                                        FilledButton.tonalIcon(
-                                          onPressed: _closePresentation,
-                                          icon: const Icon(
-                                            Icons.stop_rounded,
-                                            size: 17,
-                                          ),
-                                          label: const Text('발표 종료'),
-                                          style: FilledButton.styleFrom(
-                                            backgroundColor: Theme.of(
-                                              context,
-                                            ).colorScheme.errorContainer,
-                                            foregroundColor: Theme.of(
-                                              context,
-                                            ).colorScheme.onErrorContainer,
-                                          ),
-                                        ),
-                                      ] else
-                                        FilledButton.icon(
-                                          onPressed: slides.isEmpty
-                                              ? null
-                                              : _openPresentation,
-                                          icon: const Icon(
-                                            Icons.play_arrow_rounded,
-                                            size: 18,
-                                          ),
-                                          label: const Text('발표 시작'),
-                                        ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 8),
                                   designRibbon,
                                   const SizedBox(height: 12),
                                   // TabBarView 가 아니라 IndexedStack 인 이유:
@@ -4551,7 +4549,13 @@ class _DesignRibbon extends StatefulWidget {
     required this.offeringDesign,
     required this.onEditOffering,
     required this.imageLibrary,
+    required this.leading,
+    required this.trailing,
   });
+
+  /// 머리줄 왼쪽(편집/발표 보기 탭) / 오른쪽 끝(발표 시작·종료). 키보드 포커스는 그대로 받는다.
+  final Widget leading;
+  final List<Widget> trailing;
 
   final ExportStyle style;
   final List<Color> swatches;
@@ -4627,27 +4631,33 @@ class _DesignRibbonState extends State<_DesignRibbon> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    // 발표 중 단축키(←/→/Space)를 슬라이더·세그먼트가 가로채지 않도록
-    // 리본 안의 컨트롤은 키보드 포커스를 받지 않는다. 마우스 조작은 그대로 된다.
-    return ExcludeFocus(
-      child: Card(
-        margin: EdgeInsets.zero,
-        clipBehavior: Clip.antiAlias,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
           children: [
-            _header(cs),
-            if (!widget.isCollapsed) ...[
-              Divider(height: 1, color: cs.outlineVariant),
-              Padding(
+            widget.leading,
+            // 발표 중 단축키(←/→/Space)를 슬라이더·세그먼트가 가로채지 않도록
+            // 리본 안의 컨트롤은 키보드 포커스를 받지 않는다. 마우스 조작은 그대로 된다.
+            Expanded(child: ExcludeFocus(child: _header(cs))),
+            ...widget.trailing,
+          ],
+        ),
+        if (!widget.isCollapsed) ...[
+          const SizedBox(height: 8),
+          ExcludeFocus(
+            child: Card(
+              margin: EdgeInsets.zero,
+              clipBehavior: Clip.antiAlias,
+              child: Padding(
                 padding: const EdgeInsets.fromLTRB(10, 8, 10, 6),
                 child: SizedBox(height: _contentHeight, child: _content(cs)),
               ),
-            ],
-          ],
-        ),
-      ),
+            ),
+          ),
+        ],
+      ],
     );
   }
 
@@ -4656,7 +4666,7 @@ class _DesignRibbonState extends State<_DesignRibbon> {
       height: 40,
       child: Row(
         children: [
-          const SizedBox(width: 12),
+          const SizedBox(width: 16),
           Icon(Icons.palette_outlined, size: 16, color: cs.primary),
           const SizedBox(width: 6),
           const Text(
@@ -7596,6 +7606,23 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
           '${widget.currentIndex + 1} / ${widget.slides.length}',
           style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
         ),
+        if (_view.showAllPages) ...[
+          const SizedBox(width: 16),
+          _sectionLabel(cs, '모든 페이지 · ${widget.slides.length}장'),
+          const SizedBox(width: 4),
+          IconButton(
+            visualDensity: VisualDensity.compact,
+            onPressed: () => _changeGridZoom(-30),
+            icon: const Icon(Icons.remove_rounded, size: 18),
+            tooltip: '작게',
+          ),
+          IconButton(
+            visualDensity: VisualDensity.compact,
+            onPressed: () => _changeGridZoom(30),
+            icon: const Icon(Icons.add_rounded, size: 18),
+            tooltip: '크게',
+          ),
+        ],
         const Spacer(),
         IconButton(
           onPressed: widget.currentIndex > 0 ? widget.onPrev : null,
@@ -7842,42 +7869,24 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
 
   // 모든 페이지 보기. 기본 크기는 하단 스트립 썸네일과 비슷하게 두고,
   // 많아지면 세로로 스크롤한다. +/- 나 Ctrl(⌘)+휠로 크기를 바꾼다.
-  Widget _allPagesGrid(ColorScheme cs) {
-    void changeZoom(double delta) {
-      setState(
-        () => _view.gridThumbW = (_view.gridThumbW + delta).clamp(70.0, 460.0),
-      );
-    }
+  // 장 수와 +/- 버튼은 발표 상태 머리줄(_header)에 같이 둔다.
+  void _changeGridZoom(double delta) {
+    setState(
+      () => _view.gridThumbW = (_view.gridThumbW + delta).clamp(70.0, 460.0),
+    );
+  }
 
+  Widget _allPagesGrid(ColorScheme cs) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            _sectionLabel(cs, '모든 페이지 · ${widget.slides.length}장'),
-            const Spacer(),
-            IconButton(
-              visualDensity: VisualDensity.compact,
-              onPressed: () => changeZoom(-30),
-              icon: const Icon(Icons.remove_rounded, size: 18),
-              tooltip: '작게',
-            ),
-            IconButton(
-              visualDensity: VisualDensity.compact,
-              onPressed: () => changeZoom(30),
-              icon: const Icon(Icons.add_rounded, size: 18),
-              tooltip: '크게',
-            ),
-          ],
-        ),
-        const SizedBox(height: 4),
         Expanded(
           child: Listener(
             onPointerSignal: (event) {
               if (event is PointerScrollEvent &&
                   (HardwareKeyboard.instance.isControlPressed ||
                       HardwareKeyboard.instance.isMetaPressed)) {
-                changeZoom(-event.scrollDelta.dy * 0.6);
+                _changeGridZoom(-event.scrollDelta.dy * 0.6);
               }
             },
             child: LayoutBuilder(
