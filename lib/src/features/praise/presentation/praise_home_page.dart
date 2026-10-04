@@ -7319,7 +7319,12 @@ class _PresenterConsole extends StatefulWidget {
 class _PresenterConsoleState extends State<_PresenterConsole> {
   final _noteController = TextEditingController();
   final _stripScrollController = ScrollController();
+  final _gridScrollController = ScrollController();
   String _noteKey = '';
+  // 마지막으로 현재 페이지를 가운데 맞춘 배치(크기·열 수). 배치가 바뀌면
+  // (줄 높이를 끌거나, +/- 확대, 창 크기 변경, 화면 전환) 다시 맞춘다.
+  String? _stripLayoutKey;
+  String? _gridLayoutKey;
   PresenterViewState get _view => widget.viewState;
 
   static const double _thumbAspect = 13.333 / 7.5;
@@ -7329,6 +7334,12 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
   static const double _minStageHeight = 180;
   static const double _stripHandleHeight = 14;
   static const double _stripSpacing = 8;
+  static const double _stripPadding = 8;
+  static const double _gridSpacing = 8;
+  static const double _gridPad = 10;
+
+  // 마지막으로 그린 모든 페이지 격자의 열 수·칸 높이. 자동 스크롤이 쓴다.
+  ({int cols, double cellH})? _gridLayout;
 
   // 마지막으로 그린 썸네일 줄 높이(창 크기에 맞춰 줄어든 값). 자동 스크롤이 쓴다.
   double _renderedStripHeight = _defaultStripHeight;
@@ -7353,9 +7364,10 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
     _syncNote();
     if (oldWidget.currentIndex != widget.currentIndex ||
         oldWidget.slides.length != widget.slides.length) {
-      WidgetsBinding.instance.addPostFrameCallback(
-        (_) => _scrollStripToCurrent(),
-      );
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _scrollStripToCurrent();
+        _scrollGridToCurrent();
+      });
     }
   }
 
@@ -7363,6 +7375,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
   void dispose() {
     _noteController.dispose();
     _stripScrollController.dispose();
+    _gridScrollController.dispose();
     super.dispose();
   }
 
@@ -7376,19 +7389,45 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
     if (_noteController.text != text) _noteController.text = text;
   }
 
-  void _scrollStripToCurrent() {
+  /// 하단 썸네일 줄에서 현재 페이지를 가운데로. 페이지를 넘길 때는 부드럽게,
+  /// 배치가 바뀔 때(줄 높이 끌기·창 크기)는 그 자리에서 바로 맞춘다.
+  void _scrollStripToCurrent({bool animate = true}) {
     if (!_stripScrollController.hasClients || widget.slides.isEmpty) return;
     final tw = _thumbWidthFor(_renderedStripHeight);
-    final target = widget.currentIndex * (tw + _stripSpacing);
-    final viewport = _stripScrollController.position.viewportDimension;
-    _stripScrollController.animateTo(
-      (target - (viewport - tw) / 2).clamp(
-        0.0,
-        _stripScrollController.position.maxScrollExtent,
-      ),
-      duration: const Duration(milliseconds: 250),
-      curve: Curves.easeInOut,
+    final target =
+        _stripPadding + widget.currentIndex * (tw + _stripSpacing) + tw / 2;
+    _scrollToCenter(_stripScrollController, target, animate: animate);
+  }
+
+  /// 모든 페이지 보기에서 현재 페이지가 있는 줄을 가운데로.
+  void _scrollGridToCurrent({bool animate = true}) {
+    final g = _gridLayout;
+    if (!_gridScrollController.hasClients || g == null) return;
+    final row = widget.currentIndex ~/ g.cols;
+    final target = _gridPad + row * (g.cellH + _gridSpacing) + g.cellH / 2;
+    _scrollToCenter(_gridScrollController, target, animate: animate);
+  }
+
+  /// [center] 위치(스크롤 내용 기준)가 화면 가운데 오도록 스크롤한다. 양 끝에서는 멈춘다.
+  void _scrollToCenter(
+    ScrollController controller,
+    double center, {
+    required bool animate,
+  }) {
+    final position = controller.position;
+    final offset = (center - position.viewportDimension / 2).clamp(
+      0.0,
+      position.maxScrollExtent,
     );
+    if (animate) {
+      controller.animateTo(
+        offset,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeInOut,
+      );
+    } else {
+      controller.jumpTo(offset);
+    }
   }
 
   SlidePageData _pageDataFor(int i) {
@@ -7495,10 +7534,8 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
                   .clamp(_minStripHeight, maxStrip)
                   .toDouble();
               if (next == _view.stripHeight) return;
+              // 가운데 맞추기는 _thumbStrip 이 배치가 바뀐 것을 보고 한다.
               setState(() => _view.stripHeight = next);
-              WidgetsBinding.instance.addPostFrameCallback(
-                (_) => _scrollStripToCurrent(),
-              );
             },
           ),
           SizedBox(height: stripHeight, child: _thumbStrip(cs, stripHeight)),
@@ -7845,9 +7882,9 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
             },
             child: LayoutBuilder(
               builder: (context, constraints) {
-                const spacing = 8.0;
+                const spacing = _gridSpacing;
                 const labelH = 20.0;
-                const pad = 10.0;
+                const pad = _gridPad;
                 final avail = (constraints.maxWidth - pad * 2).clamp(
                   1.0,
                   double.infinity,
@@ -7857,8 +7894,21 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
                     .clamp(1, widget.slides.length.clamp(1, 9999));
                 final tw = (avail - (cols - 1) * spacing) / cols;
                 final cellH = tw / _thumbAspect + labelH;
+                _gridLayout = (cols: cols, cellH: cellH);
+
+                // 처음 열 때·확대/축소·창 크기를 바꿀 때 현재 페이지를 가운데로.
+                final layoutKey =
+                    '$cols/${cellH.toStringAsFixed(1)}/${constraints.maxHeight}';
+                if (!_gridScrollController.hasClients) _gridLayoutKey = null;
+                if (layoutKey != _gridLayoutKey) {
+                  _gridLayoutKey = layoutKey;
+                  WidgetsBinding.instance.addPostFrameCallback(
+                    (_) => _scrollGridToCurrent(animate: false),
+                  );
+                }
 
                 return GridView.builder(
+                  controller: _gridScrollController,
                   padding: const EdgeInsets.all(pad),
                   gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                     crossAxisCount: cols,
@@ -7896,49 +7946,70 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
         color: cs.surfaceContainerHighest.withValues(alpha: 0.4),
         borderRadius: BorderRadius.circular(8),
       ),
-      child: ListView.builder(
-        controller: _stripScrollController,
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-        itemCount: widget.slides.length,
-        itemBuilder: (context, i) {
-          final hasNote = (widget.notes[_keyAt(i)] ?? '').isNotEmpty;
-          return Padding(
-            padding: EdgeInsets.only(
-              right: i < widget.slides.length - 1 ? _stripSpacing : 0,
-            ),
-            child: SizedBox(
-              width: thumbW,
-              child: Stack(
-                children: [
-                  // 편집 탭의 슬라이드 순서와 같은 썸네일. 마우스를 올리면
-                  // 수정·삭제 버튼이 그대로 나온다.
-                  _SlideThumbnail(
-                    data: _pageDataFor(i),
-                    isSelected: i == widget.currentIndex,
-                    index: i,
-                    isEditable: !widget.slides[i].isAutoSpacer,
-                    onTap: () => widget.onSlideSelected(i),
-                    onEdit: () => widget.onSlideEdit(i),
-                    onDelete: () => widget.onSlideDelete(i),
-                  ),
-                  // 수정/삭제 버튼이 오른쪽 위에 뜨므로 메모 표시는 왼쪽에.
-                  if (hasNote)
-                    Positioned(
-                      top: 3,
-                      left: 3,
-                      child: Icon(
-                        Icons.sticky_note_2_rounded,
-                        size: 12,
-                        color: cs.primary,
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          );
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // 줄 높이를 끌어 썸네일이 커지거나, 창 크기가 바뀌거나, 모든 페이지
+          // 보기에서 돌아오면 현재 페이지를 다시 가운데로 맞춘다.
+          final layoutKey =
+              '${stripHeight.toStringAsFixed(1)}/${constraints.maxWidth}';
+          if (!_stripScrollController.hasClients) _stripLayoutKey = null;
+          if (layoutKey != _stripLayoutKey) {
+            _stripLayoutKey = layoutKey;
+            WidgetsBinding.instance.addPostFrameCallback(
+              (_) => _scrollStripToCurrent(animate: false),
+            );
+          }
+          return _thumbList(cs, thumbW);
         },
       ),
+    );
+  }
+
+  Widget _thumbList(ColorScheme cs, double thumbW) {
+    return ListView.builder(
+      controller: _stripScrollController,
+      scrollDirection: Axis.horizontal,
+      // 오른쪽 여백은 마지막 썸네일의 간격(_stripSpacing)이 대신한다.
+      padding: const EdgeInsets.fromLTRB(_stripPadding, 6, 0, 6),
+      // 폭을 고정해야 멀리 있는 페이지까지의 스크롤 길이가 정확하다. 안 그러면
+      // 아직 안 그린 썸네일 길이를 어림해서 가운데 맞추기가 중간에 멈춘다.
+      itemExtent: thumbW + _stripSpacing,
+      itemCount: widget.slides.length,
+      itemBuilder: (context, i) {
+        final hasNote = (widget.notes[_keyAt(i)] ?? '').isNotEmpty;
+        return Padding(
+          padding: const EdgeInsets.only(right: _stripSpacing),
+          child: SizedBox(
+            width: thumbW,
+            child: Stack(
+              children: [
+                // 편집 탭의 슬라이드 순서와 같은 썸네일. 마우스를 올리면
+                // 수정·삭제 버튼이 그대로 나온다.
+                _SlideThumbnail(
+                  data: _pageDataFor(i),
+                  isSelected: i == widget.currentIndex,
+                  index: i,
+                  isEditable: !widget.slides[i].isAutoSpacer,
+                  onTap: () => widget.onSlideSelected(i),
+                  onEdit: () => widget.onSlideEdit(i),
+                  onDelete: () => widget.onSlideDelete(i),
+                ),
+                // 수정/삭제 버튼이 오른쪽 위에 뜨므로 메모 표시는 왼쪽에.
+                if (hasNote)
+                  Positioned(
+                    top: 3,
+                    left: 3,
+                    child: Icon(
+                      Icons.sticky_note_2_rounded,
+                      size: 12,
+                      color: cs.primary,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }
