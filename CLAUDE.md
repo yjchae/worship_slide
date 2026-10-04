@@ -309,11 +309,13 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   (`update_service.dart`)가 압축을 푼 뒤 그 폴더를 찾아 설치 폴더에 덮어쓴다. 폴더가 없으면
   아무것도 복사하지 못하고 조용히 재시작만 한다. Windows 는 `Compress-Archive -Path dist/worship_slides`
   (뒤에 `\*` 를 붙이면 내용물만 담긴다), macOS 는 `ditto --keepParent`
-- **Windows 업데이터** (`_applyWindows`): PowerShell 스크립트를 띄우고 앱은 종료한다. 세 가지가 빠지면
-  스크립트가 조용히 실행조차 안 돼서 "재시작 안 되고 예전 버전 그대로"가 된다 —
-  `-ExecutionPolicy Bypass`(기본 정책 Restricted 는 .ps1 을 막는다), **UTF-8 BOM**(없으면 PS 5.1 이 CP949 로 읽어
-  한글 경로에서 파싱 에러), 앱 PID 종료 대기(`Wait-Process`, 2초 sleep 으론 exe 가 아직 잠겨 있을 수 있다).
-  복사는 robocopy 재시도, 성공/실패와 관계없이 앱을 다시 띄우고 과정은 `%TEMP%\ws_update.log` 에 남긴다
+- **Windows 업데이터** (`_applyWindows`): **PowerShell 을 쓰지 않고 앱이 직접 덮어쓴다.** 예전엔 숨은
+  PowerShell(.ps1, `-ExecutionPolicy Bypass -WindowStyle Hidden`)에 맡겼는데 실제 PC 에서 스크립트가 한 줄도 안 돌았다
+  (로그조차 안 생김 — 백신이 이 조합을 막는 것으로 본다). 지금은 `tar.exe`(Win10 1803+ 기본)로 풀고,
+  실행 중이라 잠긴 exe·dll·app.so 는 **덮어쓸 순 없어도 이름은 바꿀 수 있어서** `.old` 로 비켜 둔 뒤 새 파일을 넣고
+  (`applyUpdateFiles`), 새 exe 를 띄우고 종료한다. `.old` 는 다음 시작 때 `cleanupWindowsLeftovers`(main.dart)가 지운다.
+  과정은 `app.log` 에 `[update]` 로 남는다. **업데이트를 실행하는 건 깔려 있는 옛 버전의 코드**라서,
+  고친 업데이터는 한 번 수동으로 덮어써 설치해야 그다음 업데이트부터 쓰인다
 - 업데이트는 폴더를 지우지 않고 **덮어쓰기**다. 실행 파일 옆 `worship_slides.db` 가 살아남아야 하기 때문.
   수동으로 새 빌드를 받아 갈아끼울 때도 폴더째 교체하지 말고 덮어써야 곡·콘티가 유지된다
 - 앱은 시작 시 `yjchae/worship_slide`(이 레포)의 최신 릴리즈를 확인해 업데이트 배너를 띄운다.

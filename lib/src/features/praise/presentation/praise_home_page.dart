@@ -2534,10 +2534,14 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               imageLibrary: _backgroundImages,
                               // 편집/발표 보기 탭과 발표 시작 버튼을 디자인 리본
                               // 머리줄에 함께 둬서 한 줄을 아낀다.
+                              // 탭 글자가 잘리지 않게 글자 폭대로 두고(isScrollable)
+                              // 남는 폭은 디자인 묶음과의 간격이 된다.
                               leading: SizedBox(
-                                width: 180,
+                                width: 220,
                                 child: TabBar(
                                   controller: _mainTabController,
+                                  isScrollable: true,
+                                  tabAlignment: TabAlignment.start,
                                   tabs: const [
                                     Tab(text: '편집'),
                                     Tab(text: '발표 보기'),
@@ -4666,7 +4670,12 @@ class _DesignRibbonState extends State<_DesignRibbon> {
       height: 40,
       child: Row(
         children: [
-          const SizedBox(width: 16),
+          VerticalDivider(
+            width: 32,
+            indent: 10,
+            endIndent: 10,
+            color: cs.outlineVariant,
+          ),
           Icon(Icons.palette_outlined, size: 16, color: cs.primary),
           const SizedBox(width: 6),
           const Text(

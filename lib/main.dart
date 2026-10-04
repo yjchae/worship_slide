@@ -3,6 +3,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'src/app.dart';
 import 'src/features/praise/data/font_library.dart';
+import 'src/features/update/update_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -12,5 +13,6 @@ Future<void> main() async {
   try {
     await FontLibrary.load();
   } catch (_) {}
+  UpdateService.cleanupWindowsLeftovers();
   runApp(const WorshipSlidesApp());
 }

@@ -8,6 +8,8 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../praise/data/app_logger.dart';
+
 class UpdateInfo {
   final String version;
   final String tagName;
@@ -193,107 +195,91 @@ rm -f "$scriptPath"
     exit(0);
   }
 
+  /// Windows 는 PowerShell 도우미 없이 앱이 직접 덮어쓴다.
+  /// 예전엔 숨은 PowerShell(.ps1, ExecutionPolicy Bypass)에 맡겼는데, 백신이 이 조합을
+  /// 조용히 막아 스크립트가 한 줄도 안 돌았다(로그 파일조차 안 생김).
+  /// 실행 중인 exe·dll 은 덮어쓸 수는 없어도 **이름은 바꿀 수 있으므로**, 잠긴 파일은
+  /// `.old` 로 비켜 두고 새 파일을 넣은 뒤 새 exe 를 띄우고 종료한다.
+  /// `.old` 는 다음 실행 때 [cleanupWindowsLeftovers] 가 지운다.
   Future<void> _applyWindows(String zipPath) async {
     final exe = Platform.resolvedExecutable;
     final installDir = p.dirname(exe);
-    final tmp = p.dirname(zipPath);
-    final scriptPath = p.join(tmp, 'ws_update.ps1');
+    final extractDir = p.join(p.dirname(zipPath), 'ws_extracted');
+    final log = AppLogger.instance;
 
-    final script = buildWindowsUpdateScript(
-      appPid: pid,
-      exePath: exe,
-      installDir: installDir,
-      zipPath: zipPath,
-      extractDir: p.join(tmp, 'ws_extracted'),
-      logPath: p.join(tmp, 'ws_update.log'),
-    );
-    // Windows PowerShell 5.1 은 BOM 없는 .ps1 을 시스템 ANSI(CP949)로 읽는다.
-    // 경로에 한글이 있으면 깨져서 스크립트 전체가 파싱 에러로 실행조차 안 된다.
-    await File(scriptPath).writeAsBytes([
-      0xEF, 0xBB, 0xBF, // UTF-8 BOM
-      ...utf8.encode(script),
-    ]);
-
+    await log.info('[update] extract $zipPath');
+    final dir = Directory(extractDir);
+    if (dir.existsSync()) dir.deleteSync(recursive: true);
+    dir.createSync(recursive: true);
+    // Windows 10(1803)+ 에 기본으로 들어 있는 bsdtar 가 zip 도 푼다.
     final systemRoot = Platform.environment['SystemRoot'] ?? r'C:\Windows';
-    final powershell = p.join(
-      systemRoot,
-      'System32',
-      'WindowsPowerShell',
-      'v1.0',
-      'powershell.exe',
-    );
+    final tar = await Process.run(p.join(systemRoot, 'System32', 'tar.exe'), [
+      '-xf',
+      zipPath,
+      '-C',
+      extractDir,
+    ]);
+    if (tar.exitCode != 0) {
+      throw Exception('압축 풀기 실패: ${tar.stderr}');
+    }
+    final src = p.join(extractDir, 'worship_slides');
+    if (!Directory(src).existsSync()) {
+      throw Exception('업데이트 파일에 worship_slides 폴더가 없습니다.');
+    }
+
+    final count = applyUpdateFiles(src, installDir);
+    await log.info('[update] copied $count files -> $installDir');
+    try {
+      dir.deleteSync(recursive: true);
+      File(zipPath).deleteSync();
+    } catch (_) {}
+
     await Process.start(
-      powershell,
-      [
-        '-NoProfile',
-        // Windows 기본 실행 정책(Restricted)은 .ps1 실행 자체를 막는다
-        '-ExecutionPolicy', 'Bypass',
-        '-WindowStyle', 'Hidden',
-        '-NonInteractive',
-        '-File', scriptPath,
-      ],
+      exe,
+      const [],
+      workingDirectory: installDir,
       mode: ProcessStartMode.detached,
     );
     exit(0);
   }
 
-  /// Windows 업데이트 스크립트.
-  ///
-  /// 1. 앱 프로세스가 완전히 끝날 때까지 기다린다 (실행 중인 exe·dll 은 덮어쓸 수 없다)
-  /// 2. zip 을 풀어 `worship_slides/` 내용을 설치 폴더에 덮어쓴다 (robocopy, 잠김은 재시도)
-  /// 3. 성공하든 실패하든 앱을 다시 띄우고, 과정은 [logPath] 에 남긴다
+  /// [srcDir] 의 파일을 [installDir] 에 덮어쓴다(지우지 않는다 — 옆의 DB 가 살아야 한다).
+  /// 잠겨서 못 덮어쓰는 파일은 기존 것을 `.old` 로 이름만 바꾸고 넣는다. 복사한 파일 수를 돌려준다.
   @visibleForTesting
-  static String buildWindowsUpdateScript({
-    required int appPid,
-    required String exePath,
-    required String installDir,
-    required String zipPath,
-    required String extractDir,
-    required String logPath,
-  }) {
-    // 작은따옴표 문자열은 $ 를 해석하지 않는다. 안의 ' 만 '' 로 바꾸면 된다
-    String q(String v) => "'${v.replaceAll("'", "''")}'";
-    return '''
-\$ErrorActionPreference = 'Stop'
-\$log = ${q(logPath)}
-\$installDir = ${q(installDir)}
-\$exePath = ${q(exePath)}
-\$zipPath = ${q(zipPath)}
-\$extractDir = ${q(extractDir)}
-function Log([string]\$msg) {
-  Add-Content -LiteralPath \$log -Value "\$(Get-Date -Format s) \$msg" -Encoding UTF8
-}
-Set-Content -LiteralPath \$log -Value "update start (pid $appPid)" -Encoding UTF8
-try {
-  try { Wait-Process -Id $appPid -Timeout 60 -ErrorAction Stop } catch { }
-  Start-Sleep -Seconds 1
-  if (Test-Path -LiteralPath \$extractDir) {
-    Remove-Item -LiteralPath \$extractDir -Recurse -Force
+  static int applyUpdateFiles(String srcDir, String installDir) {
+    var count = 0;
+    for (final entity in Directory(srcDir).listSync(recursive: true)) {
+      if (entity is! File) continue;
+      final dest = p.join(installDir, p.relative(entity.path, from: srcDir));
+      Directory(p.dirname(dest)).createSync(recursive: true);
+      try {
+        entity.copySync(dest);
+      } on FileSystemException {
+        final old = '$dest.old';
+        try {
+          File(old).deleteSync();
+        } catch (_) {}
+        File(dest).renameSync(old);
+        entity.copySync(dest);
+      }
+      count++;
+    }
+    return count;
   }
-  Expand-Archive -LiteralPath \$zipPath -DestinationPath \$extractDir -Force
-  \$src = Join-Path \$extractDir 'worship_slides'
-  if (-not (Test-Path -LiteralPath \$src)) {
-    throw "worship_slides folder not found in zip"
-  }
-  Log "copy \$src -> \$installDir"
-  \$out = robocopy \$src \$installDir /E /IS /R:10 /W:1 /NP /NJH /NDL
-  \$code = \$LASTEXITCODE
-  Log (\$out -join "`n")
-  if (\$code -ge 8) { throw "robocopy failed (exit \$code)" }
-  Log "update ok"
-} catch {
-  Log "update failed: \$_"
-} finally {
-  try {
-    Start-Process -FilePath \$exePath -WorkingDirectory \$installDir
-  } catch {
-    Log "restart failed: \$_"
-  }
-  Remove-Item -LiteralPath \$extractDir -Recurse -Force -ErrorAction SilentlyContinue
-  Remove-Item -LiteralPath \$zipPath -Force -ErrorAction SilentlyContinue
-  Remove-Item -LiteralPath \$PSCommandPath -Force -ErrorAction SilentlyContinue
-}
-''';
+
+  /// 지난 업데이트가 비켜 둔 `.old` 파일을 지운다. 앱 시작 때 부른다.
+  static void cleanupWindowsLeftovers() {
+    if (!Platform.isWindows || !kReleaseMode) return;
+    final installDir = Directory(p.dirname(Platform.resolvedExecutable));
+    try {
+      for (final f in installDir.listSync(recursive: true)) {
+        if (f is File && f.path.endsWith('.old')) {
+          try {
+            f.deleteSync();
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
   }
 
   void _launch(String url) {
