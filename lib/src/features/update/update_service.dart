@@ -142,6 +142,9 @@ class UpdateService {
     try {
       final req = http.Request('GET', Uri.parse(url));
       final res = await client.send(req);
+      if (res.statusCode != 200) {
+        throw HttpException('다운로드 실패 (HTTP ${res.statusCode})');
+      }
       final total = res.contentLength ?? 0;
       var received = 0;
       final sink = File(dest).openWrite();
@@ -194,25 +197,103 @@ rm -f "$scriptPath"
     final exe = Platform.resolvedExecutable;
     final installDir = p.dirname(exe);
     final tmp = p.dirname(zipPath);
-    final extractDir = p.join(tmp, 'ws_extracted');
     final scriptPath = p.join(tmp, 'ws_update.ps1');
 
-    await File(scriptPath).writeAsString('''
-Start-Sleep -Seconds 2
-Expand-Archive -Force "$zipPath" "$extractDir"
-\$src = "$extractDir\\worship_slides"
-Get-ChildItem "\$src" | Copy-Item -Destination "$installDir" -Recurse -Force
-Start-Process "$installDir\\worship_slides.exe"
-Remove-Item -Recurse -Force "$extractDir"
-Remove-Item -Force "$zipPath"
-Remove-Item -Force "$scriptPath"
-''');
+    final script = buildWindowsUpdateScript(
+      appPid: pid,
+      exePath: exe,
+      installDir: installDir,
+      zipPath: zipPath,
+      extractDir: p.join(tmp, 'ws_extracted'),
+      logPath: p.join(tmp, 'ws_update.log'),
+    );
+    // Windows PowerShell 5.1 은 BOM 없는 .ps1 을 시스템 ANSI(CP949)로 읽는다.
+    // 경로에 한글이 있으면 깨져서 스크립트 전체가 파싱 에러로 실행조차 안 된다.
+    await File(scriptPath).writeAsBytes([
+      0xEF, 0xBB, 0xBF, // UTF-8 BOM
+      ...utf8.encode(script),
+    ]);
+
+    final systemRoot = Platform.environment['SystemRoot'] ?? r'C:\Windows';
+    final powershell = p.join(
+      systemRoot,
+      'System32',
+      'WindowsPowerShell',
+      'v1.0',
+      'powershell.exe',
+    );
     await Process.start(
-      'powershell',
-      ['-WindowStyle', 'Hidden', '-NonInteractive', '-File', scriptPath],
+      powershell,
+      [
+        '-NoProfile',
+        // Windows 기본 실행 정책(Restricted)은 .ps1 실행 자체를 막는다
+        '-ExecutionPolicy', 'Bypass',
+        '-WindowStyle', 'Hidden',
+        '-NonInteractive',
+        '-File', scriptPath,
+      ],
       mode: ProcessStartMode.detached,
     );
     exit(0);
+  }
+
+  /// Windows 업데이트 스크립트.
+  ///
+  /// 1. 앱 프로세스가 완전히 끝날 때까지 기다린다 (실행 중인 exe·dll 은 덮어쓸 수 없다)
+  /// 2. zip 을 풀어 `worship_slides/` 내용을 설치 폴더에 덮어쓴다 (robocopy, 잠김은 재시도)
+  /// 3. 성공하든 실패하든 앱을 다시 띄우고, 과정은 [logPath] 에 남긴다
+  @visibleForTesting
+  static String buildWindowsUpdateScript({
+    required int appPid,
+    required String exePath,
+    required String installDir,
+    required String zipPath,
+    required String extractDir,
+    required String logPath,
+  }) {
+    // 작은따옴표 문자열은 $ 를 해석하지 않는다. 안의 ' 만 '' 로 바꾸면 된다
+    String q(String v) => "'${v.replaceAll("'", "''")}'";
+    return '''
+\$ErrorActionPreference = 'Stop'
+\$log = ${q(logPath)}
+\$installDir = ${q(installDir)}
+\$exePath = ${q(exePath)}
+\$zipPath = ${q(zipPath)}
+\$extractDir = ${q(extractDir)}
+function Log([string]\$msg) {
+  Add-Content -LiteralPath \$log -Value "\$(Get-Date -Format s) \$msg" -Encoding UTF8
+}
+Set-Content -LiteralPath \$log -Value "update start (pid $appPid)" -Encoding UTF8
+try {
+  try { Wait-Process -Id $appPid -Timeout 60 -ErrorAction Stop } catch { }
+  Start-Sleep -Seconds 1
+  if (Test-Path -LiteralPath \$extractDir) {
+    Remove-Item -LiteralPath \$extractDir -Recurse -Force
+  }
+  Expand-Archive -LiteralPath \$zipPath -DestinationPath \$extractDir -Force
+  \$src = Join-Path \$extractDir 'worship_slides'
+  if (-not (Test-Path -LiteralPath \$src)) {
+    throw "worship_slides folder not found in zip"
+  }
+  Log "copy \$src -> \$installDir"
+  \$out = robocopy \$src \$installDir /E /IS /R:10 /W:1 /NP /NJH /NDL
+  \$code = \$LASTEXITCODE
+  Log (\$out -join "`n")
+  if (\$code -ge 8) { throw "robocopy failed (exit \$code)" }
+  Log "update ok"
+} catch {
+  Log "update failed: \$_"
+} finally {
+  try {
+    Start-Process -FilePath \$exePath -WorkingDirectory \$installDir
+  } catch {
+    Log "restart failed: \$_"
+  }
+  Remove-Item -LiteralPath \$extractDir -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath \$zipPath -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath \$PSCommandPath -Force -ErrorAction SilentlyContinue
+}
+''';
   }
 
   void _launch(String url) {
