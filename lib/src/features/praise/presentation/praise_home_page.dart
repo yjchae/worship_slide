@@ -6531,8 +6531,20 @@ class _SlideQuickEditDialogState extends State<_SlideQuickEditDialog> {
   @override
   void initState() {
     super.initState();
-    _mainCtrl = TextEditingController(text: widget.mainText);
-    _englishCtrl = TextEditingController(text: widget.englishText);
+    // 커서를 맨 앞에 둔다. 선택이 없으면 데스크탑은 포커스 때 끝으로 보내서
+    // 긴 가사가 마지막 줄까지 스크롤된 채로 열린다.
+    _mainCtrl = TextEditingController.fromValue(
+      TextEditingValue(
+        text: widget.mainText,
+        selection: const TextSelection.collapsed(offset: 0),
+      ),
+    );
+    _englishCtrl = TextEditingController.fromValue(
+      TextEditingValue(
+        text: widget.englishText,
+        selection: const TextSelection.collapsed(offset: 0),
+      ),
+    );
   }
 
   @override
@@ -7330,6 +7342,10 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
   final _noteController = TextEditingController();
   final _stripScrollController = ScrollController();
   final _gridScrollController = ScrollController();
+  final _searchController = TextEditingController();
+  final _searchFocus = FocusNode();
+  // 검색으로 찾은 페이지. 썸네일에 테두리만 두르고 현재 슬라이드는 바꾸지 않는다.
+  int? _foundIndex;
   String _noteKey = '';
   // 마지막으로 현재 페이지를 가운데 맞춘 배치(크기·열 수). 배치가 바뀌면
   // (줄 높이를 끌거나, +/- 확대, 창 크기 변경, 화면 전환) 다시 맞춘다.
@@ -7386,7 +7402,62 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
     _noteController.dispose();
     _stripScrollController.dispose();
     _gridScrollController.dispose();
+    _searchController.dispose();
+    _searchFocus.dispose();
     super.dispose();
+  }
+
+  /// 제목(곡 제목·성경 구절)이나 가사에 [query] 가 든 다음 곡의 첫 페이지로 썸네일만 스크롤한다.
+  /// 발표 화면이 바뀌면 안 되므로 현재 슬라이드(onSlideSelected)는 건드리지 않는다.
+  /// 같은 검색어로 다시 누르면 그다음 곡으로 넘어간다.
+  void _searchSlides(String query) {
+    String norm(String v) => v.replaceAll(RegExp(r'\s+'), '').toLowerCase();
+    final q = norm(query);
+    // 입력칸에서 포커스를 빼야 ←/→ 발표 단축키가 다시 먹는다.
+    _searchFocus.unfocus();
+    if (q.isEmpty) {
+      setState(() => _foundIndex = null);
+      return;
+    }
+    final slides = widget.slides;
+    bool matches(int i) =>
+        !slides[i].isAutoSpacer &&
+        // 한 곡의 여러 페이지 중 첫 페이지만 결과로 친다.
+        slides[i].pageIndexInItem == 0 &&
+        norm('${slides[i].title ?? ''} ${slides[i].mainText}').contains(q);
+    final start = _foundIndex == null ? 0 : _foundIndex! + 1;
+    int? found;
+    for (var k = 0; k < slides.length; k++) {
+      final i = (start + k) % slides.length;
+      if (matches(i)) {
+        found = i;
+        break;
+      }
+    }
+    setState(() => _foundIndex = found);
+    if (found == null) return;
+    _scrollStripTo(found);
+    _scrollGridTo(found);
+  }
+
+  /// 검색으로 찾은 썸네일에 테두리를 두른다.
+  Widget _foundMark(int i, ColorScheme cs, Widget child) {
+    if (i != _foundIndex) return child;
+    return Stack(
+      children: [
+        child,
+        Positioned.fill(
+          child: IgnorePointer(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                border: Border.all(color: cs.tertiary, width: 3),
+                borderRadius: BorderRadius.circular(6),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
   }
 
   // 슬라이드가 바뀌면 그 슬라이드의 메모를 컨트롤러에 옮긴다.
@@ -7401,19 +7472,24 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
 
   /// 하단 썸네일 줄에서 현재 페이지를 가운데로. 페이지를 넘길 때는 부드럽게,
   /// 배치가 바뀔 때(줄 높이 끌기·창 크기)는 그 자리에서 바로 맞춘다.
-  void _scrollStripToCurrent({bool animate = true}) {
+  void _scrollStripToCurrent({bool animate = true}) =>
+      _scrollStripTo(widget.currentIndex, animate: animate);
+
+  void _scrollStripTo(int index, {bool animate = true}) {
     if (!_stripScrollController.hasClients || widget.slides.isEmpty) return;
     final tw = _thumbWidthFor(_renderedStripHeight);
-    final target =
-        _stripPadding + widget.currentIndex * (tw + _stripSpacing) + tw / 2;
+    final target = _stripPadding + index * (tw + _stripSpacing) + tw / 2;
     _scrollToCenter(_stripScrollController, target, animate: animate);
   }
 
   /// 모든 페이지 보기에서 현재 페이지가 있는 줄을 가운데로.
-  void _scrollGridToCurrent({bool animate = true}) {
+  void _scrollGridToCurrent({bool animate = true}) =>
+      _scrollGridTo(widget.currentIndex, animate: animate);
+
+  void _scrollGridTo(int index, {bool animate = true}) {
     final g = _gridLayout;
     if (!_gridScrollController.hasClients || g == null) return;
-    final row = widget.currentIndex ~/ g.cols;
+    final row = index ~/ g.cols;
     final target = _gridPad + row * (g.cellH + _gridSpacing) + g.cellH / 2;
     _scrollToCenter(_gridScrollController, target, animate: animate);
   }
@@ -7624,6 +7700,28 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
           ),
         ],
         const Spacer(),
+        // 곡 찾기: Enter 를 누르면 썸네일만 그 곡으로 스크롤한다(발표 화면은 그대로).
+        SizedBox(
+          width: 200,
+          child: TextField(
+            controller: _searchController,
+            focusNode: _searchFocus,
+            style: const TextStyle(fontSize: 13),
+            decoration: const InputDecoration(
+              isDense: true,
+              hintText: '곡 찾기 (Enter)',
+              prefixIcon: Icon(Icons.search_rounded, size: 18),
+              prefixIconConstraints: BoxConstraints(minWidth: 34),
+              border: OutlineInputBorder(),
+            ),
+            // 검색어를 바꾸면 처음 곡부터 다시 찾는다.
+            onChanged: (_) {
+              if (_foundIndex != null) setState(() => _foundIndex = null);
+            },
+            onSubmitted: _searchSlides,
+          ),
+        ),
+        const SizedBox(width: 4),
         IconButton(
           onPressed: widget.currentIndex > 0 ? widget.onPrev : null,
           icon: const Icon(Icons.chevron_left_rounded),
@@ -7926,18 +8024,22 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
                     childAspectRatio: (tw / cellH).clamp(0.1, 100.0),
                   ),
                   itemCount: widget.slides.length,
-                  itemBuilder: (context, i) => _SlideThumbnail(
-                    data: _pageDataFor(i),
-                    isSelected: i == widget.currentIndex,
-                    index: i,
-                    isEditable: !widget.slides[i].isAutoSpacer,
-                    // 누른 페이지로 넘기고 발표자 보기로 돌아간다.
-                    onTap: () {
-                      widget.onSlideSelected(i);
-                      setState(() => _view.showAllPages = false);
-                    },
-                    onEdit: () => widget.onSlideEdit(i),
-                    onDelete: () => widget.onSlideDelete(i),
+                  itemBuilder: (context, i) => _foundMark(
+                    i,
+                    cs,
+                    _SlideThumbnail(
+                      data: _pageDataFor(i),
+                      isSelected: i == widget.currentIndex,
+                      index: i,
+                      isEditable: !widget.slides[i].isAutoSpacer,
+                      // 누른 페이지로 넘기고 발표자 보기로 돌아간다.
+                      onTap: () {
+                        widget.onSlideSelected(i);
+                        setState(() => _view.showAllPages = false);
+                      },
+                      onEdit: () => widget.onSlideEdit(i),
+                      onDelete: () => widget.onSlideDelete(i),
+                    ),
                   ),
                 );
               },
@@ -7988,33 +8090,37 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
         final hasNote = (widget.notes[_keyAt(i)] ?? '').isNotEmpty;
         return Padding(
           padding: const EdgeInsets.only(right: _stripSpacing),
-          child: SizedBox(
-            width: thumbW,
-            child: Stack(
-              children: [
-                // 편집 탭의 슬라이드 순서와 같은 썸네일. 마우스를 올리면
-                // 수정·삭제 버튼이 그대로 나온다.
-                _SlideThumbnail(
-                  data: _pageDataFor(i),
-                  isSelected: i == widget.currentIndex,
-                  index: i,
-                  isEditable: !widget.slides[i].isAutoSpacer,
-                  onTap: () => widget.onSlideSelected(i),
-                  onEdit: () => widget.onSlideEdit(i),
-                  onDelete: () => widget.onSlideDelete(i),
-                ),
-                // 수정/삭제 버튼이 오른쪽 위에 뜨므로 메모 표시는 왼쪽에.
-                if (hasNote)
-                  Positioned(
-                    top: 3,
-                    left: 3,
-                    child: Icon(
-                      Icons.sticky_note_2_rounded,
-                      size: 12,
-                      color: cs.primary,
-                    ),
+          child: _foundMark(
+            i,
+            cs,
+            SizedBox(
+              width: thumbW,
+              child: Stack(
+                children: [
+                  // 편집 탭의 슬라이드 순서와 같은 썸네일. 마우스를 올리면
+                  // 수정·삭제 버튼이 그대로 나온다.
+                  _SlideThumbnail(
+                    data: _pageDataFor(i),
+                    isSelected: i == widget.currentIndex,
+                    index: i,
+                    isEditable: !widget.slides[i].isAutoSpacer,
+                    onTap: () => widget.onSlideSelected(i),
+                    onEdit: () => widget.onSlideEdit(i),
+                    onDelete: () => widget.onSlideDelete(i),
                   ),
-              ],
+                  // 수정/삭제 버튼이 오른쪽 위에 뜨므로 메모 표시는 왼쪽에.
+                  if (hasNote)
+                    Positioned(
+                      top: 3,
+                      left: 3,
+                      child: Icon(
+                        Icons.sticky_note_2_rounded,
+                        size: 12,
+                        color: cs.primary,
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
         );
