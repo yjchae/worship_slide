@@ -143,6 +143,9 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
     짝을 찾는다. 권 수가 다르면 포기하고 보조 본문 없이 담는다
   - `subLanguage`·`bibleSubVersion` 은 `ExportStyle` 에 얹혀 `export_style.json` 에 저장된다.
     렌더러는 둘 다 읽지 않는다 (담을 때 이미 결정되어 있다)
+  - **켜기/끄기**는 리본 찬양 탭 '보조 언어'·성경 탭 '보조 역본' 줄의 스위치 = `includeEnglishLyrics`
+    (`include_english_lyrics`). 렌더러 네 곳이 원래부터 읽는 값이라 담긴 보조 가사는 그대로 두고 표시만 끈다.
+    값이 하나라 두 탭 스위치가 같이 움직인다
 - **항목별 배경 오버라이드**: "헌금송만 다른 배경"처럼 콘티 일부만 배경을 다르게 하는 기능.
   전역 `ExportStyle` 은 그대로 두고, 항목 uid → `SlideBackground`(색 + 이미지 경로) 맵
   (`_itemBackgrounds`)을 따로 들고 다닌다. 메모(`_slideNotes`)와 같은 방식이라 `StagingItem`
@@ -295,6 +298,11 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
 ## 발표 모드 단축키
 
 `praise_home_page.dart` `_handleKeyEvent` — F5 발표 시작(`_handleStartKey`, 전역 핸들러), →/↓/Space 다음, ←/↑ 이전, 숫자+Enter 해당 슬라이드로 점프, ESC 발표 종료.
+
+발표 보기 탭에서 Ctrl+F(macOS ⌘F) = 곡 찾기 입력칸으로 (`_PresenterConsoleState._handleFindKey`, 전역 핸들러 —
+콘솔은 IndexedStack 에 늘 살아 있으므로 `isActive` 로 탭이 보일 때만 받는다). 찾기 범위는 입력칸 옆 '제목 | 가사'
+(`PresenterViewState.searchScope`). 제목은 항목 첫 페이지, 가사는 원본·보조 가사가 맞는 그 페이지로 간다.
+입력칸 안 ESC 는 발표 종료가 아니라 입력칸에서 빠져나오기만 한다.
 
 ## 배포
 

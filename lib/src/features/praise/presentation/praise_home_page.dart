@@ -2438,6 +2438,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                                 _sendZoom();
                               },
                               viewState: _presenterView,
+                              isActive: _mainTabController.index == 1,
                               onZoomChanged: (center, scale) {
                                 setState(() {
                                   _zoomCenter = center;
@@ -4880,15 +4881,17 @@ class _DesignRibbonState extends State<_DesignRibbon> {
             ),
             _PropertyRow(
               label: '보조 언어',
-              child: _DenseDropdown(
-                value: widget.subLanguages.contains(_style.subLanguage)
-                    ? _style.subLanguage
-                    : PraiseRepository.defaultSubLanguage,
-                items: widget.subLanguages,
-                onChanged: (language) => _update(
-                  _style.copyWith(
-                    subLanguage:
-                        language ?? PraiseRepository.defaultSubLanguage,
+              child: _subLanguageSwitchRow(
+                _DenseDropdown(
+                  value: widget.subLanguages.contains(_style.subLanguage)
+                      ? _style.subLanguage
+                      : PraiseRepository.defaultSubLanguage,
+                  items: widget.subLanguages,
+                  onChanged: (language) => _update(
+                    _style.copyWith(
+                      subLanguage:
+                          language ?? PraiseRepository.defaultSubLanguage,
+                    ),
                   ),
                 ),
               ),
@@ -4954,15 +4957,19 @@ class _DesignRibbonState extends State<_DesignRibbon> {
               label: '보조 역본',
               child: widget.bibleVersions.isEmpty
                   ? const _HintText('성경을 먼저 가져와 주세요.')
-                  : _DenseDropdown(
-                      value:
-                          widget.bibleVersions.contains(_style.bibleSubVersion)
-                          ? _style.bibleSubVersion
-                          : '',
-                      items: widget.bibleVersions,
-                      noneLabel: '표시 안 함',
-                      onChanged: (version) => _update(
-                        _style.copyWith(bibleSubVersion: version ?? ''),
+                  : _subLanguageSwitchRow(
+                      _DenseDropdown(
+                        value:
+                            widget.bibleVersions.contains(
+                              _style.bibleSubVersion,
+                            )
+                            ? _style.bibleSubVersion
+                            : '',
+                        items: widget.bibleVersions,
+                        noneLabel: '표시 안 함',
+                        onChanged: (version) => _update(
+                          _style.copyWith(bibleSubVersion: version ?? ''),
+                        ),
                       ),
                     ),
             ),
@@ -5040,6 +5047,45 @@ class _DesignRibbonState extends State<_DesignRibbon> {
     );
   }
 
+  /// 리본 한 줄 높이에 맞춘 작은 스위치.
+  Widget _compactSwitch(bool value, ValueChanged<bool> onChanged) {
+    return FittedBox(
+      child: Switch(
+        value: value,
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        onChanged: onChanged,
+      ),
+    );
+  }
+
+  /// 보조 언어(가사 아래 둘째 줄) 표시 스위치 + 언어/역본 선택.
+  /// 렌더러 네 곳이 읽는 `include_english_lyrics` 하나라 찬양·성경 탭이 같은 값을 쓴다.
+  /// 끄면 담아 둔 보조 가사는 그대로 두고 화면·PPTX 에서만 숨긴다(다시 켜면 바로 돌아온다).
+  Widget _subLanguageSwitchRow(Widget selector) {
+    final on = _style.includeEnglishLyrics;
+    return Row(
+      children: [
+        Tooltip(
+          message: on ? '보조 언어 끄기' : '보조 언어 켜기',
+          child: SizedBox(
+            height: 26,
+            child: _compactSwitch(
+              on,
+              (v) => _update(_style.copyWith(includeEnglishLyrics: v)),
+            ),
+          ),
+        ),
+        const SizedBox(width: 4),
+        Expanded(
+          child: IgnorePointer(
+            ignoring: !on,
+            child: Opacity(opacity: on ? 1 : 0.38, child: selector),
+          ),
+        ),
+      ],
+    );
+  }
+
   /// 제목: 왼쪽 열(표시·크기·색) + 오른쪽 열(위치 셋).
   /// 제목을 끄면 나머지는 흐리게 잠근다(자리를 유지해서 리본이 출렁이지 않게).
   Widget _titleGroup({
@@ -5071,13 +5117,7 @@ class _DesignRibbonState extends State<_DesignRibbon> {
               alignment: Alignment.centerLeft,
               child: SizedBox(
                 height: 26,
-                child: FittedBox(
-                  child: Switch(
-                    value: visible,
-                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    onChanged: onVisible,
-                  ),
-                ),
+                child: _compactSwitch(visible, onVisible),
               ),
             ),
           ),
@@ -7278,7 +7318,12 @@ class PresenterViewState {
   double stripHeight = _PresenterConsoleState._defaultStripHeight;
   bool showAllPages = false;
   double gridThumbW = 140;
+  // 곡 찾기 범위. 예배 도중 탭을 오가도 고른 범위가 유지되게 여기에 둔다.
+  SlideSearchScope searchScope = SlideSearchScope.title;
 }
+
+/// 발표 보기 곡 찾기 범위: 제목만 / 가사(원본·보조 언어)만.
+enum SlideSearchScope { title, lyrics }
 
 // ── PresenterConsole ─────────────────────────────────────────────────────
 // PPT 발표자 보기. 검색 패널의 세 번째 탭으로 들어간다(창을 새로 띄우지 않는 이유는
@@ -7313,6 +7358,7 @@ class _PresenterConsole extends StatefulWidget {
     required this.onZoomToggled,
     required this.onZoomChanged,
     required this.viewState,
+    required this.isActive,
   });
 
   final List<_SlideInfo> slides;
@@ -7342,6 +7388,9 @@ class _PresenterConsole extends StatefulWidget {
   final VoidCallback onZoomToggled;
   final void Function(Offset center, double scale) onZoomChanged;
   final PresenterViewState viewState;
+  // 발표 보기 탭이 보이는 중인지. 숨은 탭(IndexedStack)도 살아 있으므로
+  // Ctrl+F 같은 전역 단축키는 이 값으로 거른다.
+  final bool isActive;
 
   @override
   State<_PresenterConsole> createState() => _PresenterConsoleState();
@@ -7387,6 +7436,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
   void initState() {
     super.initState();
     _syncNote();
+    HardwareKeyboard.instance.addHandler(_handleFindKey);
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _scrollStripToCurrent(),
     );
@@ -7411,14 +7461,46 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
     _noteController.dispose();
     _stripScrollController.dispose();
     _gridScrollController.dispose();
+    HardwareKeyboard.instance.removeHandler(_handleFindKey);
     _searchController.dispose();
     _searchFocus.dispose();
     super.dispose();
   }
 
-  /// 제목(곡 제목·성경 구절)이나 가사에 [query] 가 든 다음 곡의 첫 페이지로 썸네일만 스크롤한다.
+  /// Ctrl+F (macOS 는 ⌘F) = 곡 찾기 입력칸으로. 발표 중엔 포커스가 콘솔 바깥
+  /// FocusScope 에 있어서 Shortcuts 위젯으로는 못 받으므로 전역 핸들러로 받는다.
+  /// 발표 보기 탭이 숨어 있거나 다이얼로그가 떠 있으면 무시한다.
+  bool _handleFindKey(KeyEvent event) {
+    if (event is! KeyDownEvent ||
+        event.logicalKey != LogicalKeyboardKey.keyF ||
+        !widget.isActive ||
+        ModalRoute.of(context)?.isCurrent == false) {
+      return false;
+    }
+    final keyboard = HardwareKeyboard.instance;
+    if (!keyboard.isControlPressed && !keyboard.isMetaPressed) return false;
+    _searchFocus.requestFocus();
+    // 이전 검색어를 통째로 골라 두어 바로 덮어쓸 수 있게 한다.
+    _searchController.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: _searchController.text.length,
+    );
+    return true;
+  }
+
+  void _setSearchScope(SlideSearchScope scope) {
+    setState(() {
+      _view.searchScope = scope;
+      // 범위가 바뀌면 처음부터 다시 찾는다.
+      _foundIndex = null;
+    });
+  }
+
+  /// [query] 가 든 다음 결과로 썸네일만 스크롤한다.
+  /// - 제목: 곡 제목·성경 구절이 맞는 항목의 첫 페이지
+  /// - 가사: 원본·보조 언어 가사가 맞는 바로 그 페이지
   /// 발표 화면이 바뀌면 안 되므로 현재 슬라이드(onSlideSelected)는 건드리지 않는다.
-  /// 같은 검색어로 다시 누르면 그다음 곡으로 넘어간다.
+  /// 같은 검색어로 다시 누르면 그다음 결과로 넘어간다.
   void _searchSlides(String query) {
     String norm(String v) => v.replaceAll(RegExp(r'\s+'), '').toLowerCase();
     final q = norm(query);
@@ -7429,11 +7511,19 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
       return;
     }
     final slides = widget.slides;
-    bool matches(int i) =>
-        !slides[i].isAutoSpacer &&
+    bool matches(int i) {
+      final slide = slides[i];
+      if (slide.isAutoSpacer) return false;
+      return switch (_view.searchScope) {
         // 한 곡의 여러 페이지 중 첫 페이지만 결과로 친다.
-        slides[i].pageIndexInItem == 0 &&
-        norm('${slides[i].title ?? ''} ${slides[i].mainText}').contains(q);
+        SlideSearchScope.title =>
+          slide.pageIndexInItem == 0 && norm(slide.title ?? '').contains(q),
+        SlideSearchScope.lyrics => norm(
+          '${slide.mainText} ${slide.englishText}',
+        ).contains(q),
+      };
+    }
+
     final start = _foundIndex == null ? 0 : _foundIndex! + 1;
     int? found;
     for (var k = 0; k < slides.length; k++) {
@@ -7656,6 +7746,27 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
     );
   }
 
+  static String get _findShortcutLabel => Platform.isMacOS ? '⌘F' : 'Ctrl+F';
+
+  /// 곡 찾기 범위(제목 / 가사) 고르기.
+  Widget _searchScopeToggle() {
+    return SegmentedButton<SlideSearchScope>(
+      segments: const [
+        ButtonSegment(value: SlideSearchScope.title, label: Text('제목')),
+        ButtonSegment(value: SlideSearchScope.lyrics, label: Text('가사')),
+      ],
+      selected: {_view.searchScope},
+      showSelectedIcon: false,
+      onSelectionChanged: (s) => _setSearchScope(s.first),
+      style: const ButtonStyle(
+        visualDensity: VisualDensity.compact,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        textStyle: WidgetStatePropertyAll(TextStyle(fontSize: 12)),
+        padding: WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 10)),
+      ),
+    );
+  }
+
   Widget _header(ColorScheme cs) {
     final open = widget.isPresentationOpen;
     return Row(
@@ -7710,24 +7821,35 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
         ],
         const Spacer(),
         // 곡 찾기: Enter 를 누르면 썸네일만 그 곡으로 스크롤한다(발표 화면은 그대로).
+        _searchScopeToggle(),
+        const SizedBox(width: 6),
         SizedBox(
           width: 200,
-          child: TextField(
-            controller: _searchController,
-            focusNode: _searchFocus,
-            style: const TextStyle(fontSize: 13),
-            decoration: const InputDecoration(
-              isDense: true,
-              hintText: '곡 찾기 (Enter)',
-              prefixIcon: Icon(Icons.search_rounded, size: 18),
-              prefixIconConstraints: BoxConstraints(minWidth: 34),
-              border: OutlineInputBorder(),
-            ),
-            // 검색어를 바꾸면 처음 곡부터 다시 찾는다.
-            onChanged: (_) {
-              if (_foundIndex != null) setState(() => _foundIndex = null);
+          child: CallbackShortcuts(
+            // ESC 는 발표 종료가 아니라 입력칸에서 빠져나오기만.
+            bindings: {
+              const SingleActivator(LogicalKeyboardKey.escape): () =>
+                  _searchFocus.unfocus(),
             },
-            onSubmitted: _searchSlides,
+            child: TextField(
+              controller: _searchController,
+              focusNode: _searchFocus,
+              style: const TextStyle(fontSize: 13),
+              decoration: InputDecoration(
+                isDense: true,
+                hintText:
+                    '${_view.searchScope == SlideSearchScope.title ? '제목' : '가사'}'
+                    ' 찾기 ($_findShortcutLabel)',
+                prefixIcon: const Icon(Icons.search_rounded, size: 18),
+                prefixIconConstraints: const BoxConstraints(minWidth: 34),
+                border: const OutlineInputBorder(),
+              ),
+              // 검색어를 바꾸면 처음 곡부터 다시 찾는다.
+              onChanged: (_) {
+                if (_foundIndex != null) setState(() => _foundIndex = null);
+              },
+              onSubmitted: _searchSlides,
+            ),
           ),
         ),
         const SizedBox(width: 4),
