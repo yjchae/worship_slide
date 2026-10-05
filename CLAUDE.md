@@ -42,7 +42,7 @@ python3 python/test_sheet_lyrics.py      # 악보 가사 추출 self-check (Tess
 lib/
   main.dart                          -- sqflite FFI 초기화 후 WorshipSlidesApp 실행
   src/app.dart                       -- MaterialApp
-  src/app_theme.dart                 -- 앱 화면 테마(밝은/어두운 선택). 무채색 + 차콜 강조 + 슬레이트 블루 선, Pretendard
+  src/app_theme.dart                 -- 앱 화면 테마 7종(`AppThemeKind`: 밝은·어두운·레몬·아이보리·스카이·라벤더·미드나잇), Pretendard
   src/app_colors.dart                -- 앱 화면 색·둥글기 토큰 (슬라이드·발표 창·PPTX 색과 무관)
   src/features/praise/
     data/
@@ -295,9 +295,10 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   - 리본 전체를 `ExcludeFocus` 로 감쌌다. Tab 키로 포커스가 슬라이더에 들어가면 발표 단축키
     (←/→)를 슬라이더가 가로채 슬라이드 대신 값이 바뀐다(위젯 테스트로 확인). 마우스 클릭은
     원래 포커스를 가져가지 않으므로 마우스 조작은 영향 없다
-- **앱 화면 테마**: 밝은/어두운 테마를 앱 바 해·달 버튼으로 고른다(`appThemeMode`, `Application Support/ui_theme.txt`).
-  위젯에 색을 직접 박지 말고 `colorScheme` 을 쓴다 — 그래야 두 테마를 다 따라간다.
-  구분선·테두리(`outlineVariant`/`outline`)와 탭 밑줄·포커스(`secondary`)에만 옅은 슬레이트 블루를 섞었다
+- **앱 화면 테마**: 7종(`AppThemeKind`)을 앱 바 팔레트 메뉴로 고른다(`appThemeKind`, `Application Support/ui_theme.txt` 에 enum 이름 — 예전 `light`/`dark` 값도 그대로 읽힌다).
+  밝은·어두운은 원래 상수 그대로, 나머지는 `_tinted()` 로 바탕·선·강조·선택색만 바꿔 만든다. `primary` 는 흰 바탕 위 아이콘·글자로도 쓰이므로 늘 진하게 둔다.
+  위젯에 색을 직접 박지 말고 `colorScheme` 을 쓴다 — 그래야 모든 테마를 따라간다.
+  테마 색은 바탕·구분선·테두리(`outlineVariant`/`outline`)·탭 밑줄·포커스(`secondary`)·선택 표시(`*Container`)에만 싣는다
 - **발표 보기 썸네일 줄 높이**: 현재 슬라이드와 아래 썸네일 줄 사이 막대를 끌어 바꾼다
   (`PresenterViewState.stripHeight`, 최소 80, 현재 슬라이드 쪽에 180 은 남긴다)
 

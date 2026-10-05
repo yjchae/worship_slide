@@ -3053,18 +3053,44 @@ class _TopBar extends StatelessWidget {
               ),
             ),
           ),
-          IconButton(
-            tooltip: Theme.of(context).brightness == Brightness.dark
-                ? '밝은 테마로'
-                : '어두운 테마로',
-            onPressed: toggleThemeMode,
-            color: cs.onSurfaceVariant,
+          PopupMenuButton<AppThemeKind>(
+            tooltip: '테마',
+            onSelected: setThemeKind,
             icon: Icon(
-              Theme.of(context).brightness == Brightness.dark
-                  ? Icons.light_mode_outlined
-                  : Icons.dark_mode_outlined,
+              Icons.palette_outlined,
               size: 18,
+              color: cs.onSurfaceVariant,
             ),
+            itemBuilder: (_) => [
+              for (final k in AppThemeKind.values)
+                PopupMenuItem(
+                  value: k,
+                  height: 36,
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 20,
+                        height: 20,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: k.swatch,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: cs.outline),
+                        ),
+                        child: Icon(Icons.circle, size: 8, color: k.accent),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(child: Text(k.label)),
+                      if (k == appThemeKind.value)
+                        Icon(
+                          Icons.check_rounded,
+                          size: 16,
+                          color: cs.secondary,
+                        ),
+                    ],
+                  ),
+                ),
+            ],
           ),
           if (!hasUpdate)
             IconButton(

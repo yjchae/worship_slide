@@ -9,13 +9,11 @@ class WorshipSlidesApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder(
-      valueListenable: appThemeMode,
-      builder: (context, mode, _) => MaterialApp(
+      valueListenable: appThemeKind,
+      builder: (context, kind, _) => MaterialApp(
         title: 'Worship Slides',
         debugShowCheckedModeBanner: false,
-        theme: buildAppTheme(),
-        darkTheme: buildDarkAppTheme(),
-        themeMode: mode,
+        theme: kind.theme,
         home: const PraiseHomePage(),
       ),
     );
