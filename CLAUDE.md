@@ -41,7 +41,9 @@ python3 python/test_sheet_lyrics.py      # 악보 가사 추출 self-check (Tess
 ```
 lib/
   main.dart                          -- sqflite FFI 초기화 후 WorshipSlidesApp 실행
-  src/app.dart                       -- MaterialApp (seed #1B6B5C, 배경 #F4F1EA)
+  src/app.dart                       -- MaterialApp
+  src/app_theme.dart                 -- 앱 화면 테마(밝은/어두운 선택). 무채색 + 차콜 강조 + 슬레이트 블루 선, Pretendard
+  src/app_colors.dart                -- 앱 화면 색·둥글기 토큰 (슬라이드·발표 창·PPTX 색과 무관)
   src/features/praise/
     data/
       praise_database.dart           -- SQLite 스키마 + 마이그레이션 (현재 version 13)
@@ -286,12 +288,16 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   - 키가 없는 예전 설정·콘티는 0으로 읽혀 기존 동작 그대로다
 
 - **디자인 리본**: 폰트·색·위치 설정은 오른쪽 패널이 아니라 접이식 리본(`_DesignRibbon`)에 있다.
-  리본 머리줄이 메인 탭(편집/발표 보기)·발표 시작 버튼과 한 줄이다(`leading`/`trailing`) — 세로 공간을 아끼려고. 두 탭이 같이 쓰고, `_updateStyle` 이 발표 창에 현재 페이지를
+  메인 탭(편집/발표 보기)·가져오기 메뉴·PPTX 저장·발표 시작은 맨 위 앱 바(`_TopBar`) 한 줄에 있고, 보관함 정보(곡 수·폴더·진행률·버전)는
+  맨 아래 `_StatusBar` 다. 리본은 머리줄(디자인 탭)과 내용을 한 카드에 담는다. 두 탭이 같이 쓰고, `_updateStyle` 이 발표 창에 현재 페이지를
   다시 보내므로 발표 중에도 바로 반영된다. 찬양/성경 리본 탭은 편집 탭에선 고른 콘티 항목,
   발표 보기에선 현재 슬라이드를 따라 자동 전환된다.
   - 리본 전체를 `ExcludeFocus` 로 감쌌다. Tab 키로 포커스가 슬라이더에 들어가면 발표 단축키
     (←/→)를 슬라이더가 가로채 슬라이드 대신 값이 바뀐다(위젯 테스트로 확인). 마우스 클릭은
     원래 포커스를 가져가지 않으므로 마우스 조작은 영향 없다
+- **앱 화면 테마**: 밝은/어두운 테마를 앱 바 해·달 버튼으로 고른다(`appThemeMode`, `Application Support/ui_theme.txt`).
+  위젯에 색을 직접 박지 말고 `colorScheme` 을 쓴다 — 그래야 두 테마를 다 따라간다.
+  구분선·테두리(`outlineVariant`/`outline`)와 탭 밑줄·포커스(`secondary`)에만 옅은 슬레이트 블루를 섞었다
 - **발표 보기 썸네일 줄 높이**: 현재 슬라이드와 아래 썸네일 줄 사이 막대를 끌어 바꾼다
   (`PresenterViewState.stripHeight`, 최소 80, 현재 슬라이드 쪽에 180 은 남긴다)
 

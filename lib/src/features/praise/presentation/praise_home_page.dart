@@ -9,6 +9,8 @@ import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart' as p;
 
+import '../../../app_colors.dart';
+import '../../../app_theme.dart';
 import '../../../features/bible/data/bible_repository.dart';
 import '../../../features/bible/domain/bible_verse.dart';
 import '../../../features/update/update_service.dart';
@@ -2306,7 +2308,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
           child: Stack(
             children: [
               Padding(
-                padding: const EdgeInsets.all(24),
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 6),
                 child: LayoutBuilder(
                   builder: (context, constraints) {
                     // 디자인은 위쪽 리본으로 올라갔으므로 콘티·검색 두 열만 들어가면 된다.
@@ -2326,14 +2328,23 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                           const SizedBox(height: 8),
                         ],
                         _TopBar(
-                          storedCount: _storedCount,
-                          bibleVerseCount: _bibleVerseCount,
-                          selectedFolder: _selectedFolder,
+                          // 탭 글자가 잘리지 않게 글자 폭대로 둔다(isScrollable).
+                          tabs: SizedBox(
+                            width: 200,
+                            child: TabBar(
+                              controller: _mainTabController,
+                              isScrollable: true,
+                              tabAlignment: TabAlignment.start,
+                              dividerColor: Colors.transparent,
+                              tabs: const [
+                                Tab(text: '편집'),
+                                Tab(text: '발표 보기'),
+                              ],
+                            ),
+                          ),
+                          actions: _appBarActions(slides),
                           isImporting: _isImporting,
                           isBibleImporting: _isBibleImporting,
-                          importTotalCount: _importTotalCount,
-                          importSavedCount: _importSavedCount,
-                          importStatusText: _importStatusText,
                           onImportPressed: _pickAndImportFolder,
                           onBibleImportPressed: _pickAndImportBible,
                           onImportPptPressed: _addPptImages,
@@ -2457,6 +2468,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               onClearAll: _clearAllSongs,
                               onAddSong: () => _openSongEditor(null),
                               onEditSong: _openSongEditor,
+                              onImportFolder: _pickAndImportFolder,
                               bibleRepository: _bibleRepository,
                               bibleVerseCount: _bibleVerseCount,
                               bibleDataRevision: _bibleDataRevision,
@@ -2528,72 +2540,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                                       ),
                                       previewItem: previewItem,
                                     ),
-                              isExporting: _isExporting,
-                              onExportPressed: _exportPresentation,
                               offeringDesign: _offeringDesign,
                               onEditOffering: _editOfferingDesign,
                               imageLibrary: _backgroundImages,
-                              // 편집/발표 보기 탭과 발표 시작 버튼을 디자인 리본
-                              // 머리줄에 함께 둬서 한 줄을 아낀다.
-                              // 탭 글자가 잘리지 않게 글자 폭대로 두고(isScrollable)
-                              // 남는 폭은 디자인 묶음과의 간격이 된다.
-                              leading: SizedBox(
-                                width: 220,
-                                child: TabBar(
-                                  controller: _mainTabController,
-                                  isScrollable: true,
-                                  tabAlignment: TabAlignment.start,
-                                  tabs: const [
-                                    Tab(text: '편집'),
-                                    Tab(text: '발표 보기'),
-                                  ],
-                                ),
-                              ),
-                              trailing: [
-                                if (_isPresentationOpen) ...[
-                                  Text(
-                                    _slideJumpBuffer.isEmpty
-                                        ? '발표 중 ${_currentSlideIndex + 1} / ${slides.length}'
-                                        : '이동 → $_slideJumpBuffer',
-                                    style: TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w700,
-                                      color: _slideJumpBuffer.isEmpty
-                                          ? null
-                                          : Theme.of(
-                                              context,
-                                            ).colorScheme.primary,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 10),
-                                  FilledButton.tonalIcon(
-                                    onPressed: _closePresentation,
-                                    icon: const Icon(
-                                      Icons.stop_rounded,
-                                      size: 17,
-                                    ),
-                                    label: const Text('발표 종료'),
-                                    style: FilledButton.styleFrom(
-                                      backgroundColor: Theme.of(
-                                        context,
-                                      ).colorScheme.errorContainer,
-                                      foregroundColor: Theme.of(
-                                        context,
-                                      ).colorScheme.onErrorContainer,
-                                    ),
-                                  ),
-                                ] else
-                                  FilledButton.icon(
-                                    onPressed: slides.isEmpty
-                                        ? null
-                                        : _openPresentation,
-                                    icon: const Icon(
-                                      Icons.play_arrow_rounded,
-                                      size: 18,
-                                    ),
-                                    label: const Text('발표 시작'),
-                                  ),
-                              ],
                             );
 
                             // ── 콘티 + 검색 (가로 크기 조절 가능) ──
@@ -2657,25 +2606,19 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                             );
                           },
                         ),
+                        const SizedBox(height: 6),
+                        _StatusBar(
+                          storedCount: _storedCount,
+                          bibleVerseCount: _bibleVerseCount,
+                          selectedFolder: _selectedFolder,
+                          importStatusText: _importStatusText,
+                          importTotalCount: _importTotalCount,
+                          importSavedCount: _importSavedCount,
+                          packageInfo: _packageInfo,
+                        ),
                       ],
                     );
                   },
-                ),
-              ),
-              Positioned(
-                right: 10,
-                bottom: 2,
-                child: FutureBuilder<PackageInfo>(
-                  future: _packageInfo,
-                  builder: (context, snapshot) => Text(
-                    snapshot.hasData
-                        ? '${snapshot.data!.appName} v${snapshot.data!.version}'
-                        : '',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: Theme.of(context).hintColor,
-                    ),
-                  ),
                 ),
               ),
             ],
@@ -2683,6 +2626,50 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         ),
       ),
     );
+  }
+
+  /// 앱 바 오른쪽 끝: PPTX 저장 + 발표 시작(발표 중이면 진행 표시 + 종료).
+  List<Widget> _appBarActions(List<_SlideInfo> slides) {
+    final cs = Theme.of(context).colorScheme;
+    return [
+      OutlinedButton.icon(
+        onPressed: _isExporting ? null : _exportPresentation,
+        icon: _isExporting
+            ? const SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Icon(Icons.file_download_outlined, size: 17),
+        label: Text(_isExporting ? '생성 중' : 'PPTX 저장'),
+      ),
+      const SizedBox(width: 8),
+      if (_isPresentationOpen) ...[
+        const Icon(Icons.circle, size: 8, color: AppColors.live),
+        const SizedBox(width: 6),
+        Text(
+          _slideJumpBuffer.isEmpty
+              ? '발표 중 ${_currentSlideIndex + 1} / ${slides.length}'
+              : '이동 → $_slideJumpBuffer',
+          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(width: 10),
+        FilledButton.icon(
+          onPressed: _closePresentation,
+          icon: const Icon(Icons.stop_rounded, size: 17),
+          label: const Text('발표 종료'),
+          style: FilledButton.styleFrom(
+            backgroundColor: cs.errorContainer,
+            foregroundColor: cs.onErrorContainer,
+          ),
+        ),
+      ] else
+        FilledButton.icon(
+          onPressed: slides.isEmpty ? null : _openPresentation,
+          icon: const Icon(Icons.play_arrow_rounded, size: 18),
+          label: const Text('발표 시작'),
+        ),
+    ];
   }
 }
 
@@ -2909,16 +2896,14 @@ class _CollapsedPanelStrip extends StatelessWidget {
 
 // ── TopBar ────────────────────────────────────────────────────────────────
 
+/// 앱 바 한 줄: 제목 · 편집/발표 보기 탭 · 가져오기 메뉴 · 업데이트 · [actions](PPTX 저장, 발표 시작).
+/// 보관함 정보(곡 수·폴더·진행률)는 아래 [_StatusBar] 로 내렸다.
 class _TopBar extends StatelessWidget {
   const _TopBar({
-    required this.storedCount,
-    required this.bibleVerseCount,
-    required this.selectedFolder,
+    required this.tabs,
+    required this.actions,
     required this.isImporting,
     required this.isBibleImporting,
-    required this.importTotalCount,
-    required this.importSavedCount,
-    required this.importStatusText,
     required this.onImportPressed,
     required this.onBibleImportPressed,
     required this.onImportPptPressed,
@@ -2932,14 +2917,10 @@ class _TopBar extends StatelessWidget {
     required this.onCheckUpdate,
   });
 
-  final int storedCount;
-  final int bibleVerseCount;
-  final String? selectedFolder;
+  final Widget tabs;
+  final List<Widget> actions;
   final bool isImporting;
   final bool isBibleImporting;
-  final int importTotalCount;
-  final int importSavedCount;
-  final String? importStatusText;
   final VoidCallback onImportPressed;
   final VoidCallback onBibleImportPressed;
   final VoidCallback onImportPptPressed;
@@ -2952,242 +2933,246 @@ class _TopBar extends StatelessWidget {
   final bool hasUpdate;
   final VoidCallback onCheckUpdate;
 
+  PopupMenuItem<VoidCallback> _item(
+    VoidCallback action,
+    IconData icon,
+    String title, {
+    String? subtitle,
+    bool enabled = true,
+  }) {
+    return PopupMenuItem(
+      value: action,
+      enabled: enabled,
+      child: ListTile(
+        dense: true,
+        contentPadding: EdgeInsets.zero,
+        leading: Icon(icon, size: 18),
+        title: Text(title),
+        subtitle: subtitle == null ? null : Text(subtitle),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(8),
-        gradient: const LinearGradient(
-          colors: [Color(0xFF143642), Color(0xFF0F8B8D)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-      ),
+    final cs = Theme.of(context).colorScheme;
+    final busy = isImporting || isBibleImporting;
+    return SizedBox(
+      height: 44,
       child: Row(
         children: [
           Text(
-            '예배 슬라이드 보관함',
-            style: theme.textTheme.titleMedium?.copyWith(
-              color: Colors.white,
+            '예배 슬라이드',
+            style: TextStyle(
+              fontSize: 15,
               fontWeight: FontWeight.w700,
+              color: cs.onSurface,
             ),
           ),
-          const SizedBox(width: 10),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.18),
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text(
-                  '저장 ',
-                  style: TextStyle(color: Colors.white70, fontSize: 12),
-                ),
-                Text(
-                  '$storedCount',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
+          const SizedBox(width: 20),
+          tabs,
+          const Spacer(),
+          // 매주 쓰는 것(위)과 처음 한 번·가끔 쓰는 것(구분선 아래)을 한 메뉴로.
+          PopupMenuButton<VoidCallback>(
+            tooltip: '가져오기',
+            onSelected: (action) => action(),
+            itemBuilder: (context) => [
+              _item(
+                onImportPptPressed,
+                Icons.slideshow_rounded,
+                'PPT · PDF 가져오기',
+              ),
+              _item(
+                onImportSheetPressed,
+                Icons.music_note_rounded,
+                '악보에서 가사 읽기',
+              ),
+              _item(
+                onPasteSheetPressed,
+                Icons.content_paste_rounded,
+                '악보 붙여넣기',
+                subtitle: '캡처·복사한 악보 그림',
+              ),
+              const PopupMenuDivider(),
+              _item(
+                onImportPressed,
+                Icons.folder_open_rounded,
+                isImporting ? '찬양 폴더 읽는 중' : '찬양 폴더 가져오기',
+                enabled: !isImporting,
+              ),
+              _item(
+                onBibleImportPressed,
+                Icons.menu_book_rounded,
+                isBibleImporting ? '성경 저장 중' : '성경 불러오기',
+                enabled: !isBibleImporting,
+              ),
+              _item(
+                onExportSongsPressed,
+                Icons.file_upload_outlined,
+                '곡 모음 내보내기',
+              ),
+              _item(
+                onImportSongsPressed,
+                Icons.file_download_outlined,
+                '곡 모음 가져오기',
+                subtitle: '같은 제목은 건너뜁니다',
+              ),
+              const PopupMenuDivider(),
+              _item(onExtractLogsPressed, Icons.description_outlined, '로그 추출'),
+            ],
+            child: Container(
+              height: 32,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                border: Border.all(color: cs.outline),
+                borderRadius: BorderRadius.circular(AppRadius.control),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (busy)
+                    const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  else
+                    Icon(Icons.add_rounded, size: 18, color: cs.onSurface),
+                  const SizedBox(width: 6),
+                  const Text(
+                    '가져오기',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
                   ),
-                ),
-              ],
+                  const SizedBox(width: 2),
+                  Icon(
+                    Icons.expand_more_rounded,
+                    size: 18,
+                    color: cs.onSurfaceVariant,
+                  ),
+                ],
+              ),
             ),
           ),
+          IconButton(
+            tooltip: Theme.of(context).brightness == Brightness.dark
+                ? '밝은 테마로'
+                : '어두운 테마로',
+            onPressed: toggleThemeMode,
+            color: cs.onSurfaceVariant,
+            icon: Icon(
+              Theme.of(context).brightness == Brightness.dark
+                  ? Icons.light_mode_outlined
+                  : Icons.dark_mode_outlined,
+              size: 18,
+            ),
+          ),
+          if (!hasUpdate)
+            IconButton(
+              tooltip: '업데이트 확인',
+              onPressed: isCheckingUpdate ? null : onCheckUpdate,
+              color: cs.onSurfaceVariant,
+              icon: isCheckingUpdate
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.refresh_rounded, size: 18),
+            ),
+          const SizedBox(width: 8),
+          ...actions,
+        ],
+      ),
+    );
+  }
+}
+
+/// 맨 아래 한 줄: 보관함 정보와 가져오기 진행률, 버전.
+class _StatusBar extends StatelessWidget {
+  const _StatusBar({
+    required this.storedCount,
+    required this.bibleVerseCount,
+    required this.selectedFolder,
+    required this.importStatusText,
+    required this.importTotalCount,
+    required this.importSavedCount,
+    required this.packageInfo,
+  });
+
+  final int storedCount;
+  final int bibleVerseCount;
+  final String? selectedFolder;
+  final String? importStatusText;
+  final int importTotalCount;
+  final int importSavedCount;
+  final Future<PackageInfo> packageInfo;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final style = TextStyle(fontSize: 11, color: cs.onSurfaceVariant);
+    final status = importStatusText == null
+        ? null
+        : importTotalCount > 0
+        ? '$importStatusText  $importSavedCount / $importTotalCount'
+        : importStatusText!;
+    return SizedBox(
+      height: 22,
+      child: Row(
+        children: [
+          Text('곡 $storedCount', style: style),
           const SizedBox(width: 12),
-          Container(width: 1, height: 20, color: Colors.white30),
+          Text('성경 $bibleVerseCount절', style: style),
           const SizedBox(width: 12),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  selectedFolder ?? '아직 선택된 폴더가 없습니다.',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: Colors.white70, fontSize: 12),
-                ),
-                if (importStatusText != null)
-                  Text(
-                    importTotalCount > 0
-                        ? '$importStatusText  $importSavedCount / $importTotalCount'
-                        : importStatusText!,
-                    style: const TextStyle(color: Colors.white60, fontSize: 11),
-                  ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 10),
-          if (!hasUpdate)
-            Tooltip(
-              message: '업데이트 확인',
-              child: IconButton(
-                onPressed: isCheckingUpdate ? null : onCheckUpdate,
-                icon: isCheckingUpdate
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white54,
-                        ),
-                      )
-                    : const Icon(
-                        Icons.refresh_rounded,
-                        size: 18,
-                        color: Colors.white54,
-                      ),
-              ),
-            ),
-          const SizedBox(width: 4),
-          // 다른 헤더 버튼(반투명 흰색)과 구분되도록 단색 앰버 + 짙은 글자.
-          FilledButton.icon(
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFFFFC24B),
-              foregroundColor: const Color(0xFF10333D),
-              textStyle: const TextStyle(fontWeight: FontWeight.w700),
-            ),
-            onPressed: onImportPptPressed,
-            icon: const Icon(Icons.slideshow_rounded, size: 18),
-            label: const Text('PPT · PDF 가져오기'),
-          ),
-          const SizedBox(width: 8),
-          // 파일 / 클립보드 두 갈래. 버튼을 따로 두면 상단 바가 넘친다.
-          PopupMenuButton<VoidCallback>(
-            tooltip: '악보에서 가사 읽기',
-            onSelected: (action) => action(),
-            itemBuilder: (context) => [
-              PopupMenuItem(
-                value: onImportSheetPressed,
-                child: const ListTile(
-                  dense: true,
-                  leading: Icon(Icons.folder_open_rounded),
-                  title: Text('파일에서 가져오기'),
-                ),
-              ),
-              PopupMenuItem(
-                value: onPasteSheetPressed,
-                child: const ListTile(
-                  dense: true,
-                  leading: Icon(Icons.content_paste_rounded),
-                  title: Text('클립보드 붙여넣기'),
-                  subtitle: Text('캡처·복사한 악보 그림'),
-                ),
-              ),
-            ],
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.22),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: const Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.music_note_rounded, size: 16, color: Colors.white),
-                  SizedBox(width: 6),
-                  Text('악보 가져오기', style: TextStyle(color: Colors.white)),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          // 다른 PC 의 곡과 합치기. 같은 제목은 중복으로 넣지 않는다.
-          PopupMenuButton<VoidCallback>(
-            tooltip: '다른 PC 와 곡 합치기',
-            onSelected: (action) => action(),
-            itemBuilder: (context) => [
-              PopupMenuItem(
-                value: onExportSongsPressed,
-                child: const ListTile(
-                  dense: true,
-                  leading: Icon(Icons.file_upload_outlined),
-                  title: Text('곡 모음 내보내기'),
-                ),
-              ),
-              PopupMenuItem(
-                value: onImportSongsPressed,
-                child: const ListTile(
-                  dense: true,
-                  leading: Icon(Icons.file_download_outlined),
-                  title: Text('곡 모음 가져오기'),
-                  subtitle: Text('같은 제목은 건너뜁니다'),
-                ),
-              ),
-            ],
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.22),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: const Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.sync_alt_rounded, size: 16, color: Colors.white),
-                  SizedBox(width: 6),
-                  Text('곡 모음', style: TextStyle(color: Colors.white)),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          FilledButton.icon(
-            style: FilledButton.styleFrom(
-              backgroundColor: Colors.white.withValues(alpha: 0.22),
-              foregroundColor: Colors.white,
-            ),
-            onPressed: isImporting ? null : onImportPressed,
-            icon: isImporting
-                ? const SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.white,
+            child: Text(
+              status ?? selectedFolder ?? '찬양 폴더를 아직 가져오지 않았습니다',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: status == null
+                  ? style
+                  : style.copyWith(
+                      color: cs.onSurface,
+                      fontWeight: FontWeight.w500,
                     ),
-                  )
-                : const Icon(Icons.upload_file_rounded, size: 16),
-            label: Text(isImporting ? '읽는 중' : '찬양폴더 선택'),
-          ),
-          const SizedBox(width: 8),
-          FilledButton.icon(
-            style: FilledButton.styleFrom(
-              backgroundColor: Colors.white.withValues(alpha: 0.22),
-              foregroundColor: Colors.white,
             ),
-            onPressed: isBibleImporting ? null : onBibleImportPressed,
-            icon: isBibleImporting
-                ? const SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.white,
-                    ),
-                  )
-                : const Icon(Icons.menu_book_rounded, size: 16),
-            label: Text(isBibleImporting ? '저장 중' : '성경 불러오기'),
           ),
-          const SizedBox(width: 4),
-          Tooltip(
-            message: '저장된 로그 추출',
-            child: IconButton(
-              onPressed: onExtractLogsPressed,
-              icon: const Icon(
-                Icons.description_outlined,
-                size: 18,
-                color: Colors.white70,
-              ),
+          FutureBuilder<PackageInfo>(
+            future: packageInfo,
+            builder: (context, snapshot) => Text(
+              snapshot.hasData ? 'v${snapshot.data!.version}' : '',
+              style: style,
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// 콘티 항목 종류(성경·빈 페이지·이미지). 찬양은 기본이라 표시하지 않는다.
+class _KindTag extends StatelessWidget {
+  const _KindTag(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      margin: const EdgeInsets.only(right: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(
+        border: Border.all(color: cs.outline),
+        borderRadius: BorderRadius.circular(AppRadius.control),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w500,
+          color: cs.onSurfaceVariant,
+        ),
       ),
     );
   }
@@ -3242,14 +3227,8 @@ class _StagingPanel extends StatelessWidget {
       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
     );
 
-    final accentShape = RoundedRectangleBorder(
-      borderRadius: const BorderRadius.all(Radius.circular(8)),
-      side: BorderSide(color: cs.primary.withValues(alpha: 0.35), width: 1.4),
-    );
-
     if (isCollapsed) {
       return Card(
-        shape: accentShape,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Row(
@@ -3258,9 +3237,9 @@ class _StagingPanel extends StatelessWidget {
                 child: Text(
                   '예배 콘티',
                   style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                    color: cs.primary,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: cs.onSurface,
                   ),
                 ),
               ),
@@ -3283,9 +3262,8 @@ class _StagingPanel extends StatelessWidget {
     }
 
     return Card(
-      shape: accentShape,
       child: Padding(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -3296,9 +3274,9 @@ class _StagingPanel extends StatelessWidget {
                     '예배 콘티',
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                      color: cs.primary,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: cs.onSurface,
                     ),
                   ),
                 ),
@@ -3342,11 +3320,26 @@ class _StagingPanel extends StatelessWidget {
             const SizedBox(height: 12),
             Expanded(
               child: stagingItems.isEmpty
-                  ? const Center(
-                      child: Text(
-                        '찬양이나 성경 본문을 선택하면 순서가 여기에 표시됩니다.',
-                        style: TextStyle(color: Colors.grey),
-                        textAlign: TextAlign.center,
+                  ? Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.queue_music_rounded,
+                            size: 36,
+                            color: cs.outline,
+                          ),
+                          const SizedBox(height: 10),
+                          Text(
+                            '오른쪽 검색에서 찬양이나 성경 구절을 고르면\n여기에 순서대로 담깁니다',
+                            style: TextStyle(
+                              fontSize: 13,
+                              height: 1.5,
+                              color: cs.onSurfaceVariant,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ],
                       ),
                     )
                   : ReorderableListView.builder(
@@ -3359,7 +3352,9 @@ class _StagingPanel extends StatelessWidget {
                           builder: (context, child) => Material(
                             elevation: 4,
                             shadowColor: Colors.black26,
-                            borderRadius: BorderRadius.circular(4),
+                            borderRadius: BorderRadius.circular(
+                              AppRadius.control,
+                            ),
                             color: Theme.of(context).colorScheme.surface,
                             child: child,
                           ),
@@ -3377,11 +3372,15 @@ class _StagingPanel extends StatelessWidget {
                         return Material(
                           key: ValueKey(entry.uid),
                           color: isSelected
-                              ? cs.primary.withValues(alpha: 0.08)
+                              ? cs.secondaryContainer
                               : Colors.transparent,
-                          borderRadius: BorderRadius.circular(4),
+                          borderRadius: BorderRadius.circular(
+                            AppRadius.control,
+                          ),
                           child: InkWell(
-                            borderRadius: BorderRadius.circular(4),
+                            borderRadius: BorderRadius.circular(
+                              AppRadius.control,
+                            ),
                             onTap: () => onSelect(entry.uid),
                             child: Padding(
                               padding: const EdgeInsets.symmetric(
@@ -3395,9 +3394,13 @@ class _StagingPanel extends StatelessWidget {
                                     child: Center(
                                       child: Text(
                                         '${index + 1}',
-                                        style: const TextStyle(
-                                          fontSize: 15,
-                                          fontWeight: FontWeight.w700,
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600,
+                                          color: cs.onSurfaceVariant,
+                                          fontFeatures: const [
+                                            FontFeature.tabularFigures(),
+                                          ],
                                         ),
                                       ),
                                     ),
@@ -3410,54 +3413,11 @@ class _StagingPanel extends StatelessWidget {
                                       children: [
                                         Row(
                                           children: [
-                                            if (isBible)
-                                              Container(
-                                                margin: const EdgeInsets.only(
-                                                  right: 6,
-                                                ),
-                                                padding:
-                                                    const EdgeInsets.symmetric(
-                                                      horizontal: 5,
-                                                      vertical: 1,
-                                                    ),
-                                                decoration: BoxDecoration(
-                                                  color: Colors.blue.shade100,
-                                                  borderRadius:
-                                                      BorderRadius.circular(4),
-                                                ),
-                                                child: Text(
-                                                  '성경',
-                                                  style: TextStyle(
-                                                    fontSize: 11,
-                                                    color: Colors.blue.shade700,
-                                                    fontWeight: FontWeight.w600,
-                                                  ),
-                                                ),
-                                              ),
+                                            if (isBible) const _KindTag('성경'),
                                             if (isBlank)
-                                              Container(
-                                                margin: const EdgeInsets.only(
-                                                  right: 6,
-                                                ),
-                                                padding:
-                                                    const EdgeInsets.symmetric(
-                                                      horizontal: 5,
-                                                      vertical: 1,
-                                                    ),
-                                                decoration: BoxDecoration(
-                                                  color: Colors.grey.shade200,
-                                                  borderRadius:
-                                                      BorderRadius.circular(4),
-                                                ),
-                                                child: Text(
-                                                  '빈 페이지',
-                                                  style: TextStyle(
-                                                    fontSize: 11,
-                                                    color: Colors.grey.shade600,
-                                                    fontWeight: FontWeight.w600,
-                                                  ),
-                                                ),
-                                              ),
+                                              const _KindTag('빈 페이지'),
+                                            if (item is ImageStagingItem)
+                                              const _KindTag('이미지'),
                                             if (background != null)
                                               _BackgroundBadge(
                                                 background: background,
@@ -3468,13 +3428,10 @@ class _StagingPanel extends StatelessWidget {
                                                     ? ''
                                                     : item.displayTitle,
                                                 overflow: TextOverflow.ellipsis,
-                                                style: isBlank
-                                                    ? TextStyle(
-                                                        color: Colors
-                                                            .grey
-                                                            .shade500,
-                                                      )
-                                                    : null,
+                                                style: const TextStyle(
+                                                  fontSize: 13,
+                                                  fontWeight: FontWeight.w500,
+                                                ),
                                               ),
                                             ),
                                           ],
@@ -3484,9 +3441,9 @@ class _StagingPanel extends StatelessWidget {
                                             item.previewText,
                                             maxLines: 1,
                                             overflow: TextOverflow.ellipsis,
-                                            style: const TextStyle(
+                                            style: TextStyle(
                                               fontSize: 11,
-                                              color: Colors.grey,
+                                              color: cs.onSurfaceVariant,
                                             ),
                                           ),
                                       ],
@@ -3550,11 +3507,11 @@ class _StagingPanel extends StatelessWidget {
                                   ),
                                   ReorderableDragStartListener(
                                     index: index,
-                                    child: const Padding(
-                                      padding: EdgeInsets.all(8),
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(8),
                                       child: Icon(
                                         Icons.drag_handle_rounded,
-                                        color: Colors.grey,
+                                        color: cs.outline,
                                       ),
                                     ),
                                   ),
@@ -3585,6 +3542,7 @@ class _SearchAndBiblePanel extends StatefulWidget {
     required this.onClearAll,
     required this.onAddSong,
     required this.onEditSong,
+    required this.onImportFolder,
     required this.bibleRepository,
     required this.bibleVerseCount,
     required this.bibleDataRevision,
@@ -3605,6 +3563,7 @@ class _SearchAndBiblePanel extends StatefulWidget {
   final VoidCallback onClearAll;
   final VoidCallback onAddSong;
   final ValueChanged<PraiseSong> onEditSong;
+  final VoidCallback onImportFolder;
   final BibleRepository bibleRepository;
   final int bibleVerseCount;
   final int bibleDataRevision;
@@ -3680,6 +3639,7 @@ class _SearchAndBiblePanelState extends State<_SearchAndBiblePanel>
                   onClearAll: widget.onClearAll,
                   onAddSong: widget.onAddSong,
                   onEditSong: widget.onEditSong,
+                  onImportFolder: widget.onImportFolder,
                   searchInTitle: widget.searchInTitle,
                   searchInLyrics: widget.searchInLyrics,
                   onSearchInTitleChanged: widget.onSearchInTitleChanged,
@@ -3713,6 +3673,7 @@ class _SongSearchContent extends StatelessWidget {
     required this.onClearAll,
     required this.onAddSong,
     required this.onEditSong,
+    required this.onImportFolder,
     required this.searchInTitle,
     required this.searchInLyrics,
     required this.onSearchInTitleChanged,
@@ -3727,6 +3688,7 @@ class _SongSearchContent extends StatelessWidget {
   final VoidCallback onClearAll;
   final VoidCallback onAddSong;
   final ValueChanged<PraiseSong> onEditSong;
+  final VoidCallback onImportFolder;
   final bool searchInTitle;
   final bool searchInLyrics;
   final ValueChanged<bool> onSearchInTitleChanged;
@@ -3757,7 +3719,7 @@ class _SongSearchContent extends StatelessWidget {
                     prefixIcon: const Icon(Icons.search_rounded),
                     hintText: hintText,
                     border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
+                      borderRadius: BorderRadius.circular(AppRadius.control),
                     ),
                     isDense: true,
                   ),
@@ -3812,7 +3774,31 @@ class _SongSearchContent extends StatelessWidget {
           const SizedBox(height: 6),
           Expanded(
             child: songs.isEmpty
-                ? const Center(child: Text('저장된 찬양이 없습니다. 먼저 폴더를 불러와 주세요.'))
+                ? Center(
+                    child: controller.text.trim().isNotEmpty
+                        ? Text(
+                            '검색 결과가 없습니다',
+                            style: TextStyle(color: cs.onSurfaceVariant),
+                          )
+                        : Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                '저장된 찬양이 없습니다',
+                                style: TextStyle(color: cs.onSurfaceVariant),
+                              ),
+                              const SizedBox(height: 12),
+                              OutlinedButton.icon(
+                                onPressed: onImportFolder,
+                                icon: const Icon(
+                                  Icons.folder_open_rounded,
+                                  size: 17,
+                                ),
+                                label: const Text('찬양 폴더 가져오기'),
+                              ),
+                            ],
+                          ),
+                  )
                 : ListView.separated(
                     itemCount: songs.length,
                     separatorBuilder: (_, _) => const Divider(height: 1),
@@ -3871,16 +3857,16 @@ class _SearchFilterChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return InkWell(
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: BorderRadius.circular(AppRadius.control),
       onTap: () => onChanged(!value),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
         decoration: BoxDecoration(
-          color: value ? cs.primaryContainer : cs.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(16),
+          color: value ? cs.secondaryContainer : Colors.transparent,
+          borderRadius: BorderRadius.circular(AppRadius.control),
           border: Border.all(
-            color: value ? cs.primary : cs.outline.withValues(alpha: 0.4),
+            color: value ? cs.secondaryContainer : cs.outlineVariant,
           ),
         ),
         child: Text(
@@ -4275,16 +4261,21 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
     }
 
     if (!_hasData) {
-      return const Center(
+      final muted = Theme.of(context).colorScheme.onSurfaceVariant;
+      return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.menu_book_rounded, size: 48, color: Colors.grey),
-            SizedBox(height: 12),
+            Icon(
+              Icons.menu_book_rounded,
+              size: 36,
+              color: Theme.of(context).colorScheme.outline,
+            ),
+            const SizedBox(height: 10),
             Text(
-              '성경 데이터가 없습니다.\n상단의 \'성경 불러오기\' 버튼을 눌러 주세요.',
+              '성경 데이터가 없습니다\n위쪽 가져오기 메뉴에서 \'성경 불러오기\'를 고르세요',
               textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.grey),
+              style: TextStyle(color: muted, height: 1.5),
             ),
           ],
         ),
@@ -4419,7 +4410,9 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
                           ? '성경과 장 번호를 입력해 주세요.'
                           : '장 번호를 입력하면 절을 불러옵니다.',
                       textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.grey),
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
                     ),
                   )
                 : ListView.separated(
@@ -4549,18 +4542,10 @@ class _DesignRibbon extends StatefulWidget {
     required this.onCollapsedChanged,
     required this.contextTab,
     required this.preview,
-    required this.isExporting,
-    required this.onExportPressed,
     required this.offeringDesign,
     required this.onEditOffering,
     required this.imageLibrary,
-    required this.leading,
-    required this.trailing,
   });
-
-  /// 머리줄 왼쪽(편집/발표 보기 탭) / 오른쪽 끝(발표 시작·종료). 키보드 포커스는 그대로 받는다.
-  final Widget leading;
-  final List<Widget> trailing;
 
   final ExportStyle style;
   final List<Color> swatches;
@@ -4579,9 +4564,6 @@ class _DesignRibbon extends StatefulWidget {
 
   /// 리본 왼쪽에 둘 미리보기. 발표 보기에서는 현재 슬라이드가 이미 크게 보이므로 null.
   final Widget? preview;
-
-  final bool isExporting;
-  final VoidCallback onExportPressed;
 
   /// 등록된 헌금송 디자인(계좌 등). '공통' 탭의 헌금송 묶음에서 연다.
   final OfferingDesign offeringDesign;
@@ -4636,33 +4618,26 @@ class _DesignRibbonState extends State<_DesignRibbon> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Row(
+    // 발표 중 단축키(←/→/Space)를 슬라이더·세그먼트가 가로채지 않도록
+    // 리본 안의 컨트롤은 키보드 포커스를 받지 않는다. 마우스 조작은 그대로 된다.
+    return ExcludeFocus(
+      child: Card(
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            widget.leading,
-            // 발표 중 단축키(←/→/Space)를 슬라이더·세그먼트가 가로채지 않도록
-            // 리본 안의 컨트롤은 키보드 포커스를 받지 않는다. 마우스 조작은 그대로 된다.
-            Expanded(child: ExcludeFocus(child: _header(cs))),
-            ...widget.trailing,
-          ],
-        ),
-        if (!widget.isCollapsed) ...[
-          const SizedBox(height: 8),
-          ExcludeFocus(
-            child: Card(
-              margin: EdgeInsets.zero,
-              clipBehavior: Clip.antiAlias,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(10, 8, 10, 6),
+            _header(cs),
+            if (!widget.isCollapsed) ...[
+              Divider(height: 1, color: cs.outlineVariant),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
                 child: SizedBox(height: _contentHeight, child: _content(cs)),
               ),
-            ),
-          ),
-        ],
-      ],
+            ],
+          ],
+        ),
+      ),
     );
   }
 
@@ -4671,17 +4646,12 @@ class _DesignRibbonState extends State<_DesignRibbon> {
       height: 40,
       child: Row(
         children: [
-          VerticalDivider(
-            width: 32,
-            indent: 10,
-            endIndent: 10,
-            color: cs.outlineVariant,
-          ),
-          Icon(Icons.palette_outlined, size: 16, color: cs.primary),
+          const SizedBox(width: 14),
+          Icon(Icons.palette_outlined, size: 16, color: cs.onSurfaceVariant),
           const SizedBox(width: 6),
           const Text(
             '디자인',
-            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
           ),
           const SizedBox(width: 14),
           for (final tab in _RibbonTab.values)
@@ -4691,23 +4661,6 @@ class _DesignRibbonState extends State<_DesignRibbon> {
               onTap: () => _selectTab(tab),
             ),
           const Spacer(),
-          FilledButton.icon(
-            style: FilledButton.styleFrom(
-              visualDensity: VisualDensity.compact,
-              textStyle: Theme.of(
-                context,
-              ).textTheme.labelLarge?.copyWith(fontSize: 12.5),
-            ),
-            onPressed: widget.isExporting ? null : widget.onExportPressed,
-            icon: widget.isExporting
-                ? const SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.slideshow_rounded, size: 16),
-            label: Text(widget.isExporting ? '생성 중' : 'PPTX 저장'),
-          ),
           IconButton(
             tooltip: widget.isCollapsed ? '리본 펼치기' : '리본 접기',
             visualDensity: VisualDensity.compact,
@@ -5193,17 +5146,17 @@ class _RibbonTabButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final color = isSelected ? cs.primary : cs.onSurfaceVariant;
+    final color = isSelected ? cs.onSurface : cs.onSurfaceVariant;
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(6),
+      borderRadius: BorderRadius.circular(AppRadius.control),
       child: Container(
         height: 40,
         padding: const EdgeInsets.symmetric(horizontal: 10),
         decoration: BoxDecoration(
           border: Border(
             bottom: BorderSide(
-              color: isSelected ? cs.primary : Colors.transparent,
+              color: isSelected ? cs.secondary : Colors.transparent,
               width: 2,
             ),
           ),
@@ -5228,7 +5181,7 @@ class _RibbonTabButton extends StatelessWidget {
   }
 }
 
-/// 리본의 한 묶음: 설정 열들 + 아래쪽 가운데 묶음 이름 (PowerPoint 리본과 같은 배치).
+/// 리본의 한 묶음: 왼쪽 위 묶음 이름 + 설정 열들.
 class _RibbonGroup extends StatelessWidget {
   const _RibbonGroup({required this.label, required this.columns});
 
@@ -5239,7 +5192,17 @@ class _RibbonGroup extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            color: cs.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 4),
         Expanded(
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -5249,15 +5212,6 @@ class _RibbonGroup extends StatelessWidget {
                 columns[i],
               ],
             ],
-          ),
-        ),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 11,
-            fontWeight: FontWeight.w600,
-            letterSpacing: 0.3,
-            color: cs.onSurfaceVariant,
           ),
         ),
       ],
@@ -5287,7 +5241,7 @@ class _PropertyRow extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                fontSize: 12.5,
+                fontSize: 12,
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
             ),
@@ -5309,7 +5263,7 @@ class _FieldBox extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final radius = BorderRadius.circular(8);
+    final radius = BorderRadius.circular(AppRadius.control);
     return Material(
       color: cs.surface,
       shape: RoundedRectangleBorder(
@@ -5374,7 +5328,7 @@ class _ColorField extends StatelessWidget {
             height: 18,
             decoration: BoxDecoration(
               color: color,
-              borderRadius: BorderRadius.circular(5),
+              borderRadius: BorderRadius.circular(AppRadius.control),
               border: Border.all(color: Theme.of(context).dividerColor),
             ),
           ),
@@ -5385,7 +5339,7 @@ class _ColorField extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                fontSize: 12.5,
+                fontSize: 12,
                 color: cs.onSurface,
                 fontFeatures: const [FontFeature.tabularFigures()],
                 fontWeight: FontWeight.w600,
@@ -5581,9 +5535,9 @@ class _ValueBadge extends StatelessWidget {
     final active = onTap != null;
     final badge = Material(
       color: active ? cs.primaryContainer : cs.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(6),
+      borderRadius: BorderRadius.circular(AppRadius.control),
       child: InkWell(
-        borderRadius: BorderRadius.circular(6),
+        borderRadius: BorderRadius.circular(AppRadius.control),
         onTap: onTap,
         child: SizedBox(
           width: 42,
@@ -5642,7 +5596,7 @@ class _OptionSegments<T> extends StatelessWidget {
           ),
           // 새 TextStyle 로 덮으면 테마 글꼴이 빠지므로 테마 스타일에서 크기만 바꾼다.
           textStyle: WidgetStatePropertyAll(
-            Theme.of(context).textTheme.labelLarge?.copyWith(fontSize: 12.5),
+            Theme.of(context).textTheme.labelLarge?.copyWith(fontSize: 12),
           ),
         ),
         onSelectionChanged: (selection) => onSelected(selection.first),
@@ -5675,7 +5629,7 @@ class _DenseDropdown extends StatelessWidget {
       initialValue: value,
       style: Theme.of(
         context,
-      ).textTheme.bodyMedium?.copyWith(fontSize: 12.5, color: cs.onSurface),
+      ).textTheme.bodyMedium?.copyWith(fontSize: 12, color: cs.onSurface),
       icon: Icon(
         Icons.expand_more_rounded,
         size: 16,
@@ -5687,11 +5641,11 @@ class _DenseDropdown extends StatelessWidget {
         fillColor: cs.surface,
         contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(AppRadius.control),
           borderSide: BorderSide(color: cs.outlineVariant),
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(AppRadius.control),
           borderSide: BorderSide(color: cs.outlineVariant),
         ),
       ),
@@ -5949,18 +5903,26 @@ class _PreviewBox extends StatelessWidget {
 
     return AspectRatio(
       aspectRatio: 13.333 / 7.5,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: SlideRenderView(
-          data: SlidePageData(
-            mainText: sampleText,
-            englishText: sampleEnglishText,
-            title: titleText,
-            isBible: isBible,
-            pageIndex: 0,
-            totalPages: 1,
-            style: style,
-            imagePath: imagePath,
+      // 테두리: 어두운 테마에서 검은 슬라이드가 패널에 묻히지 않게.
+      child: DecoratedBox(
+        position: DecorationPosition.foreground,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(AppRadius.control),
+          border: Border.all(color: Theme.of(context).colorScheme.outline),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(AppRadius.control),
+          child: SlideRenderView(
+            data: SlidePageData(
+              mainText: sampleText,
+              englishText: sampleEnglishText,
+              title: titleText,
+              isBible: isBible,
+              pageIndex: 0,
+              totalPages: 1,
+              style: style,
+              imagePath: imagePath,
+            ),
           ),
         ),
       ),
@@ -5994,7 +5956,7 @@ class _UpdateBanner extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       decoration: BoxDecoration(
         color: scheme.primaryContainer,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(AppRadius.control),
       ),
       child: Row(
         children: [
@@ -6442,7 +6404,7 @@ class _SlideThumbnailState extends State<_SlideThumbnail> {
                 children: [
                   Container(
                     decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(5),
+                      borderRadius: BorderRadius.circular(AppRadius.control),
                       border: Border.all(
                         color: widget.isSelected
                             ? cs.primary
@@ -6460,7 +6422,7 @@ class _SlideThumbnailState extends State<_SlideThumbnail> {
                           : null,
                     ),
                     child: ClipRRect(
-                      borderRadius: BorderRadius.circular(4),
+                      borderRadius: BorderRadius.circular(AppRadius.control),
                       child: AspectRatio(
                         aspectRatio: _aspectRatio,
                         child: SlideRenderView(data: widget.data),
@@ -6480,7 +6442,9 @@ class _SlideThumbnailState extends State<_SlideThumbnail> {
                               padding: const EdgeInsets.all(5),
                               decoration: BoxDecoration(
                                 color: cs.surface.withValues(alpha: 0.92),
-                                borderRadius: BorderRadius.circular(5),
+                                borderRadius: BorderRadius.circular(
+                                  AppRadius.control,
+                                ),
                                 boxShadow: [
                                   BoxShadow(
                                     color: Colors.black.withValues(alpha: 0.2),
@@ -6503,7 +6467,9 @@ class _SlideThumbnailState extends State<_SlideThumbnail> {
                                 padding: const EdgeInsets.all(5),
                                 decoration: BoxDecoration(
                                   color: cs.surface.withValues(alpha: 0.92),
-                                  borderRadius: BorderRadius.circular(5),
+                                  borderRadius: BorderRadius.circular(
+                                    AppRadius.control,
+                                  ),
                                   boxShadow: [
                                     BoxShadow(
                                       color: Colors.black.withValues(
@@ -6735,12 +6701,14 @@ class _ContiListDialogState extends State<_ContiListDialog> {
       content: SizedBox(
         width: 420,
         child: _contis.isEmpty
-            ? const Padding(
-                padding: EdgeInsets.all(24),
+            ? Padding(
+                padding: const EdgeInsets.all(24),
                 child: Text(
-                  '저장된 콘티가 없습니다.',
+                  '저장된 콘티가 없습니다',
                   textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.grey),
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
                 ),
               )
             : ListView.separated(
@@ -6823,7 +6791,10 @@ class _LogViewerDialog extends StatelessWidget {
             if (logFilePath != null)
               Text(
                 logFilePath!,
-                style: const TextStyle(fontSize: 11, color: Colors.grey),
+                style: TextStyle(
+                  fontSize: 11,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
                 overflow: TextOverflow.ellipsis,
               ),
             const SizedBox(height: 8),
@@ -6831,7 +6802,7 @@ class _LogViewerDialog extends StatelessWidget {
               child: Container(
                 decoration: BoxDecoration(
                   color: const Color(0xFF1E1E1E),
-                  borderRadius: BorderRadius.circular(6),
+                  borderRadius: BorderRadius.circular(AppRadius.control),
                 ),
                 padding: const EdgeInsets.all(12),
                 child: SingleChildScrollView(
@@ -7004,7 +6975,7 @@ class _BackgroundImagePicker extends StatelessWidget {
               hasImage ? p.basename(imagePath!) : '없음 (눌러서 선택)',
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                fontSize: 12.5,
+                fontSize: 12,
                 color: hasImage ? cs.onSurface : cs.onSurfaceVariant,
                 fontWeight: hasImage ? FontWeight.w600 : FontWeight.w400,
               ),
@@ -7012,7 +6983,7 @@ class _BackgroundImagePicker extends StatelessWidget {
           ),
           if (hasImage)
             InkWell(
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(AppRadius.control),
               onTap: () => onChanged(null),
               child: Tooltip(
                 message: '배경 이미지 지우기',
@@ -7059,7 +7030,7 @@ class _OfferingDesignButton extends StatelessWidget {
                 account.isEmpty ? '미등록 (눌러서 등록)' : account,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  fontSize: 12.5,
+                  fontSize: 12,
                   color: account.isEmpty ? cs.onSurfaceVariant : cs.onSurface,
                   fontWeight: account.isEmpty ? null : FontWeight.w600,
                 ),
@@ -7089,7 +7060,7 @@ class _BackgroundBadge extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
       decoration: BoxDecoration(
         color: cs.primary.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(4),
+        borderRadius: BorderRadius.circular(AppRadius.control),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -7216,7 +7187,9 @@ class _ItemBackgroundDialogState extends State<_ItemBackgroundDialog> {
                             vertical: 10,
                           ),
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
+                            borderRadius: BorderRadius.circular(
+                              AppRadius.control,
+                            ),
                           ),
                         ),
                         onPressed: _pickColor,
@@ -7233,7 +7206,9 @@ class _ItemBackgroundDialogState extends State<_ItemBackgroundDialog> {
                               height: 28,
                               decoration: BoxDecoration(
                                 color: _background.color,
-                                borderRadius: BorderRadius.circular(6),
+                                borderRadius: BorderRadius.circular(
+                                  AppRadius.control,
+                                ),
                                 border: Border.all(
                                   color: Theme.of(context).dividerColor,
                                 ),
@@ -7550,7 +7525,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
             child: DecoratedBox(
               decoration: BoxDecoration(
                 border: Border.all(color: cs.tertiary, width: 3),
-                borderRadius: BorderRadius.circular(6),
+                borderRadius: BorderRadius.circular(AppRadius.control),
               ),
             ),
           ),
@@ -7917,11 +7892,11 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
                 child: AspectRatio(
                   aspectRatio: _thumbAspect,
                   child: ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
+                    borderRadius: BorderRadius.circular(AppRadius.control),
                     child: Container(
                       decoration: BoxDecoration(
                         border: Border.all(color: cs.outlineVariant),
-                        borderRadius: BorderRadius.circular(8),
+                        borderRadius: BorderRadius.circular(AppRadius.control),
                       ),
                       child: Stack(
                         fit: StackFit.expand,
@@ -7999,7 +7974,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
         decoration: BoxDecoration(
           color: cs.surfaceContainerHighest,
           border: Border.all(color: cs.outlineVariant),
-          borderRadius: BorderRadius.circular(6),
+          borderRadius: BorderRadius.circular(AppRadius.control),
         ),
         clipBehavior: Clip.antiAlias,
         child: hasNext
@@ -8186,7 +8161,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
     return Container(
       decoration: BoxDecoration(
         color: cs.surfaceContainerHighest.withValues(alpha: 0.4),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(AppRadius.control),
       ),
       child: LayoutBuilder(
         builder: (context, constraints) {

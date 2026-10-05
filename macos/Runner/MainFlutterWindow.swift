@@ -1,5 +1,6 @@
 import Cocoa
 import FlutterMacOS
+import UniformTypeIdentifiers
 import WebKit
 
 // ── 발표 창 ──────────────────────────────────────────────────────────────────
@@ -502,7 +503,7 @@ class MainFlutterWindow: NSWindow {
       panel.title = arguments?["title"] as? String ?? "Save PPTX"
       let ext = arguments?["extension"] as? String ?? "pptx"
       panel.nameFieldStringValue = arguments?["fileName"] as? String ?? "worship_slides.\(ext)"
-      panel.allowedFileTypes = [ext]
+      panel.allowedContentTypes = [UTType(filenameExtension: ext) ?? .data]
       panel.allowsOtherFileTypes = false
       panel.isExtensionHidden = false
       panel.canCreateDirectories = true
