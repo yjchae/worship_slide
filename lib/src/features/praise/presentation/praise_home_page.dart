@@ -8138,11 +8138,8 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
                       isSelected: i == widget.currentIndex,
                       index: i,
                       isEditable: !widget.slides[i].isAutoSpacer,
-                      // 누른 페이지로 넘기고 발표자 보기로 돌아간다.
-                      onTap: () {
-                        widget.onSlideSelected(i);
-                        setState(() => _view.showAllPages = false);
-                      },
+                      // 누른 페이지로 넘기기만 한다. 보기 전환은 버튼으로만.
+                      onTap: () => widget.onSlideSelected(i),
                       onEdit: () => widget.onSlideEdit(i),
                       onDelete: () => widget.onSlideDelete(i),
                     ),
