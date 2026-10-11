@@ -6428,21 +6428,25 @@ class _SlideThumbnailState extends State<_SlideThumbnail> {
             Expanded(
               child: Stack(
                 children: [
+                  // 선택: 진한 테두리 + 안쪽 바탕색 틈. 슬라이드가 어두워도
+                  // 테두리가 슬라이드에 묻히지 않게 틈을 둔다.
                   Container(
+                    padding: EdgeInsets.all(widget.isSelected ? 2 : 0),
                     decoration: BoxDecoration(
+                      color: widget.isSelected ? cs.surface : null,
                       borderRadius: BorderRadius.circular(AppRadius.control),
                       border: Border.all(
                         color: widget.isSelected
                             ? cs.primary
                             : cs.outlineVariant,
-                        width: widget.isSelected ? 2.5 : 1,
+                        width: widget.isSelected ? 3.5 : 1,
                       ),
                       boxShadow: widget.isSelected
                           ? [
                               BoxShadow(
-                                color: cs.primary.withValues(alpha: 0.35),
-                                blurRadius: 6,
-                                spreadRadius: 1,
+                                color: cs.primary.withValues(alpha: 0.5),
+                                blurRadius: 10,
+                                spreadRadius: 2,
                               ),
                             ]
                           : null,
@@ -6519,15 +6523,27 @@ class _SlideThumbnailState extends State<_SlideThumbnail> {
                 ],
               ),
             ),
-            const SizedBox(height: 4),
-            Text(
-              '${widget.index + 1}',
-              style: TextStyle(
-                fontSize: 11,
-                color: widget.isSelected ? cs.primary : cs.onSurfaceVariant,
-                fontWeight: widget.isSelected
-                    ? FontWeight.w700
-                    : FontWeight.normal,
+            const SizedBox(height: 3),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              decoration: widget.isSelected
+                  ? BoxDecoration(
+                      color: cs.primary,
+                      borderRadius: BorderRadius.circular(8),
+                    )
+                  : null,
+              child: Text(
+                '${widget.index + 1}',
+                style: TextStyle(
+                  fontSize: 11,
+                  height: 1.3,
+                  color: widget.isSelected
+                      ? cs.onPrimary
+                      : cs.onSurfaceVariant,
+                  fontWeight: widget.isSelected
+                      ? FontWeight.w700
+                      : FontWeight.normal,
+                ),
               ),
             ),
           ],
