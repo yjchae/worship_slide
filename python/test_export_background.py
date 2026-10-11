@@ -161,14 +161,15 @@ def test_export_per_item_background():
         export_presentation(json.dumps(payload))
         slides = Presentation(str(output)).slides
 
-        # 헌금송 1장 + 뒤따르는 자동 여백 1장 + 일반 찬양 1장
+        # 헌금송 1장 + 뒤따르는 자동 여백 1장 + 일반 찬양 1장 + 자동 여백 1장
         # + 명시적 빈 페이지 1장 + 이미지 배경 찬양 1장
-        check("슬라이드 개수", len(slides), 5)
+        check("슬라이드 개수", len(slides), 6)
         check("헌금송 배경", slide_bg_hex(slides[0]), OFFERING_BG)
         check("헌금송 뒤 자동 여백도 같은 배경", slide_bg_hex(slides[1]), OFFERING_BG)
         check("오버라이드 없는 찬양은 전역 배경", slide_bg_hex(slides[2]), GLOBAL_BG)
-        check("빈 페이지 오버라이드", slide_bg_hex(slides[3]), BLANK_BG)
-        check("이미지 오버라이드는 blipFill", slide_bg_is_image(slides[4]), True)
+        check("빈 페이지 앞에도 자동 여백", slide_bg_hex(slides[3]), GLOBAL_BG)
+        check("빈 페이지 오버라이드", slide_bg_hex(slides[4]), BLANK_BG)
+        check("이미지 오버라이드는 blipFill", slide_bg_is_image(slides[5]), True)
 
 
 def test_export_without_background_key():

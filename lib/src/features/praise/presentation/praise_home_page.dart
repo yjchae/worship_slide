@@ -175,6 +175,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   bool _isPresentationOpen = false;
   bool _isBlackout = false;
   final Set<String> _deletedSlideKeys = {};
+  // 발표 보기에서 복사한 페이지. 복사하는 순간의 내용을 콘티 항목으로 떠 둔다.
+  List<({StagingItem item, SlideBackground? background})> _slideClipboard =
+      const [];
 
   final List<Color> _swatches = const [
     Color(0xFF1B1B1B),
@@ -317,7 +320,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       } else if (item is BibleStagingItem) {
         if (!_deletedSlideKeys.contains(_slideKey(uid, 0))) result.add(entry);
       } else if (item is BlankStagingItem) {
-        result.add(entry); // 빈 페이지는 삭제 여부와 무관하게 항상 포함
+        // 발표 화면(_allSlides)에서 지운 빈 페이지는 저장·내보내기에서도 뺀다.
+        if (!_deletedSlideKeys.contains(_slideKey(uid, 0))) result.add(entry);
       }
     }
     return result;
@@ -338,11 +342,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       };
       var newIndex = 0;
       for (var j = 0; j < total; j++) {
-        // 빈 페이지는 삭제 여부와 무관하게 항상 저장된다(_effectiveStagingItems 참고).
-        if (item is! BlankStagingItem &&
-            _deletedSlideKeys.contains(_slideKey(uid, j))) {
-          continue;
-        }
+        if (_deletedSlideKeys.contains(_slideKey(uid, j))) continue;
         final note = _slideNotes[_slideKey(uid, j)];
         if (note != null && note.isNotEmpty) {
           out[_slideKey(uid, newIndex)] = note;
@@ -478,8 +478,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       final entry = _stagingItems[i];
       final item = entry.item;
       final isLast = i == _stagingItems.length - 1;
-      final nextIsBlank =
-          !isLast && _stagingItems[i + 1].item is BlankStagingItem;
+      // 다음이 직접 넣은 빈 페이지여도 자동 여백은 그대로 둔다 — 빈 페이지를
+      // 추가하면 실제로 한 장이 늘어나야 한다(ppt_tool.py export 와 같은 규칙).
       // 항목에 배경 오버라이드가 걸려 있으면 그 항목이 만드는 모든 페이지가
       // (뒤에 자동으로 붙는 여백까지) 같은 배경을 쓴다.
       final background = _itemBackgrounds[entry.uid];
@@ -513,7 +513,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
             ),
           );
         }
-        if (!isLast && !nextIsBlank) {
+        if (!isLast) {
           tryAdd(
             _SlideInfo(
               stagingUid: entry.uid,
@@ -543,7 +543,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
             ),
           );
         }
-        if (!isLast && !nextIsBlank) {
+        if (!isLast) {
           tryAdd(
             _SlideInfo(
               stagingUid: entry.uid,
@@ -571,9 +571,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
           ),
         );
         // 말씀 다음이 말씀이면 빈 페이지 삽입 안 함
-        if (!isLast &&
-            !nextIsBlank &&
-            _stagingItems[i + 1].item is! BibleStagingItem) {
+        if (!isLast && _stagingItems[i + 1].item is! BibleStagingItem) {
           tryAdd(
             _SlideInfo(
               stagingUid: entry.uid,
@@ -907,13 +905,28 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     await _sendCurrentSlide();
   }
 
-  void _deleteSlide(int slideIndex) {
+  void _deleteSlide(int slideIndex) => _deleteSlides([slideIndex]);
+
+  /// 발표 보기에서 여러 장을 골라 Delete 로 지울 때도 같은 길을 탄다.
+  void _deleteSlides(List<int> slideIndexes) {
     final slides = _allSlides;
-    if (slideIndex >= slides.length) return;
-    final info = slides[slideIndex];
-    if (info.stagingUid == _leadingBlankUid) return;
+    final targets = {
+      for (final i in slideIndexes)
+        if (i >= 0 &&
+            i < slides.length &&
+            slides[i].stagingUid != _leadingBlankUid)
+          i,
+    };
+    if (targets.isEmpty) return;
+    // 현재 페이지보다 앞이 지워진 만큼 당겨야 관객 화면이 엉뚱한 장으로 안 바뀐다.
+    final shift = targets.where((i) => i < _currentSlideIndex).length;
     setState(() {
-      _deletedSlideKeys.add(_slideKey(info.stagingUid, info.pageIndexInItem));
+      for (final i in targets) {
+        _deletedSlideKeys.add(
+          _slideKey(slides[i].stagingUid, slides[i].pageIndexInItem),
+        );
+      }
+      _currentSlideIndex -= shift;
       _clampCurrentSlideIndex();
     });
     _sendCurrentSlide();
@@ -1106,6 +1119,98 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         item: const BlankStagingItem(),
       ));
       _previewStagingUid = uid;
+    });
+  }
+
+  /// 발표 보기 '새 페이지': 현재 슬라이드가 속한 항목 바로 뒤에 빈 페이지를 넣고 바로 편집한다.
+  /// 곡 중간 페이지를 보고 있어도 곡을 쪼갤 수는 없으니 그 곡 뒤에 들어간다.
+  /// 현재 슬라이드보다 뒤에 들어가므로 관객 화면과 현재 위치는 그대로다.
+  Future<void> _addBlankAfterCurrentSlide() async {
+    final slides = _allSlides;
+    final currentUid = slides.isEmpty
+        ? null
+        : slides[_currentSlideIndex.clamp(0, slides.length - 1)].stagingUid;
+    // 맨 앞 자동 빈 페이지(또는 빈 콘티)면 -1 → 맨 앞에 들어간다.
+    final at = _stagingItems.indexWhere((e) => e.uid == currentUid);
+    final uid = _nextUid++;
+    setState(() {
+      _stagingItems.insert(at + 1, (uid: uid, item: const BlankStagingItem()));
+    });
+    final index = _allSlides.indexWhere((s) => s.stagingUid == uid);
+    if (index >= 0) await _editSlide(index);
+  }
+
+  /// 발표 보기 ⌘/Ctrl+C. 고른 페이지를 콘티 항목으로 떠 둔다.
+  /// 같은 항목의 페이지는 한 항목으로 묶는다 — 곡 페이지를 한 장씩 따로 만들면
+  /// 사이사이에 자동 여백이 끼기 때문이다. 자동 여백은 붙여 넣으면 알아서 생기므로 뺀다.
+  void _copySlides(List<int> slideIndexes) {
+    final slides = _allSlides;
+    final picked = [
+      for (final i in slideIndexes.toSet().toList()..sort())
+        if (i >= 0 &&
+            i < slides.length &&
+            !slides[i].isAutoSpacer &&
+            slides[i].stagingUid != _leadingBlankUid)
+          slides[i],
+    ];
+    final groups = <List<_SlideInfo>>[];
+    for (final info in picked) {
+      if (groups.isNotEmpty &&
+          groups.last.first.stagingUid == info.stagingUid) {
+        groups.last.add(info);
+      } else {
+        groups.add([info]);
+      }
+    }
+    final copied = <({StagingItem item, SlideBackground? background})>[];
+    for (final group in groups) {
+      final uid = group.first.stagingUid;
+      final entry = _stagingItems.where((e) => e.uid == uid).firstOrNull;
+      if (entry == null) continue;
+      final item = switch (entry.item) {
+        SongStagingItem(:final song) => SongStagingItem(
+          PraiseSong(
+            id: song.id,
+            fileName: song.fileName,
+            title: song.title,
+            lyrics: encodePages(group.map((s) => s.mainText)),
+            englishLyrics: encodePages(group.map((s) => s.englishText)),
+          ),
+        ),
+        ImageStagingItem(:final sourceName) => ImageStagingItem(
+          sourceName: sourceName,
+          imagePaths: [for (final s in group) s.imagePath!],
+        ),
+        final other => other, // 성경·빈 페이지는 한 장짜리라 그대로
+      };
+      copied.add((item: item, background: _itemBackgrounds[uid]));
+    }
+    if (copied.isEmpty) return;
+    _slideClipboard = copied;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('${picked.length}장을 복사했습니다. ⌘/Ctrl+V 로 붙여 넣으세요.'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  /// 발표 보기 ⌘/Ctrl+V. 현재 슬라이드가 속한 항목 바로 뒤에 넣는다
+  /// ('새 페이지 추가'와 같은 자리). 현재 위치·관객 화면은 그대로다.
+  void _pasteSlides() {
+    if (_slideClipboard.isEmpty) return;
+    final slides = _allSlides;
+    final currentUid = slides.isEmpty
+        ? null
+        : slides[_currentSlideIndex.clamp(0, slides.length - 1)].stagingUid;
+    final at = _stagingItems.indexWhere((e) => e.uid == currentUid);
+    setState(() {
+      var insertAt = at + 1;
+      for (final c in _slideClipboard) {
+        final uid = _nextUid++;
+        _stagingItems.insert(insertAt++, (uid: uid, item: c.item));
+        if (c.background != null) _itemBackgrounds[uid] = c.background!;
+      }
     });
   }
 
@@ -2421,6 +2526,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               onSlideSelected: _goToSlide,
                               onSlideEdit: _editSlide,
                               onSlideDelete: _deleteSlide,
+                              onSlidesDelete: _deleteSlides,
+                              onSlidesCopy: _copySlides,
+                              onPaste: _pasteSlides,
+                              onAddPage: _addBlankAfterCurrentSlide,
                               onPrev: _prevSlide,
                               onNext: _nextSlide,
                               onToggleBlackout: _toggleBlackout,
@@ -4308,7 +4417,8 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
       );
     }
 
-    const inputHeight = 56.0;
+    // 버전·검색·장·절 네 칸 높이를 같게: 세로 패딩을 통일하고 검색 아이콘이 높이를 키우지 않게 한다
+    const inputPadding = EdgeInsets.symmetric(horizontal: 12, vertical: 14);
 
     return Padding(
       padding: const EdgeInsets.all(16),
@@ -4322,14 +4432,13 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
               Expanded(
                 flex: 2,
                 child: SizedBox(
-                  height: inputHeight,
                   child: DropdownButtonFormField<String>(
                     initialValue: _selectedVersion,
                     isExpanded: true,
                     decoration: const InputDecoration(
                       labelText: '버전',
                       border: OutlineInputBorder(),
-                      contentPadding: EdgeInsets.symmetric(horizontal: 12),
+                      contentPadding: inputPadding,
                     ),
                     items: _versionNames
                         .map((v) => DropdownMenuItem(value: v, child: Text(v)))
@@ -4342,7 +4451,6 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
               Expanded(
                 flex: 3,
                 child: SizedBox(
-                  height: inputHeight,
                   child: Autocomplete<String>(
                     key: ValueKey(_selectedVersion),
                     initialValue: TextEditingValue(text: _bookController.text),
@@ -4368,9 +4476,10 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
                               labelText: '성경 검색',
                               prefixIcon: Icon(Icons.search_rounded),
                               border: OutlineInputBorder(),
-                              contentPadding: EdgeInsets.symmetric(
-                                horizontal: 12,
+                              prefixIconConstraints: BoxConstraints(
+                                minWidth: 40,
                               ),
+                              contentPadding: inputPadding,
                             ),
                             onChanged: (_) {
                               _setBookEditingValue(controller.value);
@@ -4391,7 +4500,6 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
               const SizedBox(width: 8),
               SizedBox(
                 width: 96,
-                height: inputHeight,
                 child: TextField(
                   controller: _chapterController,
                   keyboardType: TextInputType.number,
@@ -4400,7 +4508,7 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
                   decoration: const InputDecoration(
                     labelText: '장',
                     border: OutlineInputBorder(),
-                    contentPadding: EdgeInsets.symmetric(horizontal: 12),
+                    contentPadding: inputPadding,
                   ),
                   onSubmitted: (_) => _search(),
                 ),
@@ -4408,7 +4516,6 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
               const SizedBox(width: 8),
               SizedBox(
                 width: 96,
-                height: inputHeight,
                 child: TextField(
                   controller: _verseController,
                   keyboardType: TextInputType.number,
@@ -4417,7 +4524,7 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
                   decoration: const InputDecoration(
                     labelText: '절',
                     border: OutlineInputBorder(),
-                    contentPadding: EdgeInsets.symmetric(horizontal: 12),
+                    contentPadding: inputPadding,
                   ),
                   onSubmitted: (_) => _search(),
                 ),
@@ -6537,9 +6644,7 @@ class _SlideThumbnailState extends State<_SlideThumbnail> {
                 style: TextStyle(
                   fontSize: 11,
                   height: 1.3,
-                  color: widget.isSelected
-                      ? cs.onPrimary
-                      : cs.onSurfaceVariant,
+                  color: widget.isSelected ? cs.onPrimary : cs.onSurfaceVariant,
                   fontWeight: widget.isSelected
                       ? FontWeight.w700
                       : FontWeight.normal,
@@ -7361,6 +7466,10 @@ class _PresenterConsole extends StatefulWidget {
     required this.onSlideSelected,
     required this.onSlideEdit,
     required this.onSlideDelete,
+    required this.onSlidesDelete,
+    required this.onSlidesCopy,
+    required this.onPaste,
+    required this.onAddPage,
     required this.onPrev,
     required this.onNext,
     required this.onToggleBlackout,
@@ -7390,6 +7499,10 @@ class _PresenterConsole extends StatefulWidget {
   final ValueChanged<int> onSlideSelected;
   final ValueChanged<int> onSlideEdit;
   final ValueChanged<int> onSlideDelete;
+  final ValueChanged<List<int>> onSlidesDelete;
+  final ValueChanged<List<int>> onSlidesCopy;
+  final VoidCallback onPaste;
+  final VoidCallback onAddPage;
   final VoidCallback onPrev;
   final VoidCallback onNext;
   final VoidCallback onToggleBlackout;
@@ -7421,6 +7534,10 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
   final _searchFocus = FocusNode();
   // 검색으로 찾은 페이지. 썸네일에 테두리만 두르고 현재 슬라이드는 바꾸지 않는다.
   int? _foundIndex;
+  // ⌘/Ctrl·Shift+클릭으로 고른 페이지(지울 대상). 현재 슬라이드는 바꾸지 않는다.
+  // 인덱스라서 슬라이드 목록이 바뀌면 비운다.
+  final Set<int> _marked = {};
+  int? _markAnchor;
   String _noteKey = '';
   // 마지막으로 현재 페이지를 가운데 맞춘 배치(크기·열 수). 배치가 바뀌면
   // (줄 높이를 끌거나, +/- 확대, 창 크기 변경, 화면 전환) 다시 맞춘다.
@@ -7454,6 +7571,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
     super.initState();
     _syncNote();
     HardwareKeyboard.instance.addHandler(_handleFindKey);
+    HardwareKeyboard.instance.addHandler(_handleEditKey);
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _scrollStripToCurrent(),
     );
@@ -7464,6 +7582,10 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
     super.didUpdateWidget(oldWidget);
     // 콘티를 재정렬하면 인덱스·개수는 그대로여도 슬라이드가 바뀐다. 키 비교는 안에서 한다.
     _syncNote();
+    if (oldWidget.slides.length != widget.slides.length) {
+      _marked.clear();
+      _markAnchor = null;
+    }
     if (oldWidget.currentIndex != widget.currentIndex ||
         oldWidget.slides.length != widget.slides.length) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -7479,6 +7601,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
     _stripScrollController.dispose();
     _gridScrollController.dispose();
     HardwareKeyboard.instance.removeHandler(_handleFindKey);
+    HardwareKeyboard.instance.removeHandler(_handleEditKey);
     _searchController.dispose();
     _searchFocus.dispose();
     super.dispose();
@@ -7503,6 +7626,115 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
       extentOffset: _searchController.text.length,
     );
     return true;
+  }
+
+  /// 썸네일 클릭. ⌘/Ctrl = 하나씩 골라 담기, Shift = 범위로 담기, 그냥 클릭 = 그 페이지로.
+  void _onThumbTap(int i) {
+    final keyboard = HardwareKeyboard.instance;
+    if (keyboard.isShiftPressed) {
+      final anchor = _markAnchor ?? widget.currentIndex;
+      setState(() {
+        final (a, b) = anchor <= i ? (anchor, i) : (i, anchor);
+        _marked.addAll([for (var k = a; k <= b; k++) k]);
+      });
+      return;
+    }
+    if (keyboard.isMetaPressed || keyboard.isControlPressed) {
+      setState(() {
+        if (!_marked.remove(i)) _marked.add(i);
+        _markAnchor = i;
+      });
+      return;
+    }
+    if (_marked.isNotEmpty || _markAnchor != null) {
+      setState(() {
+        _marked.clear();
+        _markAnchor = null;
+      });
+    }
+    widget.onSlideSelected(i);
+  }
+
+  /// 썸네일 편집 단축키. ⌘/Ctrl+C = 고른 페이지(없으면 현재 페이지) 복사,
+  /// ⌘/Ctrl+V = 붙여 넣기, Delete/Backspace = 고른 페이지 삭제, ESC = 고르기 취소.
+  /// 고른 게 없으면 Delete 는 아무것도 안 한다 — 지금 띄운 페이지가 실수로 지워지면 안 된다.
+  bool _handleEditKey(KeyEvent event) {
+    if (event is! KeyDownEvent ||
+        widget.slides.isEmpty ||
+        !widget.isActive ||
+        ModalRoute.of(context)?.isCurrent == false) {
+      return false;
+    }
+    // 메모·찾기 입력칸에서는 글자 복사·지우기로 넘긴다.
+    final ctx = FocusManager.instance.primaryFocus?.context;
+    if (ctx?.findAncestorWidgetOfExactType<EditableText>() != null) {
+      return false;
+    }
+    final key = event.logicalKey;
+    final keyboard = HardwareKeyboard.instance;
+    final withCmd = keyboard.isControlPressed || keyboard.isMetaPressed;
+
+    if (withCmd && key == LogicalKeyboardKey.keyC) {
+      widget.onSlidesCopy(
+        _marked.isEmpty ? [widget.currentIndex] : _marked.toList(),
+      );
+      return true;
+    }
+    if (withCmd && key == LogicalKeyboardKey.keyV) {
+      widget.onPaste();
+      return true;
+    }
+    if (_marked.isEmpty) return false;
+    if (key == LogicalKeyboardKey.escape) {
+      setState(() {
+        _marked.clear();
+        _markAnchor = null;
+      });
+      return true;
+    }
+    if (key != LogicalKeyboardKey.delete &&
+        key != LogicalKeyboardKey.backspace) {
+      return false;
+    }
+    final indexes = _marked.toList();
+    setState(() {
+      _marked.clear();
+      _markAnchor = null;
+    });
+    widget.onSlidesDelete(indexes);
+    return true;
+  }
+
+  /// 골라 담은 썸네일에 체크 표시와 테두리를 두른다.
+  Widget _markedMark(int i, ColorScheme cs, Widget child) {
+    if (!_marked.contains(i)) return child;
+    return Stack(
+      children: [
+        child,
+        Positioned.fill(
+          child: IgnorePointer(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: cs.secondary.withValues(alpha: 0.18),
+                border: Border.all(color: cs.secondary, width: 3),
+                borderRadius: BorderRadius.circular(AppRadius.control),
+              ),
+              child: Align(
+                alignment: Alignment.bottomLeft,
+                child: Padding(
+                  padding: const EdgeInsets.all(4),
+                  child: Icon(
+                    Icons.check_circle_rounded,
+                    size: 18,
+                    color: cs.secondary,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
   }
 
   void _setSearchScope(SlideSearchScope scope) {
@@ -7884,6 +8116,11 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
         ),
         const SizedBox(width: 4),
         IconButton(
+          onPressed: widget.onAddPage,
+          icon: const Icon(Icons.note_add_outlined),
+          tooltip: '새 페이지 추가 (현재 항목 뒤)',
+        ),
+        IconButton(
           onPressed: () =>
               setState(() => _view.showAllPages = !_view.showAllPages),
           icon: Icon(
@@ -8175,15 +8412,19 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
                   itemBuilder: (context, i) => _foundMark(
                     i,
                     cs,
-                    _SlideThumbnail(
-                      data: _pageDataFor(i),
-                      isSelected: i == widget.currentIndex,
-                      index: i,
-                      isEditable: !widget.slides[i].isAutoSpacer,
-                      // 누른 페이지로 넘기기만 한다. 보기 전환은 버튼으로만.
-                      onTap: () => widget.onSlideSelected(i),
-                      onEdit: () => widget.onSlideEdit(i),
-                      onDelete: () => widget.onSlideDelete(i),
+                    _markedMark(
+                      i,
+                      cs,
+                      _SlideThumbnail(
+                        data: _pageDataFor(i),
+                        isSelected: i == widget.currentIndex,
+                        index: i,
+                        isEditable: !widget.slides[i].isAutoSpacer,
+                        // 누른 페이지로 넘기기만 한다. 보기 전환은 버튼으로만.
+                        onTap: () => _onThumbTap(i),
+                        onEdit: () => widget.onSlideEdit(i),
+                        onDelete: () => widget.onSlideDelete(i),
+                      ),
                     ),
                   ),
                 );
@@ -8244,14 +8485,18 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
                 children: [
                   // 편집 탭의 슬라이드 순서와 같은 썸네일. 마우스를 올리면
                   // 수정·삭제 버튼이 그대로 나온다.
-                  _SlideThumbnail(
-                    data: _pageDataFor(i),
-                    isSelected: i == widget.currentIndex,
-                    index: i,
-                    isEditable: !widget.slides[i].isAutoSpacer,
-                    onTap: () => widget.onSlideSelected(i),
-                    onEdit: () => widget.onSlideEdit(i),
-                    onDelete: () => widget.onSlideDelete(i),
+                  _markedMark(
+                    i,
+                    cs,
+                    _SlideThumbnail(
+                      data: _pageDataFor(i),
+                      isSelected: i == widget.currentIndex,
+                      index: i,
+                      isEditable: !widget.slides[i].isAutoSpacer,
+                      onTap: () => _onThumbTap(i),
+                      onEdit: () => widget.onSlideEdit(i),
+                      onDelete: () => widget.onSlideDelete(i),
+                    ),
                   ),
                   // 수정/삭제 버튼이 오른쪽 위에 뜨므로 메모 표시는 왼쪽에.
                   if (hasNote)

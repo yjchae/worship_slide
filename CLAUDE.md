@@ -311,6 +311,12 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
 (`PresenterViewState.searchScope`). 제목은 항목 첫 페이지, 가사는 원본·보조 가사가 맞는 그 페이지로 간다.
 입력칸 안 ESC 는 발표 종료가 아니라 입력칸에서 빠져나오기만 한다.
 
+발표 보기 썸네일: ⌘/Ctrl+클릭 = 하나씩 골라 담기, Shift+클릭 = 범위, Delete/Backspace = 고른 페이지 한꺼번에 삭제,
+ESC = 고르기 취소, ⌘/Ctrl+C·V = 복사·붙여 넣기(`_handleEditKey`). 복사는 고른 게 없으면 현재 페이지.
+붙여 넣기는 현재 항목 뒤에 새 콘티 항목으로 들어간다 — 같은 곡의 페이지는 곡 한 항목으로 묶고(제목·배경 유지), 자동 여백은 빼고 복사한다. 고른 게 없으면 Delete 는 아무것도 안 한다(띄운 페이지 보호).
+툴바 '새 페이지 추가' = 현재 항목 뒤에 빈 페이지를 넣고 바로 편집(`_addBlankAfterCurrentSlide`).
+직접 넣은 빈 페이지 앞에도 자동 여백은 그대로 붙는다(예전엔 빈 페이지가 여백 자리를 대신해 장 수가 안 늘었다).
+
 ## 배포
 
 - `scripts/build.sh` / `build.ps1` → `dist/worship_slides/` (앱 + `python/ppt_tool/`)
