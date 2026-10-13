@@ -1455,7 +1455,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       return;
     }
     setState(() {
-      _stagingItems.removeWhere((e) {
+      _removeStagingWhere((e) {
         final item = e.item;
         final matches = item is SongStagingItem && item.song.id == song.id;
         if (matches) _itemBackgrounds.remove(e.uid);
@@ -1569,24 +1569,64 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         : slides[_currentSlideIndex.clamp(0, slides.length - 1)];
     final at = _stagingItems.indexWhere((e) => e.uid == current?.stagingUid);
     setState(() {
-      // 현재 페이지 바로 뒤에 붙도록 현재 항목 뒤 여백을 뺀다. 곡 중간이면 나눈 뒷부분과도
-      // 이어지게 붙여 넣은 마지막 항목 뒤 여백도 뺀다(원래 여백이 없던 자리여도 마찬가지).
-      // 붙여 넣은 항목끼리는 서로 다른 곡이라 여백을 그대로 둔다.
+      // 같은 곡(같은 PPT)끼리 맞닿는 자리만 자동 여백을 빼 이어 붙인다. 다른 곡이면 여백을 둔다.
       final onPage = at >= 0 && !current!.isAutoSpacer;
-      final joinNext = onPage && _noSpacerUids.contains(current.stagingUid);
+      // 원래 다음 항목과 이어져 있던 자리(앞서 곡 중간에 붙여 넣은 자리 등)
+      final wasJoined = onPage && _noSpacerUids.contains(current.stagingUid);
       final tailAt = onPage
           ? _splitStagingItem(at, current.pageIndexInItem + 1)
           : null;
-      if (onPage) _noSpacerUids.add(_stagingItems[at].uid);
       var insertAt = tailAt ?? at + 1;
-      for (final (n, c) in _slideClipboard.indexed) {
+      final next = insertAt < _stagingItems.length
+          ? _stagingItems[insertAt].item
+          : null;
+      final first = _slideClipboard.first.item;
+      final last = _slideClipboard.last.item;
+      if (onPage) {
+        final head = _stagingItems[at];
+        if (_sameSource(head.item, first)) {
+          _noSpacerUids.add(head.uid);
+        } else {
+          _noSpacerUids.remove(head.uid);
+        }
+      }
+      for (final c in _slideClipboard) {
         final uid = _nextUid++;
         _stagingItems.insert(insertAt++, (uid: uid, item: c.item));
         if (c.background != null) _itemBackgrounds[uid] = c.background!;
-        final isLast = n == _slideClipboard.length - 1;
-        if ((tailAt != null || joinNext) && isLast) _noSpacerUids.add(uid);
+      }
+      if ((tailAt != null || wasJoined) &&
+          next != null &&
+          _sameSource(last, next)) {
+        _noSpacerUids.add(_stagingItems[insertAt - 1].uid);
       }
     });
+    // 다음 페이지가 바뀌었을 수 있다(싱어 화면의 '다음').
+    _sendCurrentSlide();
+  }
+
+  /// 같은 곡(제목)·같은 PPT 파일에서 나온 항목인지. 붙여 넣을 때 여백을 뺄지 정한다.
+  static bool _sameSource(StagingItem a, StagingItem b) => switch ((a, b)) {
+    (SongStagingItem(song: final x), SongStagingItem(song: final y)) =>
+      x.title == y.title,
+    (
+      ImageStagingItem(sourceName: final x),
+      ImageStagingItem(sourceName: final y),
+    ) =>
+      x == y,
+    _ => false,
+  };
+
+  /// 항목을 콘티에서 뺀다. 앞 항목의 '여백 없음'은 빠진 항목도 뒤와 이어져 있었을 때만
+  /// 남긴다 — 아니면 앞 항목이 엉뚱한 다음 곡과 여백 없이 붙는다.
+  void _removeStagingWhere(bool Function(({int uid, StagingItem item})) test) {
+    for (var i = _stagingItems.length - 1; i >= 0; i--) {
+      final e = _stagingItems[i];
+      if (!test(e)) continue;
+      final joined = _noSpacerUids.remove(e.uid);
+      if (!joined && i > 0) _noSpacerUids.remove(_stagingItems[i - 1].uid);
+      _stagingItems.removeAt(i);
+    }
   }
 
   /// 곡·PPT 항목 [index] 를 [cut] 페이지 앞에서 둘로 나누고 뒷부분이 들어간 자리를 돌려준다.
@@ -2051,7 +2091,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   void _removeFromStaging(int uid) {
     setState(() {
-      _stagingItems.removeWhere((e) => e.uid == uid);
+      _removeStagingWhere((e) => e.uid == uid);
       _deletedSlideKeys.removeWhere((k) => k.startsWith('$uid:'));
       _itemBackgrounds.remove(uid);
       if (_previewStagingUid == uid) {
@@ -2065,8 +2105,11 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   void _onStagingReorder(int oldIndex, int newIndex) {
     setState(() {
-      final entry = _stagingItems.removeAt(oldIndex);
+      final entry = _stagingItems[oldIndex];
+      _removeStagingWhere((e) => e.uid == entry.uid);
       _stagingItems.insert(newIndex, entry);
+      // 옮긴 자리 앞 항목과는 여백을 둔다.
+      if (newIndex > 0) _noSpacerUids.remove(_stagingItems[newIndex - 1].uid);
       _clampCurrentSlideIndex();
     });
   }
@@ -2653,7 +2696,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     await _repository.clearAllSongs();
     if (!mounted) return;
     setState(() {
-      _stagingItems.removeWhere((e) {
+      _removeStagingWhere((e) {
         final isSong = e.item is SongStagingItem;
         if (isSong) _itemBackgrounds.remove(e.uid);
         return isSong;
@@ -2704,7 +2747,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     await _repository.deleteSongsByIds(deletableIds);
     if (!mounted) return;
     setState(() {
-      _stagingItems.removeWhere(
+      _removeStagingWhere(
         (e) =>
             e.item is SongStagingItem &&
             deletableIds.contains((e.item as SongStagingItem).song.id),
