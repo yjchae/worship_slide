@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart' as p;
+import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../../app_colors.dart';
 import '../../../app_theme.dart';
@@ -23,6 +24,7 @@ import '../data/font_library.dart';
 import '../data/praise_repository.dart';
 import '../data/python_bridge.dart';
 import '../data/screen_choice_store.dart';
+import '../data/singer_web_server.dart';
 import '../data/worship_conti_repository.dart';
 import '../domain/worship_conti.dart';
 import '../domain/export_style.dart';
@@ -182,6 +184,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   bool _isBlackout = false;
   // 싱어용 화면(현재 + 다음 페이지). 발표 창과 따로 뜨는 두 번째 네이티브 창이다.
   bool _isSingerOpen = false;
+  // 같은 망 휴대폰용 싱어 화면(웹). 발표를 끝내면 같이 끈다.
+  final SingerWebServer _singerWeb = SingerWebServer();
   final Set<String> _deletedSlideKeys = {};
   // 발표 보기에서 복사한 페이지. 복사하는 순간의 내용을 콘티 항목으로 떠 둔다.
   List<({StagingItem item, SlideBackground? background})> _slideClipboard =
@@ -271,6 +275,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   @override
   void dispose() {
+    _singerWeb.stop();
     HardwareKeyboard.instance.removeHandler(_handleStartKey);
     _mainTabController
       ..removeListener(_onMainTabChanged)
@@ -693,6 +698,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     // 발표 창을 닫으면 네이티브 쪽 확대 상태도 함께 사라진다(macOS 는 컨트롤러를
     // 통째로 버린다). Dart 쪽만 켜져 있으면 다음 발표에서 어긋나므로 같이 끈다.
     _isZoomOn = false;
+    _singerWeb.stop();
   }
 
   Future<void> _closePresentation() async {
@@ -760,6 +766,123 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('싱어 화면 열기 실패: $e')));
+    }
+  }
+
+  // ── 휴대폰 싱어 화면 ────────────────────────────────────────────────────
+
+  /// 켜져 있지 않으면 켜고, 휴대폰에서 열 주소를 보여 준다. 다이얼로그에서 끌 수 있다.
+  bool _isMobileSingerBusy = false; // 두 번 눌러 다이얼로그가 둘 뜨지 않게
+
+  Future<void> _showMobileSinger() async {
+    if (_isMobileSingerBusy) return;
+    _isMobileSingerBusy = true;
+    try {
+      await _showMobileSingerDialog();
+    } finally {
+      _isMobileSingerBusy = false;
+    }
+  }
+
+  Future<void> _showMobileSingerDialog() async {
+    try {
+      // 앞서 걸어 둔 stop(발표 종료) 이 있으면 그 뒤에 켜진다.
+      await _singerWeb.start();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('휴대폰 싱어 화면 켜기 실패: $e')));
+      return;
+    }
+    if (!mounted) return;
+    setState(() {});
+    await _sendSingerView();
+    final addresses = await SingerWebServer.lanAddresses();
+    if (!mounted) return;
+    final urls = [for (final a in addresses) _singerWeb.urlFor(a)];
+    final stop = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('휴대폰 싱어 화면'),
+        // 발표가 끝나 서버가 꺼지면 QR 대신 꺼졌다고 보여 준다(찍어도 접속이 안 되므로).
+        content: ValueListenableBuilder<bool>(
+          valueListenable: _singerWeb.running,
+          builder: (context, running, _) => Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (!running)
+                const Text('휴대폰 싱어 화면이 꺼졌습니다. 발표를 다시 시작한 뒤 켜 주세요.')
+              else ...[
+                const Text('같은 와이파이에 연결된 휴대폰 카메라로 QR 을 찍거나 브라우저에서 주소를 여세요.'),
+                const SizedBox(height: 12),
+                if (urls.isEmpty)
+                  const Text('네트워크 주소를 찾지 못했습니다. 와이파이 연결을 확인해 주세요.')
+                else
+                  // 다이얼로그를 열 때마다 지금 주소로 새로 만든다(IP 가 바뀌어도 맞게).
+                  // 와이파이·유선처럼 주소가 여럿이면 주소마다 QR 을 붙인다(와이파이·유선이 앞).
+                  Wrap(
+                    spacing: 20,
+                    runSpacing: 16,
+                    children: [
+                      for (final url in urls)
+                        Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            SelectableText(
+                              url,
+                              style: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            // 휴대폰 카메라가 어두운 테마에서도 읽게 늘 흰 바탕.
+                            // QrImageView 는 안에 LayoutBuilder 가 있어 AlertDialog 의 크기 재기
+                            // (intrinsic/dry layout)에서 터진다. 그래서 QrPainter 를 직접 그린다.
+                            Container(
+                              color: Colors.white,
+                              padding: const EdgeInsets.all(10),
+                              child: CustomPaint(
+                                size: const Size.square(180),
+                                painter: QrPainter(
+                                  data: url,
+                                  version: QrVersions.auto,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                    ],
+                  ),
+                const SizedBox(height: 12),
+                Text(
+                  '처음 켤 때 방화벽이 "들어오는 연결 허용"을 물으면 허용해 주세요.\n'
+                  '주소는 켤 때마다 바뀌므로(보안 키 포함) 매번 이 QR 로 여세요.\n'
+                  '휴대폰 화면이 꺼지지 않게 휴대폰 설정에서 자동 잠금을 꺼 두세요.\n'
+                  '발표를 끝내면 자동으로 꺼집니다.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('끄기'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('닫기'),
+          ),
+        ],
+      ),
+    );
+    if (stop == true) {
+      await _singerWeb.stop();
+      if (mounted) setState(() {});
     }
   }
 
@@ -890,8 +1013,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   String? _lastSingerJson;
 
   Future<void> _sendSingerView([List<_SlideInfo>? slides]) async {
-    if (!_isSingerOpen) return;
+    if (!_isSingerOpen && !_singerWeb.isRunning) return;
     final json = _buildSingerViewData(slides).toJson();
+    _singerWeb.update(json);
+    if (!_isSingerOpen) return;
     final encoded = jsonEncode(json);
     if (encoded == _lastSingerJson) return;
     try {
@@ -911,6 +1036,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         await _presentationChannel.invokeMethod('updatePage', pageData.toJson());
       } catch (_) {
         await _closeSingerWindow();
+        await _singerWeb.stop();
         if (mounted) setState(() => _isPresentationOpen = false);
         return;
       }
@@ -2764,6 +2890,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               onToggleBlackout: _toggleBlackout,
                               isSingerOpen: _isSingerOpen,
                               onToggleSinger: _toggleSingerWindow,
+                              isMobileSingerOn: _singerWeb.isRunning,
+                              onShowMobileSinger: _showMobileSinger,
                               pointerMode: _pointerMode,
                               pointerSize: _pointerSize,
                               onPointerModeChanged: (m) {
@@ -7714,6 +7842,8 @@ class _PresenterConsole extends StatefulWidget {
     required this.onToggleBlackout,
     required this.isSingerOpen,
     required this.onToggleSinger,
+    required this.isMobileSingerOn,
+    required this.onShowMobileSinger,
     required this.pointerMode,
     required this.pointerSize,
     required this.onPointerModeChanged,
@@ -7749,6 +7879,8 @@ class _PresenterConsole extends StatefulWidget {
   final VoidCallback onToggleBlackout;
   final bool isSingerOpen;
   final VoidCallback onToggleSinger;
+  final bool isMobileSingerOn;
+  final VoidCallback onShowMobileSinger;
   final PresenterPointerMode pointerMode;
   final double pointerSize;
   final ValueChanged<PresenterPointerMode> onPointerModeChanged;
@@ -8406,6 +8538,15 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
                 ? '싱어 화면 닫기'
                 : '싱어 화면 열기 (현재 + 다음 페이지)',
             color: widget.isSingerOpen ? cs.primary : null,
+          ),
+        if (open)
+          IconButton(
+            onPressed: widget.onShowMobileSinger,
+            icon: const Icon(Icons.phone_iphone_rounded),
+            tooltip: widget.isMobileSingerOn
+                ? '휴대폰 싱어 화면 (켜짐 — 주소 보기·끄기)'
+                : '휴대폰에서 싱어 화면 보기 (같은 와이파이)',
+            color: widget.isMobileSingerOn ? cs.primary : null,
           ),
       ],
     );

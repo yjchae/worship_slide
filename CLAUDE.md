@@ -112,6 +112,15 @@ lib/
 - 갱신은 `_sendCurrentSlide` 에 얹혀 있다(페이지가 바뀌는 모든 경로가 거기를 지난다). 블랙아웃 중에도 가사는 계속
   보이고 "관객 화면 꺼짐" 표시만 뜬다. 발표를 끝내면 같이 닫힌다
 - macOS `SingerWindowController`(MainFlutterWindow.swift, WKWebView HTML), Windows `windows/runner/singer_window.cpp`(GDI)
+- **휴대폰 싱어 화면**: 발표 보기 툴바의 휴대폰 버튼 → 앱 안 HTTP 서버(`SingerWebServer`, `dart:io`, 포트 8765·쓰고 있으면 아무 빈 포트)를
+  켜고 `http://<사설 IP>:<포트>` 와 그 QR(`qr_flutter`, 다이얼로그를 열 때마다 지금 IP 로 새로 만든다)을 보여 준다. 같은 와이파이의 휴대폰 브라우저가 SSE(`/events`)로 같은 `SingerViewData` JSON 을 받는다
+  (`_sendSingerView` 에 얹혀 있다 — 네이티브 싱어 창이 닫혀 있어도 보낸다). 페이지 이미지는 로컬 경로를 내보내지 않고
+  `/img/current`·`/img/next` 로 지금 두 장만 준다(망 안의 다른 기기가 아무 파일이나 읽지 못하게). 발표를 끝내면 같이 꺼진다.
+  모든 요청은 켤 때마다 새로 만드는 토큰(`?k=`, 주소·QR 에 포함)이 맞아야 한다(게스트 와이파이 대비). 이미지는 `v`(경로+수정 시각)가
+  지금 것과 다르면 404 + `no-store`(빠르게 넘길 때 브라우저가 엉뚱한 이미지를 기억하지 않게). start/stop 은 큐로 차례만 돈다.
+  주소 후보는 사설망 IPv4 만, VPN·가상 머신 인터페이스는 빼고 와이파이·유선을 앞에 둔다(`lanAddresses`).
+  화면 꺼짐 방지(`navigator.wakeLock`)는 https 에서만 되므로 안 쓴다 — 휴대폰 자동 잠금을 끄라고 안내만 한다.
+  처음엔 OS 방화벽이 들어오는 연결을 물으므로 허용해야 한다. 페이지 HTML 은 `singerPageHtml` 상수(네이티브 싱어와 같은 모양·맞춤 규칙)
 
 ### Python (`python/ppt_tool.py`, 약 900줄)
 
@@ -369,7 +378,7 @@ ESC = 고르기 취소, ⌘/Ctrl+C·V = 복사·붙여 넣기(`_handleEditKey`).
 
 ## 의존성
 
-- Dart: `file_picker`, `sqflite_common_ffi`, `path`, `path_provider`, `package_info_plus`, `http`
+- Dart: `file_picker`, `sqflite_common_ffi`, `path`, `path_provider`, `package_info_plus`, `http`, `qr_flutter`
 - Python: `python-pptx`, `pymupdf`, `pyinstaller`, `pillow`(악보 오선 찾기)
 - 시스템: LibreOffice(`soffice`) — `.ppt` 임포트와 PPT 이미지 렌더에 필요 (없으면 해당 기능만 비활성)
 - 시스템: Tesseract OCR — 악보 가사 추출에 필요. 한국어는 `kor` 언어 데이터까지 (없으면 해당 기능만 비활성)
