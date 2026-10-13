@@ -1517,7 +1517,8 @@ def export_presentation(payload_json):
             is_last = index == len(songs) - 1
             # 다음이 직접 넣은 빈 페이지여도 여백은 따로 넣는다 — 빈 페이지를 추가하면
             # 실제로 한 장이 늘어나야 한다(발표 화면 _allSlides 와 같은 규칙).
-            if not is_last:
+            # no_spacer: 발표 화면에서 이 항목 뒤 여백을 지웠다(곡 중간 붙여 넣기 등).
+            if not is_last and not song.get("no_spacer"):
                 next_type = songs[index + 1].get("type")
                 # 말씀 다음 말씀이면 빈 슬라이드 삽입 안 함
                 if not (song.get("type") == "bible" and next_type == "bible"):

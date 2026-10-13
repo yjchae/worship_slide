@@ -46,7 +46,7 @@ lib/
   src/app_colors.dart                -- 앱 화면 색·둥글기 토큰 (슬라이드·발표 창·PPTX 색과 무관)
   src/features/praise/
     data/
-      praise_database.dart           -- SQLite 스키마 + 마이그레이션 (현재 version 13)
+      praise_database.dart           -- SQLite 스키마 + 마이그레이션 (현재 version 14)
       praise_repository.dart         -- 곡 CRUD (searchSongs, replaceAllSongs, deleteSongsByIds ...)
       worship_conti_repository.dart  -- 콘티 저장/불러오기 (곡 가사 스냅샷까지 함께 보관)
       python_bridge.dart             -- Process.run으로 ppt_tool 실행 (import / render / export)
@@ -345,7 +345,11 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
 
 발표 보기 썸네일: ⌘/Ctrl+클릭 = 하나씩 골라 담기, Shift+클릭 = 범위, Delete/Backspace = 고른 페이지 한꺼번에 삭제,
 ESC = 고르기 취소, ⌘/Ctrl+C·V = 복사·붙여 넣기(`_handleEditKey`). 복사는 고른 게 없으면 현재 페이지.
-붙여 넣기는 현재 항목 뒤에 새 콘티 항목으로 들어간다 — 같은 곡의 페이지는 곡 한 항목으로 묶고(제목·배경 유지), 자동 여백은 빼고 복사한다. 고른 게 없으면 Delete 는 아무것도 안 한다(띄운 페이지 보호).
+붙여 넣기는 현재 페이지 바로 뒤에 새 콘티 항목으로 들어간다 — 같은 곡의 페이지는 곡 한 항목으로 묶고(제목·배경 유지), 자동 여백은 빼고 복사한다.
+곡·PPT 중간 페이지면 그 항목을 둘로 나눠(`_splitStagingItem`) 사이에 넣고, 앞부분 뒤·붙여 넣은 마지막 항목 뒤 자동 여백은 뺀다
+(붙여 넣은 항목끼리는 다른 곡이라 여백 유지. 앞부분 끝 빈 가사 페이지는 곡에 담으면 사라지므로 빈 페이지 항목으로 뺀다).
+여백 빼기는 지운 페이지 키가 아니라 항목 uid 집합(`_noSpacerUids`, 썸네일에서 자동 여백을 지워도 여기로 간다)이고, 콘티 저장(`worship_conti_items.no_spacer`, DB version 14)·PPTX 내보내기(`no_spacer`)에도 실린다.
+고른 게 없으면 Delete 는 아무것도 안 한다(띄운 페이지 보호).
 툴바 '새 페이지 추가' = 현재 항목 뒤에 빈 페이지를 넣고 바로 편집(`_addBlankAfterCurrentSlide`).
 직접 넣은 빈 페이지 앞에도 자동 여백은 그대로 붙는다(예전엔 빈 페이지가 여백 자리를 대신해 장 수가 안 늘었다).
 

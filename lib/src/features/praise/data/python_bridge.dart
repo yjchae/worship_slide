@@ -145,7 +145,9 @@ class PythonBridge {
   /// null 이면 [style] 의 전역 배경을 그대로 쓴다.
   Future<String> exportPresentation({
     required String outputPath,
-    required List<({StagingItem item, SlideBackground? background})>
+    required List<
+      ({StagingItem item, SlideBackground? background, bool noSpacer})
+    >
     stagingItems,
     required ExportStyle style,
   }) async {
@@ -180,6 +182,7 @@ class PythonBridge {
           },
         };
         json['background'] = entry.background?.toJson();
+        if (entry.noSpacer) json['no_spacer'] = true;
         return json;
       }).toList(),
       'style': {

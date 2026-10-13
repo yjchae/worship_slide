@@ -16,6 +16,7 @@ class LoadContiResult {
     required this.missingCount,
     this.notes = const {},
     this.backgrounds = const {},
+    this.noSpacerUids = const {},
   });
   final List<({int uid, StagingItem item})> items;
   final int missingCount;
@@ -23,6 +24,8 @@ class LoadContiResult {
   final Map<String, String> notes;
   // 항목별 배경 오버라이드. 키는 항목 uid. 없는 항목은 전역 배경을 쓴다.
   final Map<int, SlideBackground> backgrounds;
+  // 뒤 자동 여백을 지운 항목 uid.
+  final Set<int> noSpacerUids;
 }
 
 // 메모는 항목별로 {"페이지": "메모"} JSON 한 칸에 담는다.
@@ -60,6 +63,7 @@ class WorshipContiRepository {
     List<({int uid, StagingItem item})> stagingItems, {
     Map<String, String> notes = const {},
     Map<int, SlideBackground> backgrounds = const {},
+    Set<int> noSpacerUids = const {},
   }) async {
     final db = await _db.database;
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -122,6 +126,7 @@ class WorshipContiRepository {
         row['background'] = SlideBackground.encode(
           backgrounds[stagingItems[i].uid],
         );
+        if (noSpacerUids.contains(stagingItems[i].uid)) row['no_spacer'] = 1;
         await txn.insert('worship_conti_items', row);
       }
       return contiId;
@@ -180,6 +185,7 @@ class WorshipContiRepository {
     final result = <({int uid, StagingItem item})>[];
     final notes = <String, String>{};
     final backgrounds = <int, SlideBackground>{};
+    final noSpacerUids = <int>{};
 
     for (final row in itemRows) {
       final addedBefore = result.length;
@@ -254,6 +260,7 @@ class WorshipContiRepository {
         decodeContiNotes(row['notes'], result.last.uid, notes);
         final background = SlideBackground.decode(row['background']);
         if (background != null) backgrounds[result.last.uid] = background;
+        if (row['no_spacer'] == 1) noSpacerUids.add(result.last.uid);
       }
     }
 
@@ -262,6 +269,7 @@ class WorshipContiRepository {
       missingCount: missingCount,
       notes: notes,
       backgrounds: backgrounds,
+      noSpacerUids: noSpacerUids,
     );
   }
 

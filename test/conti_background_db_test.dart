@@ -53,9 +53,12 @@ void main() {
       '주일 예배',
       items,
       backgrounds: const {10: offeringBackground},
+      noSpacerUids: const {11},
     );
 
     final loaded = await repository.loadConti(contiId, 100);
+    // 뒤 여백 없음 표시도 새 uid 로 따라온다.
+    expect(loaded.noSpacerUids, {101});
 
     expect(loaded.items.length, 3);
     // uid 는 startUid(100) 부터 새로 매겨진다. 배경도 새 uid 로 따라와야 한다.

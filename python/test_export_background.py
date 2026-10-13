@@ -246,11 +246,32 @@ def test_per_item_lyrics_position():
         check("일반 찬양 상자 위치", round(normal_box.top.inches, 2), 0.6)
 
 
+def test_no_spacer():
+    """no_spacer 항목 뒤에는 자동 여백을 넣지 않는다(곡 중간 붙여 넣기)."""
+    print("export (자동 여백 빼기)")
+    with tempfile.TemporaryDirectory() as tmp:
+        output = Path(tmp) / "no_spacer.pptx"
+        song = {"type": "song", "title": "곡", "english_lyrics": ""}
+        payload = {
+            "output_path": str(output),
+            "style": _STYLE,
+            "songs": [
+                {**song, "lyrics": "앞", "no_spacer": True},
+                {**song, "lyrics": "붙여 넣은 곡", "no_spacer": True},
+                {**song, "lyrics": "뒤"},
+                {**song, "lyrics": "다음 곡"},
+            ],
+        }
+        export_presentation(json.dumps(payload))
+        check("여백은 마지막 사이 한 장만", len(Presentation(str(output)).slides), 5)
+
+
 if __name__ == "__main__":
     test_resolve_background()
     test_export_per_item_background()
     test_export_without_background_key()
     test_per_item_lyrics_position()
+    test_no_spacer()
     if _failures:
         print(f"\n{len(_failures)}개 실패: {_failures}")
         raise SystemExit(1)

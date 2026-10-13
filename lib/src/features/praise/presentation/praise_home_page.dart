@@ -148,6 +148,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   // 콘티 항목별 배경 오버라이드. 키는 항목 uid. 없는 항목은 전역 배경을 쓴다.
   // (헌금송만 다른 배경으로 띄우는 등 "일부만 다르게" 하기 위한 것)
   final Map<int, SlideBackground> _itemBackgrounds = {};
+  // 뒤 자동 여백을 뺀 항목 uid(곡 중간 붙여 넣기, 여백 페이지 삭제). 저장·PPTX 에도 실린다.
+  final Set<int> _noSpacerUids = {};
   // 헌금송 기본 디자인(배경·은행·계좌). 항목에 적용할 때 여기서 시작해 높낮이만 곡마다 맞춘다.
   OfferingDesign _offeringDesign = const OfferingDesign();
   // offering_design.json 이 있으면(한 번이라도 등록했으면) true. 배경·계좌 없이 등록해도 된다.
@@ -302,6 +304,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       .map((item) => item.song.id)
       .toSet();
 
+  /// 항목이 만드는 페이지 수(자동 여백 제외).
+  static int _pageCount(StagingItem item) => switch (item) {
+    SongStagingItem(:final song) => song.pairedPages.length,
+    ImageStagingItem(:final imagePaths) => imagePaths.length,
+    _ => 1,
+  };
+
   /// 삭제된 슬라이드와 수정된 가사를 반영한 실제 내보내기용 스테이징 아이템 목록.
   List<({int uid, StagingItem item})> get _effectiveStagingItems {
     final result = <({int uid, StagingItem item})>[];
@@ -316,22 +325,11 @@ class _PraiseHomePageState extends State<PraiseHomePage>
             if (!_deletedSlideKeys.contains(_slideKey(uid, j))) pairs[j],
         ];
         if (kept.isEmpty) continue;
-        if (kept.length == pairs.length) {
-          result.add(entry);
-        } else {
-          result.add((
-            uid: uid,
-            item: SongStagingItem(
-              PraiseSong(
-                id: song.id,
-                fileName: song.fileName,
-                title: song.title,
-                lyrics: encodePages(kept.map((p) => p.korean)),
-                englishLyrics: encodePages(kept.map((p) => p.english)),
-              ),
-            ),
-          ));
-        }
+        result.add(
+          kept.length == pairs.length
+              ? entry
+              : (uid: uid, item: SongStagingItem(_songWithPages(song, kept))),
+        );
       } else if (item is ImageStagingItem) {
         final kept = [
           for (var j = 0; j < item.imagePaths.length; j++)
@@ -368,11 +366,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     for (final entry in _stagingItems) {
       final uid = entry.uid;
       final item = entry.item;
-      final total = switch (item) {
-        SongStagingItem(:final song) => song.pairedPages.length,
-        ImageStagingItem(:final imagePaths) => imagePaths.length,
-        _ => 1,
-      };
+      final total = _pageCount(item);
       var newIndex = 0;
       for (var j = 0; j < total; j++) {
         if (_deletedSlideKeys.contains(_slideKey(uid, j))) continue;
@@ -456,7 +450,20 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       if (matches.isEmpty) continue;
       final base = matches.first;
       final sub = await _repository.subLyricsFor(base, _style.subLanguage);
-      if (sub == item.song.englishLyrics) continue;
+      final full = PraiseSong(
+        id: base.id,
+        fileName: base.fileName,
+        title: base.title,
+        lyrics: base.lyrics,
+        englishLyrics: sub,
+      ).pairedPages;
+      final mine = item.song.pairedPages;
+      // 곡을 나누거나 일부만 복사한 항목은 같은 가사 페이지를 찾아 그 번역만 입힌다.
+      final byMain = {for (final f in full) f.korean: f.english};
+      final newSub = mine.length == full.length
+          ? sub
+          : encodePages(mine.map((m) => byMain[m.korean] ?? m.english));
+      if (newSub == item.song.englishLyrics) continue;
       updated.add((
         i,
         SongStagingItem(
@@ -465,7 +472,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
             fileName: item.song.fileName,
             title: item.song.title,
             lyrics: item.song.lyrics,
-            englishLyrics: sub,
+            englishLyrics: newSub,
           ),
         ),
       ));
@@ -546,7 +553,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
             ),
           );
         }
-        if (!isLast) {
+        if (!isLast && !_noSpacerUids.contains(entry.uid)) {
           tryAdd(
             _SlideInfo(
               stagingUid: entry.uid,
@@ -576,7 +583,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
             ),
           );
         }
-        if (!isLast) {
+        if (!isLast && !_noSpacerUids.contains(entry.uid)) {
           tryAdd(
             _SlideInfo(
               stagingUid: entry.uid,
@@ -604,7 +611,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
           ),
         );
         // 말씀 다음이 말씀이면 빈 페이지 삽입 안 함
-        if (!isLast && _stagingItems[i + 1].item is! BibleStagingItem) {
+        if (!isLast &&
+            !_noSpacerUids.contains(entry.uid) &&
+            _stagingItems[i + 1].item is! BibleStagingItem) {
           tryAdd(
             _SlideInfo(
               stagingUid: entry.uid,
@@ -1277,9 +1286,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     final shift = targets.where((i) => i < _currentSlideIndex).length;
     setState(() {
       for (final i in targets) {
-        _deletedSlideKeys.add(
-          _slideKey(slides[i].stagingUid, slides[i].pageIndexInItem),
-        );
+        if (slides[i].isAutoSpacer) {
+          _noSpacerUids.add(slides[i].stagingUid);
+        } else {
+          _deletedSlideKeys.add(
+            _slideKey(slides[i].stagingUid, slides[i].pageIndexInItem),
+          );
+        }
       }
       _currentSlideIndex -= shift;
       _clampCurrentSlideIndex();
@@ -1524,13 +1537,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       if (entry == null) continue;
       final item = switch (entry.item) {
         SongStagingItem(:final song) => SongStagingItem(
-          PraiseSong(
-            id: song.id,
-            fileName: song.fileName,
-            title: song.title,
-            lyrics: encodePages(group.map((s) => s.mainText)),
-            englishLyrics: encodePages(group.map((s) => s.englishText)),
-          ),
+          _songWithPages(song, [
+            for (final s in group) (korean: s.mainText, english: s.englishText),
+          ]),
         ),
         ImageStagingItem(:final sourceName) => ImageStagingItem(
           sourceName: sourceName,
@@ -1550,24 +1559,104 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     );
   }
 
-  /// 발표 보기 ⌘/Ctrl+V. 현재 슬라이드가 속한 항목 바로 뒤에 넣는다
-  /// ('새 페이지 추가'와 같은 자리). 현재 위치·관객 화면은 그대로다.
+  /// 발표 보기 ⌘/Ctrl+V. 현재 슬라이드 바로 뒤에 넣는다. 곡·PPT 중간 페이지면
+  /// 그 항목을 현재 페이지에서 둘로 나눠 사이에 넣는다. 현재 위치·관객 화면은 그대로다.
   void _pasteSlides() {
     if (_slideClipboard.isEmpty) return;
     final slides = _allSlides;
-    final currentUid = slides.isEmpty
+    final current = slides.isEmpty
         ? null
-        : slides[_currentSlideIndex.clamp(0, slides.length - 1)].stagingUid;
-    final at = _stagingItems.indexWhere((e) => e.uid == currentUid);
+        : slides[_currentSlideIndex.clamp(0, slides.length - 1)];
+    final at = _stagingItems.indexWhere((e) => e.uid == current?.stagingUid);
     setState(() {
-      var insertAt = at + 1;
-      for (final c in _slideClipboard) {
+      // 곡 중간이면 나눈 앞부분과 붙여 넣은 마지막 항목 뒤 여백을 빼 이어지게 한다.
+      // 붙여 넣은 항목끼리는 서로 다른 곡이라 여백을 그대로 둔다.
+      final tailAt = at >= 0 && !current!.isAutoSpacer
+          ? _splitStagingItem(at, current.pageIndexInItem + 1)
+          : null;
+      if (tailAt != null) _noSpacerUids.add(_stagingItems[at].uid);
+      var insertAt = tailAt ?? at + 1;
+      for (final (n, c) in _slideClipboard.indexed) {
         final uid = _nextUid++;
         _stagingItems.insert(insertAt++, (uid: uid, item: c.item));
         if (c.background != null) _itemBackgrounds[uid] = c.background!;
+        final isLast = n == _slideClipboard.length - 1;
+        if (tailAt != null && isLast) _noSpacerUids.add(uid);
       }
     });
   }
+
+  /// 곡·PPT 항목 [index] 를 [cut] 페이지 앞에서 둘로 나누고 뒷부분이 들어간 자리를 돌려준다.
+  /// 배경·메모·지운 페이지 표시도 같이 옮긴다. 뒤에 남은(지우지 않은) 페이지가 없으면 null.
+  int? _splitStagingItem(int index, int cut) {
+    final entry = _stagingItems[index];
+    final length = _pageCount(entry.item);
+    final hasTail = [
+      for (var j = cut; j < length; j++) _slideKey(entry.uid, j),
+    ].any((k) => !_deletedSlideKeys.contains(k));
+    if (!hasTail) return null;
+    final StagingItem head;
+    final StagingItem tail;
+    // 곡 끝의 빈 페이지는 가사로 담으면 사라지므로 앞부분 끝 빈 페이지는 빈 페이지 항목으로 뺀다.
+    var headEnd = cut;
+    switch (entry.item) {
+      case SongStagingItem(:final song):
+        final pages = song.pairedPages;
+        while (headEnd > 0 &&
+            pages[headEnd - 1].korean.isEmpty &&
+            pages[headEnd - 1].english.isEmpty) {
+          headEnd--;
+        }
+        head = SongStagingItem(_songWithPages(song, pages.sublist(0, headEnd)));
+        tail = SongStagingItem(_songWithPages(song, pages.sublist(cut)));
+      case ImageStagingItem(:final sourceName, :final imagePaths):
+        head = ImageStagingItem(
+          sourceName: sourceName,
+          imagePaths: imagePaths.sublist(0, cut),
+        );
+        tail = ImageStagingItem(
+          sourceName: sourceName,
+          imagePaths: imagePaths.sublist(cut),
+        );
+      default:
+        return null;
+    }
+    _stagingItems[index] = (uid: entry.uid, item: head);
+    var at = index + 1;
+    void move(int j, int toUid, int toPage) {
+      final from = _slideKey(entry.uid, j);
+      final to = _slideKey(toUid, toPage);
+      final note = _slideNotes.remove(from);
+      if (note != null) _slideNotes[to] = note;
+      if (_deletedSlideKeys.remove(from)) _deletedSlideKeys.add(to);
+    }
+
+    for (var j = headEnd; j < cut; j++) {
+      final uid = _nextUid++;
+      _stagingItems.insert(at++, (uid: uid, item: const BlankStagingItem()));
+      move(j, uid, 0);
+    }
+    final uid = _nextUid++;
+    _stagingItems.insert(at, (uid: uid, item: tail));
+    final background = _itemBackgrounds[entry.uid];
+    if (background != null) _itemBackgrounds[uid] = background;
+    if (_noSpacerUids.contains(entry.uid)) _noSpacerUids.add(uid);
+    for (var j = cut; j < length; j++) {
+      move(j, uid, j - cut);
+    }
+    return at;
+  }
+
+  static PraiseSong _songWithPages(
+    PraiseSong song,
+    List<({String korean, String english})> pages,
+  ) => PraiseSong(
+    id: song.id,
+    fileName: song.fileName,
+    title: song.title,
+    lyrics: encodePages(pages.map((p) => p.korean)),
+    englishLyrics: encodePages(pages.map((p) => p.english)),
+  );
 
   /// 콘티 항목 하나의 배경만 따로 지정한다(헌금송만 다른 배경 등).
   /// 다이얼로그에서 "전역 배경 사용"으로 되돌리면 오버라이드가 지워진다.
@@ -2290,7 +2379,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       final savedPath = await _pythonBridge.exportPresentation(
         outputPath: normalizedOutputPath,
         stagingItems: _effectiveStagingItems
-            .map((e) => (item: e.item, background: _itemBackgrounds[e.uid]))
+            .map(
+              (e) => (
+                item: e.item,
+                background: _itemBackgrounds[e.uid],
+                noSpacer: _noSpacerUids.contains(e.uid),
+              ),
+            )
             .toList(),
         style: _style,
       );
@@ -2367,6 +2462,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         _effectiveStagingItems,
         notes: _effectiveSlideNotes,
         backgrounds: _itemBackgrounds,
+        noSpacerUids: _noSpacerUids,
       );
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -2495,6 +2591,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         ..clear()
         ..addAll(result.items);
       _deletedSlideKeys.clear();
+      _noSpacerUids
+        ..clear()
+        ..addAll(result.noSpacerUids);
       _slideNotes
         ..clear()
         ..addAll(result.notes);

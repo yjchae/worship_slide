@@ -29,7 +29,7 @@ class PraiseDatabase {
     final dbPath = p.join(_dbDirectory, 'worship_slides.db');
     _database = await openDatabase(
       dbPath,
-      version: 13,
+      version: 14,
       onCreate: (db, version) => createPraiseSchema(db),
       onUpgrade: (db, oldVersion, newVersion) =>
           upgradePraiseSchema(db, oldVersion),
@@ -94,7 +94,8 @@ Future<void> createPraiseSchema(DatabaseExecutor db) async {
     notes           TEXT,
     background      TEXT,
     bible_sub_text  TEXT,
-    song_title      TEXT
+    song_title      TEXT,
+    no_spacer       INTEGER
   )
 ''');
   await db.execute(_createSongTranslations);
@@ -291,6 +292,15 @@ Future<void> upgradePraiseSchema(DatabaseExecutor db, int oldVersion) async {
       'worship_conti_items',
       'song_title',
       "ALTER TABLE worship_conti_items ADD COLUMN song_title TEXT",
+    );
+  }
+  if (oldVersion < 14) {
+    // 1 이면 이 항목 뒤 자동 여백을 넣지 않는다(곡 중간에 붙여 넣은 페이지 등).
+    await _addColumnIfMissing(
+      db,
+      'worship_conti_items',
+      'no_spacer',
+      "ALTER TABLE worship_conti_items ADD COLUMN no_spacer INTEGER",
     );
   }
 }
