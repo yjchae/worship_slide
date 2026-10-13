@@ -8,6 +8,8 @@
 #include <flutter/method_channel.h>
 #include <flutter/encodable_value.h>
 
+#include "singer_window.h"
+
 // gdiplus.h 는 NOMINMAX 충돌 때문에 .cpp 에서 순서를 맞춰 include 한다.
 // 여기서는 전방 선언만 하고, 소멸은 타입이 완전한 .cpp 쪽에서 이뤄진다.
 namespace Gdiplus {
@@ -93,6 +95,8 @@ class PresentationChannel {
   mutable std::wstring bg_image_cache_path_;
   std::unique_ptr<Channel> cmd_;
   std::unique_ptr<Channel> main_;
+  // 싱어용 화면(현재 + 다음 페이지). 관객 화면과 따로 뜨는 두 번째 창.
+  std::unique_ptr<SingerWindow> singer_;
 
   static PresentationChannel* s_;
   static constexpr wchar_t kClass[] = L"WorshipPresentation";

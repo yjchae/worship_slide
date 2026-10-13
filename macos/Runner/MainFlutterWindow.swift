@@ -462,19 +462,236 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
     """
   }
 
-  private func escapeHtml(_ text: String) -> String {
-    text
-      .replacingOccurrences(of: "&", with: "&amp;")
-      .replacingOccurrences(of: "<", with: "&lt;")
-      .replacingOccurrences(of: ">", with: "&gt;")
-      .replacingOccurrences(of: "\"", with: "&quot;")
+  private func escapeHtml(_ text: String) -> String { htmlEscape(text) }
+}
+
+// ── 싱어 화면 ────────────────────────────────────────────────────────────────
+// 관객용 발표 창과 별도로 뜨는 두 번째 창. 싱어가 보기 쉽게 디자인(배경·폰트·위치)은
+// 무시하고 "현재 페이지(크게) + 다음 페이지(작게)"를 고정 레이아웃으로 그린다.
+// 일반 창으로 열리므로 원하는 모니터로 끌어 놓고 더블클릭(또는 F)으로 전체화면을 켠다.
+
+class SingerWindowController: NSWindowController, NSWindowDelegate {
+  private var webView: WKWebView!
+  private var keyMonitor: Any?
+  private var isFullScreen = false
+  private var windowedFrame: NSRect?
+  private var lastData: [String: Any] = [:]
+
+  /// 사용자가 창을 닫았을 때 한 번 호출된다.
+  var onClose: (() -> Void)?
+  /// 싱어 화면에 포커스가 있을 때 누른 넘기기 키("next"/"prev")를 Dart 로 넘긴다.
+  var onNavigate: ((String) -> Void)?
+
+  convenience init() {
+    let window = SingerWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 960, height: 600),
+      styleMask: [.titled, .closable, .resizable, .miniaturizable],
+      backing: .buffered,
+      defer: false
+    )
+    window.title = "싱어 화면"
+    window.isReleasedWhenClosed = false
+    window.backgroundColor = NSColor(red: 0.05, green: 0.06, blue: 0.07, alpha: 1)
+    window.collectionBehavior = [.fullScreenAuxiliary]
+    self.init(window: window)
+
+    // 더블클릭은 페이지 JS 가 알려 준다(WKWebView 는 마우스 이벤트를 내부에서 먼저 먹는다).
+    let config = WKWebViewConfiguration()
+    config.userContentController.add(
+      SingerMessageProxy { [weak self] in self?.toggleFullScreen() }, name: "singer")
+    webView = WKWebView(frame: window.contentView!.bounds, configuration: config)
+    webView.autoresizingMask = [.width, .height]
+    window.contentView!.addSubview(webView)
+    window.delegate = self
   }
+
+  func windowWillClose(_ notification: Notification) {
+    if let monitor = keyMonitor {
+      NSEvent.removeMonitor(monitor)
+      keyMonitor = nil
+    }
+    webView.configuration.userContentController.removeScriptMessageHandler(forName: "singer")
+    onClose?()
+  }
+
+  /// screen 이 있으면 그 모니터 전체화면, 없으면 기준 모니터 가운데 일반 창.
+  /// 키 포커스는 가져가지 않는다 — 메인 창에서 넘기기 단축키가 계속 먹어야 한다.
+  func show(fullScreenOn screen: NSScreen?, near reference: NSScreen?) {
+    guard let window = self.window else { return }
+    let base = (reference ?? NSScreen.main ?? NSScreen.screens[0]).visibleFrame
+    let w = min(960, base.width), h = min(600, base.height)
+    window.setFrame(
+      NSRect(x: base.midX - w / 2, y: base.midY - h / 2, width: w, height: h),
+      display: true)
+    window.orderFrontRegardless()
+    if let screen = screen { enterFullScreen(on: screen) }
+
+    keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+      guard let self = self, event.window === self.window else { return event }
+      switch event.keyCode {
+      case 53:  // ESC: 전체화면이면 풀기만, 아니면 창 닫기
+        if self.isFullScreen { self.exitFullScreen() } else { self.window?.close() }
+      case 3:   // F
+        self.toggleFullScreen()
+      case 124, 125, 49, 121:  // → ↓ Space PageDown
+        self.onNavigate?("next")
+      case 123, 126, 116:      // ← ↑ PageUp
+        self.onNavigate?("prev")
+      default:
+        return event
+      }
+      return nil
+    }
+  }
+
+  func toggleFullScreen() {
+    if isFullScreen { exitFullScreen() }
+    else if let screen = window?.screen ?? NSScreen.main { enterFullScreen(on: screen) }
+  }
+
+  private func enterFullScreen(on screen: NSScreen) {
+    guard let window = window, !isFullScreen else { return }
+    windowedFrame = window.frame
+    isFullScreen = true
+    window.styleMask = [.borderless]
+    window.level = .screenSaver
+    window.setFrame(screen.frame, display: true)
+  }
+
+  private func exitFullScreen() {
+    guard let window = window, isFullScreen else { return }
+    isFullScreen = false
+    window.styleMask = [.titled, .closable, .resizable, .miniaturizable]
+    window.title = "싱어 화면"
+    window.level = .normal
+    if let frame = windowedFrame { window.setFrame(frame, display: true) }
+  }
+
+  func update(data: [String: Any]) {
+    lastData = data
+    webView.loadHTMLString(buildHTML(), baseURL: nil)
+  }
+
+  // ── HTML ──────────────────────────────────────────────────────────────
+
+  private func pageHTML(_ page: [String: Any]?, emptyLabel: String) -> String {
+    guard let page = page else {
+      return "<div class=\"placeholder\">\(emptyLabel)</div>"
+    }
+    if let path = page["image_path"] as? String, !path.isEmpty,
+       let data = try? Data(contentsOf: URL(fileURLWithPath: path)) {
+      let ext = (path as NSString).pathExtension.lowercased()
+      let mime = ext == "jpg" || ext == "jpeg" ? "image/jpeg" : "image/png"
+      return "<img src=\"data:\(mime);base64,\(data.base64EncodedString())\">"
+    }
+    if (page["is_blank"] as? Bool) ?? false {
+      return "<div class=\"placeholder\">빈 화면</div>"
+    }
+    let main = htmlEscape((page["main_text"] as? String) ?? "")
+    let sub = htmlEscape((page["english_text"] as? String) ?? "")
+    let subHTML = sub.isEmpty ? "" : "<div class=\"sub\">\(sub)</div>"
+    return "<div class=\"fit\"><div class=\"main\">\(main)</div>\(subHTML)</div>"
+  }
+
+  private func buildHTML() -> String {
+    let current = lastData["current"] as? [String: Any]
+    let next = lastData["next"] as? [String: Any]
+    let pageNumber = (lastData["page_number"] as? Int) ?? 0
+    let totalPages = (lastData["total_pages"] as? Int) ?? 0
+    let blackout = (lastData["blackout"] as? Bool) ?? false
+    let title = htmlEscape((current?["title"] as? String) ?? "")
+    let nextTitle = htmlEscape((next?["title"] as? String) ?? "")
+    // 다음 페이지가 다른 곡·말씀이면 그 제목을 같이 알려 준다.
+    let nextLabel = (!nextTitle.isEmpty && nextTitle != title) ? "다음 · \(nextTitle)" : "다음"
+    let badge = blackout ? "<span class=\"badge\">관객 화면 꺼짐</span>" : ""
+
+    return """
+    <!DOCTYPE html><html><head><meta charset="utf-8">
+    <style>
+      *{margin:0;padding:0;box-sizing:border-box;}
+      html,body{width:100vw;height:100vh;overflow:hidden;background:#0d0f12;color:#fff;
+        font-family:-apple-system,'Apple SD Gothic Neo','Pretendard',sans-serif;}
+      body{display:flex;flex-direction:column;padding:2.2vh 2.4vw;gap:1.6vh;}
+      header{display:flex;align-items:center;gap:1.2vw;font-size:2.6vh;color:#9aa4b1;flex:none;}
+      header .title{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;}
+      header .page{font-variant-numeric:tabular-nums;font-weight:700;color:#e6e9ee;}
+      .badge{background:#e5484d;color:#fff;border-radius:999px;padding:.2em .8em;font-size:2.2vh;font-weight:700;}
+      .label{font-size:2.3vh;color:#7d8794;font-weight:600;flex:none;
+        white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+      .box{position:relative;border-radius:1.4vh;overflow:hidden;display:flex;
+        align-items:center;justify-content:center;padding:2vh 3vw;min-height:0;}
+      .current{flex:63;background:#171b21;border:1px solid #2a313b;}
+      .next{flex:37;background:#111419;border:1px solid #1f252d;}
+      .fit{width:100%;max-height:100%;text-align:center;line-height:1.3;font-weight:700;}
+      .main{white-space:pre-wrap;word-break:keep-all;}
+      .sub{white-space:pre-wrap;color:#ffd54f;font-size:.78em;margin-top:.45em;}
+      .next .main{color:#c3cad4;}
+      .next .sub{color:#b8a25a;}
+      .placeholder{color:#59626e;font-size:3.4vh;font-weight:600;}
+      img{max-width:100%;max-height:100%;object-fit:contain;display:block;}
+    </style></head><body>
+      <header><span class="title">\(title)</span>\(badge)<span class="page">\(pageNumber) / \(totalPages)</span></header>
+      <div class="box current">\(pageHTML(current, emptyLabel: "빈 화면"))</div>
+      <div class="label">\(nextLabel)</div>
+      <div class="box next">\(pageHTML(next, emptyLabel: "마지막 페이지"))</div>
+    <script>
+    // 상자에 꼭 맞는 가장 큰 글자 크기를 찾는다(이분 탐색). 창 크기가 바뀌면 다시 맞춘다.
+    function fitAll(){
+      document.querySelectorAll('.box').forEach(function(box){
+        var el=box.querySelector('.fit'); if(!el) return;
+        var cs=getComputedStyle(box);
+        var w=box.clientWidth-parseFloat(cs.paddingLeft)-parseFloat(cs.paddingRight);
+        var h=box.clientHeight-parseFloat(cs.paddingTop)-parseFloat(cs.paddingBottom);
+        var lo=8, hi=Math.max(12, h*0.45);
+        for(var i=0;i<18;i++){
+          var mid=(lo+hi)/2; el.style.fontSize=mid+'px';
+          if(el.scrollHeight<=h && el.scrollWidth<=w) lo=mid; else hi=mid;
+        }
+        el.style.fontSize=lo+'px';
+      });
+    }
+    fitAll(); window.addEventListener('resize', fitAll);
+    document.addEventListener('dblclick', function(){
+      window.webkit.messageHandlers.singer.postMessage('toggleFullScreen');
+    });
+    </script>
+    </body></html>
+    """
+  }
+}
+
+/// borderless 창은 기본으로 키 윈도우가 못 되어 전체화면에서 ESC·화살표가 안 들어온다.
+private class SingerWindow: NSWindow {
+  override var canBecomeKey: Bool { true }
+}
+
+/// userContentController 는 핸들러를 강하게 잡으므로 컨트롤러를 직접 넣지 않고
+/// 클로저만 든 얇은 객체를 넣는다(컨트롤러 ↔ 웹뷰 순환 참조 방지).
+private class SingerMessageProxy: NSObject, WKScriptMessageHandler {
+  private let onToggle: () -> Void
+
+  init(onToggle: @escaping () -> Void) { self.onToggle = onToggle }
+
+  func userContentController(
+    _ controller: WKUserContentController, didReceive message: WKScriptMessage
+  ) {
+    onToggle()
+  }
+}
+
+private func htmlEscape(_ text: String) -> String {
+  text
+    .replacingOccurrences(of: "&", with: "&amp;")
+    .replacingOccurrences(of: "<", with: "&lt;")
+    .replacingOccurrences(of: ">", with: "&gt;")
+    .replacingOccurrences(of: "\"", with: "&quot;")
 }
 
 // ── MainFlutterWindow ─────────────────────────────────────────────────────
 
 class MainFlutterWindow: NSWindow {
   private var presentationController: PresentationWindowController?
+  private var singerController: SingerWindowController?
   private var mainPresentationChannel: FlutterMethodChannel?
 
   override func awakeFromNib() {
@@ -577,6 +794,38 @@ class MainFlutterWindow: NSWindow {
       case "closeWindow":
         self.presentationController?.window?.close()
         self.presentationController = nil
+        result(nil)
+
+      case "openSingerWindow":
+        if self.singerController == nil {
+          let ctrl = SingerWindowController()
+          ctrl.onClose = { [weak self] in
+            self?.singerController = nil
+            self?.mainPresentationChannel?.invokeMethod("singerClosed", arguments: nil)
+          }
+          ctrl.onNavigate = { [weak self] direction in
+            self?.mainPresentationChannel?.invokeMethod("singerKey", arguments: direction)
+          }
+          self.singerController = ctrl
+          // 관객 화면이 screens[1] 을 쓰므로, 모니터가 셋 이상이면 세 번째에 전체화면으로.
+          // 아니면 메인 창 옆에 일반 창으로 띄우고 사용자가 원하는 모니터로 옮긴다.
+          let screens = NSScreen.screens
+          ctrl.show(fullScreenOn: screens.count > 2 ? screens[2] : nil, near: self.screen)
+        } else {
+          self.singerController?.window?.orderFrontRegardless()
+        }
+        if let d = data { self.singerController?.update(data: d) }
+        result(nil)
+
+      case "updateSinger":
+        if let d = data { self.singerController?.update(data: d) }
+        result(nil)
+
+      case "closeSingerWindow":
+        // close() 가 windowWillClose → onClose 를 부르면 Dart 에 singerClosed 가 한 번
+        // 더 가지만, Dart 쪽은 이미 닫힌 상태라 아무 일도 안 한다.
+        self.singerController?.window?.close()
+        self.singerController = nil
         result(nil)
 
       default:

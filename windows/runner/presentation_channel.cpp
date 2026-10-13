@@ -58,6 +58,8 @@ PresentationChannel::PresentationChannel(HWND main_hwnd)
 
 PresentationChannel::~PresentationChannel() {
   if (hwnd_) { DestroyWindow(hwnd_); hwnd_ = nullptr; }
+  // 싱어 화면도 GDI+ 를 쓰므로 GdiplusShutdown 전에 내린다.
+  singer_.reset();
   // 멤버는 소멸자 본문 뒤에 정리되므로, GdiplusShutdown 뒤에 ~Image() 가 돈다.
   // 캐시를 먼저 비워야 이미 내려간 GDI+ 를 건드리지 않는다.
   image_cache_.reset();
@@ -141,6 +143,15 @@ void PresentationChannel::Setup(flutter::FlutterEngine* engine) {
           if (hwnd_) InvalidateRect(hwnd_, nullptr, TRUE);
         } else if (call.method_name() == "closeWindow") {
           CloseWindow();
+        } else if (call.method_name() == "openSingerWindow") {
+          // 관객 화면이 쓰는 모니터는 피해서 연다.
+          singer_->Open(hwnd_ ? MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONULL)
+                              : nullptr);
+          if (data) singer_->Update(*data);
+        } else if (call.method_name() == "updateSinger") {
+          if (data) singer_->Update(*data);
+        } else if (call.method_name() == "closeSingerWindow") {
+          singer_->Close();
         } else {
           result->NotImplemented();
           return;
@@ -149,6 +160,13 @@ void PresentationChannel::Setup(flutter::FlutterEngine* engine) {
       });
 
   main_ = std::make_unique<Channel>(msg, "worship_slides/presentation_main", codec);
+
+  singer_ = std::make_unique<SingerWindow>(
+      main_hwnd_, [this](const std::string& method, const std::string& arg) {
+        if (!main_) return;
+        main_->InvokeMethod(
+            method, arg.empty() ? nullptr : std::make_unique<EV>(arg));
+      });
 }
 
 // ── window management ─────────────────────────────────────────────────────────
