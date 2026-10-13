@@ -66,6 +66,7 @@ lib/
     presentation/
       praise_home_page.dart          -- 단일 화면(5,700줄). 검색·성경·디자인·콘티·발표 제어 전부 여기
       slide_page_data.dart           -- 발표 창에 보낼 한 페이지의 JSON 표현
+      singer_view_data.dart          -- 싱어 화면에 보낼 현재+다음 페이지 JSON 표현
       slide_render_view.dart         -- 미리보기/썸네일용 Flutter 슬라이드 렌더러
       offering_dialog.dart           -- 헌금송 디자인 등록 / 항목에 적용(높낮이) 다이얼로그
       offering_overlay_painter.dart  -- 헌금송 띠(라인 + 헌금 + 계좌) painter. 미리보기·PNG 공용
@@ -79,8 +80,10 @@ lib/
 
 발표 화면은 Flutter가 아니라 **네이티브 창**이다. MethodChannel 3개로 제어한다.
 
-- `worship_slides/presentation` — Dart → 네이티브: open / updatePage / toggleBlackout / close
-- `worship_slides/presentation_main` — 네이티브 → Dart: `presentationClosed`
+- `worship_slides/presentation` — Dart → 네이티브: open / updatePage / toggleBlackout / close,
+  싱어 화면 openSingerWindow / updateSinger / closeSingerWindow
+- `worship_slides/presentation_main` — 네이티브 → Dart: `presentationClosed`, `singerClosed`,
+  `singerKey`(`"next"`/`"prev"` — 싱어 화면에 포커스가 있을 때 누른 넘기기 키)
 - `worship_slides/save_panel` — 저장 위치 선택 (macOS NSSavePanel)
 
 | 플랫폼 | 구현 | 렌더링 |
@@ -89,6 +92,18 @@ lib/
 | Windows| `windows/runner/presentation_channel.cpp` | GDI `DrawTextW` + GDI+ 이미지 |
 
 보조 모니터가 있으면 그 화면에 borderless 전체화면(`level = .screenSaver`)으로, 없으면 1280x720 창으로 띄운다.
+
+**싱어 화면**: 발표 중 발표 보기 툴바의 마이크 버튼으로 여는 두 번째 네이티브 창. 디자인(배경·폰트·위치)은
+무시하고 현재 페이지(크게, 63%) + 다음 페이지(작게, 37%)를 어두운 고정 레이아웃으로 그린다(글자 크기는 상자에
+맞춰 자동). 스타일을 싣지 않는 별도 JSON(`SingerViewData`)을 받는다. 보조 가사는 디자인의 보조 언어 스위치를 따른다.
+- 메인 창도 관객 화면도 아닌 모니터(3번째)가 있으면 거기 전체화면으로, 없으면 메인 창 모니터에 960x600 일반 창으로
+  열린다. 사용자가 원하는 모니터로 끌어 놓고 **더블클릭(또는 F, Windows 는 F11 도)** 으로 전체화면을 켜고 끈다. ESC 는
+  전체화면이면 풀기, 아니면 창 닫기
+- 열 때 키 포커스를 가져가지 않는다(메인 창 넘기기 단축키 유지). 싱어 창을 클릭해 포커스가 가도 화살표·Space·PageUp/Down 은
+  `singerKey` 로 Dart 에 넘겨 똑같이 넘어간다
+- 갱신은 `_sendCurrentSlide` 에 얹혀 있다(페이지가 바뀌는 모든 경로가 거기를 지난다). 블랙아웃 중에도 가사는 계속
+  보이고 "관객 화면 꺼짐" 표시만 뜬다. 발표를 끝내면 같이 닫힌다
+- macOS `SingerWindowController`(MainFlutterWindow.swift, WKWebView HTML), Windows `windows/runner/singer_window.cpp`(GDI)
 
 ### Python (`python/ppt_tool.py`, 약 900줄)
 

@@ -32,6 +32,7 @@ import '../domain/staging_item.dart';
 import 'background_image_gallery.dart';
 import 'offering_dialog.dart';
 import 'offering_overlay_painter.dart';
+import 'singer_view_data.dart';
 import 'slide_page_data.dart';
 import 'slide_render_view.dart';
 
@@ -174,6 +175,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   int _currentSlideIndex = 0;
   bool _isPresentationOpen = false;
   bool _isBlackout = false;
+  // 싱어용 화면(현재 + 다음 페이지). 발표 창과 따로 뜨는 두 번째 네이티브 창이다.
+  bool _isSingerOpen = false;
   final Set<String> _deletedSlideKeys = {};
   // 발표 보기에서 복사한 페이지. 복사하는 순간의 내용을 콘티 항목으로 떠 둔다.
   List<({StagingItem item, SlideBackground? background})> _slideClipboard =
@@ -230,8 +233,21 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _checkForUpdates(isStartup: true);
     HardwareKeyboard.instance.addHandler(_handleStartKey);
     _mainPresentationChannel.setMethodCallHandler((call) async {
-      if (call.method == 'presentationClosed' && mounted) {
-        setState(_resetPresentationState);
+      if (!mounted) return null;
+      switch (call.method) {
+        case 'presentationClosed':
+          // 발표가 끝나면 싱어 화면도 같이 닫는다.
+          await _closeSingerWindow();
+          if (mounted) setState(_resetPresentationState);
+        case 'singerClosed':
+          setState(() => _isSingerOpen = false);
+        case 'singerKey':
+          // 싱어 화면을 클릭해 포커스가 그쪽에 가 있어도 넘기기는 되게 한다.
+          if (call.arguments == 'next') {
+            await _nextSlide();
+          } else if (call.arguments == 'prev') {
+            await _prevSlide();
+          }
       }
       return null;
     });
@@ -665,6 +681,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   }
 
   Future<void> _closePresentation() async {
+    await _closeSingerWindow();
     try {
       await _presentationChannel.invokeMethod('closeWindow');
     } catch (_) {}
@@ -676,10 +693,81 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     try {
       await _presentationChannel.invokeMethod('blackout');
       if (mounted) setState(() => _isBlackout = !_isBlackout);
+      // 싱어 화면은 가사를 계속 보여 주고 "관객 화면 꺼짐" 표시만 바꾼다.
+      await _sendSingerView();
+    } catch (_) {}
+  }
+
+  // ── 싱어 화면 ───────────────────────────────────────────────────────────
+
+  SingerViewData _buildSingerViewData() {
+    final slides = _allSlides;
+    final index = slides.isEmpty
+        ? 0
+        : _currentSlideIndex.clamp(0, slides.length - 1);
+    SingerPage? pageAt(int i) {
+      if (i < 0 || i >= slides.length) return null;
+      final slide = slides[i];
+      return SingerPage(
+        mainText: slide.mainText,
+        // 디자인에서 보조 언어를 꺼 두면 싱어 화면에서도 뺀다(관객 화면과 같게).
+        englishText: _style.includeEnglishLyrics ? slide.englishText : '',
+        title: slide.title,
+        imagePath: slide.imagePath,
+      );
+    }
+
+    return SingerViewData(
+      current: pageAt(index) ?? const SingerPage(mainText: ''),
+      next: pageAt(index + 1),
+      pageNumber: slides.isEmpty ? 0 : index + 1,
+      totalPages: slides.length,
+      isBlackout: _isBlackout,
+    );
+  }
+
+  Future<void> _toggleSingerWindow() async {
+    if (_isSingerOpen) {
+      await _closeSingerWindow();
+      return;
+    }
+    if (!_isPresentationOpen) return;
+    try {
+      await _presentationChannel.invokeMethod(
+        'openSingerWindow',
+        _buildSingerViewData().toJson(),
+      );
+      if (mounted) setState(() => _isSingerOpen = true);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('싱어 화면 열기 실패: $e')));
+    }
+  }
+
+  Future<void> _closeSingerWindow() async {
+    if (!_isSingerOpen) return;
+    try {
+      await _presentationChannel.invokeMethod('closeSingerWindow');
+    } catch (_) {}
+    if (mounted) setState(() => _isSingerOpen = false);
+  }
+
+  Future<void> _sendSingerView() async {
+    if (!_isSingerOpen) return;
+    try {
+      await _presentationChannel.invokeMethod(
+        'updateSinger',
+        _buildSingerViewData().toJson(),
+      );
     } catch (_) {}
   }
 
   Future<void> _sendCurrentSlide() async {
+    // 페이지가 바뀌는 모든 곳(넘기기·점프·편집·디자인 변경)이 이 함수를 거치므로
+    // 싱어 화면도 여기서 함께 갱신한다.
+    await _sendSingerView();
     if (!_isPresentationOpen) return;
     try {
       final pageData = _buildSlidePageData(_currentSlideIndex);
@@ -2533,6 +2621,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               onPrev: _prevSlide,
                               onNext: _nextSlide,
                               onToggleBlackout: _toggleBlackout,
+                              isSingerOpen: _isSingerOpen,
+                              onToggleSinger: _toggleSingerWindow,
                               pointerMode: _pointerMode,
                               pointerSize: _pointerSize,
                               onPointerModeChanged: (m) {
@@ -7473,6 +7563,8 @@ class _PresenterConsole extends StatefulWidget {
     required this.onPrev,
     required this.onNext,
     required this.onToggleBlackout,
+    required this.isSingerOpen,
+    required this.onToggleSinger,
     required this.pointerMode,
     required this.pointerSize,
     required this.onPointerModeChanged,
@@ -7506,6 +7598,8 @@ class _PresenterConsole extends StatefulWidget {
   final VoidCallback onPrev;
   final VoidCallback onNext;
   final VoidCallback onToggleBlackout;
+  final bool isSingerOpen;
+  final VoidCallback onToggleSinger;
   final PresenterPointerMode pointerMode;
   final double pointerSize;
   final ValueChanged<PresenterPointerMode> onPointerModeChanged;
@@ -8150,6 +8244,19 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
             ),
             tooltip: '화면 끄기 (B)',
             color: widget.isBlackout ? cs.error : null,
+          ),
+        if (open)
+          IconButton(
+            onPressed: widget.onToggleSinger,
+            icon: Icon(
+              widget.isSingerOpen
+                  ? Icons.mic_rounded
+                  : Icons.mic_none_rounded,
+            ),
+            tooltip: widget.isSingerOpen
+                ? '싱어 화면 닫기'
+                : '싱어 화면 열기 (현재 + 다음 페이지)',
+            color: widget.isSingerOpen ? cs.primary : null,
           ),
       ],
     );
