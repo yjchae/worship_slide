@@ -50,7 +50,8 @@ class PresentationChannel {
     double   ttlOffsetY = 0.0;
   };
 
-  void OpenWindow();
+  // chosen: 사용자가 고른 모니터(nullptr = 자동). 이미 열려 있으면 그 모니터로 옮긴다.
+  void OpenWindow(HMONITOR chosen);
   void CloseWindow();
   void Apply(const flutter::EncodableMap& data);
   void Paint(HDC hdc, RECT cli) const;

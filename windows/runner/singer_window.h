@@ -3,9 +3,13 @@
 #include <windows.h>
 
 #include <functional>
+#include <map>
+#include <memory>
 #include <string>
 
 #include <flutter/encodable_value.h>
+
+namespace Gdiplus { class Image; }
 
 // 싱어 화면: 관객용 발표 창과 별도로 뜨는 두 번째 창.
 // 디자인(배경·폰트·위치)은 무시하고 "현재 페이지(크게) + 다음 페이지(작게)"를
@@ -22,8 +26,9 @@ class SingerWindow {
   SingerWindow(HWND main_hwnd, Notify notify);
   ~SingerWindow();
 
-  // avoid: 관객 화면이 쓰는 모니터. 그 밖의 보조 모니터가 있으면 거기에 전체화면으로 연다.
-  void Open(HMONITOR avoid);
+  // chosen: 사용자가 고른 모니터(nullptr = 자동). 자동이면 avoid(관객 화면 모니터)도
+  // 메인 창 모니터도 아닌 모니터에 전체화면으로 연다. 이미 열려 있으면 chosen 으로 옮긴다.
+  void Open(HMONITOR avoid, HMONITOR chosen);
   void Close();
   void Update(const flutter::EncodableMap& data);
   bool IsOpen() const { return hwnd_ != nullptr; }
@@ -37,7 +42,8 @@ class SingerWindow {
 
   void Paint(HDC hdc, RECT cli) const;
   // 상자 안에 꼭 맞는 가장 큰 글자로 원본 + 보조 가사를 가운데 그린다.
-  void PaintText(HDC hdc, RECT box, const Page& page, bool dim) const;
+  // 원본 줄 그대로 맞추다 글자가 minPx 보다 작아지면 그때만 자동 줄바꿈한다.
+  void PaintText(HDC hdc, RECT box, const Page& page, bool dim, int minPx) const;
   void PaintPageImage(HDC hdc, RECT box, const std::wstring& path) const;
   void ToggleFullScreen();
 
@@ -52,6 +58,9 @@ class SingerWindow {
   Page current_, next_;
   int  page_number_ = 0, total_pages_ = 0;
   bool blackout_    = false;
+
+  // 경로 → 디코딩한 페이지 이미지. Update 때 지금·다음 페이지 것만 남긴다.
+  mutable std::map<std::wstring, std::unique_ptr<Gdiplus::Image>> image_cache_;
 
   // 전체화면을 풀 때 되돌아갈 창 위치.
   WINDOWPLACEMENT placement_ = {sizeof(WINDOWPLACEMENT)};

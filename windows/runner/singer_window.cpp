@@ -24,12 +24,13 @@ constexpr wchar_t kFontFace[]    = L"Malgun Gothic";
 
 // 앱 화면 어두운 테마와 비슷한 차분한 색. 싱어가 무대 조명 아래서 보기 쉽게 어둡게 둔다.
 const COLORREF kBg          = RGB(13, 15, 18);
-const COLORREF kCurrentFill = RGB(23, 27, 33);
-const COLORREF kCurrentLine = RGB(42, 49, 59);
-const COLORREF kNextFill    = RGB(17, 20, 25);
-const COLORREF kNextLine    = RGB(31, 37, 45);
+const COLORREF kCurrentFill = RGB(27, 32, 40);
+const COLORREF kCurrentLine = RGB(90, 100, 114);
+const COLORREF kNextFill    = RGB(15, 18, 21);
+const COLORREF kNextLine    = RGB(35, 41, 48);
+const COLORREF kDivider     = RGB(58, 66, 77);
 const COLORREF kMuted       = RGB(154, 164, 177);
-const COLORREF kLabel       = RGB(125, 135, 148);
+const COLORREF kLabel       = RGB(139, 149, 162);
 const COLORREF kPlaceholder = RGB(89, 98, 110);
 const COLORREF kBadge       = RGB(229, 72, 77);
 
@@ -73,9 +74,10 @@ HFONT MakeFont(int px, bool bold) {
                      CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, kFontFace);
 }
 
-void FillRounded(HDC hdc, RECT r, int radius, COLORREF fill, COLORREF line) {
+void FillRounded(HDC hdc, RECT r, int radius, COLORREF fill, COLORREF line,
+                 int width = 1) {
   HBRUSH brush = CreateSolidBrush(fill);
-  HPEN pen = CreatePen(PS_SOLID, 1, line);
+  HPEN pen = CreatePen(PS_SOLID, width, line);
   HGDIOBJ old_brush = SelectObject(hdc, brush);
   HGDIOBJ old_pen = SelectObject(hdc, pen);
   RoundRect(hdc, r.left, r.top, r.right, r.bottom, radius, radius);
@@ -98,14 +100,15 @@ void DrawLine(HDC hdc, const std::wstring& text, RECT r, int px, bool bold,
   DeleteObject(font);
 }
 
-// 줄바꿈을 감안한 글자 묶음의 크기를 잰다.
-SIZE Measure(HDC hdc, const std::wstring& text, int px, int width) {
+// 글자 묶음의 크기를 잰다. wrap 이 false 면 원본 줄(\n)대로 — 폭은 가장 긴 줄,
+// true 면 width 에서 자동 줄바꿈.
+SIZE Measure(HDC hdc, const std::wstring& text, int px, int width, bool wrap) {
   if (text.empty()) return {0, 0};
   HFONT font = MakeFont(px, true);
   HGDIOBJ old = SelectObject(hdc, font);
   RECT r = {0, 0, width, 0};
   DrawTextW(hdc, text.c_str(), -1, &r,
-            DT_CENTER | DT_WORDBREAK | DT_NOPREFIX | DT_CALCRECT);
+            DT_CENTER | DT_NOPREFIX | DT_CALCRECT | (wrap ? DT_WORDBREAK : 0));
   SelectObject(hdc, old);
   DeleteObject(font);
   return {r.right - r.left, r.bottom - r.top};
@@ -135,8 +138,19 @@ void SingerWindow::Register() {
   registered = true;
 }
 
-void SingerWindow::Open(HMONITOR avoid) {
+void SingerWindow::Open(HMONITOR avoid, HMONITOR chosen) {
   if (hwnd_) {
+    if (chosen && chosen != MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONULL)) {
+      // 일반 창으로 풀고 고른 모니터로 옮긴 뒤 다시 전체화면(ToggleFullScreen 은 지금 모니터 기준).
+      if (full_) ToggleFullScreen();
+      MONITORINFO info = {sizeof(info)};
+      GetMonitorInfo(chosen, &info);
+      SetWindowPos(hwnd_, nullptr, info.rcWork.left, info.rcWork.top, 0, 0,
+                   SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+      ToggleFullScreen();
+    } else if (chosen && !full_) {
+      ToggleFullScreen();
+    }
     ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
     return;
   }
@@ -150,6 +164,7 @@ void SingerWindow::Open(HMONITOR avoid) {
       if (mon != p->main && mon != p->avoid) { p->found = mon; return FALSE; }
       return TRUE;
     }, reinterpret_cast<LPARAM>(&pick));
+  if (chosen) pick.found = chosen;
 
   // 없으면 메인 창 모니터 가운데 일반 창. 사용자가 원하는 모니터로 끌어 놓는다.
   MONITORINFO info = {sizeof(info)};
@@ -173,6 +188,7 @@ void SingerWindow::Open(HMONITOR avoid) {
 }
 
 void SingerWindow::Close() {
+  image_cache_.clear();
   // DestroyWindow 는 WM_CLOSE 를 거치지 않으므로 Dart 에 singerClosed 를 다시 보내지 않는다.
   if (hwnd_) {
     HWND h = hwnd_;
@@ -199,6 +215,11 @@ void SingerWindow::Update(const flutter::EncodableMap& data) {
   page_number_ = GetInt(data, "page_number");
   total_pages_ = GetInt(data, "total_pages");
   blackout_    = GetBool(data, "blackout");
+  // 지금·다음 페이지가 안 쓰는 이미지는 놓아 준다(파일 잠금·메모리).
+  for (auto it = image_cache_.begin(); it != image_cache_.end();) {
+    if (it->first == current_.imagePath || it->first == next_.imagePath) ++it;
+    else it = image_cache_.erase(it);
+  }
   if (hwnd_) InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
@@ -255,7 +276,17 @@ void SingerWindow::Paint(HDC hdc, RECT cli) const {
   RECT header = {padX, padY, W - padX, padY + headerH};
   wchar_t pageText[32];
   swprintf_s(pageText, L"%d / %d", page_number_, total_pages_);
-  const int pageW = headerPx * 5;
+  // 페이지 수가 세 자리여도 잘리지 않게 실제 글자 폭을 잰다.
+  int pageW = 0;
+  {
+    HFONT font = MakeFont(headerPx, true);
+    HGDIOBJ old = SelectObject(hdc, font);
+    RECT r = {0, 0, 0, 0};
+    DrawTextW(hdc, pageText, -1, &r, DT_SINGLELINE | DT_NOPREFIX | DT_CALCRECT);
+    SelectObject(hdc, old);
+    DeleteObject(font);
+    pageW = r.right - r.left + headerPx / 2;
+  }
   DrawLine(hdc, pageText, {header.right - pageW, header.top, header.right, header.bottom},
            headerPx, true, RGB(230, 233, 238), DT_RIGHT);
   int titleRight = header.right - pageW;
@@ -275,14 +306,24 @@ void SingerWindow::Paint(HDC hdc, RECT cli) const {
   // 상자 두 개: 남은 높이를 63 : 37 로 나눈다.
   const int gap    = padY * 7 / 10;
   const int top    = header.bottom + gap;
-  const int remain = H - padY - top - labelH - gap;
+  const int remain = H - padY - top - labelH - gap * 2;
   const int curH   = remain * 63 / 100;
   RECT curBox  = {padX, top, W - padX, top + curH};
-  RECT label   = {padX, curBox.bottom + gap / 2, W - padX, curBox.bottom + gap / 2 + labelH};
+  RECT label   = {padX, curBox.bottom + gap, W - padX, curBox.bottom + gap + labelH};
   RECT nextBox = {padX, label.bottom, W - padX, H - padY};
 
-  FillRounded(hdc, curBox, radius, kCurrentFill, kCurrentLine);
+  FillRounded(hdc, curBox, radius, kCurrentFill, kCurrentLine, 2);
   FillRounded(hdc, nextBox, radius, kNextFill, kNextLine);
+  // 현재와 다음 사이 구분선
+  {
+    HPEN pen = CreatePen(PS_SOLID, 1, kDivider);
+    HGDIOBJ old = SelectObject(hdc, pen);
+    const int ly = curBox.bottom + gap / 2;
+    MoveToEx(hdc, padX, ly, nullptr);
+    LineTo(hdc, W - padX, ly);
+    SelectObject(hdc, old);
+    DeleteObject(pen);
+  }
 
   // 다음 페이지가 다른 곡·말씀이면 그 제목을 같이 알려 준다.
   std::wstring labelText = kNext;
@@ -303,55 +344,73 @@ void SingerWindow::Paint(HDC hdc, RECT cli) const {
     } else if (!page.imagePath.empty()) {
       PaintPageImage(hdc, inner, page.imagePath);
     } else {
-      PaintText(hdc, inner, page, dim);
+      PaintText(hdc, inner, page, dim, H * 35 / 1000);
     }
   };
   paintBox(curBox, current_, kBlank, false);
   paintBox(nextBox, next_, kLastPage, true);
 }
 
-void SingerWindow::PaintText(HDC hdc, RECT box, const Page& page, bool dim) const {
+void SingerWindow::PaintText(HDC hdc, RECT box, const Page& page, bool dim,
+                             int minPx) const {
   const int bw = box.right - box.left;
   const int bh = box.bottom - box.top;
 
   // 상자에 꼭 맞는 가장 큰 글자 크기를 이분 탐색으로 찾는다. 보조 가사는 본문의 78%.
   struct Layout { int mainPx, subPx, gap, mainH, subH; };
+  bool wrap = false;
   auto layout = [&](int px) {
     Layout l = {px, px * 78 / 100, page.sub.empty() ? 0 : px * 45 / 100, 0, 0};
-    const SIZE m = Measure(hdc, page.main, l.mainPx, bw);
-    const SIZE s = Measure(hdc, page.sub, l.subPx, bw);
+    const SIZE m = Measure(hdc, page.main, l.mainPx, bw, wrap);
+    const SIZE s = Measure(hdc, page.sub, l.subPx, bw, wrap);
     l.mainH = m.cy;
     l.subH = s.cy;
     const bool fits = m.cx <= bw && s.cx <= bw && m.cy + l.gap + s.cy <= bh;
     return std::make_pair(fits, l);
   };
-  int lo = 8, hi = (std::max)(12, bh * 45 / 100);
-  while (hi - lo > 1) {
-    const int mid = (lo + hi) / 2;
-    if (layout(mid).first) lo = mid; else hi = mid;
+  auto fit = [&] {
+    int lo = 8, hi = (std::max)(12, bh * 45 / 100);
+    while (hi - lo > 1) {
+      const int mid = (lo + hi) / 2;
+      if (layout(mid).first) lo = mid; else hi = mid;
+    }
+    return lo;
+  };
+  // 원본 줄 그대로(관객 화면과 줄 수가 같게). 긴 줄 때문에 너무 작아지면 그때만 줄바꿈.
+  int px = fit();
+  if (px < minPx) {
+    wrap = true;
+    px = fit();
   }
-  const Layout l = layout(lo).second;
+  const Layout l = layout(px).second;
 
-  int y = box.top + (bh - (l.mainH + l.gap + l.subH)) / 2;
+  // 최소 글자로도 넘치면 가운데 맞춤 대신 위에서부터 그리고 상자 밖은 잘라 낸다
+  // (머리줄·'다음' 표시를 덮지 않게).
+  int y = box.top + (std::max)(0, (bh - (l.mainH + l.gap + l.subH)) / 2);
+  const int saved = SaveDC(hdc);
+  IntersectClipRect(hdc, box.left, box.top, box.right, box.bottom);
   auto draw = [&](const std::wstring& text, int px, int height, COLORREF color) {
     if (text.empty()) return;
     HFONT font = MakeFont(px, true);
     HGDIOBJ old = SelectObject(hdc, font);
     SetTextColor(hdc, color);
     RECT r = {box.left, y, box.right, y + height};
-    DrawTextW(hdc, text.c_str(), -1, &r, DT_CENTER | DT_WORDBREAK | DT_NOPREFIX);
+    DrawTextW(hdc, text.c_str(), -1, &r, DT_CENTER | DT_NOPREFIX | (wrap ? DT_WORDBREAK : 0));
     SelectObject(hdc, old);
     DeleteObject(font);
   };
   draw(page.main, l.mainPx, l.mainH, dim ? RGB(195, 202, 212) : RGB(255, 255, 255));
   y += l.mainH + l.gap;
   draw(page.sub, l.subPx, l.subH, dim ? RGB(184, 162, 90) : RGB(255, 213, 79));
+  RestoreDC(hdc, saved);
 }
 
 // 외부 PPT 페이지 이미지: 비율을 지켜 상자 가운데에 그린다(contain).
-// 페이지가 바뀔 때만 다시 그리므로 디코딩 캐시는 두지 않는다.
+// 창 크기 조절·블랙아웃 표시에도 다시 그리므로 디코딩한 이미지는 경로별로 들고 있는다.
 void SingerWindow::PaintPageImage(HDC hdc, RECT box, const std::wstring& path) const {
-  Gdiplus::Image image(path.c_str());
+  auto& slot = image_cache_[path];
+  if (!slot) slot = std::make_unique<Gdiplus::Image>(path.c_str());
+  Gdiplus::Image& image = *slot;
   if (image.GetLastStatus() != Gdiplus::Ok) return;
   const UINT iw = image.GetWidth();
   const UINT ih = image.GetHeight();

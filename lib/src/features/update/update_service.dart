@@ -6,7 +6,6 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 
 import '../praise/data/app_logger.dart';
 
@@ -121,7 +120,10 @@ class UpdateService {
       return;
     }
 
-    final tmp = await getTemporaryDirectory();
+    // getTemporaryDirectory() 는 macOS 에서 ~/Library/Caches/<번들 id> 를 주는데 폴더를 만들어
+    // 주지 않는다. 그 폴더가 없는 Mac 에서는 다운로드가 100% 까지 가고도 마지막에 파일을 못 열어
+    // "No such file or directory" 로 실패했다. 시스템 임시 폴더는 늘 있다.
+    final tmp = Directory.systemTemp;
     final zipPath = p.join(tmp.path, 'ws_update_${info.version}.zip');
     await _downloadFile(info.downloadUrl!, zipPath, onProgress);
 
@@ -213,12 +215,18 @@ rm -f "$scriptPath"
     dir.createSync(recursive: true);
     // Windows 10(1803)+ 에 기본으로 들어 있는 bsdtar 가 zip 도 푼다.
     final systemRoot = Platform.environment['SystemRoot'] ?? r'C:\Windows';
-    final tar = await Process.run(p.join(systemRoot, 'System32', 'tar.exe'), [
-      '-xf',
-      zipPath,
-      '-C',
-      extractDir,
-    ]);
+    final ProcessResult tar;
+    try {
+      tar = await Process.run(p.join(systemRoot, 'System32', 'tar.exe'), [
+        '-xf',
+        zipPath,
+        '-C',
+        extractDir,
+      ]);
+    } on ProcessException catch (e) {
+      await log.info('[update] tar.exe 실행 실패: $e');
+      throw Exception('압축 풀기 도구(tar.exe)를 찾지 못했습니다. Windows 10 1803 이상이 필요합니다.');
+    }
     if (tar.exitCode != 0) {
       throw Exception('압축 풀기 실패: ${tar.stderr}');
     }
@@ -227,7 +235,17 @@ rm -f "$scriptPath"
       throw Exception('업데이트 파일에 worship_slides 폴더가 없습니다.');
     }
 
-    final count = applyUpdateFiles(src, installDir);
+    final int count;
+    try {
+      count = applyUpdateFiles(src, installDir);
+    } on FileSystemException catch (e) {
+      await log.info('[update] copy failed: $e');
+      // 압축을 푼 직후 백신이 ppt_tool.exe 같은 파일을 격리해 원본이 사라지는 경우가 많다.
+      throw Exception(
+        '${p.basename(e.path ?? '')} 파일을 넣지 못했습니다(${e.osError?.message ?? e.message}). '
+        '백신이 업데이트 파일을 격리했을 수 있습니다. 릴리즈 페이지에서 zip 을 받아 직접 덮어써 주세요.',
+      );
+    }
     await log.info('[update] copied $count files -> $installDir');
     try {
       dir.deleteSync(recursive: true);
@@ -255,12 +273,26 @@ rm -f "$scriptPath"
       try {
         entity.copySync(dest);
       } on FileSystemException {
+        // 잠긴 기존 파일이 없는데 실패했다면 원본 쪽 문제(백신 격리 등)다.
+        // 예전엔 여기서 없는 파일 이름을 바꾸려다 "파일을 찾을 수 없습니다"로 원인을 덮었다.
+        if (!File(dest).existsSync()) rethrow;
         final old = '$dest.old';
         try {
           File(old).deleteSync();
         } catch (_) {}
         File(dest).renameSync(old);
-        entity.copySync(dest);
+        try {
+          entity.copySync(dest);
+        } on FileSystemException {
+          // 새 파일도 못 넣으면 비켜 둔 걸 되돌린다(반쯤 쓰인 dest 는 먼저 치운다).
+          // 되돌리기마저 실패해도 원래 오류를 낸다 — .old 는 cleanupWindowsLeftovers 가
+          // 짝이 되는 원본이 있을 때만 지우므로 남아 있다.
+          try {
+            if (File(dest).existsSync()) File(dest).deleteSync();
+            File(old).renameSync(dest);
+          } catch (_) {}
+          rethrow;
+        }
       }
       count++;
     }
@@ -273,7 +305,11 @@ rm -f "$scriptPath"
     final installDir = Directory(p.dirname(Platform.resolvedExecutable));
     try {
       for (final f in installDir.listSync(recursive: true)) {
-        if (f is File && f.path.endsWith('.old')) {
+        // 짝이 되는 새 파일이 있을 때만 지운다. 없으면 .old 가 유일한 사본이다
+        // (업데이트가 중간에 실패해 되돌리지 못한 경우).
+        if (f is File &&
+            f.path.endsWith('.old') &&
+            File(f.path.substring(0, f.path.length - 4)).existsSync()) {
           try {
             f.deleteSync();
           } catch (_) {}

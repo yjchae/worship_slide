@@ -5,6 +5,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 // gdiplus.h는 min/max를 한정자 없이 쓰는데 이 타깃은 NOMINMAX로 빌드되므로
 // std 버전을 먼저 끌어와야 컴파일된다.
@@ -18,6 +19,28 @@ using std::min;
 #include <flutter/method_result_functions.h>
 
 PresentationChannel* PresentationChannel::s_ = nullptr;
+
+namespace {
+// 모니터 목록. 순서 = EnumDisplayMonitors 순서이고 Dart 가 고르는 번호가 이 index 다.
+std::vector<HMONITOR> Monitors() {
+  std::vector<HMONITOR> out;
+  EnumDisplayMonitors(nullptr, nullptr,
+    [](HMONITOR mon, HDC, LPRECT, LPARAM lp) -> BOOL {
+      reinterpret_cast<std::vector<HMONITOR>*>(lp)->push_back(mon);
+      return TRUE;
+    }, reinterpret_cast<LPARAM>(&out));
+  return out;
+}
+
+std::string Utf8(const std::wstring& w) {
+  if (w.empty()) return {};
+  int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, nullptr, 0, nullptr, nullptr);
+  if (n <= 0) return {};
+  std::string out(static_cast<size_t>(n - 1), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, out.data(), n, nullptr, nullptr);
+  return out;
+}
+}  // namespace
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -105,8 +128,40 @@ void PresentationChannel::Setup(flutter::FlutterEngine* engine) {
           return def;
         };
 
-        if (call.method_name() == "openWindow") {
-          OpenWindow();
+        // 사용자가 고른 모니터 번호(-1·범위 밖 = 자동).
+        HMONITOR chosen = nullptr;
+        if (data) {
+          auto it = data->find(EV(std::string("screen")));
+          const auto* i = it == data->end() ? nullptr : std::get_if<int32_t>(&it->second);
+          if (i && *i >= 0) {  // pointer 처럼 자주 오는 호출엔 screen 이 없어 열거하지 않는다
+            const auto mons = Monitors();
+            if (*i < static_cast<int32_t>(mons.size())) chosen = mons[*i];
+          }
+        }
+
+        if (call.method_name() == "getScreens") {
+          const HMONITOR mainMon = MonitorFromWindow(main_hwnd_, MONITOR_DEFAULTTOPRIMARY);
+          flutter::EncodableList list;
+          for (HMONITOR mon : Monitors()) {
+            MONITORINFOEXW info = {};
+            info.cbSize = sizeof(info);
+            GetMonitorInfoW(mon, &info);
+            // szDevice 는 \\.\DISPLAY1 같은 이름이라, 붙어 있는 모니터 이름을 따로 찾는다.
+            DISPLAY_DEVICEW dd = {};
+            dd.cb = sizeof(dd);
+            std::wstring name = EnumDisplayDevicesW(info.szDevice, 0, &dd, 0)
+                                    ? dd.DeviceString : info.szDevice;
+            flutter::EncodableMap m;
+            m[EV("name")]   = EV(Utf8(name));
+            m[EV("width")]  = EV(static_cast<int32_t>(info.rcMonitor.right - info.rcMonitor.left));
+            m[EV("height")] = EV(static_cast<int32_t>(info.rcMonitor.bottom - info.rcMonitor.top));
+            m[EV("main")]   = EV(mon == mainMon);
+            list.push_back(EV(m));
+          }
+          result->Success(EV(list));
+          return;
+        } else if (call.method_name() == "openWindow") {
+          OpenWindow(chosen);
           if (data) { Apply(*data); InvalidateRect(hwnd_, nullptr, TRUE); }
         } else if (call.method_name() == "updatePage") {
           if (data && hwnd_) {
@@ -144,10 +199,12 @@ void PresentationChannel::Setup(flutter::FlutterEngine* engine) {
         } else if (call.method_name() == "closeWindow") {
           CloseWindow();
         } else if (call.method_name() == "openSingerWindow") {
+          // 내용을 먼저 넣고 연다(첫 화면에 빈 '0 / 0' 이 번쩍이지 않게).
           // 관객 화면이 쓰는 모니터는 피해서 연다.
-          singer_->Open(hwnd_ ? MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONULL)
-                              : nullptr);
           if (data) singer_->Update(*data);
+          singer_->Open(hwnd_ ? MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONULL)
+                              : nullptr,
+                        chosen);
         } else if (call.method_name() == "updateSinger") {
           if (data) singer_->Update(*data);
         } else if (call.method_name() == "closeSingerWindow") {
@@ -171,8 +228,21 @@ void PresentationChannel::Setup(flutter::FlutterEngine* engine) {
 
 // ── window management ─────────────────────────────────────────────────────────
 
-void PresentationChannel::OpenWindow() {
-  if (hwnd_) { SetForegroundWindow(hwnd_); return; }
+void PresentationChannel::OpenWindow(HMONITOR chosen) {
+  if (hwnd_) {
+    if (chosen) {
+      // 발표 중에 모니터를 바꾸면 그 모니터 전체화면으로 옮긴다.
+      MONITORINFO info = { sizeof(info) };
+      GetMonitorInfo(chosen, &info);
+      SetWindowLongPtrW(hwnd_, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+      SetWindowPos(hwnd_, HWND_TOPMOST, info.rcMonitor.left, info.rcMonitor.top,
+                   info.rcMonitor.right - info.rcMonitor.left,
+                   info.rcMonitor.bottom - info.rcMonitor.top,
+                   SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+    }
+    SetForegroundWindow(hwnd_);
+    return;
+  }
 
   // 이전 발표에서 쓰던 포인터 위치가 남아 있으면 창을 열자마자 엉뚱한 곳에 그려진다.
   ptr_mode_ = 0;  // 0 = 숨김
@@ -187,6 +257,7 @@ void PresentationChannel::OpenWindow() {
       if (mon != m->primary) { m->second = mon; return FALSE; }
       return TRUE;
     }, reinterpret_cast<LPARAM>(&mi));
+  if (chosen) mi.second = chosen;  // 사용자가 고른 모니터가 우선(메인 창 모니터여도)
 
   RECT wr;
   DWORD exStyle;

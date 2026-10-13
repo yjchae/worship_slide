@@ -22,6 +22,7 @@ import '../data/background_image_library.dart';
 import '../data/font_library.dart';
 import '../data/praise_repository.dart';
 import '../data/python_bridge.dart';
+import '../data/screen_choice_store.dart';
 import '../data/worship_conti_repository.dart';
 import '../domain/worship_conti.dart';
 import '../domain/export_style.dart';
@@ -112,6 +113,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   final PythonBridge _pythonBridge = PythonBridge();
   final ExportStyleStore _styleStore = ExportStyleStore();
   final OfferingDesignStore _offeringStore = OfferingDesignStore();
+  final ScreenChoiceStore _screenStore = ScreenChoiceStore();
+  // 관객·싱어 창을 띄울 모니터. null = 자동.
+  ScreenChoice? _audienceScreen;
+  ScreenChoice? _singerScreen;
   final OfferingBackgroundComposer _offeringComposer =
       OfferingBackgroundComposer();
   final BackgroundImageLibrary _backgroundImages = BackgroundImageLibrary();
@@ -227,6 +232,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _loadSongs();
     _loadSavedStyle();
     _loadOfferingDesign();
+    _screenStore.load().then((v) {
+      if (!mounted) return;
+      setState(() {
+        _audienceScreen = v.$1;
+        _singerScreen = v.$2;
+      });
+    });
     _loadBibleCount();
     _loadSubLanguages();
     _searchController.addListener(_loadSongs);
@@ -624,8 +636,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     return _currentSlideIndex;
   }
 
-  SlidePageData _buildSlidePageData(int index) {
-    final slides = _allSlides;
+  SlidePageData _buildSlidePageData(int index, [List<_SlideInfo>? allSlides]) {
+    final slides = allSlides ?? _allSlides;
     final slide = index < slides.length ? slides[index] : null;
     return SlidePageData(
       mainText: slide?.mainText ?? '',
@@ -652,7 +664,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     }
     try {
       final pageData = _buildSlidePageData(_currentSlideIndex);
-      await _presentationChannel.invokeMethod('openWindow', pageData.toJson());
+      await _presentationChannel.invokeMethod('openWindow', {
+        ...pageData.toJson(),
+        'screen': await _screenIndex(_audienceScreen),
+      });
       if (!mounted) return;
       // 검색창에 커서가 있어도 발표 시작 시엔 단축키가 먹어야 한다.
       FocusManager.instance.primaryFocus?.unfocus();
@@ -700,8 +715,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   // ── 싱어 화면 ───────────────────────────────────────────────────────────
 
-  SingerViewData _buildSingerViewData() {
-    final slides = _allSlides;
+  SingerViewData _buildSingerViewData([List<_SlideInfo>? allSlides]) {
+    final slides = allSlides ?? _allSlides;
     final index = slides.isEmpty
         ? 0
         : _currentSlideIndex.clamp(0, slides.length - 1);
@@ -733,10 +748,12 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     }
     if (!_isPresentationOpen) return;
     try {
-      await _presentationChannel.invokeMethod(
-        'openSingerWindow',
-        _buildSingerViewData().toJson(),
-      );
+      final json = _buildSingerViewData().toJson();
+      await _presentationChannel.invokeMethod('openSingerWindow', {
+        ...json,
+        'screen': await _screenIndex(_singerScreen, singer: true),
+      });
+      _lastSingerJson = jsonEncode(json);
       if (mounted) setState(() => _isSingerOpen = true);
     } catch (e) {
       if (!mounted) return;
@@ -744,6 +761,120 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         context,
       ).showSnackBar(SnackBar(content: Text('싱어 화면 열기 실패: $e')));
     }
+  }
+
+  // ── 모니터 선택 ─────────────────────────────────────────────────────────
+
+  Future<List<ScreenInfo>> _getScreens() async {
+    try {
+      final list = await _presentationChannel.invokeMethod<List<dynamic>>(
+        'getScreens',
+      );
+      return [
+        for (final (i, s) in (list ?? const []).indexed)
+          ScreenInfo.fromJson(i, s as Map),
+      ];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// 네이티브에 넘길 모니터 번호. -1 = 자동. 고른 모니터가 지금 없거나, 메인 창이 그쪽으로
+  /// 옮겨 갔거나, 싱어가 관객과 같은 모니터면 자동으로 연다(조작 화면·관객 화면을 덮지 않게).
+  Future<int> _screenIndex(ScreenChoice? choice, {bool singer = false}) async {
+    if (choice == null) return -1;
+    final screens = await _getScreens();
+    final index = ScreenChoice.resolve(choice, screens);
+    if (index < 0 || screens[index].isMain) return -1;
+    if (singer && index == ScreenChoice.resolve(_audienceScreen, screens)) {
+      return -1;
+    }
+    return index;
+  }
+
+  Future<void> _showScreenMenu(BuildContext anchor) async {
+    final screens = await _getScreens();
+    if (!mounted || !anchor.mounted) return;
+    final box = anchor.findRenderObject() as RenderBox;
+    final overlay =
+        Overlay.of(anchor).context.findRenderObject() as RenderBox;
+    final position = RelativeRect.fromRect(
+      Rect.fromPoints(
+        box.localToGlobal(box.size.bottomLeft(Offset.zero), ancestor: overlay),
+        box.localToGlobal(box.size.bottomRight(Offset.zero), ancestor: overlay),
+      ),
+      Offset.zero & overlay.size,
+    );
+    final audienceIndex = ScreenChoice.resolve(_audienceScreen, screens);
+    final singerIndex = ScreenChoice.resolve(_singerScreen, screens);
+
+    // 메인 창 모니터와 다른 쪽 창이 고른 모니터는 고를 수 없다(전체화면이 서로를 덮는다).
+    List<PopupMenuEntry<(bool, ScreenInfo?)>> group(
+      String title,
+      bool singer,
+      int selected,
+      int taken,
+    ) => [
+      PopupMenuItem(
+        enabled: false,
+        height: 32,
+        child: Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
+      ),
+      CheckedPopupMenuItem(
+        value: (singer, null),
+        checked: selected < 0,
+        child: const Text('자동'),
+      ),
+      for (final s in screens)
+        CheckedPopupMenuItem(
+          value: (singer, s),
+          checked: selected == s.index,
+          enabled: !s.isMain && s.index != taken,
+          child: Text(
+            s.index == taken
+                ? '${s.label} · ${singer ? '관객' : '싱어'} 화면'
+                : s.label,
+          ),
+        ),
+    ];
+
+    final picked = await showMenu<(bool, ScreenInfo?)>(
+      context: context,
+      position: position,
+      items: [
+        ...group('관객 화면', false, audienceIndex, singerIndex),
+        const PopupMenuDivider(),
+        ...group('싱어 화면', true, singerIndex, audienceIndex),
+      ],
+    );
+    if (picked == null || !mounted) return;
+    final (singer, screen) = picked;
+    final choice = screen == null ? null : ScreenChoice(screen.index, screen.name);
+    setState(() {
+      if (singer) {
+        _singerScreen = choice;
+      } else {
+        _audienceScreen = choice;
+      }
+    });
+    await _screenStore.save(_audienceScreen, _singerScreen);
+    // 이미 떠 있으면 고른 모니터로 바로 옮긴다('자동'은 다음에 열 때부터).
+    if (screen == null) return;
+    try {
+      if (singer && _isSingerOpen) {
+        final json = _buildSingerViewData().toJson();
+        await _presentationChannel.invokeMethod('openSingerWindow', {
+          ...json,
+          'screen': screen.index,
+        });
+        _lastSingerJson = jsonEncode(json);
+      } else if (!singer && _isPresentationOpen) {
+        await _presentationChannel.invokeMethod('openWindow', {
+          ..._buildSlidePageData(_currentSlideIndex).toJson(),
+          'screen': screen.index,
+        });
+      }
+    } catch (_) {}
   }
 
   Future<void> _closeSingerWindow() async {
@@ -754,27 +885,37 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     if (mounted) setState(() => _isSingerOpen = false);
   }
 
-  Future<void> _sendSingerView() async {
+  // 마지막으로 싱어 창에 보낸 JSON. 싱어 화면은 스타일을 안 쓰므로 디자인 슬라이더를
+  // 끌 때처럼 내용이 그대로면 다시 보내지 않는다(macOS 는 보낼 때마다 HTML 을 통째로 다시 읽는다).
+  String? _lastSingerJson;
+
+  Future<void> _sendSingerView([List<_SlideInfo>? slides]) async {
     if (!_isSingerOpen) return;
+    final json = _buildSingerViewData(slides).toJson();
+    final encoded = jsonEncode(json);
+    if (encoded == _lastSingerJson) return;
     try {
-      await _presentationChannel.invokeMethod(
-        'updateSinger',
-        _buildSingerViewData().toJson(),
-      );
+      await _presentationChannel.invokeMethod('updateSinger', json);
+      // 보낸 게 확인된 뒤에만 기록한다. 실패하면 다음 갱신 때 다시 보낸다.
+      _lastSingerJson = encoded;
     } catch (_) {}
   }
 
   Future<void> _sendCurrentSlide() async {
     // 페이지가 바뀌는 모든 곳(넘기기·점프·편집·디자인 변경)이 이 함수를 거치므로
-    // 싱어 화면도 여기서 함께 갱신한다.
-    await _sendSingerView();
-    if (!_isPresentationOpen) return;
-    try {
-      final pageData = _buildSlidePageData(_currentSlideIndex);
-      await _presentationChannel.invokeMethod('updatePage', pageData.toJson());
-    } catch (_) {
-      if (mounted) setState(() => _isPresentationOpen = false);
+    // 싱어 화면도 여기서 함께 갱신한다. 관객 화면을 먼저 보내 싱어 갱신을 기다리지 않게 한다.
+    final slides = _allSlides;
+    if (_isPresentationOpen) {
+      try {
+        final pageData = _buildSlidePageData(_currentSlideIndex, slides);
+        await _presentationChannel.invokeMethod('updatePage', pageData.toJson());
+      } catch (_) {
+        await _closeSingerWindow();
+        if (mounted) setState(() => _isPresentationOpen = false);
+        return;
+      }
     }
+    await _sendSingerView(slides);
   }
 
   // 발표자 보기에서 현재 슬라이드 위 좌표(0~1)를 관객 화면에 그대로 넘긴다.
@@ -2843,6 +2984,14 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         label: Text(_isExporting ? '생성 중' : 'PPTX 저장'),
       ),
       const SizedBox(width: 8),
+      Builder(
+        builder: (anchor) => IconButton(
+          tooltip: '화면 모니터 선택 (관객·싱어)',
+          icon: const Icon(Icons.desktop_windows_outlined, size: 19),
+          onPressed: () => _showScreenMenu(anchor),
+        ),
+      ),
+      const SizedBox(width: 4),
       if (_isPresentationOpen) ...[
         const Icon(Icons.circle, size: 8, color: AppColors.live),
         const SizedBox(width: 6),

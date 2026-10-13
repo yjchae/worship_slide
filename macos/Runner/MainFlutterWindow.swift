@@ -41,6 +41,23 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
   }
 
   func show(on screen: NSScreen? = nil) {
+    place(on: screen)
+    window?.makeKeyAndOrderFront(nil)
+
+    keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+      // ESC 는 발표 창이 키 윈도우일 때만 여기서 처리한다.
+      // 메인 창(검색창 입력 등)의 ESC 는 Flutter 로 그대로 넘긴다.
+      if event.keyCode == 53, event.window === self?.window {
+        self?.window?.close()
+        return nil
+      }
+      return event
+    }
+  }
+
+  /// 발표 중에 모니터를 바꿀 때도 쓴다. 키 포커스는 건드리지 않는다 — 발표 중에 옮기면서
+  /// 포커스를 가져가면 메인 창의 넘기기 단축키가 멈추고, ESC 한 번에 발표가 꺼진다.
+  func place(on screen: NSScreen?) {
     guard let window = self.window else { return }
     if let screen = screen {
       // 보조 모니터: 전체화면
@@ -58,17 +75,7 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
       let y = mainScreen.visibleFrame.minY + (sh - 720) / 2
       window.setFrame(NSRect(x: x, y: y, width: 1280, height: 720), display: true)
     }
-    window.makeKeyAndOrderFront(nil)
-
-    keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-      // ESC 는 발표 창이 키 윈도우일 때만 여기서 처리한다.
-      // 메인 창(검색창 입력 등)의 ESC 는 Flutter 로 그대로 넘긴다.
-      if event.keyCode == 53, event.window === self?.window {
-        self?.window?.close()
-        return nil
-      }
-      return event
-    }
+    window.orderFrontRegardless()
   }
 
   private var _isBlackout = false
@@ -558,6 +565,13 @@ class SingerWindowController: NSWindowController, NSWindowDelegate {
     window.setFrame(screen.frame, display: true)
   }
 
+  /// 발표 중에 사용자가 고른 모니터로 옮긴다(그 모니터 전체화면).
+  func moveFullScreen(to screen: NSScreen) {
+    if isFullScreen && window?.screen == screen { return }  // 이미 거기면 깜빡이지 않게
+    exitFullScreen()
+    enterFullScreen(on: screen)
+  }
+
   private func exitFullScreen() {
     guard let window = window, isFullScreen else { return }
     isFullScreen = false
@@ -616,15 +630,17 @@ class SingerWindowController: NSWindowController, NSWindowDelegate {
       header .title{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;}
       header .page{font-variant-numeric:tabular-nums;font-weight:700;color:#e6e9ee;}
       .badge{background:#e5484d;color:#fff;border-radius:999px;padding:.2em .8em;font-size:2.2vh;font-weight:700;}
-      .label{font-size:2.3vh;color:#7d8794;font-weight:600;flex:none;
-        white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+      .label{font-size:2.3vh;color:#8b95a2;font-weight:600;flex:none;
+        white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+        border-top:1px solid #3a424d;padding-top:1.4vh;margin-top:.6vh;}
       .box{position:relative;border-radius:1.4vh;overflow:hidden;display:flex;
         align-items:center;justify-content:center;padding:2vh 3vw;min-height:0;}
-      .current{flex:63;background:#171b21;border:1px solid #2a313b;}
-      .next{flex:37;background:#111419;border:1px solid #1f252d;}
+      .current{flex:63;background:#1b2028;border:2px solid #5a6472;}
+      .next{flex:37;background:#0f1215;border:1px solid #232930;}
       .fit{width:100%;max-height:100%;text-align:center;line-height:1.3;font-weight:700;}
-      .main{white-space:pre-wrap;word-break:keep-all;}
-      .sub{white-space:pre-wrap;color:#ffd54f;font-size:.78em;margin-top:.45em;}
+      .main,.sub{white-space:pre;}
+      .wrap .main,.wrap .sub{white-space:pre-wrap;word-break:keep-all;}
+      .sub{color:#ffd54f;font-size:.78em;margin-top:.45em;}
       .next .main{color:#c3cad4;}
       .next .sub{color:#b8a25a;}
       .placeholder{color:#59626e;font-size:3.4vh;font-weight:600;}
@@ -642,12 +658,19 @@ class SingerWindowController: NSWindowController, NSWindowDelegate {
         var cs=getComputedStyle(box);
         var w=box.clientWidth-parseFloat(cs.paddingLeft)-parseFloat(cs.paddingRight);
         var h=box.clientHeight-parseFloat(cs.paddingTop)-parseFloat(cs.paddingBottom);
-        var lo=8, hi=Math.max(12, h*0.45);
-        for(var i=0;i<18;i++){
-          var mid=(lo+hi)/2; el.style.fontSize=mid+'px';
-          if(el.scrollHeight<=h && el.scrollWidth<=w) lo=mid; else hi=mid;
+        function fit(){
+          var lo=8, hi=Math.max(12, h*0.45);
+          for(var i=0;i<18;i++){
+            var mid=(lo+hi)/2; el.style.fontSize=mid+'px';
+            if(el.scrollHeight<=h+1 && el.scrollWidth<=w+1) lo=mid; else hi=mid;
+          }
+          el.style.fontSize=lo+'px';
+          return lo;
         }
-        el.style.fontSize=lo+'px';
+        // 원본 줄 그대로(관객 화면과 줄 수가 같게) 맞추되, 긴 줄 때문에 글씨가 너무 작아지면
+        // (창 높이의 3.5% 미만) 그때만 자동 줄바꿈을 허용한다 — 긴 성경 구절 같은 경우.
+        el.classList.remove('wrap');
+        if(fit() < window.innerHeight*0.035){ el.classList.add('wrap'); fit(); }
       });
     }
     fitAll(); window.addEventListener('resize', fitAll);
@@ -745,10 +768,29 @@ class MainFlutterWindow: NSWindow {
       guard let self = self else { return }
       // Dart 가 Map 으로 보냄 (FlutterStandardMessageCodec)
       let data = call.arguments as? [String: Any]
+      // 사용자가 고른 모니터(NSScreen.screens 순서). -1·범위 밖이면 자동.
+      let chosen: NSScreen? = {
+        guard let i = data?["screen"] as? Int, i >= 0, i < NSScreen.screens.count else { return nil }
+        return NSScreen.screens[i]
+      }()
 
       switch call.method {
+      case "getScreens":
+        result(NSScreen.screens.map { screen -> [String: Any] in
+          [
+            "name": screen.localizedName,
+            "width": Int(screen.frame.width),
+            "height": Int(screen.frame.height),
+            "main": screen == self.screen,
+          ]
+        })
+
       case "openWindow":
-        if self.presentationController == nil {
+        if let ctrl = self.presentationController {
+          // 이미 열려 있으면 고른 모니터로 옮기기만 한다.
+          if let screen = chosen { ctrl.place(on: screen) }
+          else { ctrl.window?.makeKeyAndOrderFront(nil) }
+        } else {
           let ctrl = PresentationWindowController()
           ctrl.onClose = { [weak self] in
             self?.presentationController = nil
@@ -756,9 +798,7 @@ class MainFlutterWindow: NSWindow {
           }
           self.presentationController = ctrl
           let screens = NSScreen.screens
-          ctrl.show(on: screens.count > 1 ? screens[1] : nil)
-        } else {
-          self.presentationController?.window?.makeKeyAndOrderFront(nil)
+          ctrl.show(on: chosen ?? (screens.count > 1 ? screens[1] : nil))
         }
         if let d = data { self.presentationController?.updatePage(data: d) }
         result(nil)
@@ -797,7 +837,10 @@ class MainFlutterWindow: NSWindow {
         result(nil)
 
       case "openSingerWindow":
-        if self.singerController == nil {
+        if let ctrl = self.singerController {
+          if let screen = chosen { ctrl.moveFullScreen(to: screen) }
+          else { ctrl.window?.orderFrontRegardless() }
+        } else {
           let ctrl = SingerWindowController()
           ctrl.onClose = { [weak self] in
             self?.singerController = nil
@@ -807,12 +850,11 @@ class MainFlutterWindow: NSWindow {
             self?.mainPresentationChannel?.invokeMethod("singerKey", arguments: direction)
           }
           self.singerController = ctrl
-          // 관객 화면이 screens[1] 을 쓰므로, 모니터가 셋 이상이면 세 번째에 전체화면으로.
-          // 아니면 메인 창 옆에 일반 창으로 띄우고 사용자가 원하는 모니터로 옮긴다.
-          let screens = NSScreen.screens
-          ctrl.show(fullScreenOn: screens.count > 2 ? screens[2] : nil, near: self.screen)
-        } else {
-          self.singerController?.window?.orderFrontRegardless()
+          // 고른 모니터가 없으면: 관객 화면도 메인 창 모니터도 아닌 모니터에 전체화면으로.
+          // 그런 모니터도 없으면 메인 창 옆에 일반 창으로 띄우고 사용자가 원하는 모니터로 옮긴다.
+          let audience = self.presentationController?.window?.screen
+          let free = NSScreen.screens.first { $0 != self.screen && $0 != audience }
+          ctrl.show(fullScreenOn: chosen ?? free, near: self.screen)
         }
         if let d = data { self.singerController?.update(data: d) }
         result(nil)
