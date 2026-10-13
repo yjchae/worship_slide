@@ -1569,19 +1569,22 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         : slides[_currentSlideIndex.clamp(0, slides.length - 1)];
     final at = _stagingItems.indexWhere((e) => e.uid == current?.stagingUid);
     setState(() {
-      // 곡 중간이면 나눈 앞부분과 붙여 넣은 마지막 항목 뒤 여백을 빼 이어지게 한다.
+      // 현재 페이지 바로 뒤에 붙도록 현재 항목 뒤 여백을 뺀다. 곡 중간이면 나눈 뒷부분과도
+      // 이어지게 붙여 넣은 마지막 항목 뒤 여백도 뺀다(원래 여백이 없던 자리여도 마찬가지).
       // 붙여 넣은 항목끼리는 서로 다른 곡이라 여백을 그대로 둔다.
-      final tailAt = at >= 0 && !current!.isAutoSpacer
+      final onPage = at >= 0 && !current!.isAutoSpacer;
+      final joinNext = onPage && _noSpacerUids.contains(current.stagingUid);
+      final tailAt = onPage
           ? _splitStagingItem(at, current.pageIndexInItem + 1)
           : null;
-      if (tailAt != null) _noSpacerUids.add(_stagingItems[at].uid);
+      if (onPage) _noSpacerUids.add(_stagingItems[at].uid);
       var insertAt = tailAt ?? at + 1;
       for (final (n, c) in _slideClipboard.indexed) {
         final uid = _nextUid++;
         _stagingItems.insert(insertAt++, (uid: uid, item: c.item));
         if (c.background != null) _itemBackgrounds[uid] = c.background!;
         final isLast = n == _slideClipboard.length - 1;
-        if (tailAt != null && isLast) _noSpacerUids.add(uid);
+        if ((tailAt != null || joinNext) && isLast) _noSpacerUids.add(uid);
       }
     });
   }
