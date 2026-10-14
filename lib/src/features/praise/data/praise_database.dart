@@ -29,7 +29,7 @@ class PraiseDatabase {
     final dbPath = p.join(_dbDirectory, 'worship_slides.db');
     _database = await openDatabase(
       dbPath,
-      version: 14,
+      version: 15,
       onCreate: (db, version) => createPraiseSchema(db),
       onUpgrade: (db, oldVersion, newVersion) =>
           upgradePraiseSchema(db, oldVersion),
@@ -95,7 +95,8 @@ Future<void> createPraiseSchema(DatabaseExecutor db) async {
     background      TEXT,
     bible_sub_text  TEXT,
     song_title      TEXT,
-    no_spacer       INTEGER
+    no_spacer       INTEGER,
+    image_source_path TEXT
   )
 ''');
   await db.execute(_createSongTranslations);
@@ -301,6 +302,15 @@ Future<void> upgradePraiseSchema(DatabaseExecutor db, int oldVersion) async {
       'worship_conti_items',
       'no_spacer',
       "ALTER TABLE worship_conti_items ADD COLUMN no_spacer INTEGER",
+    );
+  }
+  if (oldVersion < 15) {
+    // 외부 PPT 항목의 원본 파일 경로. 'PowerPoint 에서 수정' 후 다시 굽는 데 쓴다.
+    await _addColumnIfMissing(
+      db,
+      'worship_conti_items',
+      'image_source_path',
+      "ALTER TABLE worship_conti_items ADD COLUMN image_source_path TEXT",
     );
   }
 }

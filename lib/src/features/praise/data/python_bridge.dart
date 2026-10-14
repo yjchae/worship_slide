@@ -119,6 +119,7 @@ class PythonBridge {
     return ImageStagingItem(
       sourceName: json['source_name'] as String,
       imagePaths: (json['image_paths'] as List<dynamic>).cast<String>(),
+      sourcePath: filePath,
     );
   }
 

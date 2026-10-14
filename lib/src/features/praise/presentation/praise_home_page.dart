@@ -25,6 +25,7 @@ import '../data/praise_repository.dart';
 import '../data/python_bridge.dart';
 import '../data/screen_choice_store.dart';
 import '../data/singer_web_server.dart';
+import '../data/source_file_watcher.dart';
 import '../data/worship_conti_repository.dart';
 import '../domain/worship_conti.dart';
 import '../domain/export_style.dart';
@@ -188,6 +189,15 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   bool _isSingerOpen = false;
   // 같은 망 휴대폰용 싱어 화면(웹). 발표를 끝내면 같이 끈다.
   final SingerWebServer _singerWeb = SingerWebServer();
+
+  // '원본 열어 수정' 으로 연 PPT 가 저장되면 다시 굽는다.
+  late final SourceFileWatcher _sourceWatcher = SourceFileWatcher(
+    onChanged: (path) => unawaited(_reloadImageSource(path, automatic: true)),
+  );
+  // 같은 파일을 겹쳐 굽지 않게 지금 굽고 있는 원본 경로.
+  final Set<String> _reloadingSources = {};
+  // 굽는 동안 또 저장된 원본. 끝나면 한 번 더 굽는다.
+  final Set<String> _reloadAgainSources = {};
   final Set<String> _deletedSlideKeys = {};
   // 발표 보기에서 복사한 페이지. 복사하는 순간의 내용을 콘티 항목으로 떠 둔다.
   List<({StagingItem item, SlideBackground? background})> _slideClipboard =
@@ -278,6 +288,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   @override
   void dispose() {
     _singerWeb.stop();
+    _sourceWatcher.dispose();
     HardwareKeyboard.instance.removeHandler(_handleStartKey);
     _mainTabController
       ..removeListener(_onMainTabChanged)
@@ -342,9 +353,11 @@ class _PraiseHomePageState extends State<PraiseHomePage>
               ? entry
               : (
                   uid: uid,
+                  // 지운 페이지만 빠졌을 뿐 원본 파일 그대로라 다시 굽기는 남긴다.
                   item: ImageStagingItem(
                     sourceName: item.sourceName,
                     imagePaths: kept,
+                    sourcePath: item.sourcePath,
                   ),
                 ),
         );
@@ -1941,6 +1954,134 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     }
   }
 
+  /// PPT 항목의 원본 파일을 기본 프로그램(PowerPoint 등)으로 열고, 저장되면 다시 굽도록 지켜본다.
+  Future<void> _openImageSource(int uid) async {
+    final path = _imageSourcePath(uid);
+    if (path == null) return;
+    try {
+      if (Platform.isMacOS) {
+        await Process.run('open', [path]);
+      } else if (Platform.isWindows) {
+        // explorer 는 파일을 기본 연결 프로그램으로 연다(경로에 공백이 있어도 된다).
+        await Process.run('explorer', [path]);
+      } else {
+        await Process.run('xdg-open', [path]);
+      }
+    } catch (error, stack) {
+      await AppLogger.instance.error('원본 파일 열기 실패', error, stack);
+      _showSnack('원본 파일을 열지 못했습니다: $error');
+      return;
+    }
+    _sourceWatcher.watch(path);
+    _showSnack('${p.basename(path)} 을(를) 열었습니다. 고친 뒤 저장하면 자동으로 다시 불러옵니다.');
+  }
+
+  /// 원본 파일 경로. 항목에 원본이 없거나 파일이 사라졌으면 알리고 null.
+  String? _imageSourcePath(int uid) {
+    final item = _stagingItems.where((e) => e.uid == uid).firstOrNull?.item;
+    if (item is! ImageStagingItem) return null;
+    final path = item.sourcePath;
+    if (path == null) {
+      _showSnack('원본 파일 정보가 없는 항목입니다. 파일을 다시 추가해 주세요.');
+      return null;
+    }
+    if (!File(path).existsSync()) {
+      _showSnack('원본 파일을 찾을 수 없습니다: $path');
+      return null;
+    }
+    return path;
+  }
+
+  /// [path] 를 원본으로 하는 모든 PPT 항목을 다시 굽는다. 항목 uid 는 그대로라
+  /// 배경·여백 설정은 남고, 페이지 수가 바뀔 수 있으므로 지운 페이지 표시는 풀고
+  /// 남는 페이지 범위 밖의 메모만 버린다.
+  Future<void> _reloadImageSource(
+    String path, {
+    required bool automatic,
+  }) async {
+    bool usesPath(({int uid, StagingItem item}) e) =>
+        e.item is ImageStagingItem &&
+        (e.item as ImageStagingItem).sourcePath == path;
+    if (!_stagingItems.any(usesPath)) {
+      // 콘티에서 뺀 항목의 원본은 더 지켜볼 필요가 없다.
+      _sourceWatcher.unwatch(path);
+      return;
+    }
+    if (!_reloadingSources.add(path)) {
+      _reloadAgainSources.add(path);
+      return;
+    }
+
+    final name = p.basename(path);
+    final progress = automatic
+        ? null
+        : ValueNotifier<String>('$name 다시 불러오는 중…');
+    if (progress != null) {
+      _showProgressDialog(progress);
+    } else {
+      _showSnack('$name 이(가) 바뀌어 다시 불러오는 중…');
+    }
+
+    ImageStagingItem? rendered;
+    String? errorMessage;
+    try {
+      rendered = await _pythonBridge.renderPptToImages(path);
+    } on LibreOfficeMissingException catch (error) {
+      errorMessage = error.toString();
+    } catch (error, stack) {
+      await AppLogger.instance.error('원본 다시 불러오기 실패', error, stack);
+      errorMessage = '다시 불러오기 실패: $error';
+    } finally {
+      _reloadingSources.remove(path);
+    }
+
+    if (progress != null) {
+      progress.dispose();
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+    }
+    if (!mounted) return;
+    if (rendered == null) {
+      _showSnack(errorMessage ?? '다시 불러오기 실패');
+    } else {
+      await _applyReloadedSource(path, rendered);
+    }
+    if (_reloadAgainSources.remove(path)) {
+      await _reloadImageSource(path, automatic: true);
+    }
+  }
+
+  /// 다시 구운 [rendered] 로 [path] 를 원본으로 하는 항목을 모두 바꾼다.
+  Future<void> _applyReloadedSource(
+    String path,
+    ImageStagingItem rendered,
+  ) async {
+    final pageCount = rendered.imagePaths.length;
+    setState(() {
+      for (var i = 0; i < _stagingItems.length; i++) {
+        final entry = _stagingItems[i];
+        final item = entry.item;
+        if (item is! ImageStagingItem || item.sourcePath != path) continue;
+        _stagingItems[i] = (uid: entry.uid, item: rendered);
+        _deletedSlideKeys.removeWhere((k) => k.startsWith('${entry.uid}:'));
+        _slideNotes.removeWhere((k, _) {
+          if (!k.startsWith('${entry.uid}:')) return false;
+          final page = int.tryParse(k.substring('${entry.uid}:'.length));
+          return page == null || page >= pageCount;
+        });
+      }
+      _clampCurrentSlideIndex();
+    });
+    await _sendCurrentSlide();
+    _showSnack('${p.basename(path)} 을(를) 다시 불러왔습니다 ($pageCount장).');
+  }
+
+  void _showSnack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
   /// 닫기는 호출한 쪽에서 `Navigator.of(context, rootNavigator: true).pop()`.
   void _showProgressDialog(ValueNotifier<String> progress) {
     unawaited(
@@ -2974,6 +3115,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               onEditBackground: _editItemBackground,
                               onOffering: _applyOffering,
                               onEditText: _editStagingItemText,
+                              onOpenSource: _openImageSource,
+                              onReloadSource: (uid) {
+                                final path = _imageSourcePath(uid);
+                                if (path != null) {
+                                  _reloadImageSource(path, automatic: false);
+                                }
+                              },
                               onReorder: _onStagingReorder,
                               onRemove: _removeFromStaging,
                               isCollapsed: _isStagingCollapsed,
@@ -3835,6 +3983,8 @@ class _StagingPanel extends StatelessWidget {
     required this.onEditBackground,
     required this.onOffering,
     required this.onEditText,
+    required this.onOpenSource,
+    required this.onReloadSource,
     required this.onReorder,
     required this.onRemove,
     required this.onSelect,
@@ -3853,6 +4003,9 @@ class _StagingPanel extends StatelessWidget {
   // 찬양(또는 빈 페이지)을 헌금송 배경으로 표시
   final ValueChanged<int> onOffering;
   final ValueChanged<int> onEditText;
+  // PPT 항목: 원본을 PowerPoint 등으로 열어 고치기 / 원본에서 다시 굽기
+  final ValueChanged<int> onOpenSource;
+  final ValueChanged<int> onReloadSource;
   final void Function(int oldIndex, int newIndex) onReorder;
   final void Function(int uid) onRemove;
   final ValueChanged<int> onSelect;
@@ -4096,6 +4249,40 @@ class _StagingPanel extends StatelessWidget {
                                       ],
                                     ),
                                   ),
+                                  if (item is ImageStagingItem &&
+                                      item.sourcePath != null)
+                                    PopupMenuButton<bool>(
+                                      icon: const Icon(
+                                        Icons.edit_note_rounded,
+                                        size: 20,
+                                      ),
+                                      tooltip: '원본 PPT 수정',
+                                      style: compactIcon,
+                                      onSelected: (reloadOnly) => reloadOnly
+                                          ? onReloadSource(entry.uid)
+                                          : onOpenSource(entry.uid),
+                                      itemBuilder: (_) => const [
+                                        PopupMenuItem(
+                                          value: false,
+                                          child: ListTile(
+                                            leading: Icon(Icons.open_in_new),
+                                            title: Text('원본 열어 수정'),
+                                            subtitle: Text(
+                                              '저장하면 자동으로 다시 불러옵니다',
+                                            ),
+                                            dense: true,
+                                          ),
+                                        ),
+                                        PopupMenuItem(
+                                          value: true,
+                                          child: ListTile(
+                                            leading: Icon(Icons.refresh),
+                                            title: Text('원본에서 다시 불러오기'),
+                                            dense: true,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
                                   // 버튼이 여럿이라 기본 48px 탭 타깃이면 제목이 밀린다.
                                   if (item is! ImageStagingItem)
                                     IconButton(
