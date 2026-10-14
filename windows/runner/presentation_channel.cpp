@@ -14,6 +14,7 @@ using std::min;
 
 #include <objidl.h>
 #include <gdiplus.h>
+#include <shellapi.h>
 
 #include <flutter/standard_method_codec.h>
 #include <flutter/method_result_functions.h>
@@ -139,7 +140,22 @@ void PresentationChannel::Setup(flutter::FlutterEngine* engine) {
           }
         }
 
-        if (call.method_name() == "getScreens") {
+        if (call.method_name() == "openFile") {
+          // 원본 PPT 를 기본 연결 프로그램으로 연다. explorer 에 경로를 넘기면 쉼표를
+          // 구분자로 읽고, cmd start 는 따옴표 처리가 Dart 인자 규칙과 어긋난다.
+          // ShellExecuteW 는 경로를 그대로 받는다. 반환값이 32 이하면 실패.
+          std::wstring path;
+          if (data) {
+            auto it = data->find(EV(std::string("path")));
+            if (it != data->end()) {
+              if (const auto* s = std::get_if<std::string>(&it->second)) path = W(*s);
+            }
+          }
+          const auto code = reinterpret_cast<INT_PTR>(ShellExecuteW(
+              main_hwnd_, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+          result->Success(EV(!path.empty() && code > 32));
+          return;
+        } else if (call.method_name() == "getScreens") {
           const HMONITOR mainMon = MonitorFromWindow(main_hwnd_, MONITOR_DEFAULTTOPRIMARY);
           flutter::EncodableList list;
           for (HMONITOR mon : Monitors()) {

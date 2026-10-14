@@ -1640,6 +1640,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       if (!joined && i > 0) _noSpacerUids.remove(_stagingItems[i - 1].uid);
       _stagingItems.removeAt(i);
     }
+    _pruneSourceWatches();
   }
 
   /// 곡·PPT 항목 [index] 를 [cut] 페이지 앞에서 둘로 나누고 뒷부분이 들어간 자리를 돌려준다.
@@ -1958,21 +1959,37 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   Future<void> _openImageSource(int uid) async {
     final path = _imageSourcePath(uid);
     if (path == null) return;
+    String? failure;
     try {
-      if (Platform.isMacOS) {
-        await Process.run('open', [path]);
-      } else if (Platform.isWindows) {
-        // explorer 는 파일을 기본 연결 프로그램으로 연다(경로에 공백이 있어도 된다).
-        await Process.run('explorer', [path]);
+      if (Platform.isWindows) {
+        // explorer 는 경로의 쉼표를 구분자로 읽어 엉뚱한 폴더를 연다 → 네이티브 ShellExecuteW.
+        final opened = await _presentationChannel.invokeMethod<bool>(
+          'openFile',
+          {'path': path},
+        );
+        if (opened != true) failure = '연결된 프로그램이 없습니다';
       } else {
-        await Process.run('xdg-open', [path]);
+        final result = await Process.run(
+          Platform.isMacOS ? 'open' : 'xdg-open',
+          [path],
+        );
+        if (result.exitCode != 0) {
+          final stderr = '${result.stderr}'.trim();
+          failure = stderr.isEmpty ? '종료 코드 ${result.exitCode}' : stderr;
+        }
+      }
+      if (failure != null) {
+        await AppLogger.instance.error('원본 파일 열기 실패: $path', failure);
       }
     } catch (error, stack) {
-      await AppLogger.instance.error('원본 파일 열기 실패', error, stack);
-      _showSnack('원본 파일을 열지 못했습니다: $error');
+      await AppLogger.instance.error('원본 파일 열기 실패: $path', error, stack);
+      failure = '$error';
+    }
+    if (failure != null) {
+      _showSnack('원본 파일을 열지 못했습니다. 이 파일을 열 프로그램이 있는지 확인해 주세요. ($failure)');
       return;
     }
-    _sourceWatcher.watch(path);
+    await _sourceWatcher.watch(path);
     _showSnack('${p.basename(path)} 을(를) 열었습니다. 고친 뒤 저장하면 자동으로 다시 불러옵니다.');
   }
 
@@ -1992,9 +2009,20 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     return path;
   }
 
-  /// [path] 를 원본으로 하는 모든 PPT 항목을 다시 굽는다. 항목 uid 는 그대로라
-  /// 배경·여백 설정은 남고, 페이지 수가 바뀔 수 있으므로 지운 페이지 표시는 풀고
-  /// 남는 페이지 범위 밖의 메모만 버린다.
+  /// 콘티에 더는 없는 원본은 지켜보지 않는다. 남겨 두면 나중에 같은 파일을 쓰는 다른
+  /// 콘티를 불러왔을 때, 그 파일을 저장하는 것만으로 항목이 멋대로 다시 구워진다.
+  void _pruneSourceWatches() {
+    final used = {
+      for (final e in _stagingItems)
+        if (e.item case ImageStagingItem(:final sourcePath?)) sourcePath,
+    };
+    for (final path in _sourceWatcher.watchedPaths.toList()) {
+      if (!used.contains(path)) _sourceWatcher.unwatch(path);
+    }
+  }
+
+  /// [path] 를 원본으로 하는 모든 PPT 항목을 다시 굽는다.
+  /// [automatic] 은 저장 감지로 불린 경우 — 진행 창 없이 안내만 띄운다.
   Future<void> _reloadImageSource(
     String path, {
     required bool automatic,
@@ -2003,23 +2031,26 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         e.item is ImageStagingItem &&
         (e.item as ImageStagingItem).sourcePath == path;
     if (!_stagingItems.any(usesPath)) {
-      // 콘티에서 뺀 항목의 원본은 더 지켜볼 필요가 없다.
       _sourceWatcher.unwatch(path);
       return;
     }
+    final name = p.basename(path);
     if (!_reloadingSources.add(path)) {
+      // 굽는 중에 또 저장됐거나 버튼을 눌렀다. 끝나면 한 번 더 굽는다.
       _reloadAgainSources.add(path);
+      if (!automatic) {
+        _showSnack('$name 을(를) 이미 다시 불러오는 중입니다. 끝나면 한 번 더 불러옵니다.');
+      }
       return;
     }
 
-    final name = p.basename(path);
     final progress = automatic
         ? null
         : ValueNotifier<String>('$name 다시 불러오는 중…');
     if (progress != null) {
       _showProgressDialog(progress);
     } else {
-      _showSnack('$name 이(가) 바뀌어 다시 불러오는 중…');
+      _showSnack('$name 이(가) 바뀌어 다시 불러오는 중…', replace: false);
     }
 
     ImageStagingItem? rendered;
@@ -2043,7 +2074,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     if (rendered == null) {
       _showSnack(errorMessage ?? '다시 불러오기 실패');
     } else {
-      await _applyReloadedSource(path, rendered);
+      await _applyReloadedSource(path, rendered, automatic: automatic);
     }
     if (_reloadAgainSources.remove(path)) {
       await _reloadImageSource(path, automatic: true);
@@ -2051,35 +2082,89 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   }
 
   /// 다시 구운 [rendered] 로 [path] 를 원본으로 하는 항목을 모두 바꾼다.
+  ///
+  /// 항목 uid 는 그대로라 배경·헌금송·여백 설정은 남는다. 보고 있던 슬라이드는 번호가 아니라
+  /// (항목, 페이지) 로 다시 찾는다 — 앞 항목의 장 수가 바뀌어도 관객 화면이 멋대로 넘어가지 않게.
+  /// 장 수가 그대로면 지운 페이지·메모를 그대로 두고, 바뀌었으면 페이지 대응을 알 수 없으므로
+  /// 지운 페이지 표시는 풀고(안내한다) 범위 밖 메모만 버린다. 자동 여백의 메모는 여백을 따라간다.
   Future<void> _applyReloadedSource(
     String path,
-    ImageStagingItem rendered,
-  ) async {
-    final pageCount = rendered.imagePaths.length;
+    ImageStagingItem rendered, {
+    required bool automatic,
+  }) async {
+    final newCount = rendered.imagePaths.length;
+    final slides = _allSlides;
+    final current = slides.isEmpty
+        ? null
+        : slides[_currentSlideIndex.clamp(0, slides.length - 1)];
+    var restoredPages = false;
+
     setState(() {
       for (var i = 0; i < _stagingItems.length; i++) {
         final entry = _stagingItems[i];
         final item = entry.item;
         if (item is! ImageStagingItem || item.sourcePath != path) continue;
         _stagingItems[i] = (uid: entry.uid, item: rendered);
-        _deletedSlideKeys.removeWhere((k) => k.startsWith('${entry.uid}:'));
-        _slideNotes.removeWhere((k, _) {
-          if (!k.startsWith('${entry.uid}:')) return false;
-          final page = int.tryParse(k.substring('${entry.uid}:'.length));
-          return page == null || page >= pageCount;
-        });
+        if (remapReloadedPages(
+          uid: entry.uid,
+          oldCount: item.imagePaths.length,
+          newCount: newCount,
+          deletedKeys: _deletedSlideKeys,
+          notes: _slideNotes,
+        )) {
+          restoredPages = true;
+        }
+      }
+
+      if (current != null) {
+        _currentSlideIndex = _findSlideAfterReload(current, newCount, path);
       }
       _clampCurrentSlideIndex();
     });
     await _sendCurrentSlide();
-    _showSnack('${p.basename(path)} 을(를) 다시 불러왔습니다 ($pageCount장).');
+    _showSnack(
+      restoredPages
+          ? '${p.basename(path)} 을(를) 다시 불러왔습니다 ($newCount장). 장 수가 바뀌어 지웠던 페이지가 다시 보입니다.'
+          : '${p.basename(path)} 을(를) 다시 불러왔습니다 ($newCount장).',
+      replace: !automatic,
+    );
   }
 
-  void _showSnack(String message) {
+  /// 다시 불러오기 전에 보던 슬라이드 [before] 가 지금 몇 번째인지.
+  /// 다시 구운 항목 안이었으면 같은 페이지(줄었으면 마지막 페이지), 여백이었으면 여백으로 간다.
+  int _findSlideAfterReload(_SlideInfo before, int newCount, String path) {
+    final slides = _allSlides;
+    final reloaded = _stagingItems.any(
+      (e) =>
+          e.uid == before.stagingUid &&
+          e.item is ImageStagingItem &&
+          (e.item as ImageStagingItem).sourcePath == path,
+    );
+    final page = !reloaded || before.isAutoSpacer
+        ? before.pageIndexInItem
+        : before.pageIndexInItem.clamp(0, newCount - 1);
+    int? sameItem;
+    for (var i = 0; i < slides.length; i++) {
+      final s = slides[i];
+      if (s.stagingUid != before.stagingUid) continue;
+      if (before.isAutoSpacer) {
+        if (s.isAutoSpacer) return i;
+        continue;
+      }
+      if (!s.isAutoSpacer && s.pageIndexInItem == page) return i;
+      // 그 페이지를 지워 둔 경우 항목 안에서 가장 가까운 앞 페이지.
+      if (!s.isAutoSpacer && s.pageIndexInItem < page) sameItem = i;
+    }
+    return sameItem ?? _currentSlideIndex;
+  }
+
+  /// [replace] 가 true 면 떠 있는 안내를 바로 닫고 띄운다. 저장 감지처럼 사용자가 누르지 않은
+  /// 안내는 false 로 — 떠 있던 오류 안내를 읽기도 전에 지우면 안 된다.
+  void _showSnack(String message, {bool replace = true}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
+    final messenger = ScaffoldMessenger.of(context);
+    if (replace) messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(SnackBar(content: Text(message)));
   }
 
   /// 닫기는 호출한 쪽에서 `Navigator.of(context, rootNavigator: true).pop()`.
@@ -2773,6 +2858,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     final result = await _contiRepository.loadConti(selected.id, _nextUid);
     if (!mounted) return;
 
+    // 불러온 콘티의 원본은 '원본 열어 수정' 을 누르기 전까지 지켜보지 않는다.
+    _sourceWatcher.unwatchAll();
     setState(() {
       _stagingItems
         ..clear()
@@ -6975,6 +7062,38 @@ class _SongEditDialog extends StatefulWidget {
 
   @override
   State<_SongEditDialog> createState() => _SongEditDialogState();
+}
+
+/// 원본을 다시 구워 PPT 항목 [uid] 의 장 수가 [oldCount] → [newCount] 로 바뀔 때
+/// 지운 페이지 표시(`uid:페이지`)와 메모를 맞춘다. 지운 페이지 표시가 풀렸으면 true.
+///
+/// 장 수가 같으면 페이지가 그대로 대응한다고 보고 아무것도 안 건드린다. 다르면 어느 페이지가
+/// 어디로 갔는지 알 수 없으므로 지운 표시는 풀고, 메모는 남는 범위 안의 것만 둔다.
+/// 자동 여백은 항목 끝(`uid:장수`)에 붙으므로 그 표시·메모는 새 끝으로 옮긴다 —
+/// 안 옮기면 장 수가 늘 때 여백 메모가 실제 페이지에 붙는다.
+@visibleForTesting
+bool remapReloadedPages({
+  required int uid,
+  required int oldCount,
+  required int newCount,
+  required Set<String> deletedKeys,
+  required Map<String, String> notes,
+}) {
+  if (oldCount == newCount) return false;
+  String key(int page) => '$uid:$page';
+
+  var restored = false;
+  for (var j = 0; j < oldCount; j++) {
+    if (deletedKeys.remove(key(j))) restored = true;
+  }
+  if (deletedKeys.remove(key(oldCount))) deletedKeys.add(key(newCount));
+
+  final spacerNote = notes.remove(key(oldCount));
+  for (var j = newCount; j < oldCount; j++) {
+    notes.remove(key(j));
+  }
+  if (spacerNote != null) notes[key(newCount)] = spacerNote;
+  return restored;
 }
 
 // 저장 형식이 편집 형식과 동일하므로 변환 불필요.
