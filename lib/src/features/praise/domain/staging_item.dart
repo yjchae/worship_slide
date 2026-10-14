@@ -41,10 +41,18 @@ class BibleStagingItem extends StagingItem {
 
 /// 외부 PPT를 페이지별 이미지로 구워 넣은 항목. 디자인 설정을 타지 않고 원본 그대로 표시된다.
 class ImageStagingItem extends StagingItem {
-  const ImageStagingItem({required this.sourceName, required this.imagePaths});
+  const ImageStagingItem({
+    required this.sourceName,
+    required this.imagePaths,
+    this.sourcePath,
+  });
 
   final String sourceName;
   final List<String> imagePaths;
+
+  /// 구운 원본 PPT/PDF 파일 경로. 원본을 열어 고친 뒤 다시 굽는 데 쓴다.
+  /// 원본의 일부 페이지만 담은 항목(나누기·복사)은 다시 구우면 페이지가 어긋나므로 null.
+  final String? sourcePath;
 
   @override
   String get displayTitle => '[PPT] $sourceName';

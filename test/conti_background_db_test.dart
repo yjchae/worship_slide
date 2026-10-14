@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:worship_slides/src/features/praise/data/praise_database.dart';
 import 'package:worship_slides/src/features/praise/data/worship_conti_repository.dart';
@@ -131,6 +134,7 @@ void main() {
 
     final columns = await db.rawQuery('PRAGMA table_info(worship_conti_items)');
     expect(columns.map((c) => c['name']), contains('background'));
+    expect(columns.map((c) => c['name']), contains('image_source_path'));
 
     // 마이그레이션된 옛 항목은 "오버라이드 없음"으로 읽힌다.
     final repository = WorshipContiRepository(
@@ -139,5 +143,38 @@ void main() {
     final loaded = await repository.loadConti(1, 0);
     expect(loaded.items.length, 1);
     expect(loaded.backgrounds, isEmpty);
+  });
+
+  test('PPT 항목의 원본 파일 경로가 콘티 저장 → 불러오기를 왕복한다', () async {
+    final db = await openFreshDb();
+    addTearDown(db.close);
+    final repository = WorshipContiRepository(
+      database: PraiseDatabase.forTesting(db),
+    );
+    final dir = Directory.systemTemp.createTempSync('conti_source_');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final image = File(p.join(dir.path, '0001.png'))..writeAsBytesSync([0]);
+    final source = p.join(dir.path, '광고.pptx');
+
+    final contiId = await repository.saveConti('광고 콘티', [
+      (
+        uid: 1,
+        item: ImageStagingItem(
+          sourceName: '광고.pptx',
+          imagePaths: [image.path],
+          sourcePath: source,
+        ),
+      ),
+      // 나누기·복사로 생긴 항목은 원본이 없다.
+      (
+        uid: 2,
+        item: ImageStagingItem(sourceName: '광고.pptx', imagePaths: [image.path]),
+      ),
+    ]);
+
+    final loaded = await repository.loadConti(contiId, 0);
+    final items = loaded.items.map((e) => e.item as ImageStagingItem).toList();
+    expect(items[0].sourcePath, source);
+    expect(items[1].sourcePath, isNull);
   });
 }

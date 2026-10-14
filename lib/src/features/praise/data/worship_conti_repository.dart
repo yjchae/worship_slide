@@ -107,6 +107,7 @@ class WorshipContiRepository {
             'bible_text': null,
             'image_source': item.sourceName,
             'image_paths': item.imagePaths.join('\n'),
+            'image_source_path': item.sourcePath,
           };
         } else if (item is BlankStagingItem) {
           row = {
@@ -245,6 +246,7 @@ class WorshipContiRepository {
           item: ImageStagingItem(
             sourceName: row['image_source'] as String? ?? 'PPT',
             imagePaths: paths,
+            sourcePath: row['image_source_path'] as String?,
           ),
         ));
       } else if (type == 'blank') {
@@ -321,7 +323,9 @@ class WorshipContiRepository {
         ..remove('song_id')
         ..remove('cur_title')
         ..remove('cur_lyrics')
-        ..remove('cur_english_lyrics');
+        ..remove('cur_english_lyrics')
+        // 원본 PPT 경로는 이 PC 에서만 뜻이 있다(받는 쪽은 다시 굽기만 못 한다).
+        ..remove('image_source_path');
       if (row['item_type'] == 'song') {
         item['song_title'] ??= row['cur_title'];
         item['song_lyrics'] ??= row['cur_lyrics'];

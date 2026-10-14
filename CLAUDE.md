@@ -46,7 +46,7 @@ lib/
   src/app_colors.dart                -- 앱 화면 색·둥글기 토큰 (슬라이드·발표 창·PPTX 색과 무관)
   src/features/praise/
     data/
-      praise_database.dart           -- SQLite 스키마 + 마이그레이션 (현재 version 14)
+      praise_database.dart           -- SQLite 스키마 + 마이그레이션 (현재 version 15)
       praise_repository.dart         -- 곡 CRUD (searchSongs, replaceAllSongs, deleteSongsByIds ...)
       worship_conti_repository.dart  -- 콘티 저장/불러오기 (곡 가사 스냅샷까지 함께 보관)
       python_bridge.dart             -- Process.run으로 ppt_tool 실행 (import / render / export)
@@ -56,6 +56,7 @@ lib/
       background_image_library.dart  -- 공통 배경 이미지 모음(등록 = 앱 폴더로 복사). 헌금송·항목 배경이 같이 쓴다
       app_logger.dart                -- Application Support/logs/app.log (앱 내 "로그 보기"용)
       font_library.dart              -- 내장 무료 폰트를 Application Support/fonts 로 복사해 올린다
+      source_file_watcher.dart       -- 바깥 프로그램에서 연 원본 PPT 가 저장되는지 수정 시각·크기로 지켜본다
     domain/
       praise_song.dart               -- PraiseSong; 페이지 구분자는 빈 줄(\n\n)
       export_style.dart              -- ExportStyle (가사/성경 각각의 색·크기·정렬·제목 표시 등)
@@ -234,6 +235,26 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   - `.ppt`는 XML을 못 여니 pptx로 먼저 바꾼 뒤에 본다. 다만 **LibreOffice가 `.ppt`를 저장할 때
     애니메이션을 버리는 것은 확인됐고, 진짜 PowerPoint가 만든 `.ppt`를 읽을 때 타이밍이
     남는지는 미확인**이다. 안 남으면 그냥 예전처럼 한 장씩 구워진다
+- **외부 PPT 수정 (원본 열어 수정)**: 앱 안에 PPT 편집기를 만들지 않고, 원본 파일을 OS 기본 프로그램
+  (PowerPoint 등, macOS `open` / Windows 네이티브 `openFile` = `ShellExecuteW`)으로 열어 고치게 한다.
+  Windows 에서 `explorer <경로>` 는 경로의 쉼표를 구분자로 읽고, `cmd /c start` 는 Dart 인자 따옴표 규칙
+  (공백이 있을 때만 감싼다)과 어긋나서 네이티브로 뺐다. macOS 는 `open` 의 종료 코드로 실패를 가린다. 콘티 항목의 연필 메뉴
+  '원본 열어 수정' / '원본에서 다시 불러오기'.
+  - `ImageStagingItem.sourcePath` 에 구운 원본 경로를 담는다(DB `worship_conti_items.image_source_path`,
+    version 15). **원본의 일부 페이지만 담은 항목(나누기·복사)은 null** — 다시 구우면 전 페이지가 들어와
+    페이지가 겹친다. 발표 보기에서 지운 페이지만 빠진 항목은 원본 그대로라 남긴다.
+    `.wsconti` 내보내기에서는 뺀다(다른 PC 경로라 뜻이 없다)
+  - 저장 감지는 `SourceFileWatcher` 가 2초마다 수정 시각·크기를 본다. `File.watch` 를 안 쓰는 이유 —
+    PowerPoint 는 임시 파일에 쓰고 이름을 바꿔 저장해서 파일 하나에 건 감시가 끊긴다. 바뀐 뒤
+    **같은 값이 한 번 더 나와야**(저장이 끝나야) 다시 굽는다. 상태는 **비동기**로 읽는다(원본이 NAS·USB 면
+    동기 stat 이 발표 넘기기를 멈춘다). 항목을 빼면(`_removeStagingWhere` → `_pruneSourceWatches`) 그
+    원본 감시를 끄고, 콘티를 불러오면 모두 끈다 — 다른 콘티가 같은 파일을 쓸 때 멋대로 다시 굽지 않게
+  - 다시 구워도 항목 uid 는 그대로라 배경·헌금송·여백 설정은 남는다. **보던 슬라이드는 번호가 아니라
+    (항목, 페이지)로 다시 찾는다**(`_findSlideAfterReload`) — 앞 항목 장 수가 바뀌어도 관객 화면이 넘어가지 않게.
+    지운 페이지·메모는 `remapReloadedPages`: 장 수가 같으면 그대로, 다르면 지운 표시를 풀고(안내) 범위 밖
+    메모만 버린다. 자동 여백(`uid:장수`)의 표시·메모는 새 끝으로 옮긴다
+  - Python 은 손댈 게 없다 — 렌더 캐시 키에 원본의 수정 시각·크기가 들어 있어 저장 후 다시 구우면
+    새 폴더에 굽고, 예전 콘티가 가리키는 옛 폴더는 그대로 남는다
 - **악보 가사 추출**: 오선을 좌표로 먼저 찾아 "오선 아래"만 OCR 에 넘긴다. 제목·작곡가(첫 단 위)와
   코드 기호(다음 단 바로 위)를 글자 모양으로 거르는 것보다 훨씬 정확하다.
   - 오선 찾기는 이미지 처리 라이브러리 없이 **행별 검은 비율**(Pillow `resize((1, h), BOX)` = 가로 평균)
