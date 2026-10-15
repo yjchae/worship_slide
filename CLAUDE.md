@@ -120,8 +120,21 @@ lib/
   모든 요청은 켤 때마다 새로 만드는 토큰(`?k=`, 주소·QR 에 포함)이 맞아야 한다(게스트 와이파이 대비). 이미지는 `v`(경로+수정 시각)가
   지금 것과 다르면 404 + `no-store`(빠르게 넘길 때 브라우저가 엉뚱한 이미지를 기억하지 않게). start/stop 은 큐로 차례만 돈다.
   주소 후보는 사설망 IPv4 만, VPN·가상 머신 인터페이스는 빼고 와이파이·유선을 앞에 둔다(`lanAddresses`).
-  화면 꺼짐 방지(`navigator.wakeLock`)는 https 에서만 되므로 안 쓴다 — 휴대폰 자동 잠금을 끄라고 안내만 한다.
+  화면 꺼짐 방지(`navigator.wakeLock`)는 https 에서만 되므로 같은 망(http) 주소에선 안 걸린다 — 휴대폰 자동 잠금을 끄라고 안내한다.
   처음엔 OS 방화벽이 들어오는 연결을 물으므로 허용해야 한다. 페이지 HTML 은 `singerPageHtml` 상수(네이티브 싱어와 같은 모양·맞춤 규칙)
+  - **바깥 망(LTE 등) 주소**: `cloudflared` 가 깔려 있으면 서버를 켤 때 Cloudflare 임시 터널(`cloudflared tunnel --url`,
+    계정 불필요)을 같이 띄워 `https://<이름>.trycloudflare.com/?k=<토큰>` QR 을 하나 더 보여 준다(`SingerWebServer.tunnel`).
+    LibreOffice·Tesseract 같은 **선택 의존성** — 없으면 설치 안내만 띄우고 같은 망 주소는 그대로. 찾는 곳은 앱 폴더 →
+    Homebrew·`Program Files`·WinGet Links → PATH(Finder 로 띄운 macOS 앱은 PATH 에 Homebrew 가 없다). 서버를 끄면 터널 프로세스도 죽인다.
+    **인터넷이 잠깐 끊겨도 주소는 그대로다** — cloudflared 는 처음 붙은 뒤엔 포기하지 않고 같은 터널로 다시 붙는다
+    (`supervisor.go` `retryForever`). `--retries 2` 는 다시 붙는 간격을 20~40초로 줄이려는 값(기본 5 면 최대 5분).
+    프로세스가 죽었을 때만 `_runTunnel` 이 새로 띄우고, 그러면 주소가 바뀐다(키는 그대로) — 임시 터널로는 피할 수 없다.
+    앱 종료는 `AppLifecycleListener.onExitRequested` 에서 끄고, 그 신호가 안 오는 경우(강제 종료, Windows 에서 발표 창이
+    열린 채 닫기 — Windows 는 마지막 창일 때만 종료 요청을 보낸다)는 pid 파일(임시 폴더)로 다음 시작 때 치운다(`killLeftoverTunnel`,
+    이름이 cloudflared 일 때만). 키는 인터넷에 열리므로 16자
+    **임시 터널은 SSE 를 흘려보내지 않는다**(헤더만 오고 본문이 안 온다 — 실제로 확인). 그래서 https 로 열린 페이지는
+    `/state`(지금 JSON)를 0.5초마다 묻고(실패하면 3초까지 늘려 계속, 403 = 키 바뀜이면 멈춤, 화면이 가려지면 쉼), http(같은 망)만 SSE 를 쓴다. https 라 `navigator.wakeLock` 도 그쪽에서만 걸린다.
+    트래픽은 Cloudflare 를 거쳐 가고(거기서 TLS 가 풀린다), 토큰을 아는 사람은 어느 망에서든 본다
 
 ### Python (`python/ppt_tool.py`, 약 900줄)
 

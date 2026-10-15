@@ -56,6 +56,16 @@ void main() {
     // 버전이 다르면(그 사이 페이지가 넘어감) 주지 않는다.
     expect((await get('/img/current?v=old&k=$k')).statusCode, 404);
     expect((await get('/img/next?k=$k')).statusCode, 404);
+
+    // 터널 주소용 폴링도 같은 내용, 토큰 필요.
+    expect((await get('/state')).statusCode, 403);
+    final state = await get('/state?k=$k');
+    expect(
+      jsonDecode(
+        await state.transform(utf8.decoder).join(),
+      )['current']['image_path'],
+      imgUrl,
+    );
   });
 
   test('끄고 바로 켜도, 두 번 켜도 서버는 하나이고 이전 이미지는 남지 않는다', () async {
@@ -95,5 +105,26 @@ void main() {
     expect(SingerWebServer.isVirtualInterface('vEthernet (WSL)'), isTrue);
     expect(SingerWebServer.isVirtualInterface('en0'), isFalse);
     expect(SingerWebServer.isVirtualInterface('Wi-Fi'), isFalse);
+  });
+
+  test('cloudflared 로그에서 임시 터널 주소만 뽑는다', () {
+    expect(
+      SingerWebServer.tunnelUrlIn(
+        '2026-10-15T01:02:03Z INF |  https://rich-tide-alpha-sun.trycloudflare.com                |',
+      ),
+      'https://rich-tide-alpha-sun.trycloudflare.com',
+    );
+    expect(
+      SingerWebServer.tunnelUrlIn(
+        'ERR failed to request quick Tunnel: Post "https://api.trycloudflare.com/tunnel"',
+      ),
+      isNull,
+    );
+    expect(
+      SingerWebServer.tunnelUrlIn(
+        'INF Requesting new quick Tunnel on trycloudflare.com...',
+      ),
+      isNull,
+    );
   });
 }

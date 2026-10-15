@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' show AppExitResponse;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/gestures.dart';
@@ -189,6 +190,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   bool _isSingerOpen = false;
   // 같은 망 휴대폰용 싱어 화면(웹). 발표를 끝내면 같이 끈다.
   final SingerWebServer _singerWeb = SingerWebServer();
+  // 창을 닫아 앱이 끝날 때는 dispose 가 불리지 않는다. 그대로 두면 cloudflared 터널 프로세스가
+  // 앱 밖에 남으므로 종료 요청 때 끈다. 이 신호가 안 오는 경우(강제 종료, Windows 에서 발표 창이
+  // 열린 채 닫기 등)는 다음 시작 때 [SingerWebServer.killLeftoverTunnel] 이 치운다.
+  late final AppLifecycleListener _exitListener;
 
   // '원본 열어 수정' 으로 연 PPT 가 저장되면 다시 굽는다.
   late final SourceFileWatcher _sourceWatcher = SourceFileWatcher(
@@ -237,6 +242,17 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   @override
   void initState() {
     super.initState();
+    _exitListener = AppLifecycleListener(
+      onExitRequested: () async {
+        // 무슨 일이 있어도 앱은 닫혀야 한다.
+        await _singerWeb
+            .stop()
+            .timeout(const Duration(seconds: 3))
+            .catchError((_) {});
+        return AppExitResponse.exit;
+      },
+    );
+    unawaited(SingerWebServer.killLeftoverTunnel());
     // 탭 전환에 애니메이션을 쓰지 않는다. TabBarView(PageView) 의 전환 애니메이션이
     // 중간에 멈추면(발표 창이 뜨면서 메인 창이 가려지는 등으로 프레임이 끊길 때)
     // 내부 카운터가 0으로 안 돌아와 탭이 영영 안 넘어간다.
@@ -287,6 +303,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   @override
   void dispose() {
+    _exitListener.dispose();
     _singerWeb.stop();
     _sourceWatcher.dispose();
     HardwareKeyboard.instance.removeHandler(_handleStartKey);
@@ -823,9 +840,47 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     final addresses = await SingerWebServer.lanAddresses();
     if (!mounted) return;
     final urls = [for (final a in addresses) _singerWeb.urlFor(a)];
+    // 주소 줄과 QR 을 왼쪽에 맞춘다(주소 길이가 달라도 QR 이 같은 자리에).
+    Widget qr(String url) => Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Flexible(
+              child: SelectableText(
+                url,
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            const SizedBox(width: 4),
+            // 단톡방 등에 붙여 넣기 쉽게.
+            _CopyTextButton(text: url),
+          ],
+        ),
+        const SizedBox(height: 8),
+        // 휴대폰 카메라가 어두운 테마에서도 읽게 늘 흰 바탕.
+        // QrImageView 는 안에 LayoutBuilder 가 있어 AlertDialog 의 크기 재기
+        // (intrinsic/dry layout)에서 터진다. 그래서 QrPainter 를 직접 그린다.
+        Container(
+          color: Colors.white,
+          padding: const EdgeInsets.all(10),
+          child: CustomPaint(
+            size: const Size.square(180),
+            painter: QrPainter(data: url, version: QrVersions.auto),
+          ),
+        ),
+      ],
+    );
     final stop = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
+        // QR 이 두 줄(바깥 망 + 같은 망)이라 작은 화면에서 넘치지 않게.
+        scrollable: true,
         title: const Text('휴대폰 싱어 화면'),
         // 발표가 끝나 서버가 꺼지면 QR 대신 꺼졌다고 보여 준다(찍어도 접속이 안 되므로).
         content: ValueListenableBuilder<bool>(
@@ -837,6 +892,52 @@ class _PraiseHomePageState extends State<PraiseHomePage>
               if (!running)
                 const Text('휴대폰 싱어 화면이 꺼졌습니다. 발표를 다시 시작한 뒤 켜 주세요.')
               else ...[
+                // 다른 망(LTE·다른 와이파이)용 공개 주소. 터널은 몇 초 걸려서 따로 듣는다.
+                ValueListenableBuilder<TunnelState>(
+                  valueListenable: _singerWeb.tunnel,
+                  builder: (context, state, _) => switch (state) {
+                    TunnelState.ready => Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('어느 망에서든(LTE 포함) 이 QR 이나 주소로 열 수 있습니다.'),
+                        const SizedBox(height: 8),
+                        qr(_singerWeb.publicUrl!),
+                        const SizedBox(height: 16),
+                      ],
+                    ),
+                    TunnelState.connecting => const Padding(
+                      padding: EdgeInsets.only(bottom: 16),
+                      child: Text('바깥 망 주소를 만드는 중...'),
+                    ),
+                    TunnelState.failed => const Padding(
+                      padding: EdgeInsets.only(bottom: 16),
+                      child: Text(
+                        '바깥 망 연결이 안 됩니다. 자동으로 다시 시도하는 중입니다.\n'
+                        '인터넷 연결을 확인해 주세요. 같은 와이파이 주소는 그대로 쓸 수 있습니다.',
+                      ),
+                    ),
+                    TunnelState.missing => Padding(
+                      padding: const EdgeInsets.only(bottom: 16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            '다른 망(LTE 등)에서도 보려면 cloudflared 를 설치한 뒤 다시 켜 주세요.\n'
+                            'macOS: 터미널에서 brew install cloudflared\n'
+                            'Windows: winget install --id Cloudflare.cloudflared',
+                          ),
+                          TextButton(
+                            onPressed: () => _openUrl(
+                              'https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/',
+                            ),
+                            child: const Text('다운로드 페이지 열기'),
+                          ),
+                        ],
+                      ),
+                    ),
+                    TunnelState.off => const SizedBox.shrink(),
+                  },
+                ),
                 const Text('같은 와이파이에 연결된 휴대폰 카메라로 QR 을 찍거나 브라우저에서 주소를 여세요.'),
                 const SizedBox(height: 12),
                 if (urls.isEmpty)
@@ -847,42 +948,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                   Wrap(
                     spacing: 20,
                     runSpacing: 16,
-                    children: [
-                      for (final url in urls)
-                        Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            SelectableText(
-                              url,
-                              style: const TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            // 휴대폰 카메라가 어두운 테마에서도 읽게 늘 흰 바탕.
-                            // QrImageView 는 안에 LayoutBuilder 가 있어 AlertDialog 의 크기 재기
-                            // (intrinsic/dry layout)에서 터진다. 그래서 QrPainter 를 직접 그린다.
-                            Container(
-                              color: Colors.white,
-                              padding: const EdgeInsets.all(10),
-                              child: CustomPaint(
-                                size: const Size.square(180),
-                                painter: QrPainter(
-                                  data: url,
-                                  version: QrVersions.auto,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                    ],
+                    children: [for (final url in urls) qr(url)],
                   ),
                 const SizedBox(height: 12),
                 Text(
                   '처음 켤 때 방화벽이 "들어오는 연결 허용"을 물으면 허용해 주세요.\n'
                   '주소는 켤 때마다 바뀌므로(보안 키 포함) 매번 이 QR 로 여세요.\n'
-                  '휴대폰 화면이 꺼지지 않게 휴대폰 설정에서 자동 잠금을 꺼 두세요.\n'
+                  '같은 와이파이 주소로 열면 휴대폰 화면 꺼짐 방지가 안 되니 휴대폰 자동 잠금을 꺼 두세요.\n'
                   '발표를 끝내면 자동으로 꺼집니다.',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
@@ -9757,4 +9829,40 @@ class _ZoomDimPainter extends CustomPainter {
   @override
   bool shouldRepaint(_ZoomDimPainter old) =>
       old.rect != rect || old.color != color;
+}
+
+/// 누르면 [text] 를 클립보드에 넣고 2초 동안 체크 표시로 바뀌는 작은 버튼.
+class _CopyTextButton extends StatefulWidget {
+  const _CopyTextButton({required this.text});
+
+  final String text;
+
+  @override
+  State<_CopyTextButton> createState() => _CopyTextButtonState();
+}
+
+class _CopyTextButtonState extends State<_CopyTextButton> {
+  Timer? _reset;
+
+  @override
+  void dispose() {
+    _reset?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => IconButton(
+    tooltip: _reset == null ? '주소 복사' : '복사됨',
+    icon: Icon(_reset == null ? Icons.copy_rounded : Icons.check, size: 18),
+    onPressed: () async {
+      await Clipboard.setData(ClipboardData(text: widget.text));
+      if (!mounted) return;
+      _reset?.cancel();
+      setState(() {
+        _reset = Timer(const Duration(seconds: 2), () {
+          if (mounted) setState(() => _reset = null);
+        });
+      });
+    },
+  );
 }

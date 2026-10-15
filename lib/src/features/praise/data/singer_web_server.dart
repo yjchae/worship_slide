@@ -15,13 +15,19 @@ import 'package:flutter/foundation.dart';
 ///
 /// 모든 요청은 켤 때마다 새로 만드는 토큰(`?k=`)이 맞아야 한다. 주소·QR 에 들어 있어서 찍은 사람만 본다
 /// (게스트 와이파이처럼 모르는 사람이 같은 망에 있어도 포트만으로는 못 본다).
+///
+/// **바깥 망 주소**: cloudflared 가 깔려 있으면 Cloudflare 임시 터널(`*.trycloudflare.com`, 계정 불필요)을
+/// 같이 띄워 https 공개 주소를 만든다. 다른 망의 휴대폰도 그 주소로 본다. 토큰은 그대로 필요하다.
+/// 없으면 같은 망 주소만 쓴다(LibreOffice·Tesseract 처럼 선택 의존성).
+enum TunnelState { off, missing, connecting, ready, failed }
+
 class SingerWebServer {
   static const preferredPort = 8765;
 
   HttpServer? _server;
   final _clients = <HttpResponse>{};
   Timer? _ping;
-  String? _lastEvent;
+  String? _lastJson; // 지금 페이지. SSE(/events)·폴링(/state) 둘 다 이걸 보낸다
   String _token = '';
   final _images = <String, String>{}; // 'current' | 'next' → 로컬 경로
   // start/stop 을 차례로만 돌린다. 발표 종료(stop) 직후 다시 켜거나(start) 버튼을 두 번 눌러도
@@ -31,20 +37,38 @@ class SingerWebServer {
   /// 다이얼로그가 듣는다 — 발표가 끝나 꺼지면 QR 대신 "꺼짐" 을 보여 준다.
   final running = ValueNotifier(false);
 
+  /// 바깥 망 터널 상태. [TunnelState.ready] 일 때 [publicUrl] 이 있다.
+  final tunnel = ValueNotifier(TunnelState.off);
+  Process? _tunnelProcess;
+  String? _publicBase; // https://xxxx.trycloudflare.com
+
+  /// 다른 망에서 열 주소(토큰 포함). 터널이 아직이면 null.
+  String? get publicUrl =>
+      _publicBase == null ? null : '$_publicBase/?k=$_token';
+
   bool get isRunning => _server != null;
   int? get port => _server?.port;
 
   /// 휴대폰에서 열 주소(토큰 포함).
   String urlFor(String address) => 'http://$address:$port/?k=$_token';
 
-  Future<void> start() => _queue = _queue.then((_) => _start());
-  Future<void> stop() => _queue = _queue.then((_) => _stop());
+  // 앞 작업이 실패해도(포트 못 잡음 등) 줄이 막히지 않게 오류는 그 호출에만 돌려준다.
+  // 막히면 그 뒤 stop 이 영영 안 돌아 터널이 앱 밖에 남는다.
+  Future<void> start() => _enqueue(_start);
+  Future<void> stop() => _enqueue(_stop);
+
+  Future<void> _enqueue(Future<void> Function() job) {
+    final f = _queue.catchError((_) {}).then((_) => job());
+    _queue = f;
+    return f;
+  }
 
   Future<void> _start() async {
     if (_server != null) return;
     final rnd = Random.secure();
+    // 터널 주소는 인터넷 어디서나 닿으므로 넉넉히(31^16 ≈ 7×10^23).
     _token = List.generate(
-      10,
+      16,
       (_) => 'abcdefghjkmnpqrstuvwxyz23456789'[rnd.nextInt(31)],
     ).join();
     try {
@@ -54,6 +78,7 @@ class SingerWebServer {
       _server = await HttpServer.bind(InternetAddress.anyIPv4, 0);
     }
     _server!.listen(_handle, onError: (_) {});
+    unawaited(_runTunnel(_server!));
     // 휴대폰이 잠깐 잠들었다 깨도 끊긴 걸 알아채게 주기적으로 빈 줄을 보낸다.
     _ping = Timer.periodic(
       const Duration(seconds: 15),
@@ -69,13 +94,189 @@ class SingerWebServer {
     _server = null;
     // force 로 소켓부터 끊는다. 잠든 휴대폰 연결의 close() 를 기다리면 TCP 시간 초과까지 멈춘다.
     await server?.close(force: true);
+    _tunnelProcess?.kill();
+    if (_tunnelProcess != null) {
+      try {
+        _tunnelPidFile.deleteSync();
+      } catch (_) {}
+    }
+    _tunnelProcess = null;
+    _publicBase = null;
+    tunnel.value = TunnelState.off;
     for (final c in _clients) {
       c.close().catchError((_) {});
     }
     _clients.clear();
-    _lastEvent = null;
+    _lastJson = null;
     _images.clear();
     running.value = false;
+  }
+
+  // cloudflared 임시 터널. 서버가 켜져 있는 동안 계속 살려 둔다.
+  //
+  // 인터넷이 잠깐 끊기는 건 cloudflared 가 스스로 다시 붙는다 — 프로세스가 살아 있으면 주소가
+  // 그대로라 휴대폰은 아무것도 안 해도 이어진다(페이지가 계속 다시 묻는다). `--retries 2` 는
+  // 다시 붙는 간격을 20~40초로 줄인다(기본 5 면 끊김이 길어질 때 5분까지 벌어진다. 포기하지는 않는다).
+  // 프로세스 자체가 죽었을 때만 새로 띄우는데, 그러면 주소가 바뀌어 QR 을 다시 찍어야 한다.
+  Future<void> _runTunnel(HttpServer server) async {
+    final exe = await findCloudflared();
+    if (_server != server) return;
+    if (exe == null) {
+      tunnel.value = TunnelState.missing;
+      return;
+    }
+    var wait = const Duration(seconds: 5);
+    while (_server == server) {
+      tunnel.value = TunnelState.connecting;
+      final reached = await _tunnelOnce(exe, server);
+      if (_server != server) return;
+      _publicBase = null;
+      tunnel.value = TunnelState.failed;
+      // 한 번 붙었다 죽었으면 바로, 처음부터 안 붙으면 점점 길게(최대 1분).
+      wait = reached
+          ? const Duration(seconds: 2)
+          : Duration(seconds: min(wait.inSeconds * 2, 60));
+      await Future.delayed(wait);
+    }
+  }
+
+  /// cloudflared 한 번 띄우기. 주소를 받았으면(=한 번은 붙었으면) true. 프로세스가 끝나야 돌아온다.
+  Future<bool> _tunnelOnce(String exe, HttpServer server) async {
+    final Process proc;
+    try {
+      proc = await Process.start(exe, [
+        'tunnel',
+        '--no-autoupdate',
+        '--retries',
+        '2',
+        '--url',
+        'http://127.0.0.1:${server.port}',
+      ]);
+    } catch (_) {
+      return false;
+    }
+    // 그 사이 꺼졌으면 바로 정리.
+    if (_server != server) {
+      proc.kill();
+      return false;
+    }
+    _tunnelProcess = proc;
+    _rememberTunnelPid(proc.pid);
+    final found = Completer<String?>();
+    void scan(String line) {
+      final url = tunnelUrlIn(line);
+      if (url != null && !found.isCompleted) found.complete(url);
+    }
+
+    for (final stream in [proc.stdout, proc.stderr]) {
+      stream
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen(scan, onError: (_) {});
+    }
+    final exited = proc.exitCode.whenComplete(() {
+      if (!found.isCompleted) found.complete(null);
+      if (_tunnelProcess == proc) _tunnelProcess = null;
+    });
+    final url = await found.future.timeout(
+      const Duration(seconds: 30),
+      onTimeout: () => null,
+    );
+    if (url == null) {
+      proc.kill();
+      await exited;
+      return false;
+    }
+    if (_tunnelProcess == proc) {
+      _publicBase = url;
+      tunnel.value = TunnelState.ready;
+    }
+    await exited;
+    return true;
+  }
+
+  // 앱이 강제 종료되거나 Windows 에서 종료 신호 없이 끝나면 cloudflared 가 앱 밖에 남는다.
+  // 띄울 때 번호를 적어 두고 다음 시작 때 그 번호가 아직 cloudflared 면 끈다.
+  static File get _tunnelPidFile => File(
+    '${Directory.systemTemp.path}${Platform.pathSeparator}worship_slides_cloudflared.pid',
+  );
+
+  static void _rememberTunnelPid(int pid) {
+    try {
+      _tunnelPidFile.writeAsStringSync('$pid');
+    } catch (_) {}
+  }
+
+  /// 지난번에 남은 cloudflared 를 끈다. 번호가 다른 프로그램에 다시 쓰였을 수 있으니
+  /// 이름이 cloudflared 일 때만.
+  static Future<void> killLeftoverTunnel() async {
+    try {
+      final file = _tunnelPidFile;
+      if (!await file.exists()) return;
+      final pid = int.tryParse((await file.readAsString()).trim());
+      await file.delete();
+      if (pid == null) return;
+      final r = Platform.isWindows
+          ? await Process.run('tasklist', [
+              '/FI',
+              'PID eq $pid',
+              '/FO',
+              'CSV',
+              '/NH',
+            ])
+          : await Process.run('ps', ['-p', '$pid', '-o', 'comm=']);
+      if ((r.stdout as String).toLowerCase().contains('cloudflared')) {
+        Process.killPid(pid);
+      }
+    } catch (_) {}
+  }
+
+  /// cloudflared 로그 한 줄에서 임시 터널 주소. 터널 이름은 낱말을 `-` 로 이은 꼴이라
+  /// 실패 로그의 `https://api.trycloudflare.com` 은 걸리지 않는다.
+  @visibleForTesting
+  static String? tunnelUrlIn(String line) => RegExp(
+    r'https://[a-z0-9]+(?:-[a-z0-9]+)+\.trycloudflare\.com',
+  ).firstMatch(line)?.group(0);
+
+  static String? _cloudflaredPath; // 찾은 경로는 기억한다(켤 때마다 which/where 를 안 돌게)
+
+  /// cloudflared 실행 파일. 앱 폴더 → 흔한 설치 위치 → PATH 순.
+  /// 앱을 켠 뒤에 설치해도 찾게 PATH 보다 설치 위치를 먼저 직접 본다
+  /// (Finder 로 띄운 macOS 앱은 PATH 에 Homebrew 가 없고, Windows 는 켤 때의 PATH 를 쓴다).
+  static Future<String?> findCloudflared() async {
+    final cached = _cloudflaredPath;
+    if (cached != null && await File(cached).exists()) return cached;
+    final name = Platform.isWindows ? 'cloudflared.exe' : 'cloudflared';
+    final exe = File(Platform.resolvedExecutable);
+    final sep = Platform.pathSeparator;
+    final localAppData = Platform.environment['LOCALAPPDATA'];
+    final candidates = [
+      // 배포 폴더(DB 가 있는 곳). macOS 는 .app/Contents/MacOS/exe 라 네 단계 위.
+      '${(Platform.isMacOS ? exe.parent.parent.parent.parent : exe.parent).path}$sep$name',
+      if (Platform.isMacOS) ...[
+        '/opt/homebrew/bin/cloudflared',
+        '/usr/local/bin/cloudflared',
+      ],
+      if (Platform.isWindows) ...[
+        r'C:\Program Files (x86)\cloudflared\cloudflared.exe',
+        r'C:\Program Files\cloudflared\cloudflared.exe',
+        if (localAppData != null)
+          '$localAppData\\Microsoft\\WinGet\\Links\\cloudflared.exe',
+      ],
+    ];
+    for (final c in candidates) {
+      if (await File(c).exists()) return _cloudflaredPath = c;
+    }
+    try {
+      final r = await Process.run(Platform.isWindows ? 'where' : 'which', [
+        'cloudflared',
+      ]);
+      final first = (r.stdout as String).trim().split(RegExp(r'\r?\n')).first;
+      if (r.exitCode == 0 && first.isNotEmpty) {
+        return _cloudflaredPath = first.trim();
+      }
+    } catch (_) {}
+    return null;
   }
 
   /// [SingerViewData.toJson] 을 그대로 받는다. 내용이 같으면 보내지 않는다.
@@ -96,10 +297,10 @@ class SingerWebServer {
       }
       public[key] = copy;
     }
-    final event = 'data: ${jsonEncode(public)}\n\n';
-    if (event == _lastEvent) return;
-    _lastEvent = event;
-    _broadcast(event);
+    final json = jsonEncode(public);
+    if (json == _lastJson) return;
+    _lastJson = json;
+    _broadcast('data: $json\n\n');
   }
 
   void _broadcast(String text) {
@@ -151,7 +352,15 @@ class SingerWebServer {
                 .catchError((_) {})
                 .whenComplete(() => _clients.remove(res)),
           );
-          res.write(_lastEvent ?? ': hello\n\n');
+          res.write(_lastJson == null ? ': hello\n\n' : 'data: $_lastJson\n\n');
+        // 지금 페이지 JSON 한 번. Cloudflare 임시 터널은 SSE 를 붙잡아 두고 안 흘려보내서
+        // (trycloudflare 의 알려진 제한) 터널(https) 주소에서는 페이지가 이걸 0.5초마다 묻는다.
+        case '/state':
+          res.headers
+            ..contentType = ContentType.json
+            ..set(HttpHeaders.cacheControlHeader, 'no-store');
+          res.write(_lastJson ?? '{}');
+          await res.close();
         case '/img/current' || '/img/next':
           final path = _images[req.uri.path.substring(5)];
           final file = path == null ? null : File(path);
@@ -318,15 +527,54 @@ function render(d){
   fill(document.getElementById('next'), next, '마지막 페이지');
   fitAll();
 }
-function offline(){
-  var badge=document.getElementById('badge');
-  badge.textContent='연결 끊김'; badge.className='badge off';
+function setBadge(text, cls){
+  var b=document.getElementById('badge'); b.textContent=text; b.className=cls;
 }
-var es=new EventSource('/events'+location.search);
-es.onmessage=function(ev){ try{ render(JSON.parse(ev.data)); }catch(_){} };
-es.onerror=offline;
+var last='';
+function offline(){ last=''; setBadge('연결 끊김','badge off'); }
+function apply(text){
+  if(text===last) return;
+  last=text;
+  // 아직 보낸 페이지가 없어도({}) 연결은 된 것이니 "연결 끊김" 은 지운다.
+  if(text==='{}'){ setBadge('',''); return; }
+  try{ render(JSON.parse(text)); }catch(_){}
+}
+if(location.protocol==='https:'){
+  // 바깥 망 터널 주소: Cloudflare 임시 터널이 SSE 를 흘려보내지 않아서 폴링.
+  // 끊기면(PC 인터넷이 잠깐 끊김 등) 간격을 3초까지 늘려 가며 계속 묻는다 — 터널이 같은 주소로
+  // 다시 붙으면 저절로 이어진다. 403 은 키가 바뀐 것(앱에서 껐다 켬)이라 묻기를 멈춘다.
+  // 화면이 가려져 있는 동안은 묻지 않는다(배터리).
+  var delay=500, timer=null;
+  function poll(){
+    timer=null;
+    if(document.hidden) return;
+    fetch('/state'+location.search,{cache:'no-store'})
+      .then(function(r){
+        if(r.status===403){ setBadge('주소가 바뀌었습니다 · 새 QR 로 여세요','badge off'); return 'stop'; }
+        if(!r.ok) throw 0;
+        return r.text().then(function(t){ apply(t); delay=500; });
+      })
+      .catch(function(){ offline(); delay=Math.min(delay*2,3000); })
+      .then(function(stop){ if(stop!=='stop' && !timer) timer=setTimeout(poll,delay); });
+  }
+  document.addEventListener('visibilitychange', function(){
+    if(!document.hidden && !timer){ delay=500; poll(); }
+  });
+  poll();
+}else{
+  var es=new EventSource('/events'+location.search);
+  es.onopen=function(){ if(last==='') apply('{}'); };
+  es.onmessage=function(ev){ apply(ev.data); };
+  es.onerror=offline;
+}
 window.addEventListener('resize', fitAll);
-// 화면 꺼짐 방지(navigator.wakeLock)는 https 에서만 되므로 쓰지 않는다. 앱 다이얼로그가
-// "휴대폰 자동 잠금을 꺼 두라"고 안내한다.
+// 화면 꺼짐 방지. https(바깥 망 터널 주소)에서만 된다 — 같은 망 http 주소면 조용히 건너뛰고,
+// 앱 다이얼로그가 "휴대폰 자동 잠금을 꺼 두라"고 안내한다. 탭이 가려지면 풀리므로 돌아올 때 다시 건다.
+function keepAwake(){
+  if(navigator.wakeLock && document.visibilityState==='visible')
+    navigator.wakeLock.request('screen').catch(function(){});
+}
+keepAwake();
+document.addEventListener('visibilitychange', keepAwake);
 </script></body></html>
 ''';
