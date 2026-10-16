@@ -924,15 +924,14 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           const Text(
-                            '다른 망(LTE 등)에서도 보려면 cloudflared 를 설치한 뒤 다시 켜 주세요.\n'
-                            'macOS: 터미널에서 brew install cloudflared\n'
-                            'Windows: winget install --id Cloudflare.cloudflared',
+                            '다른 망(LTE 등)에서도 보려면 cloudflared 가 필요합니다.',
                           ),
-                          TextButton(
-                            onPressed: () => _openUrl(
+                          const SizedBox(height: 8),
+                          _CloudflaredInstallButton(
+                            onInstalled: _singerWeb.retryTunnel,
+                            onOpenDownloadPage: () => _openUrl(
                               'https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/',
                             ),
-                            child: const Text('다운로드 페이지 열기'),
                           ),
                         ],
                       ),
@@ -9921,4 +9920,134 @@ class _CopyTextButtonState extends State<_CopyTextButton> {
       });
     },
   );
+}
+
+/// 휴대폰 싱어 다이얼로그 안의 cloudflared 자동 설치. LibreOffice 와 같은 설치기(winget·Homebrew)를 쓴다.
+/// 수십 MB 라 따로 다이얼로그를 띄우지 않고 그 자리에서 진행 상황만 보여 준다.
+class _CloudflaredInstallButton extends StatefulWidget {
+  const _CloudflaredInstallButton({
+    required this.onInstalled,
+    required this.onOpenDownloadPage,
+  });
+
+  final VoidCallback onInstalled;
+  final VoidCallback onOpenDownloadPage;
+
+  @override
+  State<_CloudflaredInstallButton> createState() =>
+      _CloudflaredInstallButtonState();
+}
+
+class _CloudflaredInstallButtonState extends State<_CloudflaredInstallButton> {
+  late final _manager = LibreOfficeInstaller.findPackageManager(
+    wingetId: 'Cloudflare.cloudflared',
+    brewArgs: const ['install', 'cloudflared'],
+  );
+  // 다이얼로그를 닫았다 다시 열어도 설치를 겹쳐 돌리지 않게 진행 중인 설치는 클래스에 둔다.
+  static Future<bool>? _inFlight;
+  bool _installing = false;
+  bool _failed = false;
+  String _status = '';
+
+  @override
+  void initState() {
+    super.initState();
+    final running = _inFlight;
+    if (running != null) {
+      _installing = true;
+      _status = '설치하는 중…';
+      _await(running);
+    }
+  }
+
+  void _install(LibreOfficePackageManager manager) {
+    setState(() {
+      _installing = true;
+      _failed = false;
+      _status = '${manager.label}로 설치를 시작합니다…';
+    });
+    final run = _inFlight = LibreOfficeInstaller.install(
+      manager,
+      tag: 'cloudflared',
+      installed: () async => await SingerWebServer.findCloudflared() != null,
+      onProgress: (line) {
+        if (mounted) setState(() => _status = line);
+      },
+    );
+    run.then((ok) {
+      _inFlight = null;
+      if (ok) widget.onInstalled(); // 다이얼로그를 닫았어도 터널은 띄운다
+    });
+    _await(run);
+  }
+
+  Future<void> _await(Future<bool> run) async {
+    final ok = await run;
+    if (mounted) {
+      setState(() {
+        _installing = false;
+        _failed = !ok;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    if (_installing) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const LinearProgressIndicator(),
+          const SizedBox(height: 8),
+          Text(
+            _status,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: textTheme.bodySmall,
+          ),
+        ],
+      );
+    }
+    return FutureBuilder<LibreOfficePackageManager?>(
+      future: _manager,
+      builder: (context, snap) {
+        final manager = snap.data;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (_failed)
+              Text(
+                '설치를 끝내지 못했습니다. 자세한 내용은 로그에 남겼습니다.',
+                style: textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.error,
+                ),
+              )
+            else if (snap.connectionState == ConnectionState.done &&
+                manager == null)
+              Text(
+                '이 PC에는 자동 설치 도구(${Platform.isWindows ? 'winget' : 'Homebrew'})가 없습니다. '
+                '다운로드 페이지에서 직접 설치해 주세요.',
+                style: textTheme.bodySmall,
+              ),
+            Wrap(
+              spacing: 8,
+              children: [
+                if (manager != null)
+                  FilledButton.icon(
+                    onPressed: () => _install(manager),
+                    icon: const Icon(Icons.download_rounded),
+                    label: Text(_failed ? '다시 시도' : '자동 설치'),
+                  ),
+                TextButton(
+                  onPressed: widget.onOpenDownloadPage,
+                  child: const Text('다운로드 페이지'),
+                ),
+              ],
+            ),
+          ],
+        );
+      },
+    );
+  }
 }

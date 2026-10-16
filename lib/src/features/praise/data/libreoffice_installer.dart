@@ -60,7 +60,11 @@ class LibreOfficeInstaller {
   }
 
   /// 이 PC 에서 쓸 수 있는 패키지 관리자. 없으면 null (직접 설치 안내).
-  static Future<LibreOfficePackageManager?> findPackageManager() async {
+  /// 기본값은 LibreOffice. 다른 선택 의존성(cloudflared)도 패키지 이름만 바꿔 쓴다.
+  static Future<LibreOfficePackageManager?> findPackageManager({
+    String wingetId = _wingetId,
+    List<String> brewArgs = const ['install', '--cask', 'libreoffice'],
+  }) async {
     if (Platform.isWindows) {
       // winget 은 WindowsApps 의 실행 별칭이라 파일 존재 확인보다 직접 불러 보는 게 확실하다.
       try {
@@ -69,13 +73,13 @@ class LibreOfficeInstaller {
       } catch (_) {
         return null;
       }
-      return const LibreOfficePackageManager(
+      return LibreOfficePackageManager(
         label: 'winget',
         executable: 'winget',
         arguments: [
           'install',
           '--id',
-          _wingetId,
+          wingetId,
           '--exact',
           '--source',
           'winget',
@@ -95,7 +99,7 @@ class LibreOfficeInstaller {
         return LibreOfficePackageManager(
           label: 'Homebrew',
           executable: brew,
-          arguments: const ['install', '--cask', 'libreoffice'],
+          arguments: brewArgs,
           environment: {
             'PATH': '${p.dirname(brew)}:/usr/bin:/bin:/usr/sbin:/sbin',
             'NONINTERACTIVE': '1',
@@ -111,10 +115,12 @@ class LibreOfficeInstaller {
   static Future<bool> install(
     LibreOfficePackageManager manager, {
     void Function(String line)? onProgress,
+    String tag = 'libreoffice',
+    Future<bool> Function() installed = isInstalled,
   }) async {
     final log = AppLogger.instance;
     await log.info(
-      '[libreoffice] 설치 시작: ${manager.executable} ${manager.arguments.join(' ')}',
+      '[$tag] 설치 시작: ${manager.executable} ${manager.arguments.join(' ')}',
     );
     final tail = <String>[]; // 로그에 남길 마지막 출력 몇 줄
 
@@ -151,12 +157,12 @@ class LibreOfficeInstaller {
       );
       // 죽인 경우 자식 프로세스가 파이프를 붙잡고 있을 수 있어 오래 기다리지 않는다.
       await outputDone.timeout(const Duration(seconds: 5), onTimeout: () => []);
-      await log.info('[libreoffice] 종료 코드 $exitCode\n${tail.join('\n')}');
+      await log.info('[$tag] 종료 코드 $exitCode\n${tail.join('\n')}');
     } catch (e, st) {
-      await log.error('[libreoffice] 설치 실행 실패', e, st);
+      await log.error('[$tag] 설치 실행 실패', e, st);
       return false;
     }
     // 종료 코드는 도구·버전마다 뜻이 달라서, 실제로 깔렸는지를 기준으로 본다.
-    return isInstalled();
+    return installed();
   }
 }

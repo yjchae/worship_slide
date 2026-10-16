@@ -112,6 +112,16 @@ class SingerWebServer {
     running.value = false;
   }
 
+  /// cloudflared 를 켜 둔 뒤에 설치했을 때 — 서버는 그대로 두고 터널만 띄운다(같은 망 주소·키 유지).
+  void retryTunnel() {
+    final server = _server;
+    if (server != null && tunnel.value == TunnelState.missing) {
+      // 바로 상태를 바꿔 둔다 — 연달아 불려도 터널 루프가 둘 생기지 않게.
+      tunnel.value = TunnelState.connecting;
+      unawaited(_runTunnel(server));
+    }
+  }
+
   // cloudflared 임시 터널. 서버가 켜져 있는 동안 계속 살려 둔다.
   //
   // 인터넷이 잠깐 끊기는 건 cloudflared 가 스스로 다시 붙는다 — 프로세스가 살아 있으면 주소가

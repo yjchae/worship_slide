@@ -125,7 +125,7 @@ lib/
   처음엔 OS 방화벽이 들어오는 연결을 물으므로 허용해야 한다. 페이지 HTML 은 `singerPageHtml` 상수(네이티브 싱어와 같은 모양·맞춤 규칙)
   - **바깥 망(LTE 등) 주소**: `cloudflared` 가 깔려 있으면 서버를 켤 때 Cloudflare 임시 터널(`cloudflared tunnel --url`,
     계정 불필요)을 같이 띄워 `https://<이름>.trycloudflare.com/?k=<토큰>` QR 을 하나 더 보여 준다(`SingerWebServer.tunnel`).
-    LibreOffice·Tesseract 같은 **선택 의존성** — 없으면 설치 안내만 띄우고 같은 망 주소는 그대로. 찾는 곳은 앱 폴더 →
+    LibreOffice·Tesseract 같은 **선택 의존성** — 없으면 다이얼로그 안 '자동 설치' 버튼(`_CloudflaredInstallButton`, `LibreOfficeInstaller` 를 패키지 이름만 바꿔 씀: winget `Cloudflare.cloudflared`·`brew install cloudflared`)이 깔고 `retryTunnel` 로 서버는 그대로 둔 채 터널만 띄운다. 같은 망 주소는 그대로. 찾는 곳은 앱 폴더 →
     Homebrew·`Program Files`·WinGet Links → PATH(Finder 로 띄운 macOS 앱은 PATH 에 Homebrew 가 없다). 서버를 끄면 터널 프로세스도 죽인다.
     **인터넷이 잠깐 끊겨도 주소는 그대로다** — cloudflared 는 처음 붙은 뒤엔 포기하지 않고 같은 터널로 다시 붙는다
     (`supervisor.go` `retryForever`). `--retries 2` 는 다시 붙는 간격을 20~40초로 줄이려는 값(기본 5 면 최대 5분).
