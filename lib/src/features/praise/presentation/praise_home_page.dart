@@ -22,6 +22,7 @@ import '../data/offering_background_composer.dart';
 import '../data/offering_design_store.dart';
 import '../data/background_image_library.dart';
 import '../data/font_library.dart';
+import '../data/libreoffice_installer.dart';
 import '../data/praise_repository.dart';
 import '../data/python_bridge.dart';
 import '../data/screen_choice_store.dart';
@@ -35,6 +36,7 @@ import '../domain/praise_song.dart';
 import '../domain/slide_background.dart';
 import '../domain/staging_item.dart';
 import 'background_image_gallery.dart';
+import 'libreoffice_install_dialog.dart';
 import 'offering_dialog.dart';
 import 'offering_overlay_painter.dart';
 import 'singer_view_data.dart';
@@ -1980,21 +1982,30 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     );
     final paths = picked?.paths.whereType<String>().toList() ?? const [];
     if (paths.isEmpty || !mounted) return;
+    await _insertPptImages(paths);
+  }
 
+  /// [paths] 를 차례로 구워 고른 항목 뒤에 넣는다. LibreOffice 가 없어 못 구운 파일이
+  /// 있으면 설치를 권하고, 설치되면 그 파일들만 다시 굽는다.
+  Future<void> _insertPptImages(List<String> paths) async {
     final progress = ValueNotifier<String>('변환 중…');
     _showProgressDialog(progress);
 
     final items = <ImageStagingItem>[];
     String? errorMessage;
+    // LibreOffice 가 없어 못 구운 파일. 뒤의 PDF 등은 그대로 계속 굽는다.
+    final missing = <String>[];
     try {
       for (var i = 0; i < paths.length; i++) {
         progress.value = paths.length == 1
             ? '${p.basename(paths[i])} 변환 중…'
             : '${paths.length}개 중 ${i + 1}번째 변환 중…';
-        items.add(await _pythonBridge.renderPptToImages(paths[i]));
+        try {
+          items.add(await _pythonBridge.renderPptToImages(paths[i]));
+        } on LibreOfficeMissingException {
+          missing.add(paths[i]);
+        }
       }
-    } on LibreOfficeMissingException catch (error) {
-      errorMessage = error.toString();
     } catch (error, stack) {
       await AppLogger.instance.error('PPT/PDF 이미지 변환 실패', error, stack);
       errorMessage = '가져오기 실패: $error';
@@ -2024,6 +2035,17 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(errorMessage)));
+    }
+
+    if (missing.isNotEmpty) {
+      final installed = await _showLibreofficeDialog(
+        reason:
+            'PPT를 이미지로 바꾸려면 LibreOffice가 설치되어 있어야 합니다.\n'
+            'PDF 파일은 LibreOffice 없이도 넣을 수 있습니다.',
+      );
+      if (installed && mounted) {
+        await _insertPptImages(missing);
+      }
     }
   }
 
@@ -2437,6 +2459,16 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         ? PraiseRepository.defaultSubLanguage
         : language.trim();
 
+    final libreofficeMissing = await _importFolder(folder, subLanguage);
+    // 설치되면 같은 폴더를 다시 가져온다. 이미 들어간 곡(.pptx)은 중복으로 건너뛰고 .ppt 만 새로 들어간다.
+    if (libreofficeMissing && mounted && await _showLibreofficeDialog()) {
+      if (mounted) await _importFolder(folder, subLanguage);
+    }
+  }
+
+  /// 폴더를 가져와 저장한다. LibreOffice 가 없어 .ppt 를 건너뛰었으면 true.
+  Future<bool> _importFolder(String folder, String subLanguage) async {
+    var libreofficeMissing = false;
     setState(() {
       _selectedFolder = folder;
       _isImporting = true;
@@ -2447,7 +2479,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
     try {
       final result = await _pythonBridge.importFolder(folder);
-      if (!mounted) return;
+      libreofficeMissing = result.libreofficeMissing;
+      if (!mounted) return false;
       setState(() {
         _importTotalCount = result.importedCount;
         _importSavedCount = 0;
@@ -2465,7 +2498,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         });
         await _loadSubLanguages();
         final saved = await _repository.countTranslations(subLanguage);
-        if (!mounted) return;
+        if (!mounted) return libreofficeMissing;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
@@ -2475,10 +2508,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
             ),
           ),
         );
-        if (result.libreofficeMissing && mounted) {
-          await _showLibreofficeDialog();
-        }
-        return;
+        return libreofficeMissing;
       }
       var insertedCount = 0;
       var duplicateCount = 0;
@@ -2504,7 +2534,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         updatedCount = saveResult.updatedCount;
       }
       await _loadSongs();
-      if (!mounted) return;
+      if (!mounted) return libreofficeMissing;
       final message = switch ((
         insertedCount,
         duplicateCount,
@@ -2528,12 +2558,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
           ),
         ),
       );
-      if (result.libreofficeMissing && mounted) {
-        await _showLibreofficeDialog();
-      }
     } catch (error, stack) {
       await AppLogger.instance.error('찬양 폴더 가져오기 실패', error, stack);
-      if (!mounted) return;
+      if (!mounted) return libreofficeMissing;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('가져오기 실패: $error')));
@@ -2545,6 +2572,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         });
       }
     }
+    return libreofficeMissing;
   }
 
   // ── 성경 JSON 가져오기 ───────────────────────────────────────────────
@@ -3130,32 +3158,16 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     }
   }
 
-  Future<void> _showLibreofficeDialog() async {
-    await showDialog<void>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('LibreOffice가 필요합니다'),
-        content: const Text(
-          '.ppt 파일을 읽으려면 LibreOffice가 설치되어 있어야 합니다.\n\n'
-          '.pptx 파일은 LibreOffice 없이도 정상적으로 가져올 수 있습니다.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('닫기'),
-          ),
-          FilledButton.icon(
-            onPressed: () {
-              _openUrl(
-                'https://www.libreoffice.org/download/download-libreoffice/',
-              );
-              Navigator.of(context).pop();
-            },
-            icon: const Icon(Icons.download_rounded),
-            label: const Text('LibreOffice 다운로드'),
-          ),
-        ],
-      ),
+  /// LibreOffice 안내 + 자동 설치. 설치까지 끝나면 true — 하던 작업을 다시 시도하면 된다.
+  Future<bool> _showLibreofficeDialog({
+    String reason =
+        '.ppt 파일을 읽으려면 LibreOffice가 설치되어 있어야 합니다.\n'
+        '.pptx 파일은 LibreOffice 없이도 정상적으로 가져올 수 있습니다.',
+  }) {
+    return LibreOfficeInstallDialog.show(
+      context,
+      reason: reason,
+      onOpenDownloadPage: () => _openUrl(LibreOfficeInstaller.downloadPage),
     );
   }
 

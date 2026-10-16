@@ -57,6 +57,7 @@ lib/
       app_logger.dart                -- Application Support/logs/app.log (앱 내 "로그 보기"용)
       font_library.dart              -- 내장 무료 폰트를 Application Support/fonts 로 복사해 올린다
       source_file_watcher.dart       -- 바깥 프로그램에서 연 원본 PPT 가 저장되는지 수정 시각·크기로 지켜본다
+      libreoffice_installer.dart     -- LibreOffice 설치 확인 + winget(Windows)·Homebrew(macOS) 자동 설치
     domain/
       praise_song.dart               -- PraiseSong; 페이지 구분자는 빈 줄(\n\n)
       export_style.dart              -- ExportStyle (가사/성경 각각의 색·크기·정렬·제목 표시 등)
@@ -300,6 +301,13 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   - 읽어 온 가사는 `_SheetLyricsDialog` 에서 고친 뒤 **곡 편집 다이얼로그로 넘어간다**. 그래서
     `_openSongEditor` 는 `song == null` 이 아니라 **`edited.id == null`** 로 새 곡 여부를 가린다
     (악보 초안은 song 은 있고 id 만 없다)
+- **LibreOffice 는 내장하지 않고 자동 설치한다** (`LibreOfficeInstaller`, `LibreOfficeInstallDialog`):
+  수백 MB 라 내장하면 업데이트 zip(덮어쓰기 방식이라 매번 통째로 받는다)이 무거워진다. 없으면 안내창의 '자동 설치'가
+  Windows 는 `winget install --id TheDocumentFoundation.LibreOffice`, macOS 는 `brew install --cask libreoffice` 를 돌린다
+  (Homebrew 는 `/opt/homebrew`·`/usr/local` 에서 직접 찾는다). 도구가 없으면 다운로드 페이지만 안내한다.
+  성공 여부는 종료 코드가 아니라 **설치 후 `soffice` 가 실제로 있는지**로 가린다 — 찾는 경로는 `ppt_tool.py`
+  `get_libreoffice_executable` 과 같아야 한다. 설치되면 하던 일을 다시 한다: 폴더 가져오기는 같은 폴더를 다시
+  가져오고(이미 들어간 곡은 중복으로 건너뜀), PPT 이미지 넣기는 못 구운 파일만 다시 굽는다(뒤의 PDF 는 기다리지 않고 먼저 들어간다). 출력은 `app.log` 에 `[libreoffice]`
 - **PPT 렌더 캐시 위치**: `~/Library/Application Support/worship_slides/ppt_slides/<해시>/`.
   Caches가 아닌 이유 — 저장한 콘티가 나중에 이미지 유실로 깨지면 안 되기 때문.
   (`.ppt`→`.pptx` 변환 캐시는 유실돼도 되므로 `~/Library/Caches/worship_slides/ppt_import_cache/`)
