@@ -45,18 +45,21 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
     window?.makeKeyAndOrderFront(nil)
 
     keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-      // ESC 는 발표 창이 키 윈도우일 때만 여기서 처리한다.
-      // 메인 창(검색창 입력 등)의 ESC 는 Flutter 로 그대로 넘긴다.
-      if event.keyCode == 53, event.window === self?.window {
+      // 발표 창이 키 윈도우일 때만 여기서 처리한다. 메인 창의 키는 Flutter 로 그대로 넘긴다.
+      // 닫기는 Ctrl+F4(118) 만 — ESC 는 잘못 눌러 발표가 꺼지는 일이 잦아서 삼킨다.
+      // ⌃F4 는 macOS 기본 단축키(다음 창으로 포커스)라 시스템이 먼저 가져갈 수 있어 ⌘F4 도 받는다.
+      guard event.window === self?.window else { return event }
+      if event.keyCode == 118, !event.modifierFlags.isDisjoint(with: [.control, .command]) {
         self?.window?.close()
         return nil
       }
+      if event.keyCode == 53 { return nil }
       return event
     }
   }
 
   /// 발표 중에 모니터를 바꿀 때도 쓴다. 키 포커스는 건드리지 않는다 — 발표 중에 옮기면서
-  /// 포커스를 가져가면 메인 창의 넘기기 단축키가 멈추고, ESC 한 번에 발표가 꺼진다.
+  /// 포커스를 가져가면 메인 창의 넘기기 단축키가 멈춘다.
   func place(on screen: NSScreen?) {
     guard let window = self.window else { return }
     if let screen = screen {
@@ -536,8 +539,10 @@ class SingerWindowController: NSWindowController, NSWindowDelegate {
     keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
       guard let self = self, event.window === self.window else { return event }
       switch event.keyCode {
-      case 53:  // ESC: 전체화면이면 풀기만, 아니면 창 닫기
-        if self.isFullScreen { self.exitFullScreen() } else { self.window?.close() }
+      case 53:  // ESC: 전체화면 풀기만. 닫기는 Ctrl+F4(잘못 눌러 꺼지는 사고 방지)
+        if self.isFullScreen { self.exitFullScreen() }
+      case 118 where !event.modifierFlags.isDisjoint(with: [.control, .command]):  // ⌃/⌘F4
+        self.window?.close()
       case 3:   // F
         self.toggleFullScreen()
       case 124, 125, 49, 121:  // → ↓ Space PageDown

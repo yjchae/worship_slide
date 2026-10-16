@@ -108,7 +108,7 @@ lib/
 단 그러다 글자가 창 높이의 3.5% 보다 작아지면(긴 성경 구절) 그때만 자동 줄바꿈한다. 스타일을 싣지 않는 별도 JSON(`SingerViewData`)을 받는다. 보조 가사는 디자인의 보조 언어 스위치를 따른다.
 - 모니터를 고르지 않았으면(자동) 메인 창도 관객 화면도 아닌 모니터(3번째)가 있으면 거기 전체화면으로, 없으면 메인 창 모니터에 960x600 일반 창으로
   열린다. 사용자가 원하는 모니터로 끌어 놓고 **더블클릭(또는 F, Windows 는 F11 도)** 으로 전체화면을 켜고 끈다. ESC 는
-  전체화면이면 풀기, 아니면 창 닫기
+  전체화면 풀기만, 창 닫기는 Ctrl+F4(macOS 는 ⌘F4 도) — 발표 창과 같은 이유(잘못 눌러 꺼지는 사고 방지)
 - 열 때 키 포커스를 가져가지 않는다(메인 창 넘기기 단축키 유지). 싱어 창을 클릭해 포커스가 가도 화살표·Space·PageUp/Down 은
   `singerKey` 로 Dart 에 넘겨 똑같이 넘어간다
 - 갱신은 `_sendCurrentSlide` 에 얹혀 있다(페이지가 바뀌는 모든 경로가 거기를 지난다). 블랙아웃 중에도 가사는 계속
@@ -378,12 +378,13 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
 
 ## 발표 모드 단축키
 
-`praise_home_page.dart` `_handleKeyEvent` — F5 발표 시작(`_handleStartKey`, 전역 핸들러), →/↓/Space 다음, ←/↑ 이전, 숫자+Enter 해당 슬라이드로 점프, ESC 발표 종료.
+`praise_home_page.dart` `_handleKeyEvent` — F5 발표 시작(`_handleStartKey`, 전역 핸들러), →/↓/Space 다음, ←/↑ 이전, 숫자+Enter 해당 슬라이드로 점프, Ctrl+F4 발표 종료(macOS 는 ⌃F4 를 시스템이 가져갈 수 있어 ⌘F4 도. ESC 는 번호 입력 취소만 — 잘못 눌러 꺼지는 사고 방지. macOS·Windows 발표 창도 같다).
 
 발표 보기 탭에서 Ctrl+F(macOS ⌘F) = 곡 찾기 입력칸으로 (`_PresenterConsoleState._handleFindKey`, 전역 핸들러 —
 콘솔은 IndexedStack 에 늘 살아 있으므로 `isActive` 로 탭이 보일 때만 받는다). 찾기 범위는 입력칸 옆 '제목 | 가사'
 (`PresenterViewState.searchScope`). 제목은 항목 첫 페이지, 가사는 원본·보조 가사가 맞는 그 페이지로 간다.
 입력칸 안 ESC 는 발표 종료가 아니라 입력칸에서 빠져나오기만 한다.
+F3 = 입력된 검색어로 다음 찾기, F2 = 이전 찾기(같은 전역 핸들러, 끝에 닿으면 처음/끝으로 돈다).
 
 발표 보기 썸네일: ⌘/Ctrl+클릭 = 하나씩 골라 담기, Shift+클릭 = 범위, Delete/Backspace = 고른 페이지 한꺼번에 삭제,
 ESC = 고르기 취소, ⌘/Ctrl+C·V = 복사·붙여 넣기(`_handleEditKey`). 복사는 고른 게 없으면 현재 페이지.

@@ -551,7 +551,7 @@ def img_present_mode() -> Image.Image:
         ("←  /  →", "이전 / 다음 슬라이드"),
         ("↑  /  ↓", "이전 / 다음 슬라이드"),
         ("숫자 + Enter", "해당 번호 슬라이드로 바로 이동"),
-        ("ESC", "발표 종료"),
+        ("Ctrl+F4", "발표 종료"),
     ]
     kx = 30
     d.text((kx, 252), "키보드 단축키", fill=PT_DARK, font=pf(16, True))

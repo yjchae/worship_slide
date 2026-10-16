@@ -394,7 +394,7 @@ def make_presentation_image() -> Image.Image:
         d.text((x + 10, 116), name, fill=tc, font=fS)
 
     d.text((18, 196),
-           "키보드:  ← →  이전/다음  |  숫자 + Enter  슬라이드 번호로 이동  |  ESC  발표 종료",
+           "키보드:  ← →  이전/다음  |  숫자 + Enter  슬라이드 번호로 이동  |  Ctrl+F4  발표 종료",
            fill=(100, 118, 128), font=fS)
 
     return img
@@ -981,7 +981,7 @@ def build_body(doc: Document):
             '      발표 컨트롤 바의 [▶ 발표 시작] 버튼을 클릭합니다.'),
         (2, '외부 모니터 또는 새 창에 첫 번째 슬라이드가 표시됩니다.'),
         (3, '키보드 또는 화면의 버튼으로 슬라이드를 넘깁니다.'),
-        (4, '[■ 종료] 버튼 또는 ESC 키를 누르면 발표를 종료합니다.'),
+        (4, '[■ 종료] 버튼 또는 Ctrl+F4(macOS ⌘F4) 키를 누르면 발표를 종료합니다.'),
     ])
 
     add_section_heading(doc, '발표 중 슬라이드 제어', 2)
@@ -989,7 +989,8 @@ def build_body(doc: Document):
         ('→  또는  ↓', '다음 슬라이드로 이동'),
         ('←  또는  ↑', '이전 슬라이드로 이동'),
         ('숫자 + Enter', '해당 번호 슬라이드로 바로 이동 (예: 5 → Enter → 5번 슬라이드)'),
-        ('ESC', '슬라이드 번호 입력 취소 / 발표 종료'),
+        ('ESC', '슬라이드 번호 입력 취소'),
+        ('Ctrl+F4 (macOS ⌘F4)', '발표 종료'),
     ])
 
     add_section_heading(doc, '발표 중 슬라이드 편집', 2)

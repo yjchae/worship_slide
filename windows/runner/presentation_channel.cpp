@@ -782,7 +782,8 @@ LRESULT CALLBACK PresentationChannel::WndProc(
       return 1;  // handled in WM_PAINT
 
     case WM_KEYDOWN:
-      if (wp == VK_ESCAPE) {
+      // 닫기는 Ctrl+F4 만 — ESC 는 잘못 눌러 발표가 꺼지는 일이 잦아서 뺐다.
+      if (wp == VK_F4 && (GetKeyState(VK_CONTROL) & 0x8000)) {
         SendMessage(hwnd, WM_CLOSE, 0, 0);
         return 0;
       }

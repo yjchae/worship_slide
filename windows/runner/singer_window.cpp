@@ -469,9 +469,12 @@ LRESULT CALLBACK SingerWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
     case WM_KEYDOWN:
       switch (wp) {
         case VK_ESCAPE:
-          // 전체화면이면 풀기만, 아니면 창 닫기
+          // 전체화면 풀기만. 닫기는 Ctrl+F4(잘못 눌러 꺼지는 사고 방지)
           if (self->full_) self->ToggleFullScreen();
-          else SendMessage(hwnd, WM_CLOSE, 0, 0);
+          return 0;
+        case VK_F4:
+          if (!(GetKeyState(VK_CONTROL) & 0x8000)) break;
+          SendMessage(hwnd, WM_CLOSE, 0, 0);
           return 0;
         case 'F':
         case VK_F11:

@@ -1434,9 +1434,20 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
     if (!_isPresentationOpen) return KeyEventResult.ignored;
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
-    if (_isTextFieldFocused) return KeyEventResult.ignored;
 
     final key = event.logicalKey;
+
+    // 발표 종료는 Ctrl+F4 만(macOS 는 ⌃F4 를 시스템이 가져가므로 ⌘F4 도). ESC 는 잘못 눌러
+    // 발표가 꺼지는 일이 잦아서 번호 입력 취소만 한다. 글자를 안 쓰는 키라 입력칸에 있어도 받는다.
+    final keyboard = HardwareKeyboard.instance;
+    if (key == LogicalKeyboardKey.f4 &&
+        (keyboard.isControlPressed ||
+            (Platform.isMacOS && keyboard.isMetaPressed))) {
+      _closePresentation();
+      return KeyEventResult.handled;
+    }
+
+    if (_isTextFieldFocused) return KeyEventResult.ignored;
 
     final digit = _digitKeys[key];
     if (digit != null) {
@@ -1457,11 +1468,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     }
 
     if (key == LogicalKeyboardKey.escape) {
-      if (_slideJumpBuffer.isNotEmpty) {
-        setState(() => _slideJumpBuffer = '');
-        return KeyEventResult.handled;
-      }
-      _closePresentation();
+      if (_slideJumpBuffer.isEmpty) return KeyEventResult.ignored;
+      setState(() => _slideJumpBuffer = '');
       return KeyEventResult.handled;
     }
 
@@ -8496,6 +8504,17 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
       _marked.clear();
       _markAnchor = null;
     }
+    // 찾은 자리가 다른 슬라이드가 됐으면(개수 변화·재정렬) 다음 찾기는 처음부터 다시.
+    final found = _foundIndex;
+    if (found != null &&
+        (found >= widget.slides.length ||
+            found >= oldWidget.slides.length ||
+            widget.slides[found].stagingUid !=
+                oldWidget.slides[found].stagingUid ||
+            widget.slides[found].pageIndexInItem !=
+                oldWidget.slides[found].pageIndexInItem)) {
+      _foundIndex = null;
+    }
     if (oldWidget.currentIndex != widget.currentIndex ||
         oldWidget.slides.length != widget.slides.length) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -8519,14 +8538,33 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
 
   /// Ctrl+F (macOS 는 ⌘F) = 곡 찾기 입력칸으로. 발표 중엔 포커스가 콘솔 바깥
   /// FocusScope 에 있어서 Shortcuts 위젯으로는 못 받으므로 전역 핸들러로 받는다.
+  /// F3 = 입력된 검색어로 다음 찾기, F2(또는 Shift+F3) = 이전 찾기.
+  /// 메모 등 다른 입력칸에 있을 땐 넘긴다.
   /// 발표 보기 탭이 숨어 있거나 다이얼로그가 떠 있으면 무시한다.
   bool _handleFindKey(KeyEvent event) {
     if (event is! KeyDownEvent ||
-        event.logicalKey != LogicalKeyboardKey.keyF ||
         !widget.isActive ||
         ModalRoute.of(context)?.isCurrent == false) {
       return false;
     }
+    if ((event.logicalKey == LogicalKeyboardKey.f3 ||
+            event.logicalKey == LogicalKeyboardKey.f2) &&
+        _searchController.text.trim().isNotEmpty) {
+      final focus = FocusManager.instance.primaryFocus;
+      if (focus != _searchFocus &&
+          focus?.context?.findAncestorWidgetOfExactType<EditableText>() !=
+              null) {
+        return false;
+      }
+      _searchSlides(
+        _searchController.text,
+        backward:
+            event.logicalKey == LogicalKeyboardKey.f2 ||
+            HardwareKeyboard.instance.isShiftPressed,
+      );
+      return true;
+    }
+    if (event.logicalKey != LogicalKeyboardKey.keyF) return false;
     final keyboard = HardwareKeyboard.instance;
     if (!keyboard.isControlPressed && !keyboard.isMetaPressed) return false;
     _searchFocus.requestFocus();
@@ -8659,8 +8697,8 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
   /// - 제목: 곡 제목·성경 구절이 맞는 항목의 첫 페이지
   /// - 가사: 원본·보조 언어 가사가 맞는 바로 그 페이지
   /// 발표 화면이 바뀌면 안 되므로 현재 슬라이드(onSlideSelected)는 건드리지 않는다.
-  /// 같은 검색어로 다시 누르면 그다음 결과로 넘어간다.
-  void _searchSlides(String query) {
+  /// 같은 검색어로 다시 누르면 그다음 결과로([backward] 면 그 앞 결과로) 넘어간다.
+  void _searchSlides(String query, {bool backward = false}) {
     String norm(String v) => v.replaceAll(RegExp(r'\s+'), '').toLowerCase();
     final q = norm(query);
     // 입력칸에서 포커스를 빼야 ←/→ 발표 단축키가 다시 먹는다.
@@ -8683,10 +8721,13 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
       };
     }
 
-    final start = _foundIndex == null ? 0 : _foundIndex! + 1;
+    final step = backward ? -1 : 1;
+    final start = _foundIndex == null
+        ? (backward ? slides.length - 1 : 0)
+        : _foundIndex! + step;
     int? found;
     for (var k = 0; k < slides.length; k++) {
-      final i = (start + k) % slides.length;
+      final i = (start + step * k) % slides.length;
       if (matches(i)) {
         found = i;
         break;
@@ -8982,32 +9023,35 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
         // 곡 찾기: Enter 를 누르면 썸네일만 그 곡으로 스크롤한다(발표 화면은 그대로).
         _searchScopeToggle(),
         const SizedBox(width: 6),
-        SizedBox(
-          width: 200,
-          child: CallbackShortcuts(
-            // ESC 는 발표 종료가 아니라 입력칸에서 빠져나오기만.
-            bindings: {
-              const SingleActivator(LogicalKeyboardKey.escape): () =>
-                  _searchFocus.unfocus(),
-            },
-            child: TextField(
-              controller: _searchController,
-              focusNode: _searchFocus,
-              style: const TextStyle(fontSize: 13),
-              decoration: InputDecoration(
-                isDense: true,
-                hintText:
-                    '${_view.searchScope == SlideSearchScope.title ? '제목' : '가사'}'
-                    ' 찾기 ($_findShortcutLabel)',
-                prefixIcon: const Icon(Icons.search_rounded, size: 18),
-                prefixIconConstraints: const BoxConstraints(minWidth: 34),
-                border: const OutlineInputBorder(),
-              ),
-              // 검색어를 바꾸면 처음 곡부터 다시 찾는다.
-              onChanged: (_) {
-                if (_foundIndex != null) setState(() => _foundIndex = null);
+        Tooltip(
+          message: '다음 찾기 F3 · 이전 찾기 F2',
+          child: SizedBox(
+            width: 200,
+            child: CallbackShortcuts(
+              // ESC 는 발표 종료가 아니라 입력칸에서 빠져나오기만.
+              bindings: {
+                const SingleActivator(LogicalKeyboardKey.escape): () =>
+                    _searchFocus.unfocus(),
               },
-              onSubmitted: _searchSlides,
+              child: TextField(
+                controller: _searchController,
+                focusNode: _searchFocus,
+                style: const TextStyle(fontSize: 13),
+                decoration: InputDecoration(
+                  isDense: true,
+                  hintText:
+                      '${_view.searchScope == SlideSearchScope.title ? '제목' : '가사'}'
+                      ' 찾기 ($_findShortcutLabel)',
+                  prefixIcon: const Icon(Icons.search_rounded, size: 18),
+                  prefixIconConstraints: const BoxConstraints(minWidth: 34),
+                  border: const OutlineInputBorder(),
+                ),
+                // 검색어를 바꾸면 처음 곡부터 다시 찾는다.
+                onChanged: (_) {
+                  if (_foundIndex != null) setState(() => _foundIndex = null);
+                },
+                onSubmitted: _searchSlides,
+              ),
             ),
           ),
         ),
