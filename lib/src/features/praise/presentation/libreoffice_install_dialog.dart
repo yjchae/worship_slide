@@ -155,7 +155,11 @@ class _LibreOfficeInstallDialogState extends State<LibreOfficeInstallDialog> {
   List<Widget> _buildActions() {
     return [
       TextButton(
-        onPressed: () => Navigator.of(context).pop(false),
+        // 다운로드 페이지에서 직접 설치했을 수도 있으니 닫을 때 한 번 더 확인한다.
+        onPressed: () async {
+          final installed = await LibreOfficeInstaller.isInstalled();
+          if (mounted) Navigator.of(context).pop(installed);
+        },
         child: const Text('닫기'),
       ),
       OutlinedButton.icon(
@@ -165,7 +169,7 @@ class _LibreOfficeInstallDialogState extends State<LibreOfficeInstallDialog> {
       ),
       if (_manager != null)
         FilledButton.icon(
-          onPressed: _phase == _Phase.checking ? null : _install,
+          onPressed: _install,
           icon: const Icon(Icons.download_rounded),
           label: Text(_phase == _Phase.failed ? '다시 시도' : '자동 설치'),
         ),

@@ -39,6 +39,7 @@ class LibreOfficeInstaller {
   /// 두 곳이 다르면 "설치됨"이라고 해 놓고 Python 이 못 찾는다.
   static const _knownPaths = [
     '/Applications/LibreOffice.app/Contents/MacOS/soffice',
+    '/Applications/LibreOffice.app/Contents/MacOS/LibreOffice',
     r'C:\Program Files\LibreOffice\program\soffice.exe',
     r'C:\Program Files (x86)\LibreOffice\program\soffice.exe',
   ];
@@ -47,14 +48,15 @@ class LibreOfficeInstaller {
     for (final path in _knownPaths) {
       if (await File(path).exists()) return true;
     }
-    try {
-      final r = await Process.run(Platform.isWindows ? 'where' : 'which', [
-        'soffice',
-      ]);
-      return r.exitCode == 0;
-    } catch (_) {
-      return false;
+    for (final name in const ['soffice', 'libreoffice']) {
+      try {
+        final r = await Process.run(Platform.isWindows ? 'where' : 'which', [
+          name,
+        ]);
+        if (r.exitCode == 0) return true;
+      } catch (_) {}
     }
+    return false;
   }
 
   /// 이 PC 에서 쓸 수 있는 패키지 관리자. 없으면 null (직접 설치 안내).
@@ -116,15 +118,13 @@ class LibreOfficeInstaller {
     );
     final tail = <String>[]; // 로그에 남길 마지막 출력 몇 줄
 
-    void collect(String chunk) {
-      for (final raw in chunk.split(RegExp(r'[\r\n]+'))) {
-        final line = raw.trim();
-        // winget 은 한 글자짜리 스피너(-\|/)를 계속 찍는다.
-        if (line.length <= 1) continue;
-        tail.add(line);
-        if (tail.length > 40) tail.removeAt(0);
-        onProgress?.call(line);
-      }
+    void collect(String raw) {
+      final line = raw.trim();
+      // winget 은 한 글자짜리 스피너(-\|/)를 계속 찍는다.
+      if (line.length <= 1) return;
+      tail.add(line);
+      if (tail.length > 40) tail.removeAt(0);
+      onProgress?.call(line);
     }
 
     try {
@@ -135,8 +135,12 @@ class LibreOfficeInstaller {
       );
       const decoder = Utf8Decoder(allowMalformed: true);
       final outputDone = Future.wait([
-        process.stdout.transform(decoder).forEach(collect),
-        process.stderr.transform(decoder).forEach(collect),
+        // 줄 단위로 끊는다(\r 도 줄 끝) — 청크 경계에서 줄이 잘려 반쪽짜리가 찍히지 않게.
+        for (final stream in [process.stdout, process.stderr])
+          stream
+              .transform(decoder)
+              .transform(const LineSplitter())
+              .forEach(collect),
       ]);
       final exitCode = await process.exitCode.timeout(
         _timeout,

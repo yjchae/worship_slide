@@ -1985,15 +1985,16 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     await _insertPptImages(paths);
   }
 
-  /// [paths] 를 차례로 구워 고른 항목 뒤에 넣는다. LibreOffice 가 없어 멈추면
-  /// 설치를 권하고, 설치되면 못 구운 파일부터 이어서 굽는다.
+  /// [paths] 를 차례로 구워 고른 항목 뒤에 넣는다. LibreOffice 가 없어 못 구운 파일이
+  /// 있으면 설치를 권하고, 설치되면 그 파일들만 다시 굽는다.
   Future<void> _insertPptImages(List<String> paths) async {
     final progress = ValueNotifier<String>('변환 중…');
     _showProgressDialog(progress);
 
     final items = <ImageStagingItem>[];
     String? errorMessage;
-    int? missingFrom; // LibreOffice 가 없어 멈춘 파일 번호
+    // LibreOffice 가 없어 못 구운 파일. 뒤의 PDF 등은 그대로 계속 굽는다.
+    final missing = <String>[];
     try {
       for (var i = 0; i < paths.length; i++) {
         progress.value = paths.length == 1
@@ -2002,8 +2003,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         try {
           items.add(await _pythonBridge.renderPptToImages(paths[i]));
         } on LibreOfficeMissingException {
-          missingFrom = i;
-          break;
+          missing.add(paths[i]);
         }
       }
     } catch (error, stack) {
@@ -2037,14 +2037,14 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       ).showSnackBar(SnackBar(content: Text(errorMessage)));
     }
 
-    if (missingFrom != null) {
+    if (missing.isNotEmpty) {
       final installed = await _showLibreofficeDialog(
         reason:
             'PPT를 이미지로 바꾸려면 LibreOffice가 설치되어 있어야 합니다.\n'
             'PDF 파일은 LibreOffice 없이도 넣을 수 있습니다.',
       );
       if (installed && mounted) {
-        await _insertPptImages(paths.sublist(missingFrom));
+        await _insertPptImages(missing);
       }
     }
   }
