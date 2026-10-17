@@ -14,6 +14,7 @@ import 'package:worship_slides/src/features/praise/data/sync_snapshot.dart';
 import 'package:worship_slides/src/features/praise/data/worship_conti_repository.dart';
 import 'package:worship_slides/src/features/praise/domain/praise_song.dart';
 import 'package:worship_slides/src/features/praise/domain/slide_background.dart';
+import 'package:worship_slides/src/features/praise/domain/slide_media.dart';
 import 'package:worship_slides/src/features/praise/domain/staging_item.dart';
 
 /// PC 한 대: 자기 DB + 자기 설정 폴더. 공유 폴더 하나를 여러 대가 같이 쓴다.
@@ -756,6 +757,15 @@ void main() {
       Directory(
         p.join(shared, SyncService.syncDirName, SyncService.filesDirName),
       ).deleteSync(recursive: true);
+      // 하는 일이 없을 때는 files/ 목록을 10분에 한 번만 본다.
+      await a.sync.syncNow();
+      expect(
+        Directory(
+          p.join(shared, SyncService.syncDirName, SyncService.filesDirName),
+        ).existsSync(),
+        isFalse,
+      );
+      now = now.add(const Duration(minutes: 10));
       await a.sync.syncNow();
       await b.sync.syncNow();
       expect((await b.contis.listContis()).map((c) => c.name), ['콘티']);
@@ -954,6 +964,129 @@ void main() {
       a.sync.markLocalChanged();
       await a.sync.syncNow();
       expect(own.readAsStringSync(), text);
+    });
+  });
+
+  group('리뷰 5차', () {
+    void writePeer(String id, SyncSnapshot snapshot) =>
+        (File(p.join(shared, SyncService.syncDirName, '$id.json'))
+              ..parent.createSync(recursive: true))
+            .writeAsStringSync(jsonEncode(snapshot.toJson()));
+
+    SyncSong remoteSong(String uid, String lyrics, int at) => SyncSong(
+      uid: uid,
+      updatedAt: at,
+      title: '은혜',
+      fileName: '',
+      lyrics: lyrics,
+      englishLyrics: '',
+    );
+
+    test('내 파일을 못 써도 들어온 곡은 화면에 알린다', () async {
+      final b = await newPc('B');
+      final merged = <SyncResult>[];
+      b.sync.onMerged = merged.add;
+      writePeer(
+        'p1',
+        SyncSnapshot(
+          deviceId: 'p1',
+          deviceName: 'p1',
+          songs: [remoteSong('s1', '가사', 1)],
+          deleted: const {},
+          aliases: const {},
+        ),
+      );
+      // 내 파일 자리에 폴더가 있어 쓰기가 실패한다.
+      final own = File(
+        p.join(shared, SyncService.syncDirName, '${b.sync.deviceId}.json'),
+      );
+      own.deleteSync();
+      Directory(own.path).createSync();
+      await b.sync.syncNow();
+      expect(b.sync.status.value.lastError, isNotNull);
+      expect(merged.single.songs.addedCount, 1);
+      Directory(own.path).deleteSync();
+      await b.sync.syncNow();
+      expect(own.existsSync(), isTrue);
+    });
+
+    test('한 번의 합치기에서 uid 가 합쳐져도 옛 uid 로 온 수정이 중복 곡이 되지 않는다', () async {
+      final b = await newPc('B', join: false);
+      await b.repo.insertSong(song('은혜', '처음'));
+      final db = await databaseFactoryFfi.openDatabase(
+        p.join(b.dir.path, 'a.db'),
+      );
+      addTearDown(db.close);
+      await db.update('praise_songs', {'uid': 'b', 'updated_at': 1});
+      // p1 은 같은 곡을 작은 uid 'a' 로, p2 는 옛 uid 'b' 로 고친 판을 갖고 있다.
+      writePeer(
+        'p1',
+        SyncSnapshot(
+          deviceId: 'p1',
+          deviceName: 'p1',
+          songs: [remoteSong('a', '처음', 1)],
+          deleted: const {},
+          aliases: const {},
+        ),
+      );
+      writePeer(
+        'p2',
+        SyncSnapshot(
+          deviceId: 'p2',
+          deviceName: 'p2',
+          songs: [remoteSong('b', '고친 가사', 5)],
+          deleted: const {},
+          aliases: const {},
+        ),
+      );
+      await b.sync.setFolder(shared);
+      expect(await b.titles(), ['은혜:고친 가사']);
+    });
+
+    test('동영상·음악 페이지의 파일 경로는 넘기지 않고 유튜브는 넘긴다', () async {
+      final a = await newPc('A');
+      final b = await newPc('B');
+      await a.contis.saveConti('콘티', [
+        (
+          uid: 1,
+          item: const BlankStagingItem(
+            media: SlideMedia(kind: MediaKind.video, source: '/Users/a/x.mp4'),
+          ),
+        ),
+        (
+          uid: 2,
+          item: const BlankStagingItem(
+            media: SlideMedia(
+              kind: MediaKind.youtube,
+              source: 'https://youtu.be/abc',
+            ),
+          ),
+        ),
+      ]);
+      await syncAll([a, b]);
+      final list = await b.contis.listContis();
+      final loaded = await b.contis.loadConti(list.single.id, 1);
+      final pages = loaded.items.map((e) => e.item as BlankStagingItem);
+      expect(pages.map((e) => e.media?.kind), [null, MediaKind.youtube]);
+    });
+
+    test('다시 가져오기에서 파일 이름만 바뀐 곡도 다른 PC 로 넘어간다', () async {
+      final a = await newPc('A');
+      final b = await newPc('B');
+      await a.repo.replaceAllSongs([song('은혜', '가사')]);
+      await syncAll([a, b]);
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      await a.repo.replaceAllSongs([
+        PraiseSong(
+          id: null,
+          fileName: '새 파일.pptx',
+          title: '은혜',
+          lyrics: '가사',
+          englishLyrics: '',
+        ),
+      ]);
+      await syncAll([a, b]);
+      expect((await b.songs()).single.fileName, '새 파일.pptx');
     });
   });
 }

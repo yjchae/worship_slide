@@ -124,7 +124,7 @@ class SongSyncRepository {
           if (storedContent[e.key] != null)
             (uid: e.key, hash: storedContent[e.key]!, at: e.value),
       ],
-      localLive: {for (final mine in local.values) mine.song.contentHash},
+      localSongs: [for (final mine in local.values) mine.song],
       remotes: remotes,
     );
 
@@ -141,8 +141,10 @@ class SongSyncRepository {
     var added = 0;
     var updated = 0;
     final uids = newest.keys.toList()..sort();
-    for (final uid in uids) {
-      final song = newest[uid]!;
+    for (final key in uids) {
+      // 이 반복 안에서 uid 를 합쳤을 수 있다(_renameUid) — 옛 uid 로 온 판은 지금 uid 로 다룬다.
+      final uid = canonical(key);
+      final song = uid == key ? newest[key]! : newest[key]!.withUid(uid);
       final deletedAt = tombstones[uid];
       if (deletedAt != null && deletedAt >= song.updatedAt) continue;
 
@@ -441,14 +443,19 @@ class _ContentTombstones {
   _ContentTombstones({
     required String Function(String) canonical,
     required List<({String uid, String hash, int at})> local,
-    required Set<String> localLive,
+    required Iterable<SyncSong> localSongs,
     required List<SyncSnapshot> remotes,
   }) : _canonical = canonical {
+    // 곡마다 가사 전체를 해시하므로 내용 해시가 달린 지운 기록이 있을 때만 계산한다.
     // 이 PC 기록: 이 PC 에 같은 내용 곡이 남아 있으면 쓰지 않는다.
-    for (final t in local) {
-      if (!localLive.contains(t.hash)) _add(_local, t.uid, t.hash, t.at);
+    if (local.isNotEmpty) {
+      final localLive = {for (final s in localSongs) s.contentHash};
+      for (final t in local) {
+        if (!localLive.contains(t.hash)) _add(_local, t.uid, t.hash, t.at);
+      }
     }
     for (final remote in remotes) {
+      if (remote.deletedContent.isEmpty) continue;
       final live = {for (final s in remote.songs) s.contentHash};
       remote.deletedContent.forEach((uid, hash) {
         final at = remote.deleted[uid];
@@ -479,6 +486,7 @@ class _ContentTombstones {
     Map<String, List<({String uid, int at})>> from,
     SyncSong song,
   ) {
+    if (from.isEmpty) return null;
     int? latest;
     for (final t
         in from[song.contentHash] ?? const <({String uid, int at})>[]) {

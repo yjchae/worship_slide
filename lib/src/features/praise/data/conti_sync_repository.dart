@@ -36,25 +36,34 @@ class ContiSyncRepository {
         ({int updatedAt, String shared, Set<String> files, SyncConti conti})
       >{};
 
-  /// 지난번에 올린 파일 중 공유 폴더에서 사라진 것이 있으면 true(누가 files/ 를 정리함 등).
-  /// 그러면 다시 올려야 다른 PC 가 그 콘티를 받는다. 폴더 목록 한 번이라 매번 불러도 싸다.
-  Future<bool> sharedFilesMissing(Directory sharedFiles) async {
-    final expected = {
-      for (final e in _exported.values)
-        if (e.shared == sharedFiles.path) ...e.files,
-    };
-    if (expected.isEmpty) return false;
-    return !(await _listNames(sharedFiles)).containsAll(expected);
+  /// 지난번에 올린 파일 중 공유 폴더([present] = 그 목록)에서 사라진 것이 있으면 true
+  /// (누가 files/ 를 정리함 등). 그러면 다시 올려야 다른 PC 가 그 콘티를 받는다.
+  bool sharedFilesMissing(Directory sharedFiles, Set<String> present) =>
+      _exported.values.any(
+        (e) => e.shared == sharedFiles.path && !present.containsAll(e.files),
+      );
+
+  /// 공유 files/ 폴더에 지금 있는 파일 이름.
+  static Future<Set<String>> listShared(Directory dir) async {
+    final names = <String>{};
+    if (!await dir.exists()) return names;
+    await for (final entity in dir.list()) {
+      if (entity is File) names.add(p.basename(entity.path));
+    }
+    return names;
   }
 
   /// 이 PC 의 저장 콘티 전부 + 지운 콘티. 쓰는 이미지는 [sharedFiles] 에 올린다.
-  Future<({List<SyncConti> contis, Map<String, int> deleted})> export({
+  /// [present] 는 공유 files/ 목록(없으면 새로 본다). `failed` = 이미지를 못 올려 이번엔 빠진 콘티가 있다.
+  Future<({List<SyncConti> contis, Map<String, int> deleted, bool failed})>
+  export({
     required Directory sharedFiles,
     required Directory localFiles,
+    Set<String>? present,
   }) async {
     final db = await _databaseProvider.database;
-    // 공유 폴더에 지금 있는 파일. 누가 files/ 를 정리했으면 다시 올린다 — 폴더 목록 한 번이라 싸다.
-    final present = await _listNames(sharedFiles);
+    // 공유 폴더에 지금 있는 파일. 누가 files/ 를 정리했으면 다시 올린다.
+    final shared = Set.of(present ?? await listShared(sharedFiles));
     final contis = await db.query('worship_contis', orderBy: 'uid');
     final items = await db.rawQuery('''
       SELECT wci.*, ps.uid AS cur_song_uid, ps.title AS cur_title,
@@ -71,6 +80,7 @@ class ContiSyncRepository {
     // 지운 콘티의 캐시는 버린다 — 남아 있으면 그 파일이 사라졌다고 매번 다시 맞춘다.
     _exported.removeWhere((uid, _) => !contis.any((c) => c['uid'] == uid));
     final result = <SyncConti>[];
+    var failed = false;
     for (final conti in contis) {
       final uid = conti['uid'] as String;
       final updatedAt = (conti['updated_at'] as int?) ?? 0;
@@ -78,7 +88,7 @@ class ContiSyncRepository {
       if (cached != null &&
           cached.updatedAt == updatedAt &&
           cached.shared == sharedFiles.path &&
-          present.containsAll(cached.files)) {
+          shared.containsAll(cached.files)) {
         result.add(cached.conti);
         continue;
       }
@@ -88,7 +98,7 @@ class ContiSyncRepository {
           conti,
           itemsByConti[conti['id']] ?? const [],
           files: files,
-          present: present,
+          present: shared,
           sharedFiles: sharedFiles,
           localFiles: localFiles,
         );
@@ -100,8 +110,11 @@ class ContiSyncRepository {
         );
         result.add(built);
       } on FileSystemException catch (error) {
-        // 이미지 하나를 못 올렸다고 곡·다른 콘티까지 못 올리면 안 된다. 이 콘티만 다음에 다시.
-        // (빠진 콘티는 지운 게 아니므로 다른 PC 에서 사라지지 않는다.)
+        // 이미지 하나를 못 올렸다고 곡·다른 콘티까지 못 올리면 안 된다. 이 콘티만 다음에 다시
+        // (서비스가 간격을 늘려 다시 부른다). 빠진 콘티는 지운 게 아니므로 다른 PC 에서 사라지지 않는다.
+        // 옛 캐시를 남기면 그 파일이 없다고 매번 다시 맞추므로 버린다.
+        _exported.remove(uid);
+        failed = true;
         await AppLogger.instance.info(
           '[sync] 콘티 올리기 건너뜀 "${conti['name']}": $error',
         );
@@ -113,6 +126,7 @@ class ContiSyncRepository {
         for (final r in await db.query('conti_tombstones', orderBy: 'uid'))
           r['uid'] as String: r['deleted_at'] as int,
       },
+      failed: failed,
     );
   }
 
@@ -161,6 +175,7 @@ class ContiSyncRepository {
         ].join('\n');
       }
       item['background'] = await _mapBackgroundAsync(row['background'], pack);
+      item['media'] = _shareableMedia(row['media']);
       syncItems.add(item);
     }
     return SyncConti(
@@ -303,6 +318,7 @@ class ContiSyncRepository {
             row['background'],
             (v) => _receivedPath(v, localFiles),
           );
+          row['media'] = _shareableMedia(row['media']);
           // 합쳐진 uid 도 따라간다. 이 PC 에 없는 곡이면 null — 콘티는 가사 스냅샷을 들고 있어
           // 곡이 없어도 불러와진다.
           final songUid = row['song_uid'];
@@ -315,15 +331,16 @@ class ContiSyncRepository {
         }
       }
 
-      // 곡보다 콘티가 먼저 온 경우(그 곡을 가진 PC 파일을 이번엔 못 읽음 등) 곡이 들어온 뒤에 잇는다.
+      // 곡 링크를 곡 uid 로 다시 맞춘다 — 곡보다 콘티가 먼저 왔거나(그 곡을 가진 PC 파일을
+      // 이번엔 못 읽음 등), 잇던 곡이 지워졌다 다른 id 로 돌아왔거나, 같은 곡으로 합쳐진 경우.
       for (final r in await txn.query(
         'worship_conti_items',
-        columns: ['id', 'song_uid'],
-        where: 'song_uid IS NOT NULL AND song_id IS NULL',
+        columns: ['id', 'song_uid', 'song_id'],
+        where: 'song_uid IS NOT NULL',
       )) {
         final songId =
             songIdByUid[resolveSongUid(aliases, r['song_uid'] as String)];
-        if (songId == null) continue;
+        if (songId == null || songId == r['song_id']) continue;
         await txn.update(
           'worship_conti_items',
           {'song_id': songId},
@@ -415,13 +432,16 @@ class ContiSyncRepository {
     return RegExp(r'^\.[a-z0-9]{1,8}$').hasMatch(ext) ? ext : '';
   }
 
-  static Future<Set<String>> _listNames(Directory dir) async {
-    final names = <String>{};
-    if (!await dir.exists()) return names;
-    await for (final entity in dir.list()) {
-      if (entity is File) names.add(p.basename(entity.path));
+  /// 미디어 페이지는 유튜브만 넘긴다. 동영상·음악 파일 경로는 보낸 PC 의 로컬 경로라
+  /// 받는 PC 에서 없는 파일이거나 엉뚱한 파일이다(파일 자체는 싣지 않는다 — `.wsconti` 와 같다).
+  static Object? _shareableMedia(Object? stored) {
+    if (stored is! String || stored.isEmpty) return null;
+    try {
+      final json = jsonDecode(stored);
+      return json is Map && json['kind'] == 'youtube' ? stored : null;
+    } on FormatException {
+      return null;
     }
-    return names;
   }
 
   /// 콘티 항목이 실제로 가리키는 공유 파일 이름들. 남이 쓴 파일이라 '../' 같은 이름이

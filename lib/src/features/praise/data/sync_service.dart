@@ -96,6 +96,7 @@ class SyncService {
   static const _interval = Duration(minutes: 1);
   static const _debounce = Duration(seconds: 3);
   static const _maxRetry = Duration(minutes: 30);
+  static const _filesCheckInterval = Duration(minutes: 10);
 
   final SongSyncRepository _songs;
   final ContiSyncRepository _contis;
@@ -110,7 +111,8 @@ class SyncService {
 
   String? _deviceId;
 
-  /// 이번 실행이 쓰는 내 파일 표시([SyncSnapshot.writer]). 설정에는 마지막으로 쓴 값을 남긴다.
+  /// 이번 실행이 쓰는 내 파일 표시([SyncSnapshot.writer]). 설정에는 남기지 않는다 —
+  /// 지난 실행의 파일은 [_lastWrittenAt] 으로 알아본다.
   final String _writer = newSongUid();
 
   /// 이 PC 가 마지막으로 내 파일을 쓴 시각(ms). 설정에 남기고, **파일보다 먼저** 저장한다.
@@ -139,6 +141,12 @@ class SyncService {
   /// 늘린다 — 영영 안 고쳐지는 파일 때문에 매분 전체를 다시 읽지 않게.
   DateTime? _nextRetry;
   Duration _retryDelay = _interval;
+
+  /// 지난번에 콘티 이미지를 다 못 올렸다 — 다시 볼 차례에 내 파일을 다시 만든다.
+  bool _exportFailed = false;
+
+  /// 다음에 공유 files/ 목록을 볼 시각.
+  DateTime? _nextFilesCheck;
 
   String get deviceId => _deviceId ?? '';
 
@@ -188,6 +196,8 @@ class SyncService {
       _localDirty = true;
       _nextRetry = null;
       _retryDelay = _interval;
+      _exportFailed = false;
+      _nextFilesCheck = null;
       _setStatus(SyncStatus(folder: folder));
       _restartTimer();
     });
@@ -256,6 +266,7 @@ class SyncService {
     if (_disposed || folder == null) return null;
     _setStatus(status.value.copyWith(syncing: true));
     var hadLocalChanges = false;
+    var merged = false;
     try {
       if (!await Directory(folder).exists()) {
         throw const FileSystemException(
@@ -297,14 +308,27 @@ class SyncService {
       hadLocalChanges = hadLocalChanges || _localDirty;
       _localDirty = false;
       final ownMissing = !await File(ownPath).exists();
-      final retryPending =
-          _nextRetry != null && !_clock().isBefore(_nextRetry!);
-      final filesMissing = await _contis.sharedFilesMissing(sharedFiles);
+      final retryDue = _nextRetry != null && !_clock().isBefore(_nextRetry!);
+      // 공유 files/ 목록은 내 파일을 쓸 수도 있는 차례엔 늘, 아니면 10분에 한 번만 본다
+      // (누가 files/ 를 정리했는지 알아채려고. 드라이브 폴더 목록이 공짜는 아니다).
+      final checkFiles =
+          remoteChanged ||
+          hadLocalChanges ||
+          ownMissing ||
+          retryDue ||
+          _nextFilesCheck == null ||
+          !_clock().isBefore(_nextFilesCheck!);
+      final present = checkFiles
+          ? await ContiSyncRepository.listShared(sharedFiles)
+          : null;
+      if (checkFiles) _nextFilesCheck = _clock().add(_filesCheckInterval);
+      final filesMissing =
+          present != null && _contis.sharedFilesMissing(sharedFiles, present);
       if (!remoteChanged &&
           !hadLocalChanges &&
           !ownMissing &&
           !filesMissing &&
-          !retryPending) {
+          !retryDue) {
         _setStatus(
           status.value.copyWith(
             syncing: false,
@@ -322,24 +346,43 @@ class SyncService {
       ];
       // 곡을 먼저 합쳐야 콘티의 곡 항목이 이 PC 의 곡에 이어진다.
       final songs = await _songs.merge(snapshots);
+      merged = true;
       final contis = await _contis.merge(
         snapshots,
         sharedFiles: sharedFiles,
         localFiles: localFiles,
       );
       final result = SyncResult(songs: songs, contis: contis);
+      // 내 파일을 쓰기 전에 화면부터 맞춘다 — 쓰기가 실패해도 들어온 곡은 이미 DB 에 있다.
+      if (result.changed) {
+        String counts(SyncMergeResult r) =>
+            '추가 ${r.addedCount} · 수정 ${r.updatedCount} · 삭제 ${r.deletedCount}';
+        await AppLogger.instance.info(
+          '[sync] 곡 ${counts(result.songs)} / 콘티 ${counts(result.contis)}',
+        );
+        if (!_disposed) onMerged?.call(result);
+      }
       // 다른 PC 파일만 바뀌고 이 PC 에 들어온 게 없으면 내 파일은 그대로다 — 다시 만들지 않는다.
+      var exportFailed = false;
       if (hadLocalChanges ||
           ownMissing ||
           filesMissing ||
           result.changed ||
           songs.stateChanged ||
-          contis.stateChanged) {
-        await _writeOwn(ownPath, sharedFiles, localFiles, force: ownMissing);
+          contis.stateChanged ||
+          (retryDue && _exportFailed)) {
+        exportFailed = await _writeOwn(
+          ownPath,
+          sharedFiles,
+          localFiles,
+          present: present,
+          force: ownMissing,
+        );
       }
+      _exportFailed = exportFailed;
       _lastRemoteSignature = signature;
-      // 받지 못한 콘티나 못 읽은 파일(드라이브가 아직 내려받는 중)이 있으면 조금 뒤에 다시 본다.
-      _scheduleRetry(contis.pendingCount > 0 || read.failed);
+      // 받지 못한 콘티·못 읽은 파일(드라이브가 아직 내려받는 중)·못 올린 콘티 이미지가 있으면 조금 뒤에 다시 본다.
+      _scheduleRetry(contis.pendingCount > 0 || read.failed || exportFailed);
 
       _setStatus(
         status.value.copyWith(
@@ -353,18 +396,10 @@ class SyncService {
           pendingContis: contis.pendingCount,
         ),
       );
-      if (result.changed) {
-        String counts(SyncMergeResult r) =>
-            '추가 ${r.addedCount} · 수정 ${r.updatedCount} · 삭제 ${r.deletedCount}';
-        await AppLogger.instance.info(
-          '[sync] 곡 ${counts(result.songs)} / 콘티 ${counts(result.contis)}',
-        );
-        if (!_disposed) onMerged?.call(result);
-      }
       return result;
     } catch (error, stack) {
-      // 쓰지 못한 이 PC 의 수정은 다음 차례에 다시 쓴다.
-      if (hadLocalChanges) _localDirty = true;
+      // 쓰지 못한 이 PC 의 수정(또는 이미 DB 에 들어온 합치기 결과)은 다음 차례에 다시 쓴다.
+      if (hadLocalChanges || merged) _localDirty = true;
       await AppLogger.instance.error('동기화 실패', error, stack);
       _setStatus(
         status.value.copyWith(
@@ -440,11 +475,13 @@ class SyncService {
 
   /// 내 파일은 내용이 바뀌었을 때만 쓴다(드라이브가 쓸데없이 올리지 않게).
   /// 임시 파일에 쓰고 이름을 바꿔, 다른 PC 가 반쯤 쓴 파일을 읽지 않게 한다.
-  /// [force] 면 내용이 같아도 쓴다(내 파일이 사라졌을 때).
-  Future<void> _writeOwn(
+  /// [force] 면 내용이 같아도 쓴다(내 파일이 사라졌을 때). [present] 는 이번 차례에 본 공유
+  /// files/ 목록(없으면 새로 본다). 콘티 이미지를 다 못 올렸으면 true.
+  Future<bool> _writeOwn(
     String path,
     Directory sharedFiles,
     Directory localFiles, {
+    Set<String>? present,
     bool force = false,
   }) async {
     // 시각은 늘 앞으로만 간다(시계가 같은 ms 를 돌려줘도).
@@ -459,11 +496,12 @@ class SyncService {
     final contis = await _contis.export(
       sharedFiles: sharedFiles,
       localFiles: localFiles,
+      present: present,
     );
     final snapshot = songs.withContis(contis.contis, contis.deleted);
     // 쓴 시각은 내용 비교에서 뺀다 — 넣으면 바뀐 게 없어도 매번 다시 쓴다.
     final body = await Isolate.run(() => jsonEncode(snapshot.toJson()));
-    if (!force && body == _lastWrittenText) return;
+    if (!force && body == _lastWrittenText) return contis.failed;
     final text = '{"written_at":$writtenAt,${body.substring(1)}';
     // 쓴 시각을 설정에 먼저 남긴다. 못 남기면 쓰지 않는다 — 남기지 못한 채 쓰면 다음 실행이
     // 내 파일을 "다른 PC 가 쓴 것"으로 오해한다.
@@ -482,6 +520,7 @@ class SyncService {
     }
     _lastWrittenText = body;
     _ownStat = await file.stat();
+    return contis.failed;
   }
 
   /// 내 파일(이 기기 id)을 다른 PC 가 쓰고 있으면 true. 내가 쓴 뒤로 파일이 바뀌었을 때만

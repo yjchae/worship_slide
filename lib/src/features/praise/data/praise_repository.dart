@@ -78,7 +78,14 @@ class PraiseRepository {
     await db.transaction((txn) async {
       final old = await txn.query(
         'praise_songs',
-        columns: ['uid', 'updated_at', 'title', 'lyrics', 'english_lyrics'],
+        columns: [
+          'uid',
+          'updated_at',
+          'file_name',
+          'title',
+          'lyrics',
+          'english_lyrics',
+        ],
       );
       String keyOf(Object? title, Object? lyrics, Object? english) =>
           SyncSong.contentKeyOf(
@@ -104,7 +111,10 @@ class PraiseRepository {
         if (same != null && same.isNotEmpty) {
           final kept = same.removeLast();
           row['uid'] = kept['uid'] ?? row['uid'];
-          row['updated_at'] = kept['updated_at'] ?? now;
+          // 파일 이름만 바뀌었으면 고친 것으로 친다 — 옛 시각이면 다른 PC 의 옛 이름에 진다.
+          if (kept['file_name'] == song.fileName) {
+            row['updated_at'] = kept['updated_at'] ?? now;
+          }
         }
         await txn.insert('praise_songs', row);
         savedCount += 1;

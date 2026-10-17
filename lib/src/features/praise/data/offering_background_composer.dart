@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../domain/offering_design.dart';
 import '../presentation/offering_overlay_painter.dart';
+import 'atomic_file.dart';
 import 'fnv_hash.dart';
 
 /// 헌금송 디자인을 1920x1080 PNG 한 장으로 굽는다.
@@ -34,12 +35,14 @@ class OfferingBackgroundComposer {
     );
     if (await file.exists()) return file.path;
 
-    await dir.create(recursive: true);
     final bytes = await renderPng(design);
     // 굽다가 앱이 꺼져도 반쪽짜리 파일이 캐시로 남지 않게 임시 파일에 쓰고 바꾼다.
-    final temp = File('${file.path}.tmp');
-    await temp.writeAsBytes(bytes, flush: true);
-    await temp.rename(file.path);
+    // 같은 키를 동시에 구우면 내용도 같으므로 먼저 끝난 쪽 것을 둔다.
+    await atomicWrite(
+      file,
+      (temp) => temp.writeAsBytes(bytes, flush: true),
+      overwrite: false,
+    );
     return file.path;
   }
 
