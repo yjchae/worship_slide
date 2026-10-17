@@ -26,7 +26,6 @@ class SongSyncRepository {
     required String deviceId,
     required String deviceName,
     String writer = '',
-    int writtenAt = 0,
   }) async {
     final db = await _databaseProvider.database;
     final rows = await db.query('praise_songs', orderBy: 'uid');
@@ -34,7 +33,6 @@ class SongSyncRepository {
       deviceId: deviceId,
       deviceName: deviceName,
       writer: writer,
-      writtenAt: writtenAt,
       songs: [for (final row in rows) _songFromRow(row)],
       deleted: await _tombstones(db),
       deletedContent: {
@@ -296,7 +294,21 @@ class SongSyncRepository {
         current = _LocalSong(current.id, song.withUid(uid));
       }
       final other = result[uid];
+      if (other != null && other.song.contentKey != current.song.contentKey) {
+        // 합칠 때는 같은 곡이었지만 그 뒤에 한쪽을 고쳤다 — 가사가 다른 곡은 둘 다 남긴다는 규칙대로
+        // 지우지 않고 새 uid 를 줘 따로 남긴다.
+        final fresh = current.song.withUid(newSongUid());
+        await txn.update(
+          'praise_songs',
+          {'uid': fresh.uid},
+          where: 'id = ?',
+          whereArgs: [current.id],
+        );
+        result[fresh.uid] = _LocalSong(current.id, fresh);
+        continue;
+      }
       if (other != null) {
+        // 내용까지 같은 중복 — 하나만 남긴다(콘티 곡 링크는 곡 uid 로 다시 맞춰진다).
         final loser = current.song.winsOver(other.song) ? other : current;
         await txn.delete(
           'praise_songs',

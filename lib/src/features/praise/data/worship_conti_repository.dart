@@ -344,20 +344,7 @@ class WorshipContiRepository {
 
     final items = <Map<String, Object?>>[];
     for (final row in itemRows) {
-      final item = Map<String, Object?>.of(row)
-        ..remove('id')
-        ..remove('conti_id')
-        ..remove('song_id')
-        ..remove('cur_title')
-        ..remove('cur_lyrics')
-        ..remove('cur_english_lyrics')
-        // 원본 PPT 경로는 이 PC 에서만 뜻이 있다(받는 쪽은 다시 굽기만 못 한다).
-        ..remove('image_source_path');
-      if (row['item_type'] == 'song') {
-        item['song_title'] ??= row['cur_title'];
-        item['song_lyrics'] ??= row['cur_lyrics'];
-        item['song_english_lyrics'] ??= row['cur_english_lyrics'];
-      }
+      final item = portableItemRow(row);
       final imagePaths = row['image_paths'] as String?;
       if (imagePaths != null) {
         item['image_paths'] = imagePaths.split('\n').map(pack).join('\n');
@@ -421,12 +408,7 @@ class WorshipContiRepository {
 
     final db = await _db.database;
     // 더 새 버전 앱이 만든 파일의 모르는 칸은 버린다.
-    final columns = {
-      for (final c in await db.rawQuery(
-        'PRAGMA table_info(worship_conti_items)',
-      ))
-        c['name'] as String,
-    }..removeAll(['id', 'conti_id', 'song_id']);
+    final columns = await receivableItemColumns(db);
 
     final now = DateTime.now().millisecondsSinceEpoch;
     final importedId = await db.transaction((txn) async {
@@ -465,24 +447,84 @@ class WorshipContiRepository {
     Object? stored,
     String? Function(String?) map,
   ) {
-    if (stored is! String || stored.isEmpty) return stored;
+    final json = _decodeBackground(stored);
+    if (json == null) return stored;
+    for (final slot in _backgroundPathSlots(json)) {
+      slot.set(map(slot.value));
+    }
+    return jsonEncode(json);
+  }
+
+  /// [mapBackgroundPaths] 의 비동기판(경로마다 파일을 올리는 동기화용). JSON 은 한 번만 푼다.
+  static Future<Object?> mapBackgroundPathsAsync(
+    Object? stored,
+    Future<String?> Function(String?) map,
+  ) async {
+    final json = _decodeBackground(stored);
+    if (json == null) return stored;
+    for (final slot in _backgroundPathSlots(json)) {
+      slot.set(await map(slot.value));
+    }
+    return jsonEncode(json);
+  }
+
+  static Map<dynamic, dynamic>? _decodeBackground(Object? stored) {
+    if (stored is! String || stored.isEmpty) return null;
     try {
       final json = jsonDecode(stored);
-      if (json is! Map) return stored;
-      if (json['image_path'] is String) {
-        json['image_path'] = map(json['image_path'] as String);
-      }
-      final offering = json['offering'];
-      if (offering is Map && offering['background_image_path'] is String) {
-        offering['background_image_path'] = map(
-          offering['background_image_path'] as String,
-        );
-      }
-      return jsonEncode(json);
-    } catch (_) {
-      return stored;
+      return json is Map ? json : null;
+    } on FormatException {
+      return null;
     }
   }
+
+  /// 배경 JSON 안의 경로 칸: 배경 이미지, 헌금송 디자인의 원본 배경.
+  static List<({String value, void Function(String?) set})>
+  _backgroundPathSlots(Map<dynamic, dynamic> json) {
+    final offering = json['offering'];
+    return [
+      if (json['image_path'] is String)
+        (
+          value: json['image_path'] as String,
+          set: (v) => json['image_path'] = v,
+        ),
+      if (offering is Map && offering['background_image_path'] is String)
+        (
+          value: offering['background_image_path'] as String,
+          set: (v) => offering['background_image_path'] = v,
+        ),
+    ];
+  }
+
+  /// 다른 PC 로 보낼 항목 행(.wsconti·동기화 공용). 이 PC 에서만 뜻이 있는 칸(id·conti_id·song_id·
+  /// 원본 PPT 경로)과 `cur_` 로 시작하는 곁들인 칸을 빼고, 빈 곡 스냅샷은 지금 곡(`cur_title`·
+  /// `cur_lyrics`·`cur_english_lyrics`)으로 채운다 — 예전(DB version 7·13 전) 콘티는 스냅샷이 비어
+  /// 있어서, 받는 PC 에 그 곡이 없으면 항목이 통째로 빠진다.
+  static Map<String, Object?> portableItemRow(Map<String, Object?> row) {
+    final item = Map<String, Object?>.of(row)
+      ..remove('id')
+      ..remove('conti_id')
+      ..remove('song_id')
+      // 원본 PPT 경로는 이 PC 에서만 뜻이 있다(받는 쪽은 다시 굽기만 못 한다).
+      ..remove('image_source_path')
+      ..removeWhere((key, _) => key.startsWith('cur_'));
+    if (row['item_type'] == 'song') {
+      item['song_title'] ??= row['cur_title'];
+      item['song_lyrics'] ??= row['cur_lyrics'];
+      item['song_english_lyrics'] ??= row['cur_english_lyrics'];
+    }
+    return item;
+  }
+
+  /// 다른 PC 가 보낸 항목에서 받을 칸(.wsconti·동기화 공용). 더 새 버전 앱이 보낸 모르는 칸은
+  /// 버리고, song_id 는 이 PC 의 곡으로 다시 잇는다.
+  static Future<Set<String>> receivableItemColumns(DatabaseExecutor db) async =>
+      {
+        for (final c in await db.rawQuery(
+          'PRAGMA table_info(worship_conti_items)',
+        ))
+          c['name'] as String,
+      }..removeAll(['id', 'conti_id', 'song_id']);
 
   Future<void> deleteConti(int contiId) async {
     final db = await _db.database;

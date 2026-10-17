@@ -36,6 +36,11 @@ class PraiseRepository {
 
   static int _now() => DateTime.now().millisecondsSinceEpoch;
 
+  /// 고치거나 지운 시각. 그 곡의 지금 시각([previous])보다 늘 늦게 찍는다 — 시계가 앞선 PC 에서 온
+  /// 곡을 이 PC 에서 고치거나 지웠는데 시각이 더 일러서 다음 합치기에 되돌아가지 않게.
+  static int _after(Object? previous, int now) =>
+      previous is int && previous >= now ? previous + 1 : now;
+
   /// 새로 넣는 곡의 행. 동기화용 uid 와 고친 시각을 붙인다.
   static Map<String, Object?> _newSongRow(PraiseSong song, int now) =>
       song.toMap()
@@ -43,7 +48,13 @@ class PraiseRepository {
         ..['uid'] = newSongUid()
         ..['updated_at'] = now;
 
-  static const _tombstoneColumns = ['uid', 'title', 'lyrics', 'english_lyrics'];
+  static const _tombstoneColumns = [
+    'uid',
+    'updated_at',
+    'title',
+    'lyrics',
+    'english_lyrics',
+  ];
 
   /// 지운 곡을 다른 PC 에 알리려고 uid 와 내용 해시를 남긴다.
   /// [rows] 에는 [_tombstoneColumns] 가 있어야 한다.
@@ -57,7 +68,7 @@ class PraiseRepository {
       if (uid == null) continue;
       await txn.insert('song_tombstones', {
         'uid': uid,
-        'deleted_at': now,
+        'deleted_at': _after(row['updated_at'], now),
         'content_hash': SyncSong.contentHashOf(
           row['title'] as String,
           row['lyrics'] as String,
@@ -140,7 +151,7 @@ class PraiseRepository {
       for (final song in songs) {
         final existing = await txn.query(
           'praise_songs',
-          columns: ['id', 'lyrics', 'english_lyrics'],
+          columns: ['id', 'lyrics', 'english_lyrics', 'updated_at'],
           where: 'title = ?',
           whereArgs: [song.title],
         );
@@ -167,7 +178,7 @@ class PraiseRepository {
             {
               'lyrics': song.lyrics,
               'english_lyrics': song.englishLyrics,
-              'updated_at': now,
+              'updated_at': _after(resplit.first['updated_at'], now),
             },
             where: 'id = ?',
             whereArgs: [resplit.first['id']],
@@ -296,7 +307,7 @@ class PraiseRepository {
       'praise_songs',
       song.toMap()
         ..remove('id')
-        ..['updated_at'] = _now(),
+        ..['updated_at'] = _after(current.firstOrNull?['updated_at'], _now()),
       where: 'id = ?',
       whereArgs: [song.id],
     );
@@ -382,10 +393,11 @@ class PraiseRepository {
           where: 'language = ?',
           whereArgs: [language],
         ))
-          r['song_title'] as String: r['lyrics'] as String,
+          r['song_title'] as String: r,
       };
       for (final entry in lyricsByTitle.entries) {
         final old = before[entry.key];
+        final at = _after(old?['updated_at'], now);
         if (entry.value.trim().isEmpty) {
           if (old == null) continue;
           await txn.delete(
@@ -393,17 +405,17 @@ class PraiseRepository {
             where: 'song_title = ? AND language = ?',
             whereArgs: [entry.key, language],
           );
-          await _addTranslationTombstone(txn, entry.key, language, now);
+          await _addTranslationTombstone(txn, entry.key, language, at);
           changed = true;
           continue;
         }
-        if (old == entry.value) continue;
+        if (old?['lyrics'] == entry.value) continue;
         changed = true;
         await txn.insert('song_translations', {
           'song_title': entry.key,
           'language': language,
           'lyrics': entry.value,
-          'updated_at': now,
+          'updated_at': at,
         }, conflictAlgorithm: ConflictAlgorithm.replace);
       }
     });
@@ -425,7 +437,7 @@ class PraiseRepository {
     await db.transaction((txn) async {
       final rows = await txn.query(
         'song_translations',
-        columns: ['song_title'],
+        columns: ['song_title', 'updated_at'],
         where: 'language = ?',
         whereArgs: [language],
       );
@@ -435,7 +447,7 @@ class PraiseRepository {
           txn,
           row['song_title'] as String,
           language,
-          now,
+          _after(row['updated_at'], now),
         );
       }
       await txn.delete(
@@ -548,11 +560,10 @@ class PraiseRepository {
           dbTitle = found.title;
           skipped += 1;
           if (found.noEnglish && english.trim().isNotEmpty) {
-            await txn.update(
-              'praise_songs',
-              {'english_lyrics': english, 'updated_at': now},
-              where: 'id = ?',
-              whereArgs: [found.id],
+            await txn.rawUpdate(
+              'UPDATE praise_songs SET english_lyrics = ?, '
+              'updated_at = MAX(updated_at + 1, ?) WHERE id = ?',
+              [english, now, found.id],
             );
             existing[key] = (
               id: found.id,

@@ -63,7 +63,11 @@ class ContiSyncRepository {
   }) async {
     final db = await _databaseProvider.database;
     // 공유 폴더에 지금 있는 파일. 누가 files/ 를 정리했으면 다시 올린다.
-    final shared = Set.of(present ?? await listShared(sharedFiles));
+    // 목록을 안 받았으면 다시 만들 콘티가 있을 때만 본다(곡만 고친 차례엔 드라이브 폴더를 안 읽는다).
+    final given = present == null ? null : Set.of(present);
+    Set<String>? listed;
+    Future<Set<String>> shared() async =>
+        given ?? (listed ??= Set.of(await listShared(sharedFiles)));
     final contis = await db.query('worship_contis', orderBy: 'uid');
     final items = await db.rawQuery('''
       SELECT wci.*, ps.uid AS cur_song_uid, ps.title AS cur_title,
@@ -88,7 +92,7 @@ class ContiSyncRepository {
       if (cached != null &&
           cached.updatedAt == updatedAt &&
           cached.shared == sharedFiles.path &&
-          shared.containsAll(cached.files)) {
+          (given == null || given.containsAll(cached.files))) {
         result.add(cached.conti);
         continue;
       }
@@ -98,7 +102,7 @@ class ContiSyncRepository {
           conti,
           itemsByConti[conti['id']] ?? const [],
           files: files,
-          present: shared,
+          present: await shared(),
           sharedFiles: sharedFiles,
           localFiles: localFiles,
         );
@@ -148,23 +152,7 @@ class ContiSyncRepository {
 
     final syncItems = <Map<String, Object?>>[];
     for (final row in rows) {
-      final item = Map<String, Object?>.of(row)
-        ..remove('id')
-        ..remove('conti_id')
-        ..remove('song_id')
-        ..remove('cur_song_uid')
-        ..remove('cur_title')
-        ..remove('cur_lyrics')
-        ..remove('cur_english_lyrics')
-        // 원본 PPT 경로는 이 PC 에서만 뜻이 있다.
-        ..remove('image_source_path');
-      if (row['item_type'] == 'song') {
-        // 예전(DB version 7·13 전) 콘티는 가사·제목 스냅샷이 비어 있다. 받는 PC 에 그 곡이
-        // 없으면 항목이 통째로 빠지므로 지금 곡으로 채운다(.wsconti 내보내기와 같다).
-        item['song_title'] ??= row['cur_title'];
-        item['song_lyrics'] ??= row['cur_lyrics'];
-        item['song_english_lyrics'] ??= row['cur_english_lyrics'];
-      }
+      final item = WorshipContiRepository.portableItemRow(row);
       // 저장할 때 적어 둔 곡 uid 를 먼저 쓴다 — 받은 콘티의 곡이 이 PC 에 없어도 링크가 남는다.
       item['song_uid'] ??= row['cur_song_uid'];
       if (item['song_uid'] == null) item.remove('song_uid');
@@ -174,7 +162,10 @@ class ContiSyncRepository {
           for (final path in imagePaths.split('\n')) await pack(path),
         ].join('\n');
       }
-      item['background'] = await _mapBackgroundAsync(row['background'], pack);
+      item['background'] = await WorshipContiRepository.mapBackgroundPathsAsync(
+        row['background'],
+        pack,
+      );
       item['media'] = _shareableMedia(row['media']);
       syncItems.add(item);
     }
@@ -189,10 +180,12 @@ class ContiSyncRepository {
 
   /// 다른 PC 들의 콘티를 이 PC 에 합친다. 곡 합치기가 끝난 뒤에 불러야
   /// 곡 항목이 이 PC 의 곡(id)에 이어진다.
+  /// [songsChanged] 면(곡 합치기에서 곡·합친 uid 가 바뀜) 저장 콘티 전체의 곡 링크를 다시 맞춘다.
   Future<SyncMergeResult> merge(
     List<SyncSnapshot> remotes, {
     required Directory sharedFiles,
     required Directory localFiles,
+    bool songsChanged = true,
   }) async {
     final db = await _databaseProvider.database;
 
@@ -220,20 +213,16 @@ class ContiSyncRepository {
         r['uid'] as String: (r['updated_at'] as int?) ?? 0,
     };
 
-    // 더 새 버전 앱이 보낸 모르는 칸은 버린다. song_id 는 이 PC 의 곡으로 다시 잇는다.
-    final columns = {
-      for (final c in await db.rawQuery(
-        'PRAGMA table_info(worship_conti_items)',
-      ))
-        c['name'] as String,
-    }..removeAll(['id', 'conti_id', 'song_id', 'image_source_path']);
+    final columns = await WorshipContiRepository.receivableItemColumns(db)
+      ..remove('image_source_path');
 
     // 받을 콘티를 고르고 파일부터 내려받는다(DB 트랜잭션을 파일 복사 동안 잡고 있지 않게).
     final incoming = <({SyncConti conti, List<Map<String, Object?>> rows})>[];
     var pending = 0;
     for (final conti in newest.values) {
-      final deletedAt = tombstones[conti.uid];
-      if (deletedAt != null && deletedAt >= conti.updatedAt) continue;
+      // 콘티는 저장하면 안 바뀌므로 지운 기록이 있으면 시각과 상관없이 지운 쪽이 이긴다
+      // (시계가 뒤진 PC 에서 지운 콘티가 되살아나지 않게).
+      if (tombstones.containsKey(conti.uid)) continue;
       final mine = localUpdatedAt[conti.uid];
       if (mine != null && mine >= conti.updatedAt) continue;
       // 남이 쓴 파일이라 값 모양·파일 이름을 먼저 본다. 이상하면 받지 않는다
@@ -333,11 +322,14 @@ class ContiSyncRepository {
 
       // 곡 링크를 곡 uid 로 다시 맞춘다 — 곡보다 콘티가 먼저 왔거나(그 곡을 가진 PC 파일을
       // 이번엔 못 읽음 등), 잇던 곡이 지워졌다 다른 id 로 돌아왔거나, 같은 곡으로 합쳐진 경우.
-      for (final r in await txn.query(
-        'worship_conti_items',
-        columns: ['id', 'song_uid', 'song_id'],
-        where: 'song_uid IS NOT NULL',
-      )) {
+      for (final r
+          in songsChanged || incoming.isNotEmpty
+              ? await txn.query(
+                  'worship_conti_items',
+                  columns: ['id', 'song_uid', 'song_id'],
+                  where: 'song_uid IS NOT NULL',
+                )
+              : const <Map<String, Object?>>[]) {
         final songId =
             songIdByUid[resolveSongUid(aliases, r['song_uid'] as String)];
         if (songId == null || songId == r['song_id']) continue;
@@ -363,7 +355,7 @@ class ContiSyncRepository {
       };
       for (final entry in tombstones.entries) {
         final mine = localNow[entry.key];
-        if (mine != null && mine.updatedAt <= entry.value) {
+        if (mine != null) {
           await txn.delete(
             'worship_conti_items',
             where: 'conti_id = ?',
@@ -515,18 +507,4 @@ class ContiSyncRepository {
   /// 이미지 페이지 자리를 지키는 없는 파일 경로. 불러오기가 '유실'로 센다.
   static String _missing(Directory localFiles) =>
       p.join(localFiles.path, '.missing');
-
-  static Future<Object?> _mapBackgroundAsync(
-    Object? stored,
-    Future<String?> Function(String?) map,
-  ) async {
-    // mapBackgroundPaths 는 동기 콜백이라, 경로를 먼저 모아 올린 뒤 결과로 바꿔 쓴다.
-    final paths = <String?>[];
-    WorshipContiRepository.mapBackgroundPaths(stored, (v) {
-      paths.add(v);
-      return v;
-    });
-    final mapped = {for (final v in paths) v: await map(v)};
-    return WorshipContiRepository.mapBackgroundPaths(stored, (v) => mapped[v]);
-  }
 }

@@ -154,7 +154,11 @@ class SyncService {
       File(p.join((await _settingsDirectory()).path, _settingsFile));
 
   /// 저장해 둔 설정을 읽고, 폴더가 있으면 바로 한 번 맞춘 뒤 1분마다 맞춘다.
-  Future<void> load() async {
+  /// 큐로 돈다 — 다 읽기 전에 [setFolder] 가 기기 id 없는 설정을 저장하거나, 다 읽은 뒤
+  /// 옛 폴더로 상태를 덮지 않게.
+  Future<void> load() => _enqueue(_load);
+
+  Future<void> _load() async {
     String? folder;
     String? settingsError;
     try {
@@ -182,6 +186,7 @@ class SyncService {
     if (_disposed) return;
     _setStatus(SyncStatus(folder: folder, lastError: settingsError));
     _restartTimer();
+    // 큐 안이라 기다리지 않고 맡겨만 둔다(기다리면 자기 자신을 기다린다).
     if (folder != null) unawaited(syncNow());
   }
 
@@ -309,11 +314,9 @@ class SyncService {
       _localDirty = false;
       final ownMissing = !await File(ownPath).exists();
       final retryDue = _nextRetry != null && !_clock().isBefore(_nextRetry!);
-      // 공유 files/ 목록은 내 파일을 쓸 수도 있는 차례엔 늘, 아니면 10분에 한 번만 본다
-      // (누가 files/ 를 정리했는지 알아채려고. 드라이브 폴더 목록이 공짜는 아니다).
+      // 공유 files/ 목록은 10분에 한 번(누가 files/ 를 정리했는지 알아채려고)만 본다 —
+      // 곡을 고칠 때마다 드라이브 폴더를 읽지 않게. 내보낼 콘티가 있으면 그때 export 가 본다.
       final checkFiles =
-          remoteChanged ||
-          hadLocalChanges ||
           ownMissing ||
           retryDue ||
           _nextFilesCheck == null ||
@@ -351,6 +354,7 @@ class SyncService {
         snapshots,
         sharedFiles: sharedFiles,
         localFiles: localFiles,
+        songsChanged: songs.changed || songs.stateChanged,
       );
       final result = SyncResult(songs: songs, contis: contis);
       // 내 파일을 쓰기 전에 화면부터 맞춘다 — 쓰기가 실패해도 들어온 곡은 이미 DB 에 있다.
@@ -452,6 +456,13 @@ class SyncService {
               final snapshot = SyncSnapshot.fromJson(
                 jsonDecode(File(path).readAsStringSync()),
               );
+              // 지운 기록 비교에 쓰는 곡 내용 해시를 여기서 미리 계산해 둔다(가사 전체를 훑는다 —
+              // 화면 스레드에서 하면 발표 넘기기가 끊긴다). late final 이라 그대로 넘어간다.
+              if (snapshot != null && snapshot.deletedContent.isNotEmpty) {
+                for (final song in snapshot.songs) {
+                  song.contentHash;
+                }
+              }
               return (snapshot: snapshot, error: null);
             } catch (error) {
               return (snapshot: null, error: '$path: $error');

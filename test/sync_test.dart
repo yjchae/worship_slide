@@ -1089,4 +1089,108 @@ void main() {
       expect((await b.songs()).single.fileName, '새 파일.pptx');
     });
   });
+
+  group('리뷰 6차', () {
+    void writePeer(String id, SyncSnapshot snapshot) =>
+        (File(p.join(shared, SyncService.syncDirName, '$id.json'))
+              ..parent.createSync(recursive: true))
+            .writeAsStringSync(jsonEncode(snapshot.toJson()));
+
+    // 시계가 크게 앞선 PC 에서 온 곡·콘티.
+    final future = DateTime.now().millisecondsSinceEpoch + 3600 * 1000;
+
+    test('시계가 앞선 PC 에서 온 곡도 이 PC 에서 지우면 지워진 채로 남는다', () async {
+      final b = await newPc('B');
+      writePeer(
+        'fast',
+        SyncSnapshot(
+          deviceId: 'fast',
+          deviceName: 'fast',
+          songs: [
+            SyncSong(
+              uid: 's1',
+              updatedAt: future,
+              title: '은혜',
+              fileName: '',
+              lyrics: '가사',
+              englishLyrics: '',
+            ),
+          ],
+          deleted: const {},
+          aliases: const {},
+        ),
+      );
+      await b.sync.syncNow();
+      final got = (await b.songs()).single;
+      await b.repo.deleteSongsByIds([got.id!]);
+      await b.sync.syncNow();
+      expect(await b.songs(), isEmpty);
+    });
+
+    test('시계가 뒤진 PC 에서 지운 콘티도 되살아나지 않는다', () async {
+      final b = await newPc('B');
+      writePeer(
+        'fast',
+        SyncSnapshot(
+          deviceId: 'fast',
+          deviceName: 'fast',
+          songs: const [],
+          deleted: const {},
+          aliases: const {},
+          contis: [
+            SyncConti(
+              uid: 'c1',
+              updatedAt: future,
+              name: '콘티',
+              createdAt: future,
+              items: [
+                {'item_type': 'blank', 'blank_text': '환영'},
+              ],
+            ),
+          ],
+        ),
+      );
+      await b.sync.syncNow();
+      final conti = (await b.contis.listContis()).single;
+      await b.contis.deleteConti(conti.id);
+      await b.sync.syncNow();
+      expect(await b.contis.listContis(), isEmpty);
+    });
+
+    test('합친 뒤 따로 고친 두 곡이 같은 uid 로 모여도 둘 다 남는다', () async {
+      final b = await newPc('B', join: false);
+      await b.repo.insertSong(song('은혜', '편곡 1'));
+      await b.repo.insertSong(song('은혜', '편곡 2'));
+      final db = await databaseFactoryFfi.openDatabase(
+        p.join(b.dir.path, 'a.db'),
+      );
+      addTearDown(db.close);
+      final rows = await db.query('praise_songs', orderBy: 'id');
+      await db.update(
+        'praise_songs',
+        {'uid': 'a'},
+        where: 'id = ?',
+        whereArgs: [rows[0]['id']],
+      );
+      await db.update(
+        'praise_songs',
+        {'uid': 'b'},
+        where: 'id = ?',
+        whereArgs: [rows[1]['id']],
+      );
+      // 다른 PC 가 예전에 b → a 로 합쳤다(그때는 내용이 같았다).
+      writePeer(
+        'p1',
+        SyncSnapshot(
+          deviceId: 'p1',
+          deviceName: 'p1',
+          songs: const [],
+          deleted: const {},
+          aliases: const {'b': 'a'},
+        ),
+      );
+      await b.sync.setFolder(shared);
+      expect(await b.titles(), ['은혜:편곡 1', '은혜:편곡 2']);
+    });
+  });
 }
