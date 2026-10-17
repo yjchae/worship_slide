@@ -1577,7 +1577,11 @@ _SECTION_LABEL = (
 _SECTION_LINE_RE = re.compile(f"^{_SECTION_LABEL}$", re.IGNORECASE)
 _SECTION_PREFIX_RE = re.compile(f"^{_SECTION_LABEL}\\s+", re.IGNORECASE)
 # 괄호 안 연주 메모 (`(verse로 갈땐 D/A)`, `(F# if keyup)`). 코드나 key 가 들어 있을 때만 지운다 — `(x2)` 는 남긴다.
-_NOTE_RE = re.compile(r"\([^()]*(?:\b[A-G][#b]?(?:m|/|\b)|[Kk]ey)[^()]*\)")
+# 코드는 낱말 전체가 코드여야 한다 — `(Amen)` 의 `Am` 에 걸리면 안 된다.
+_NOTE_RE = re.compile(
+    r"\([^()]*(?:\b[A-G][#b\u266f\u266d]?(?:m|maj|sus|dim|aug|add)?[0-9]*(?:/[A-G][#b]?)?(?![\w#])"
+    r"|\b[Kk]ey)[^()]*\)"
+)
 
 
 def get_tesseract_executable():
@@ -1949,7 +1953,6 @@ def is_chord_line(text):
         1 for token in tokens if _LOOSE_CHORD_TOKEN_RE.match(token)
     ) >= len(tokens) * 0.6:
         return True
-        return False
     letters = re.findall("[A-Za-z]", text)
     roots = sum(1 for letter in letters if letter in "ABCDEFG")
     chordish = roots + sum(1 for letter in letters if letter in "mb")
@@ -2328,6 +2331,7 @@ def _trim_unread_lines(system_lines):
             core(system_lines[other])
             for other in (index - 1, index + 1)
             if 0 <= other < len(system_lines) and any(system_lines[other])
+            and system_lines[other] != _SECTION_BREAK
         }
         lines = list(lines)
         if (
@@ -2498,7 +2502,7 @@ def _native_line_image(image):
     """OS OCR 용 줄 이미지: 절반으로 줄이고 흰 여백을 두른다.
 
     Vision 은 글자가 띄엄띄엄 놓인 큰 줄 이미지(글자 높이 48px, 여백 없음)를 통째로 못 찾고
-    빈 결과를 자주 낸다(콘티 PDF 7쪽에서 줄 13개 중 10개). 이렇게 하면 다 읽었다."""
+    빈 결과를 자주 낸다(콘티 PDF 한 쪽에서 12줄 중 8줄). 이렇게 하면 다 읽었다."""
     from PIL import Image, ImageOps
 
     image = image.resize((max(image.width // 2, 1), max(image.height // 2, 1)), Image.LANCZOS)
@@ -2742,8 +2746,9 @@ def _native_page_lines(observations):
                 continue
         rows.append((top, bottom, [observation]))
     # 맨 윗줄이 다른 줄보다 확 크면 곡 제목이다 (오선 없는 가사·코드 악보).
-    heights = sorted(bottom - top for top, bottom, _members in rows)
-    if len(rows) >= 3 and rows[0][1] - rows[0][0] > heights[len(heights) // 2] * 1.5:
+    # 줄 높이는 덩어리 중 가장 큰 것 — 겹쳐 묶은 범위는 덩어리가 살짝 어긋나기만 해도 커진다.
+    heights = [max(item.get("h", 0.0) for item in members) for _top, _bottom, members in rows]
+    if len(rows) >= 3 and heights[0] > sorted(heights)[len(heights) // 2] * 1.5:
         rows = rows[1:]
     return [_native_line_text(members) for _top, _bottom, members in rows]
 

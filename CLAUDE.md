@@ -347,7 +347,7 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
       확신도를 안 줘서 1.0. `OcrEngine.MaxImageDimension` 을 넘는 그림은 못 읽으므로 Python 이 긴 변을 2500px 로 줄여 보낸다
     - OS OCR 용 줄 이미지는 흑백으로 굳히지 않는다(`binarize=False`). 굳히고 굵힌 글자는 Tesseract 용이다.
       대신 **절반으로 줄이고 흰 여백을 두른다**(`_native_line_image`) — Vision 이 글자 높이 48px·여백 없는 띄엄띄엄한 줄을
-      빈 결과로 돌려줬다(콘티 PDF 한 쪽에서 13줄 중 10줄). Windows OCR 에서는 확인 못 했다
+      빈 결과로 돌려줬다(콘티 PDF 한 쪽에서 12줄 중 8줄). Windows OCR 에서는 확인 못 했다
     - `isAvailable` 이 false(옛 macOS, 한국어 OCR 없는 Windows)거나 `recognize` 가 PlatformException 이면 Tesseract 로 읽는다.
       답은 앱이 켜져 있는 동안 기억한다
     - **이 경로는 이 레포의 리눅스 환경에서 실행해 보지 못했다**(Swift·C++ 는 CI 에서만 컴파일). 정확도 수치는 Tesseract 기준이다

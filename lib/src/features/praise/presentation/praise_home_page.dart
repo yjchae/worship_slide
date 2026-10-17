@@ -2333,6 +2333,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _showProgressDialog(
       progress,
       onCancel: () {
+        // 닫히는 동안 한 번 더 누르면 두 번째 pop 이 메인 화면을 닫는다.
+        if (cancelled) return;
         cancelled = true;
         Navigator.of(context, rootNavigator: true).pop();
       },

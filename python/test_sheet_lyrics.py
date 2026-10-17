@@ -142,6 +142,7 @@ def test_sheet_without_staff_sections():
     assert finish("A/C# D E F#m E A (verse로 갈땐 D/A)") == ppt_tool._CHORD_LINE
     assert finish("다시오실 그이름 (F# if keyup)") == ("다시오실 그이름", False)
     assert finish("주님 찬양해 (x2)") == ("주님 찬양해 (x2)", False)
+    assert finish("할렐루야 (Amen)") == ("할렐루야 (Amen)", False)
 
     def row(text, y, h=0.02):
         return {"text": text, "confidence": 1.0, "x": 0.1, "y": y, "w": 0.5, "h": h}
