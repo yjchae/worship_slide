@@ -16,6 +16,12 @@ import 'package:flutter/foundation.dart';
 /// 모든 요청은 켤 때마다 새로 만드는 토큰(`?k=`)이 맞아야 한다. 주소·QR 에 들어 있어서 찍은 사람만 본다
 /// (게스트 와이파이처럼 모르는 사람이 같은 망에 있어도 포트만으로는 못 본다).
 ///
+/// **발표자 리모컨**: 같은 페이지를 리모컨 키(`?k=` 가 [remoteToken])로 열면 넘기기·확대·블랙아웃 제스처가 켜진다.
+/// - `POST /control?action=next|prev&from=<보던 쪽>` / `action=blackout&on=0|1` / `action=zoom&on&x&y&size`
+///   → [onControl] 을 부르고 바뀐 상태 JSON 을 돌려준다
+/// - 리모컨에만 가는 값(`note`·`zoom`, [remoteOnlyKeys])은 싱어 키로 받는 쪽에서 뺀다.
+///   싱어 QR 을 단체방에 돌려도 그 키로는 넘기지도, 발표자 메모를 보지도 못한다
+///
 /// **바깥 망 주소**: cloudflared 가 깔려 있으면 Cloudflare 임시 터널(`*.trycloudflare.com`, 계정 불필요)을
 /// 같이 띄워 https 공개 주소를 만든다. 다른 망의 휴대폰도 그 주소로 본다. 토큰은 그대로 필요하다.
 /// 없으면 같은 망 주소만 쓴다(LibreOffice·Tesseract 처럼 선택 의존성).
@@ -29,6 +35,15 @@ class SingerWebServer {
   Timer? _ping;
   String? _lastJson; // 지금 페이지. SSE(/events)·폴링(/state) 둘 다 이걸 보낸다
   String _token = '';
+  String _remoteToken = '';
+  String? _lastRemoteJson; // 리모컨용(메모·확대 포함)
+  final _remoteClients = <HttpResponse>{};
+
+  static const remoteOnlyKeys = ['note', 'zoom'];
+
+  /// 리모컨 요청. 다 처리한 뒤([update] 까지 끝난 뒤) 돌아와야 응답에 바뀐 상태가 실린다.
+  Future<void> Function(String action, Map<String, String> params)? onControl;
+  Future<void> _control = Future.value();
   final _images = <String, String>{}; // 'current' | 'next' → 로컬 경로
   // start/stop 을 차례로만 돌린다. 발표 종료(stop) 직후 다시 켜거나(start) 버튼을 두 번 눌러도
   // 서로 겹치지 않는다.
@@ -43,14 +58,16 @@ class SingerWebServer {
   String? _publicBase; // https://xxxx.trycloudflare.com
 
   /// 다른 망에서 열 주소(토큰 포함). 터널이 아직이면 null.
-  String? get publicUrl =>
-      _publicBase == null ? null : '$_publicBase/?k=$_token';
+  String? publicUrl({bool remote = false}) => _publicBase == null
+      ? null
+      : '$_publicBase/?k=${remote ? _remoteToken : _token}';
 
   bool get isRunning => _server != null;
   int? get port => _server?.port;
 
   /// 휴대폰에서 열 주소(토큰 포함).
-  String urlFor(String address) => 'http://$address:$port/?k=$_token';
+  String urlFor(String address, {bool remote = false}) =>
+      'http://$address:$port/?k=${remote ? _remoteToken : _token}';
 
   // 앞 작업이 실패해도(포트 못 잡음 등) 줄이 막히지 않게 오류는 그 호출에만 돌려준다.
   // 막히면 그 뒤 stop 이 영영 안 돌아 터널이 앱 밖에 남는다.
@@ -67,10 +84,12 @@ class SingerWebServer {
     if (_server != null) return;
     final rnd = Random.secure();
     // 터널 주소는 인터넷 어디서나 닿으므로 넉넉히(31^16 ≈ 7×10^23).
-    _token = List.generate(
+    String newToken() => List.generate(
       16,
       (_) => 'abcdefghjkmnpqrstuvwxyz23456789'[rnd.nextInt(31)],
     ).join();
+    _token = newToken();
+    _remoteToken = newToken();
     try {
       _server = await HttpServer.bind(InternetAddress.anyIPv4, preferredPort);
     } on SocketException {
@@ -82,7 +101,7 @@ class SingerWebServer {
     // 휴대폰이 잠깐 잠들었다 깨도 끊긴 걸 알아채게 주기적으로 빈 줄을 보낸다.
     _ping = Timer.periodic(
       const Duration(seconds: 15),
-      (_) => _broadcast(': ping\n\n'),
+      (_) => _broadcast(': ping\n\n', ': ping\n\n'),
     );
     running.value = true;
   }
@@ -103,11 +122,13 @@ class SingerWebServer {
     _tunnelProcess = null;
     _publicBase = null;
     tunnel.value = TunnelState.off;
-    for (final c in _clients) {
+    for (final c in [..._clients, ..._remoteClients]) {
       c.close().catchError((_) {});
     }
     _clients.clear();
+    _remoteClients.clear();
     _lastJson = null;
+    _lastRemoteJson = null;
     _images.clear();
     running.value = false;
   }
@@ -289,7 +310,7 @@ class SingerWebServer {
     return null;
   }
 
-  /// [SingerViewData.toJson] 을 그대로 받는다. 내용이 같으면 보내지 않는다.
+  /// [SingerViewData.toJson] 에 리모컨용 값([remoteOnlyKeys])을 얹어 받는다. 내용이 같으면 보내지 않는다.
   void update(Map<String, dynamic> data) {
     if (_server == null) return;
     final public = <String, dynamic>{...data};
@@ -307,18 +328,34 @@ class SingerWebServer {
       }
       public[key] = copy;
     }
+    final remoteJson = jsonEncode(public);
+    for (final k in remoteOnlyKeys) {
+      public.remove(k);
+    }
     final json = jsonEncode(public);
-    if (json == _lastJson) return;
+    if (remoteJson == _lastRemoteJson) return;
+    _lastRemoteJson = remoteJson;
+    // 메모·확대만 바뀌었으면 싱어 쪽엔 보내지 않는다.
+    final singerChanged = json != _lastJson;
     _lastJson = json;
-    _broadcast('data: $json\n\n');
+    _broadcast(
+      singerChanged ? 'data: $json\n\n' : null,
+      'data: $remoteJson\n\n',
+    );
   }
 
-  void _broadcast(String text) {
-    for (final c in _clients.toList()) {
-      try {
-        c.write(text);
-      } catch (_) {
-        _clients.remove(c);
+  void _broadcast(String? singerText, String remoteText) {
+    for (final (clients, text) in [
+      (_clients, singerText),
+      (_remoteClients, remoteText),
+    ]) {
+      if (text == null) continue;
+      for (final c in clients.toList()) {
+        try {
+          c.write(text);
+        } catch (_) {
+          clients.remove(c);
+        }
       }
     }
   }
@@ -334,7 +371,9 @@ class SingerWebServer {
 
   Future<void> _handle(HttpRequest req) async {
     final res = req.response;
-    if (_token.isEmpty || req.uri.queryParameters['k'] != _token) {
+    final key = req.uri.queryParameters['k'];
+    final remote = _remoteToken.isNotEmpty && key == _remoteToken;
+    if (!remote && (_token.isEmpty || key != _token)) {
       res.statusCode = HttpStatus.forbidden;
       res.headers.contentType = ContentType.text;
       res.write('QR 코드나 앱에 나온 주소로 다시 열어 주세요.');
@@ -345,7 +384,11 @@ class SingerWebServer {
       switch (req.uri.path) {
         case '/':
           res.headers.contentType = ContentType.html;
-          res.write(singerPageHtml);
+          res.write(
+            remote
+                ? singerPageHtml.replaceFirst('<body>', '<body class="remote">')
+                : singerPageHtml,
+          );
           await res.close();
         case '/events':
           res.bufferOutput = false;
@@ -356,20 +399,45 @@ class SingerWebServer {
               charset: 'utf-8',
             )
             ..set(HttpHeaders.cacheControlHeader, 'no-cache');
-          _clients.add(res);
+          (remote ? _remoteClients : _clients).add(res);
           unawaited(
-            res.done
-                .catchError((_) {})
-                .whenComplete(() => _clients.remove(res)),
+            res.done.catchError((_) {}).whenComplete(() {
+              _clients.remove(res);
+              _remoteClients.remove(res);
+            }),
           );
-          res.write(_lastJson == null ? ': hello\n\n' : 'data: $_lastJson\n\n');
+          final last = remote ? _lastRemoteJson : _lastJson;
+          res.write(last == null ? ': hello\n\n' : 'data: $last\n\n');
         // 지금 페이지 JSON 한 번. Cloudflare 임시 터널은 SSE 를 붙잡아 두고 안 흘려보내서
         // (trycloudflare 의 알려진 제한) 터널(https) 주소에서는 페이지가 이걸 0.5초마다 묻는다.
         case '/state':
           res.headers
             ..contentType = ContentType.json
             ..set(HttpHeaders.cacheControlHeader, 'no-store');
-          res.write(_lastJson ?? '{}');
+          res.write((remote ? _lastRemoteJson : _lastJson) ?? '{}');
+          await res.close();
+        case '/control':
+          if (!remote || req.method != 'POST') {
+            res.statusCode = HttpStatus.forbidden;
+            await res.close();
+            return;
+          }
+          final params = req.uri.queryParameters;
+          // 앞 요청이 끝난 뒤에 처리한다(확대 요청이 뒤바뀌어 도착해도 순서대로).
+          // 실패해도 응답은 닫는다 — 안 닫으면 휴대폰 브라우저의 연결 수가 차서 폴링·이미지까지 막힌다.
+          // 앱이 멈춰(네이티브 응답 없음) 끝나지 않아도 다음 요청이 영영 막히지 않게 5초에서 끊는다.
+          final job = _control
+              .catchError((_) {})
+              .then((_) => onControl?.call(params['action'] ?? '', params))
+              .timeout(const Duration(seconds: 5));
+          _control = job;
+          try {
+            await job;
+          } catch (_) {}
+          res.headers
+            ..contentType = ContentType.json
+            ..set(HttpHeaders.cacheControlHeader, 'no-store');
+          res.write(_lastRemoteJson ?? '{}');
           await res.close();
         case '/img/current' || '/img/next':
           final path = _images[req.uri.path.substring(5)];
@@ -397,6 +465,7 @@ class SingerWebServer {
       }
     } catch (_) {
       _clients.remove(res);
+      _remoteClients.remove(res);
     }
   }
 
@@ -462,6 +531,10 @@ class SingerWebServer {
 
 /// 싱어 페이지. 네이티브 싱어 창(MainFlutterWindow.swift)과 같은 모양·같은 글자 맞춤 규칙
 /// (원본 줄 그대로, 너무 작아지면 그때만 줄바꿈). 글자는 textContent 로만 넣는다(HTML 주입 없음).
+///
+/// `<body class="remote">`(리모컨 키로 연 경우)면 발표자 리모컨이 된다: 현재 페이지는 관객 화면과 같은 16:9 틀
+/// (그래야 핀치로 고른 영역이 관객 화면 좌표와 맞는다), 메모·블랙아웃 버튼, 제스처.
+/// 확대 영역은 발표 보기 '영역 확대'와 같은 값(x·y = 왼쪽 위, size = 폭 비율, 0~1)이다.
 const singerPageHtml =
     r'''<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
@@ -480,8 +553,9 @@ const singerPageHtml =
   .off{background:#59626e;}
   #label{font-size:2.1vh;color:#8b95a2;font-weight:600;flex:none;white-space:nowrap;overflow:hidden;
     text-overflow:ellipsis;border-top:1px solid #3a424d;padding-top:1.2vh;margin-top:.4vh;}
-  .box{position:relative;border-radius:1.4vh;overflow:hidden;display:flex;align-items:center;
-    justify-content:center;padding:1.6vh 3vw;min-height:0;}
+  .box{position:relative;border-radius:1.4vh;overflow:hidden;min-height:0;}
+  .stage{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    padding:1.6vh 3vw;transform-origin:0 0;}
   #current{flex:63;background:#1b2028;border:2px solid #5a6472;}
   #next{flex:37;background:#0f1215;border:1px solid #232930;}
   .fit{width:100%;max-height:100%;text-align:center;line-height:1.3;font-weight:700;}
@@ -492,33 +566,61 @@ const singerPageHtml =
   #next .sub{color:#b8a25a;}
   .placeholder{color:#59626e;font-size:3vh;font-weight:600;}
   img{max-width:100%;max-height:100%;object-fit:contain;display:block;}
+  #note,#bar,#flash{display:none;}
+  body.remote{touch-action:none;overscroll-behavior:none;-webkit-user-select:none;user-select:none;
+    -webkit-touch-callout:none;}
+  .remote #current{flex:none;aspect-ratio:16/9;width:min(100%,calc(46vh*16/9));
+    width:min(100%,calc(46dvh*16/9));align-self:center;}
+  .remote #current .stage{padding:0;}
+  .remote #current .fit{padding:0 4%;}
+  .remote #next{flex:1;}
+  .remote #note{display:block;flex:none;max-height:16vh;overflow:auto;touch-action:pan-y;white-space:pre-wrap;
+    font-size:2.3vh;line-height:1.4;color:#e6e9ee;background:#1a1f26;border-left:3px solid #ffd54f;
+    border-radius:.8vh;padding:1vh 3vw;}
+  .remote #note:empty{display:none;}
+  .remote #bar{display:flex;flex:none;}
+  #black{flex:1;position:relative;overflow:hidden;border:1px solid #3a424d;border-radius:1vh;background:#1b2028;
+    color:#e6e9ee;font:inherit;font-size:2.2vh;font-weight:700;padding:1.6vh 0;}
+  #black::before{content:'';position:absolute;inset:0;background:#e5484d;transform:scaleX(0);transform-origin:0 50%;}
+  #black.hold::before{transform:scaleX(1);transition:transform .6s linear;}
+  #black span{position:relative;}
+  #black.on{background:#e5484d;border-color:#e5484d;}
+  .remote #flash{display:block;position:fixed;top:0;bottom:0;width:16vw;pointer-events:none;opacity:0;
+    transition:opacity .35s;background:linear-gradient(to right,rgba(255,213,79,.45),transparent);}
+  #flash.r{right:0;background:linear-gradient(to left,rgba(255,213,79,.45),transparent);}
+  #flash.show{opacity:1;transition:none;}
 </style></head><body>
   <header><span id="title"></span><span id="badge"></span><span id="page"></span></header>
   <div class="box" id="current"></div>
+  <div id="note"></div>
   <div id="label">다음</div>
   <div class="box" id="next"></div>
+  <div id="bar"><button id="black"><span>화면 끄기 (길게 누르기)</span></button></div>
+  <div id="flash"></div>
 <script>
 function el(tag, cls, text){ var e=document.createElement(tag); if(cls) e.className=cls;
   if(text!=null) e.textContent=text; return e; }
+var REMOTE=document.body.classList.contains('remote');
+if(REMOTE) document.title='발표자 리모컨';
 function fill(box, page, empty){
   box.textContent='';
-  if(!page){ box.appendChild(el('div','placeholder',empty)); return; }
-  if(page.image_path){ var img=el('img'); img.src=page.image_path; box.appendChild(img); return; }
-  if(page.is_blank){ box.appendChild(el('div','placeholder','빈 화면')); return; }
+  var st=el('div','stage'); box.appendChild(st);
+  if(!page){ st.appendChild(el('div','placeholder',empty)); return; }
+  if(page.image_path){ var img=el('img'); img.src=page.image_path; st.appendChild(img); return; }
+  if(page.is_blank){ st.appendChild(el('div','placeholder','빈 화면')); return; }
   var f=el('div','fit'); f.appendChild(el('div','main',page.main_text||''));
   if(page.english_text) f.appendChild(el('div','sub',page.english_text));
-  box.appendChild(f);
+  st.appendChild(f);
 }
 function fitAll(){
-  document.querySelectorAll('.box').forEach(function(box){
+  document.querySelectorAll('.stage').forEach(function(box){
     var e=box.querySelector('.fit'); if(!e) return;
     var cs=getComputedStyle(box);
-    var w=box.clientWidth-parseFloat(cs.paddingLeft)-parseFloat(cs.paddingRight);
     var h=box.clientHeight-parseFloat(cs.paddingTop)-parseFloat(cs.paddingBottom);
     function fit(){
       var lo=8, hi=Math.max(12,h*0.45);
       for(var i=0;i<18;i++){ var mid=(lo+hi)/2; e.style.fontSize=mid+'px';
-        if(e.scrollHeight<=h+1 && e.scrollWidth<=w+1) lo=mid; else hi=mid; }
+        if(e.scrollHeight<=h+1 && e.scrollWidth<=e.clientWidth+1) lo=mid; else hi=mid; }
       e.style.fontSize=lo+'px'; return lo;
     }
     e.classList.remove('wrap');
@@ -533,15 +635,22 @@ function render(d){
   if(d.blackout){ badge.textContent='관객 화면 꺼짐'; badge.className='badge'; }
   var nt=next&&next.title; document.getElementById('label').textContent=
     (nt && nt!==cur.title) ? '다음 · '+nt : '다음';
-  fill(document.getElementById('current'), d.current, '빈 화면');
-  fill(document.getElementById('next'), next, '마지막 페이지');
-  fitAll();
+  // 메모·확대만 바뀌었으면 다시 채우지 않는다(이미지를 다시 받느라 깜빡이지 않게).
+  var pages=JSON.stringify([d.current,next]);
+  if(pages!==lastPages){
+    lastPages=pages;
+    fill(document.getElementById('current'), d.current, '빈 화면');
+    fill(document.getElementById('next'), next, '마지막 페이지');
+    fitAll();
+  }
+  if(REMOTE) renderRemote(d);
 }
+var lastPages='';
 function setBadge(text, cls){
   var b=document.getElementById('badge'); b.textContent=text; b.className=cls;
 }
 var last='';
-function offline(){ last=''; setBadge('연결 끊김','badge off'); }
+function offline(){ last=''; lastPages=''; setBadge('연결 끊김','badge off'); }
 function apply(text){
   if(text===last) return;
   last=text;
@@ -577,7 +686,144 @@ if(location.protocol==='https:'){
   es.onmessage=function(ev){ apply(ev.data); };
   es.onerror=offline;
 }
-window.addEventListener('resize', fitAll);
+window.addEventListener('resize', function(){ fitAll(); if(REMOTE) showZoom(); });
+
+// ── 발표자 리모컨 ──
+// 좌우로 밀기·양쪽 끝 누르기 = 넘기기, 두 손가락 = 확대(확대 중엔 한 손가락 = 옮기기),
+// 가운데 두 번 누르기 = 확대 풀기, '화면 끄기' 길게 = 블랙아웃.
+var state=null, zoom={on:false,x:0,y:0,size:1}, zoomLocalUntil=0, zoomSyncTimer=null;
+var MIN_ZOOM=0.12, MAX_ZOOM=0.9; // 발표 보기 _ZoomRegionOverlay 와 같다
+function renderRemote(d){
+  state=d;
+  var note=document.getElementById('note');
+  // 메모가 생기거나 없어지면 다음 페이지 칸 높이가 바뀌므로 글자 크기를 다시 맞춘다.
+  if(note.textContent!==(d.note||'')){ note.textContent=d.note||''; fitAll(); }
+  var b=document.getElementById('black');
+  b.classList.toggle('on',!!d.blackout); // 길게 누르는 중(hold)은 그대로 둔다
+  b.firstChild.textContent=d.blackout?'화면 켜기 (길게 누르기)':'화면 끄기 (길게 누르기)';
+  // 손으로 확대하는 중·직후엔 서버 값(조금 전 상태)으로 되돌리지 않는다. 그 사이 온 값은
+  // 다시 오지 않으므로(같은 글은 apply 가 거른다) 끝나면 마지막으로 받은 값을 입힌다.
+  var wait=zoomLocalUntil-Date.now();
+  if(wait>0){
+    clearTimeout(zoomSyncTimer);
+    zoomSyncTimer=setTimeout(function(){ if(state && !g) renderRemote(state); },wait+50);
+  }else if(d.zoom && !g){
+    zoom=d.zoom.on?{on:true,x:d.zoom.x,y:d.zoom.y,size:d.zoom.size}:{on:false,x:0,y:0,size:1};
+  }
+  showZoom();
+}
+function showZoom(){
+  var box=document.getElementById('current'), st=box.querySelector('.stage'); if(!st) return;
+  if(!zoom.on){ st.style.transform=''; return; }
+  st.style.transform='scale('+(1/zoom.size)+') translate('+(-zoom.x*box.clientWidth)+'px,'
+    +(-zoom.y*box.clientHeight)+'px)';
+}
+function control(q){
+  return fetch('/control'+location.search+'&action='+q,{method:'POST',cache:'no-store'})
+    .then(function(r){ return r.ok?r.text():null; })
+    .then(function(t){ if(t) apply(t); })
+    .catch(function(){});
+}
+function buzz(){ if(navigator.vibrate) navigator.vibrate(15); }
+var flashTimer=null;
+function go(dir){
+  if(!state) return;
+  // 마지막·첫 페이지면 넘길 곳이 없다.
+  if(dir>0 ? state.page_number>=state.total_pages : state.page_number<=1) return;
+  var f=document.getElementById('flash');
+  f.className=dir>0?'r show':'show';
+  clearTimeout(flashTimer); flashTimer=setTimeout(function(){ f.className=dir>0?'r':''; },120);
+  buzz();
+  // from = 보던 쪽. 앱은 지금 쪽과 다르면 무시한다(두 장씩 넘어가지 않게).
+  control((dir>0?'next':'prev')+'&from='+state.page_number);
+}
+var zoomTimer=null;
+function sendZoom(){
+  zoomLocalUntil=Date.now()+800;
+  if(zoomTimer) return; // 끄는 동안 80ms 에 한 번만
+  zoomTimer=setTimeout(function(){
+    zoomTimer=null;
+    var on=zoom.on && zoom.size<=MAX_ZOOM;
+    control('zoom&on='+(on?1:0)+'&x='+zoom.x.toFixed(4)+'&y='+zoom.y.toFixed(4)
+      +'&size='+Math.min(zoom.size,MAX_ZOOM).toFixed(4));
+  },80);
+}
+function clamp(v,lo,hi){ return Math.max(lo,Math.min(hi,v)); }
+function points(e){ return Array.prototype.map.call(e.touches,function(t){ return {x:t.clientX,y:t.clientY}; }); }
+function middle(p){ var x=0,y=0; p.forEach(function(q){ x+=q.x; y+=q.y; }); return {x:x/p.length,y:y/p.length}; }
+function spread(p){ return p.length<2?1:Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y)||1; }
+var g=null, lastTap=0;
+// 손가락 수가 바뀔 때마다 기준을 다시 잡는다(두 손가락 → 한 손가락으로 옮기기 등).
+function begin(e, keep){
+  // 테두리를 뺀 안쪽(showZoom 이 쓰는 clientWidth 와 같은 기준).
+  var p=points(e), m=middle(p), box=document.getElementById('current'), b=box.getBoundingClientRect();
+  var r={left:b.left+box.clientLeft, top:b.top+box.clientTop, width:box.clientWidth||1, height:box.clientHeight||1};
+  g={n:p.length, t0:keep?keep.t0:Date.now(), sx:keep?keep.sx:m.x, sy:keep?keep.sy:m.y,
+    moved:keep?keep.moved:false, multi:(keep&&keep.multi)||p.length>1, zoomed:keep?keep.zoomed:false,
+    onNote:keep?keep.onNote:!!e.target.closest('#note'),
+    r:r, mx:m.x, my:m.y, lx:m.x, ly:m.y, d0:spread(p), z0:{x:zoom.on?zoom.x:0, y:zoom.on?zoom.y:0, size:zoom.on?zoom.size:1}};
+}
+if(REMOTE){
+  // 메모칸 위는 위아래 밀기를 브라우저에 맡긴다(긴 메모 스크롤). 좌우 밀기는 그대로 넘기기.
+  function own(e){ if(!e.target.closest('#note')) e.preventDefault(); }
+  document.addEventListener('touchstart',function(e){
+    if(e.target.closest('#bar')) return;
+    own(e);
+    begin(e,g);
+  },{passive:false});
+  document.addEventListener('touchmove',function(e){
+    if(!g) return;
+    own(e);
+    var p=points(e); if(p.length!==g.n) return;
+    var m=middle(p);
+    g.lx=m.x; g.ly=m.y;
+    if(Math.abs(m.x-g.sx)>10 || Math.abs(m.y-g.sy)>10) g.moved=true;
+    // 메모칸에서 시작한 손가락은 좌우 밀기만(스크롤하다 확대가 움직이지 않게).
+    if(g.onNote || !(p.length>1 || zoom.on) || !g.moved) return;
+    // 손가락 아래 슬라이드 점이 그대로 손가락을 따라오게.
+    var size=clamp(g.z0.size*g.d0/spread(p),MIN_ZOOM,1);
+    var px=g.z0.x+(g.mx-g.r.left)/g.r.width*g.z0.size, py=g.z0.y+(g.my-g.r.top)/g.r.height*g.z0.size;
+    zoom={on:size<0.999, size:size,
+      x:clamp(px-(m.x-g.r.left)/g.r.width*size,0,1-size), y:clamp(py-(m.y-g.r.top)/g.r.height*size,0,1-size)};
+    g.zoomed=true;
+    showZoom(); sendZoom();
+  },{passive:false});
+  function end(e){
+    if(!g) return;
+    if(e.touches.length){ begin(e,g); return; }
+    // 끝 좌표는 마지막 touchmove 값(changedTouches 는 브라우저마다 믿기 어렵다).
+    var dx=g.lx-g.sx, dy=g.ly-g.sy, dt=Date.now()-g.t0, w=window.innerWidth;
+    if(g.zoomed){
+      // 살짝만 벌렸으면(관객 화면 확대 범위 밖) 확대를 끈다.
+      if(zoom.size>MAX_ZOOM) zoom={on:false,x:0,y:0,size:1};
+      showZoom(); sendZoom();
+    }else if(!g.multi && !g.moved && dt<350 && !g.onNote){
+      if(g.lx<w*0.22) go(-1);
+      else if(g.lx>w*0.78) go(1);
+      else if(Date.now()-lastTap<320 && zoom.on){ zoom={on:false,x:0,y:0,size:1}; showZoom(); sendZoom(); buzz(); lastTap=0; }
+      else lastTap=Date.now();
+    }else if(!g.multi && dt<600 && Math.abs(dx)>60 && Math.abs(dx)>1.5*Math.abs(dy)){
+      go(dx<0?1:-1);
+    }
+    g=null;
+  }
+  document.addEventListener('touchend',end);
+  document.addEventListener('touchcancel',function(){ g=null; });
+  // 블랙아웃은 잘못 눌러 꺼지지 않게 0.6초 길게 눌러야 한다.
+  var black=document.getElementById('black'), holdTimer=null;
+  function release(){ clearTimeout(holdTimer); holdTimer=null; black.classList.remove('hold'); }
+  black.addEventListener('touchstart',function(e){
+    e.preventDefault();
+    if(!state) return;
+    black.classList.add('hold');
+    holdTimer=setTimeout(function(){
+      release(); buzz();
+      control('blackout&on='+(state.blackout?0:1));
+    },600);
+  },{passive:false});
+  black.addEventListener('touchend',release);
+  black.addEventListener('touchcancel',release);
+}
 // 화면 꺼짐 방지. https(바깥 망 터널 주소)에서만 된다 — 같은 망 http 주소면 조용히 건너뛰고,
 // 앱 다이얼로그가 "휴대폰 자동 잠금을 꺼 두라"고 안내한다. 탭이 가려지면 풀리므로 돌아올 때 다시 건다.
 function keepAwake(){

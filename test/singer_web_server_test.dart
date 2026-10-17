@@ -68,6 +68,63 @@ void main() {
     );
   });
 
+  test('리모컨 키만 넘길 수 있고, 메모·확대는 리모컨에만 간다', () async {
+    final server = SingerWebServer();
+    await server.start();
+    addTearDown(server.stop);
+    final base = 'http://127.0.0.1:${server.port}';
+    final singerK = Uri.parse(server.urlFor('127.0.0.1')).queryParameters['k'];
+    final remoteUrl = Uri.parse(server.urlFor('127.0.0.1', remote: true));
+    final remoteK = remoteUrl.queryParameters['k'];
+    expect(remoteK, isNot(singerK));
+    final calls = <String>[];
+    server.onControl = (action, params) async {
+      calls.add('$action ${params['from']}');
+      server.update({
+        'current': {'main_text': '다음 쪽'},
+        'page_number': 2,
+        'note': '여기서 기도',
+        'zoom': {'on': false},
+      });
+    };
+    final client = HttpClient();
+    addTearDown(() => client.close(force: true));
+    Future<(int, String)> send(String method, String path) async {
+      final res = await (await client.openUrl(
+        method,
+        Uri.parse('$base$path'),
+      )).close();
+      return (res.statusCode, await res.transform(utf8.decoder).join());
+    }
+
+    // 싱어 키로는 못 넘긴다. GET 도 안 된다(미리 불러오기 등으로 넘어가지 않게).
+    expect((await send('POST', '/control?k=$singerK&action=next')).$1, 403);
+    expect((await send('GET', '/control?k=$remoteK&action=next')).$1, 403);
+    expect(calls, isEmpty);
+
+    final (code, body) = await send(
+      'POST',
+      '/control?k=$remoteK&action=next&from=1',
+    );
+    expect(code, 200);
+    expect(calls, ['next 1']);
+    // 응답에 바뀐 상태가 실린다.
+    expect(jsonDecode(body)['note'], '여기서 기도');
+
+    final singer = jsonDecode((await send('GET', '/state?k=$singerK')).$2);
+    expect(singer['current']['main_text'], '다음 쪽');
+    expect(singer.containsKey('note'), isFalse);
+    expect(singer.containsKey('zoom'), isFalse);
+
+    // 리모컨 키로 연 페이지만 제스처가 켜진다.
+    final page = (await send('GET', '/?k=$remoteK')).$2;
+    expect(page, contains('<body class="remote">'));
+    expect(
+      (await send('GET', '/?k=$singerK')).$2,
+      isNot(contains('<body class="remote">')),
+    );
+  });
+
   test('끄고 바로 켜도, 두 번 켜도 서버는 하나이고 이전 이미지는 남지 않는다', () async {
     final server = SingerWebServer();
     addTearDown(server.stop);
@@ -101,7 +158,10 @@ void main() {
     expect(SingerWebServer.isPrivateIPv4('100.64.1.2'), isFalse); // VPN(CGNAT)
     expect(SingerWebServer.isPrivateIPv4('8.8.8.8'), isFalse);
     expect(SingerWebServer.isVirtualInterface('utun3'), isTrue);
-    expect(SingerWebServer.isVirtualInterface('bridge100'), isTrue); // Parallels
+    expect(
+      SingerWebServer.isVirtualInterface('bridge100'),
+      isTrue,
+    ); // Parallels
     expect(SingerWebServer.isVirtualInterface('vEthernet (WSL)'), isTrue);
     expect(SingerWebServer.isVirtualInterface('en0'), isFalse);
     expect(SingerWebServer.isVirtualInterface('Wi-Fi'), isFalse);
