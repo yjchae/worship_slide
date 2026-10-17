@@ -87,6 +87,8 @@ lib/
 - `worship_slides/presentation_main` — 네이티브 → Dart: `presentationClosed`, `singerClosed`,
   `singerKey`(`"next"`/`"prev"` — 싱어 화면에 포커스가 있을 때 누른 넘기기 키)
 - `worship_slides/save_panel` — 저장 위치 선택 (macOS NSSavePanel)
+- `worship_slides/ocr` — 악보 가사 줄 이미지 OCR: `isAvailable` / `recognize({paths})`
+  (macOS `SheetTextRecognizer` = Vision, Windows `ocr_channel.cpp` = Windows.Media.Ocr)
 
 | 플랫폼 | 구현 | 렌더링 |
 |--------|------|--------|
@@ -149,6 +151,9 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
 - `sheet <파일 | --clipboard>` — 악보(이미지·PDF·클립보드 그림)에서 오선 아래 가사만 →
   `{source_name, lyrics, lines, page_count, staff_count, text_layer}`
   (OCR 이 필요한데 Tesseract 가 없으면 `{"error": "tesseract_missing"}`)
+- `sheet <파일 | --clipboard> --ocr-lines <폴더>` — OS 내장 OCR 1단계: 가사 줄 이미지만 잘라 두고
+  `{needs_ocr: true, job, images}` (OCR 이 필요 없으면 위와 같은 최종 결과)
+- `sheet-finish <job.json> <ocr.json>` — 2단계: 앱이 읽은 결과(`{경로: [{text, confidence, x, y, w, h}]}`)로 마무리
 
 ## 중요 설계 결정
 
@@ -321,6 +326,18 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   - **클립보드 붙여넣기** (`sheet --clipboard`, '악보 가져오기' 옆 붙여넣기 버튼): Pillow `ImageGrab.grabclipboard()`
     라 Dart 쪽 클립보드 패키지가 필요 없다. 복사한 파일 경로 목록도 받는다. 없으면 `{"error": "clipboard_empty"}`.
     투명 배경 그림은 흰 바탕에 얹어서 읽는다
+  - **글자 읽기는 OS 내장 OCR 이 먼저다** (`PythonBridge.extractSheetLyrics`): 오선·줄 찾기와 정리는 Python 이 하고
+    (`layout_sheet` → `resolve_sheet_lines`), 잘라 낸 줄 이미지만 앱이 `worship_slides/ocr` 로 읽는다. 실제 악보 사진(손글씨풍
+    가사 글꼴)에서 Tesseract 가 약 69% 에 머물러서 넣었다. 두 단계라 ppt_tool 을 두 번 부른다(`--ocr-lines` → `sheet-finish`)
+    - macOS: Vision `VNRecognizeTextRequest`(정확 모드, 3번째 판 = 한국어, **macOS 13 이상**). 사전 교정은 끈다(띄엄띄엄 음절을
+      엉뚱한 낱말로 바꿀 수 있어서). 좌표는 아래가 0 이라 뒤집어서 넘긴다
+    - Windows: Windows.Media.Ocr 한국어 엔진(**한국어 언어 팩/OCR 기능이 깔려 있어야** 함, 영문도 같이 읽는다). C++/WinRT
+      `.get()` 은 UI(STA) 스레드에서 못 기다려서 작업 스레드에서 읽고 메시지 전용 창으로 UI 스레드에 넘겨 응답한다.
+      확신도를 안 줘서 1.0. `OcrEngine.MaxImageDimension` 을 넘는 그림은 못 읽으므로 Python 이 긴 변을 2500px 로 줄여 보낸다
+    - OS OCR 용 줄 이미지는 흑백으로 굳히지 않는다(`binarize=False`). 굳히고 굵힌 글자는 Tesseract 용이다
+    - `isAvailable` 이 false(옛 macOS, 한국어 OCR 없는 Windows)거나 `recognize` 가 PlatformException 이면 Tesseract 로 읽는다.
+      답은 앱이 켜져 있는 동안 기억한다
+    - **이 경로는 이 레포의 리눅스 환경에서 실행해 보지 못했다**(Swift·C++ 는 CI 에서만 컴파일). 정확도 수치는 Tesseract 기준이다
   - Tesseract 는 LibreOffice 와 같은 **선택 시스템 의존성**이다. 없으면 그 기능만 막고 설치 안내를 띄운다
     (`TesseractMissingException` → `_showTesseractDialog`). `kor` 언어 데이터가 없으면 `eng` 로만 읽는다
   - 읽어 온 가사는 `_SheetLyricsDialog` 에서 고친 뒤 **곡 편집 다이얼로그로 넘어간다**. 그래서
