@@ -180,11 +180,21 @@ class PythonBridge {
       if (json['needs_ocr'] != true) return _sheetResult(stage1.stdout as String);
 
       final images = (json['images'] as List<dynamic>).cast<String>();
-      final found = await _ocrChannel.invokeMethod<Object?>('recognize', {
-        'paths': images,
-      });
+      final found = await _ocrChannel.invokeMethod<Map<Object?, Object?>>(
+        'recognize',
+        {'paths': images},
+      );
+      // 한 장도 못 읽었으면(파일 경로를 못 여는 등 이미지마다 조용히 실패) 빈 가사를 돌려주지 말고
+      // Tesseract 로 넘긴다.
+      final anyText = found?.values.any((lines) => lines is List && lines.isNotEmpty);
+      if (anyText != true) {
+        throw PlatformException(
+          code: 'ocr_empty',
+          message: 'OS OCR 이 줄 이미지 ${images.length}장에서 글자를 하나도 못 읽었습니다',
+        );
+      }
       final ocrFile = File(p.join(workDir.path, 'ocr.json'));
-      await ocrFile.writeAsString(jsonEncode(found ?? const {}));
+      await ocrFile.writeAsString(jsonEncode(found));
       final stage2 = await _runTool([
         'sheet-finish',
         json['job'] as String,

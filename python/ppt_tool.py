@@ -1548,6 +1548,8 @@ _STAFF_ROW_RATIO = 0.45
 _TEXT_ROW_RATIO = 0.004
 # 그림 악보는 오선 줄 간격이 이 크기(px)가 되게 맞춘 뒤 읽는다 (300dpi 인쇄 악보쯤).
 _TARGET_STAFF_SPACING = 22
+# 크기를 맞출 때 넘지 않을 픽셀 수 (약 4500x4500).
+_MAX_SHEET_PIXELS = 20_000_000
 # OCR 에 넘기는 가사 한 줄의 글자 높이(px). Tesseract 는 30~50px 글자를 가장 잘 읽는다.
 _TARGET_LINE_HEIGHT = 48
 # 줄마다 Tesseract 를 여럿 동시에 띄우므로 하나가 코어를 다 잡지 않게 한다.
@@ -1555,9 +1557,9 @@ _TESSERACT_ENV = {**os.environ, "OMP_THREAD_LIMIT": "1"}
 # OS 내장 OCR 결과에서 버리는 글 덩어리 확신도(0~100). Windows 는 확신도를 안 줘서 늘 100 이다.
 _NATIVE_MIN_CONFIDENCE = 30
 
-_LYRIC_HYPHEN_RE = re.compile(
-    "[ \t\u00a0]*[-\u2010\u2011\u2012\u2013\u2014\u2015\uff0d][ \t\u00a0]*"
-)
+# 음절을 잇는 하이픈·대시. 줄 끝 하이픈 검사(ends_with_word_break)도 같은 목록을 쓴다.
+_HYPHEN_CHARS = "-\u2010\u2011\u2012\u2013\u2014\u2015\uff0d"
+_LYRIC_HYPHEN_RE = re.compile(f"[ \\t\\u00a0]*[{_HYPHEN_CHARS}][ \\t\\u00a0]*")
 _LYRIC_LETTER_RE = re.compile(r"[A-Za-z\uac00-\ud7a3]")
 _HANGUL_RE = re.compile(r"[\uac00-\ud7a3]")
 _CHORD_TOKEN_RE = re.compile(
@@ -1701,8 +1703,9 @@ def prepare_sheet_image(image):
     if systems:
         spacings = sorted(spacing for _top, _bottom, spacing in systems)
         factor = _TARGET_STAFF_SPACING / spacings[len(spacings) // 2]
+        # 큰 사진을 키우면 뒤의 오선 지우기(파이썬 반복)와 메모리가 픽셀 수만큼 는다.
+        factor = min(factor, 4.0, (_MAX_SHEET_PIXELS / (gray.width * gray.height)) ** 0.5)
         if not 0.85 <= factor <= 1.15:
-            factor = min(factor, 4.0)
             gray = gray.resize(
                 (max(int(gray.width * factor), 1), max(int(gray.height * factor), 1)),
                 Image.LANCZOS,
@@ -1795,9 +1798,10 @@ def lyric_line_boxes_by_system(systems, ratios):
         while next_top is not None and groups:
             last_start, last_end = groups[-1]
             above = last_start - (groups[-2][1] if len(groups) > 1 else bottom)
-            # 다음 단 윗선에 한 줄 간격 안으로 붙은 덩어리는 거리와 상관없이 그 단의 음표다.
-            # 흐린 그림에서는 음표 기둥이 글 줄로 잡혀 코드 줄과 오선 사이를 메운다.
-            attached = next_top - last_end <= spacing
+            # 다음 단 윗선에 한 줄 간격 안으로 붙은 덩어리는 거리와 상관없이 그 단의 코드 줄이다
+            # (가사와 코드 사이가 코드와 오선 사이보다 좁은 악보가 있다). 단, 위에 다른 줄이 남을
+            # 때만 — 띠에 한 줄뿐이면 빽빽하게 찍은 악보의 가사일 수 있다.
+            attached = len(groups) > 1 and next_top - last_end <= spacing
             if not attached and next_top - last_end >= above:
                 break
             groups.pop()
@@ -1808,20 +1812,29 @@ def lyric_line_boxes_by_system(systems, ratios):
 
     # 가사 줄보다 확 얇은 덩어리(붙임줄 ‿, 맨 아래 저작권 문구, 지우고 남은 음표 조각)는 버린다.
     # 소문자뿐인 짧은 영어 줄(`for ever`)도 한글 줄 높이의 60% 쯤이라, 40% 미만은 무조건,
-    # 60% 미만은 띠 맨 위(오선 바로 아래 = 음표 조각 자리)에 있고 아래에 줄이 더 있을 때만 버린다.
+    # 60% 미만은 오선 바로 밑(한 줄 간격 안 = 음표 조각 자리)에서 시작하고 아래에 줄이 더 있을 때만 버린다.
     heights = sorted(end - start + 1 for groups in result for start, end in groups)
     if heights:
         median = heights[len(heights) // 2]
+
+        def is_fragment(groups, index, staff_bottom, spacing):
+            start, end = groups[index]
+            if end - start + 1 < median * 0.4:
+                return True
+            return (
+                index == 0
+                and len(groups) > 1
+                and end - start + 1 < median * 0.6
+                and start - staff_bottom < spacing
+            )
+
         result = [
             [
-                (start, end)
-                for index, (start, end) in enumerate(groups)
-                if end - start + 1 >= median * 0.4
-                and not (
-                    index == 0 and len(groups) > 1 and end - start + 1 < median * 0.6
-                )
+                group
+                for index, group in enumerate(groups)
+                if not is_fragment(groups, index, systems[system_index][1], systems[system_index][2])
             ]
-            for groups in result
+            for system_index, groups in enumerate(result)
         ]
     return result
 
@@ -1860,7 +1873,7 @@ def clean_lyric_line(line):
     text = unicodedata.normalize("NFC", line)
     text = text.replace("|", " ")  # 마디선을 글자로 읽은 것
     text = _LYRIC_HYPHEN_RE.sub("", text)
-    text = re.sub("[ \t ]+", " ", text).strip()
+    text = re.sub("[ \t\u00a0]+", " ", text).strip()
     return join_single_syllables(text)
 
 
@@ -1890,8 +1903,15 @@ def ends_with_word_break(raw_line):
     """영어 낱말이 단 끝에서 하이픈으로 끊겼는지 (`Lift -` ↵ `ing`).
 
     한글 줄 끝 하이픈은 '음을 끌라'는 표시라 다음 줄과 붙이면 안 된다."""
-    match = re.search(r"([A-Za-z])[ \t ]*[-‐‑–－]+[ \t ]*$", raw_line)
+    match = re.search(
+        f"[A-Za-z][ \\t\\u00a0]*[{_HYPHEN_CHARS}]+[ \\t\\u00a0]*$", raw_line
+    )
     return match is not None
+
+
+def _line_reach(spacing):
+    """가사 줄 위아래로 함께 보는 높이. 줄을 지나는 음표 기둥을 알아볼 만큼."""
+    return max(int(spacing * 2), 6)
 
 
 def _lyric_line_image(gray, threshold, top, bottom, spacing, binarize=True):
@@ -1904,7 +1924,7 @@ def _lyric_line_image(gray, threshold, top, bottom, spacing, binarize=True):
       OS 내장 OCR 은 사진 같은 그림에 맞춰져 있어 굳히고 굵힌 글자가 오히려 낯설다)"""
     from PIL import Image
 
-    reach = max(int(spacing * 2), 6)
+    reach = _line_reach(spacing)
     window_top = max(top - reach, 0)
     window_bottom = min(bottom + 1 + reach, gray.height)
     window = gray.crop((0, window_top, gray.width, window_bottom))
@@ -2071,19 +2091,33 @@ def _words_score(words):
         if letters:
             weighted += letters * conf
             total += letters
-        elif not _keep_word(text, conf, index):
+        elif not _keep_word(text, index):
             total += len(text)
     return weighted / total if total else 0.0
 
 
-def _keep_word(text, confidence, index):
+def _keep_word(text, index):
     """음표·기둥을 잘못 읽은 토막을 버린다. 하이픈과 맨 앞 절 번호(`1.`)는 남긴다."""
     if _LYRIC_LETTER_RE.search(text):
-        # 음표 기둥을 l·i·j 로 읽은 것. 'I'·'a' 는 진짜 낱말이라 남긴다.
-        return not (text in ("l", "i", "j", "J") and confidence < 60)
+        # 음표 기둥을 l·i·j 로 읽은 것. 'I'·'a' 는 진짜 낱말이라 남긴다. OS OCR 은 줄 단위
+        # 확신도만 주거나(Vision) 아예 안 줘서(Windows) 확신도로는 가를 수 없다.
+        return text not in ("l", "i", "j", "J")
     if _LYRIC_HYPHEN_RE.fullmatch(text):
         return True
     return index == 0 and re.fullmatch(r"\d{1,2}[.)]", text) is not None
+
+
+def _kept_words(words):
+    """[낱말] → 가사로 남길 낱말. 영어 줄의 외따로 선 세로 막대는 대명사 I 다."""
+    joined = " ".join(words)
+    latin_line = len(re.findall("[A-Za-z]", joined)) > len(_HANGUL_RE.findall(joined))
+    kept = []
+    for word in words:
+        if word == "|" and latin_line:
+            kept.append("I")
+        elif _keep_word(word, len(kept)):
+            kept.append(word)
+    return kept
 
 
 def _ocr_lyric_line(executable, image_path, languages):
@@ -2097,15 +2131,7 @@ def _ocr_lyric_line(executable, image_path, languages):
         for language in languages
     ]
     words = max(candidates, key=_words_score)
-    joined = " ".join(text for text, _ in words)
-    latin_line = len(re.findall("[A-Za-z]", joined)) > len(_HANGUL_RE.findall(joined))
-    kept = []
-    for index, (text, conf) in enumerate(words):
-        if text == "|" and latin_line:
-            kept.append("I")  # 영어 줄의 외따로 선 세로 막대는 대명사 I 다
-        elif _keep_word(text, conf, index):
-            kept.append(text)
-    return " ".join(kept)
+    return " ".join(_kept_words([text for text, _ in words]))
 
 
 def _pdf_page_words(page, scale):
@@ -2116,10 +2142,20 @@ def _pdf_page_words(page, scale):
     ]
 
 
+# _finish_line 결과: 코드 줄이라 아예 빼야 하는 줄.
+_CHORD_LINE = "chord"
+
+
 def _finish_line(raw):
-    """OCR/PDF 원문 한 줄 → (가사 한 줄, 다음 단에 낱말이 이어지는지). 가사가 아니면 None."""
+    """OCR/PDF 원문 한 줄 → (가사 한 줄, 다음 단에 낱말이 이어지는지).
+
+    코드 줄이면 _CHORD_LINE, 읽지 못한 줄(글자가 두 자도 안 됨)이면 None.
+    둘을 가르는 이유 — 코드 줄은 띠에 잘못 섞여 들어온 줄이라 빼면 되지만, 못 읽은 줄은
+    진짜 가사 줄 자리라 자리를 비워 둬야 1·2절 순서가 밀리지 않는다 (order_lyric_lines)."""
     text = clean_lyric_line(raw)
-    if not is_lyric_line(text) or is_chord_line(text):
+    if is_chord_line(text):
+        return _CHORD_LINE
+    if not is_lyric_line(text):
         return None
     return text, ends_with_word_break(raw)
 
@@ -2133,7 +2169,7 @@ def _words_to_system_lines(words, boxes):
         )
         if inside:
             line = _finish_line(" ".join(word[2] for word in inside))
-            if line:
+            if line and line != _CHORD_LINE:
                 lines.append(line)
     return lines
 
@@ -2146,12 +2182,16 @@ def _words_to_lyric_lines(words, boxes):
 def order_lyric_lines(system_lines):
     """단마다 [(1절 줄), (2절 줄), ...] → 절 순서로 편 가사 줄. 빈 문자열 = 절 사이 빈 줄.
 
+    None 은 못 읽은 줄 자리다. 줄 수 셈에는 넣고(그래야 한 줄을 놓친 단도 같은 구간에
+    들고 2절 줄이 1절로 밀리지 않는다) 결과에서는 뺀다.
+
     악보는 한 단 아래에 1·2절을 겹쳐 적어서, 위에서 아래로 읽으면 1절과 2절이
     한 줄씩 엇갈려 나온다. 줄 수가 같은 단이 이어진 구간마다 1절을 끝까지,
     빈 줄, 2절을 끝까지 ... 순서로 편다. 한 줄짜리 단(후렴)은 그대로 둔다."""
+    system_lines = _trim_unread_lines(system_lines)
     runs = []
     for lines in system_lines:
-        if not lines:
+        if not any(lines):
             continue
         if runs and len(runs[-1][0]) == len(lines):
             runs[-1].append(lines)
@@ -2164,19 +2204,63 @@ def order_lyric_lines(system_lines):
             verses_out.append([lines[verse] for lines in run])
 
     result = []
-    for index, verse in enumerate(verses_out):
-        if index > 0:
+    for verse in verses_out:
+        merged = _join_broken_words(verse)
+        if not merged:
+            continue  # 줄을 하나도 못 읽은 절
+        if result:
             result.append("")
-        result.extend(_join_broken_words(verse))
+        result.extend(merged)
     return result
+
+
+# 단 끝 하이픈 뒤에 와도 끊긴 낱말의 뒷부분으로 보지 않는 흔한 낱말 (_join_broken_words).
+_COMMON_ENGLISH_WORDS = frozenset(
+    "a an and as at be by for from he her him his i in is it me my no not of oh on "
+    "or our she so that the thee their them they this thy to up us we who will with "
+    "you your".split()
+)
+
+
+def _trim_unread_lines(system_lines):
+    """다른 단들보다 줄이 많은 단에서 못 읽은 자리(None)를 뒤에서부터 덜어 낸다.
+
+    못 읽은 줄의 상당수는 가사가 아니라 띠에 섞여 든 다음 단 코드 줄을 뭉개 읽은 것이다
+    (`4DmMCFCG`). 가장 흔한 줄 수까지만 덜어서, 진짜 가사 줄을 놓친 단의 빈 자리는 남긴다."""
+    counts = [len(lines) for lines in system_lines if any(lines)]
+    if not counts:
+        return system_lines
+    common = max(set(counts), key=counts.count)
+    trimmed = []
+    for lines in system_lines:
+        lines = list(lines)
+        index = len(lines) - 1
+        while len(lines) > common and index >= 0:
+            if lines[index] is None:
+                del lines[index]
+            index -= 1
+        trimmed.append(lines)
+    return trimmed
 
 
 def _join_broken_words(lines):
     """`Lift -` ↵ `ing up my` 처럼 단 끝에서 끊긴 영어 낱말을 앞 줄에 붙인다."""
+    lines = [line for line in lines if line]
+    if not lines:
+        return []
     texts = [text for text, _ in lines]
     for index, (_, broken) in enumerate(lines[:-1]):
         following = texts[index + 1].split(" ", 1)
-        if broken and following[0] and re.match("[A-Za-z]", following[0]):
+        # 흐린 그림은 낱말은 못 읽고 하이픈만 남기기도 한다(`for me -` ↵ `ing`, `for` ↵ `ever`).
+        # 하이픈 앞이나 뒷줄 첫 토막이 그 자체로 흔한 낱말이면 끊긴 낱말이 아니다.
+        preceding = texts[index].rsplit(" ", 1)[-1].lower()
+        if (
+            broken
+            and following[0]
+            and re.match("[a-z]", following[0])
+            and following[0].lower() not in _COMMON_ENGLISH_WORDS
+            and preceding not in _COMMON_ENGLISH_WORDS
+        ):
             texts[index] += following[0]
             texts[index + 1] = following[1] if len(following) > 1 else ""
     return [text for text in texts if text]
@@ -2227,8 +2311,10 @@ def erase_staff_symbols(gray, threshold, systems):
     width, height = gray.size
     ink = bytearray(gray.point(lambda value: 1 if value < threshold else 0).tobytes())
     stack = []
-    for top, _bottom, spacing in systems:
-        for line in range(5):
+    for top, bottom, spacing in systems:
+        # 한 줄이 흐려 4줄만 찾은 단도 있다. 찾은 줄 수만큼만 — 5줄로 치면 마지막 씨앗이
+        # 오선 밑 가사 자리에 떨어져 가사를 지운다.
+        for line in range(int(round((bottom - top) / spacing)) + 1):
             center = int(round(top + line * spacing))
             for row in range(max(center - 1, 0), min(center + 2, height)):
                 offset = row * width
@@ -2331,11 +2417,17 @@ def _layout_image_page(image, work_dir, page_index, native=False):
         spacing = systems[system_index][2]
         items = []
         for box_index, (top, bottom) in enumerate(boxes):
+            # 줄 주변만 잘라서 다룬다 (줄마다 쪽 전체를 복사하지 않게).
+            reach = _line_reach(spacing)
+            window = (0, max(top - reach, 0), gray.width, min(bottom + 1 + reach, gray.height))
+            offset = window[1]
             source = restore_lyric_band(
-                original, gray, mask, top, bottom, max(int(spacing * 0.3), 2)
+                original.crop(window), gray.crop(window), mask.crop(window),
+                top - offset, bottom - offset, max(int(spacing * 0.3), 2),
             )
             line_image = _lyric_line_image(
-                source, threshold, top, bottom, spacing, binarize=not native
+                source, threshold, top - offset, bottom - offset, spacing,
+                binarize=not native,
             )
             if line_image is None:
                 continue
@@ -2403,7 +2495,8 @@ def ocr_image_paths(job):
 def resolve_sheet_lines(job, read_line, read_page):
     """줄 항목을 실제 가사 줄로 바꾼다 → 단마다의 [(가사 줄, 이어짐)].
 
-    read_line(경로) → (가사 줄, 이어짐) 또는 None, read_page(경로) → 그런 줄 목록.
+    read_line(경로) → _finish_line 결과, read_page(경로) → (가사 줄, 이어짐) 목록.
+    못 읽은 줄은 None 으로 자리를 남기고 코드 줄은 뺀다 (_finish_line 참고).
     쪽 전체에서 읽은 줄은 한 줄씩 따로 단으로 둔다 — 한 단에 넣으면 절 정리가
     줄마다 다른 절로 보고 사이사이 빈 줄을 넣는다."""
     systems = []
@@ -2417,7 +2510,7 @@ def resolve_sheet_lines(job, read_line, read_page):
                 (item["text"], item["continues"]) if "text" in item
                 else read_line(item["image"])
             )
-            if line:
+            if line != _CHORD_LINE:
                 lines.append(line)
         systems.append(lines)
     return systems
@@ -2454,9 +2547,8 @@ def _read_with_tesseract(job, executable, languages):
 
         def read_page(path):
             text = _run_tesseract(executable, path, "+".join(languages), "6")
-            return [
-                line for line in (_finish_line(raw) for raw in text.splitlines()) if line
-            ]
+            lines = (_finish_line(raw) for raw in text.splitlines())
+            return [line for line in lines if line and line != _CHORD_LINE]
 
         return resolve_sheet_lines(job, read_line, read_page)
 
@@ -2510,15 +2602,12 @@ def _native_line_text(observations):
 
     음표 자리 때문에 벌어진 가사는 한 줄이 여러 덩어리로 나뉘어 오므로 x 순서로 잇는다.
     확신도가 낮은 덩어리, 음표·기둥을 읽은 토막은 버린다."""
-    tokens = []
+    words = []
     for observation in sorted(observations, key=lambda item: item.get("x", 0.0)):
-        confidence = float(observation.get("confidence", 1.0)) * 100
-        if confidence < _NATIVE_MIN_CONFIDENCE:
+        if float(observation.get("confidence", 1.0)) * 100 < _NATIVE_MIN_CONFIDENCE:
             continue
-        for word in unicodedata.normalize("NFC", observation.get("text", "")).split():
-            if _keep_word(word, confidence, len(tokens)):
-                tokens.append(word)
-    return " ".join(tokens)
+        words.extend(unicodedata.normalize("NFC", observation.get("text", "")).split())
+    return " ".join(_kept_words(words))
 
 
 def _native_page_lines(observations):
@@ -2549,7 +2638,7 @@ def finish_sheet_lines(job_path, ocr_path):
 
     def read_page(path):
         lines = (_finish_line(raw) for raw in _native_page_lines(results.get(path) or []))
-        return [line for line in lines if line]
+        return [line for line in lines if line and line != _CHORD_LINE]
 
     return _sheet_result(job, resolve_sheet_lines(job, read_line, read_page), "native")
 

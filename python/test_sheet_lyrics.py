@@ -124,6 +124,24 @@ def test_order_lyric_lines():
     # 단 끝에서 하이픈으로 끊긴 영어 낱말은 앞 줄에 붙인다.
     broken = [[("for me Lift", True)], [("ing up my hands", False)]]
     assert order_lyric_lines(broken) == ["for me Lifting", "up my hands"]
+    # 흐려서 낱말은 못 읽고 하이픈만 남은 경우(`for me -`)는 붙이지 않는다.
+    assert order_lyric_lines([[("love for me", True)], [("ing up", False)]]) == [
+        "love for me", "ing up",
+    ]
+    assert order_lyric_lines([[("and a gain", True)], [("for ever", False)]]) == [
+        "and a gain", "for ever",
+    ]
+    # 못 읽은 줄(None)은 자리만 지킨다 — 2절 줄이 1절로 밀리지 않는다.
+    v = lambda text: (text, False)  # noqa: E731
+    assert order_lyric_lines([
+        [v("1a"), v("2a")], [None, v("2b")], [v("1c"), v("2c")],
+    ]) == ["1a", "1c", "", "2a", "2b", "2c"]
+    # 다른 단보다 줄이 많은 단의 못 읽은 자리(뭉개진 코드 줄)는 덜어 낸다.
+    assert order_lyric_lines([
+        [v("1a"), v("2a"), None], [v("1b"), v("2b")],
+    ]) == ["1a", "1b", "", "2a", "2b"]
+    # 한 절을 통째로 못 읽어도 빈 줄이 겹치지 않는다.
+    assert order_lyric_lines([[v("1a"), None], [v("1b"), None]]) == ["1a", "1b"]
 
 
 def test_ends_with_word_break():
@@ -132,6 +150,9 @@ def test_ends_with_word_break():
     # 한글 줄 끝 하이픈은 '음을 끌라'는 표시라 이어 붙이지 않는다.
     assert not ends_with_word_break("주 님 의 사 랑 -")
     assert not ends_with_word_break("for me")
+    # 하이픈 문자 목록은 clean_lyric_line 과 같다 (긴 대시 포함).
+    assert ends_with_word_break("Lift \u2014")
+    assert clean_lyric_line("a\u00a0\u00a0b") == "a b"
 
 
 def test_prepare_sheet_image():
@@ -255,6 +276,22 @@ def test_native_page_without_staff():
 
     # 같은 높이의 두 덩어리는 한 줄, 줄 사이에 빈 줄(절 나눔)이 끼지 않는다.
     assert result["lyrics"] == "주님의 사랑\n나를 감싸네", result
+
+
+def test_erase_staff_symbols_with_four_detected_lines():
+    """윗선이 흐려 4줄만 찾은 단에서도 오선 밑 가사를 지우지 않는다."""
+    from PIL import Image, ImageDraw
+
+    image = Image.new("L", (400, 200), 255)
+    draw = ImageDraw.Draw(image)
+    for line in range(1, 5):  # 윗선(0번)은 안 그린다
+        draw.line((20, 20 + line * 10, 380, 20 + line * 10), fill=0, width=1)
+    # 오선 한 칸 아래(옛 코드가 5번째 줄로 치던 자리)에 걸친 가사 획
+    draw.rectangle((100, 66, 140, 80), fill=0)
+    systems = find_staff_systems(ppt_tool.row_dark_ratios(image, 160))
+    assert len(systems) == 1 and round(systems[0][2]) == 10, systems
+    cleaned, _mask = erase_staff_symbols(image, 160, systems)
+    assert cleaned.getpixel((120, 72)) == 0
 
 
 def test_otsu_threshold():
@@ -383,6 +420,7 @@ if __name__ == "__main__":
     test_otsu_threshold()
     test_prepare_sheet_image()
     test_erase_staff_symbols_keeps_lyrics_under_low_notes()
+    test_erase_staff_symbols_with_four_detected_lines()
     test_native_ocr_two_stage()
     test_native_page_without_staff()
     test_extract_pdf_with_text_layer()
