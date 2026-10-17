@@ -46,6 +46,7 @@ import 'offering_overlay_painter.dart';
 import 'singer_view_data.dart';
 import 'slide_page_data.dart';
 import 'slide_render_view.dart';
+import 'cloud_conti_dialog.dart';
 import 'sync_dialog.dart';
 
 class PraiseHomePage extends StatefulWidget {
@@ -124,7 +125,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   );
 
   final PraiseRepository _repository = PraiseRepository();
-  // 공유 폴더(Google Drive 공유 드라이브)로 여러 PC 의 곡·저장 콘티를 맞춘다.
+  // 공유 폴더(Google Drive 공유 드라이브)로 여러 PC 의 찬양을 맞추고 콘티를 주고받는다(모두 손으로).
   final SyncService _sync = SyncService();
   final PythonBridge _pythonBridge = PythonBridge();
   final ExportStyleStore _styleStore = ExportStyleStore();
@@ -279,13 +280,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     )..addListener(_onMainTabChanged);
     _loadSongs();
     _repository.onSongsChanged = _sync.markLocalChanged;
-    _contiRepository.onContisChanged = _sync.markLocalChanged;
-    _sync.onMerged = (_) {
-      if (!mounted) return;
-      _loadSongs();
-      _loadSubLanguages();
-    };
-    _sync.load();
+    // 자동으로 하는 건 켤 때 한 번 서버를 보는 것뿐이다.
+    _sync.load().then((_) => _checkServerOnStartup());
     _loadSavedStyle();
     _loadOfferingDesign();
     _sermonStore.load().then((v) {
@@ -338,7 +334,6 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _singerWeb.stop();
     _sourceWatcher.dispose();
     _repository.onSongsChanged = null;
-    _contiRepository.onContisChanged = null;
     _sync.dispose();
     HardwareKeyboard.instance.removeHandler(_handleStartKey);
     _mainTabController
@@ -3432,6 +3427,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         },
         onExport: _exportContiFile,
         onImport: _importContiFile,
+        onUploadToCloud: _sync.status.value.enabled
+            ? _uploadContiToCloud
+            : null,
+        onOpenCloud: _sync.status.value.enabled ? _openCloudContis : null,
       ),
     );
     if (selected == null || !mounted) return;
@@ -3500,6 +3499,112 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     }
   }
 
+  // ── 동기화 (모두 손으로) ─────────────────────────────────────────────
+
+  void _openSyncDialog() => SyncDialog.show(
+    context,
+    service: _sync,
+    onSyncSongs: _syncSongs,
+    onOpenCloudContis: _openCloudContis,
+  );
+
+  void _openCloudContis() => CloudContiDialog.show(context, _sync);
+
+  /// '찬양 동기화' 버튼: 다른 PC 의 새 찬양·바뀐 찬양을 받고 이 PC 찬양을 올린다.
+  Future<void> _syncSongs() async {
+    final result = await _sync.syncSongs();
+    if (!mounted) return;
+    final error = _sync.status.value.lastError;
+    if (result == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('찬양 동기화 실패: ${error ?? '알 수 없는 오류'}')),
+      );
+      return;
+    }
+    if (result.changed) {
+      await _loadSongs();
+      await _loadSubLanguages();
+      if (!mounted) return;
+    }
+    final parts = [
+      if (result.addedCount > 0) '새 찬양 ${result.addedCount}곡',
+      if (result.updatedCount > 0) '바뀐 찬양 ${result.updatedCount}곡',
+      if (result.deletedCount > 0) '지운 찬양 ${result.deletedCount}곡',
+    ];
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          parts.isEmpty
+              ? '받을 새 찬양이 없습니다. 이 PC 의 찬양은 올렸습니다.'
+              : '찬양 동기화 완료: ${parts.join(' · ')}'
+                    '${error == null ? '' : '\n$error'}',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _uploadContiToCloud(WorshipConti conti) async {
+    try {
+      await _sync.uploadConti(conti);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('"${conti.name}" 콘티를 클라우드에 올렸습니다.')),
+      );
+    } catch (error, stack) {
+      await AppLogger.instance.error('콘티 올리기 실패', error, stack);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '콘티 올리기 실패: ${error is FileSystemException ? error.message : error}',
+          ),
+        ),
+      );
+    }
+  }
+
+  /// 켤 때 한 번: 서버에 새 찬양·바뀐 찬양·새 콘티가 있으면 알리고 고르게 한다(DB 는 그대로 본다).
+  Future<void> _checkServerOnStartup() async {
+    if (!_sync.status.value.enabled) return;
+    final check = await _sync.checkForUpdates();
+    if (check == null || !check.hasAnything || !mounted) return;
+    final songs = check.songs;
+    final lines = [
+      if (songs.addedCount > 0) '새 찬양 ${songs.addedCount}곡',
+      if (songs.updatedCount > 0) '바뀐 찬양 ${songs.updatedCount}곡',
+      if (songs.deletedCount > 0) '다른 PC 에서 지운 찬양 ${songs.deletedCount}곡',
+      if (check.newContis.isNotEmpty) '새 콘티 ${check.newContis.length}개',
+    ];
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('서버에 새 내용이 있습니다'),
+        content: Text(
+          '${lines.map((l) => '· $l').join('\n')}\n\n지금 받을까요? 나중에 \'찬양·콘티 동기화\' 에서 받아도 됩니다.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('나중에'),
+          ),
+          if (check.newContis.isNotEmpty)
+            OutlinedButton(
+              onPressed: () => Navigator.of(ctx).pop('contis'),
+              child: const Text('콘티 보기'),
+            ),
+          if (songs.changed)
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop('songs'),
+              child: const Text('찬양 동기화'),
+            ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (choice == 'songs') await _syncSongs();
+    if (choice == 'contis' && mounted) _openCloudContis();
+  }
+
   // ── 곡 관리 ──────────────────────────────────────────────────────────
 
   Future<void> _clearAllSongs() async {
@@ -3509,7 +3614,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         title: const Text('전체 초기화'),
         content: Text(
           _sync.status.value.enabled
-              ? '저장된 찬양 DB를 모두 삭제합니다.\n곡 동기화가 켜져 있어 같은 폴더를 쓰는 다른 PC 의 곡도 지워집니다. 계속할까요?'
+              ? '저장된 찬양 DB를 모두 삭제합니다.\n동기화 폴더를 쓰고 있어, 다음에 \'찬양 동기화\'를 누르면 다른 PC 의 찬양도 지워집니다. 계속할까요?'
               : '저장된 찬양 DB를 모두 삭제합니다. 계속할까요?',
         ),
         actions: [
@@ -3778,8 +3883,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               _importSheetMusic(fromClipboard: true),
                           onExportSongsPressed: _exportSongBundle,
                           onImportSongsPressed: _importSongBundle,
-                          onSyncPressed: () =>
-                              SyncDialog.show(context, _sync),
+                          onSyncPressed: _openSyncDialog,
                           onExtractLogsPressed: _showExtractLogsDialog,
                           isCheckingUpdate: _isCheckingUpdate,
                           hasUpdate: _pendingUpdate != null,
@@ -4072,8 +4176,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                           importSavedCount: _importSavedCount,
                           packageInfo: _packageInfo,
                           syncStatus: _sync.status,
-                          onSyncPressed: () =>
-                              SyncDialog.show(context, _sync),
+                          onSyncPressed: _openSyncDialog,
                         ),
                       ],
                     );
@@ -4489,7 +4592,7 @@ class _TopBar extends StatelessWidget {
               _item(
                 onSyncPressed,
                 Icons.sync_rounded,
-                '곡·콘티 동기화',
+                '찬양·콘티 동기화',
                 subtitle: 'Google Drive 공유 폴더로 여러 PC',
               ),
               const PopupMenuDivider(),
@@ -4651,8 +4754,10 @@ class _StatusBar extends StatelessWidget {
                   ? '동기화 중'
                   : failed
                   ? '동기화 실패'
+                  : sync.hasLocalChanges
+                  ? '동기화 안 한 찬양 있음'
                   : sync.lastSyncAt == null
-                  ? '동기화 대기'
+                  ? '동기화'
                   : '동기화 ${syncAgo(sync.lastSyncAt!)}';
               final color = failed ? cs.error : cs.onSurfaceVariant;
               return Padding(
@@ -8312,12 +8417,18 @@ class _ContiListDialog extends StatefulWidget {
     required this.onDelete,
     required this.onExport,
     required this.onImport,
+    this.onUploadToCloud,
+    this.onOpenCloud,
   });
 
   final List<WorshipConti> contis;
   final Future<void> Function(WorshipConti) onDelete;
   final Future<void> Function(WorshipConti) onExport;
   final Future<List<WorshipConti>?> Function() onImport;
+
+  /// 동기화 폴더를 골랐을 때만 — 콘티를 클라우드에 올리기 / 클라우드 콘티 목록 열기.
+  final Future<void> Function(WorshipConti)? onUploadToCloud;
+  final VoidCallback? onOpenCloud;
 
   @override
   State<_ContiListDialog> createState() => _ContiListDialogState();
@@ -8409,6 +8520,15 @@ class _ContiListDialogState extends State<_ContiListDialog> {
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        if (widget.onUploadToCloud != null)
+                          IconButton(
+                            icon: const Icon(
+                              Icons.cloud_upload_outlined,
+                              size: 20,
+                            ),
+                            tooltip: '클라우드에 올리기',
+                            onPressed: () => widget.onUploadToCloud!(conti),
+                          ),
                         IconButton(
                           icon: const Icon(Icons.ios_share_rounded, size: 20),
                           tooltip: '파일로 내보내기 (다른 PC 로 옮기기)',
@@ -8431,6 +8551,16 @@ class _ContiListDialogState extends State<_ContiListDialog> {
               ),
       ),
       actions: [
+        if (widget.onOpenCloud != null)
+          TextButton.icon(
+            onPressed: () {
+              // 받은 콘티가 목록에 보이도록 이 창은 닫고 클라우드 창을 연다.
+              Navigator.of(context).pop();
+              widget.onOpenCloud!();
+            },
+            icon: const Icon(Icons.cloud_download_outlined, size: 18),
+            label: const Text('클라우드에서 내려받기'),
+          ),
         TextButton.icon(
           onPressed: _import,
           icon: const Icon(Icons.file_open_outlined, size: 18),

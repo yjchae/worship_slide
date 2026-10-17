@@ -11,6 +11,7 @@ import '../domain/slide_media.dart';
 import '../domain/staging_item.dart';
 import '../domain/worship_conti.dart';
 import 'praise_database.dart';
+import 'sync_snapshot.dart';
 
 class LoadContiResult {
   const LoadContiResult({
@@ -55,13 +56,16 @@ void decodeContiNotes(Object? stored, int uid, Map<String, String> out) {
 }
 
 class WorshipContiRepository {
-  WorshipContiRepository({PraiseDatabase? database})
-    : _db = database ?? PraiseDatabase.instance;
+  WorshipContiRepository({
+    PraiseDatabase? database,
+    Future<Directory> Function()? supportDirectory,
+  }) : _db = database ?? PraiseDatabase.instance,
+       _supportDirectory = supportDirectory ?? getApplicationSupportDirectory;
 
   final PraiseDatabase _db;
 
-  /// 콘티를 저장·가져오기·삭제할 때마다 부른다. 동기화가 공유 폴더에 다시 쓰는 신호.
-  void Function()? onContisChanged;
+  /// 가져온 콘티의 이미지를 풀 곳의 바탕(Application Support). 테스트가 바꾼다.
+  final Future<Directory> Function() _supportDirectory;
 
   Future<int> saveConti(
     String name,
@@ -92,7 +96,6 @@ class WorshipContiRepository {
         'name': name,
         'created_at': now,
         'uid': newSongUid(),
-        'updated_at': now,
       });
       for (var i = 0; i < stagingItems.length; i++) {
         final item = stagingItems[i].item;
@@ -156,7 +159,6 @@ class WorshipContiRepository {
       }
       return contiId;
     });
-    onContisChanged?.call();
     return savedId;
   }
 
@@ -310,6 +312,7 @@ class WorshipContiRepository {
   /// song_id 는 받는 쪽 DB 와 안 맞으므로 빼고, 제목·가사 스냅샷만 보낸다.
   Future<void> exportContiFile(int contiId, String outPath) async {
     final db = await _db.database;
+    await fillMissingSyncUids(db);
     final contiRows = await db.query(
       'worship_contis',
       where: 'id = ?',
@@ -319,7 +322,7 @@ class WorshipContiRepository {
     final itemRows = await db.rawQuery(
       '''
       SELECT wci.*, ps.title AS cur_title, ps.lyrics AS cur_lyrics,
-             ps.english_lyrics AS cur_english_lyrics
+             ps.english_lyrics AS cur_english_lyrics, ps.uid AS cur_song_uid
       FROM worship_conti_items wci
       LEFT JOIN praise_songs ps ON ps.id = wci.song_id
       WHERE wci.conti_id = ?
@@ -357,7 +360,10 @@ class WorshipContiRepository {
       jsonEncode({
         'format': contiFileFormat,
         'version': 1,
+        // 클라우드에 올린 콘티를 다시 받을 때 같은 콘티로 알아보려고(새로 넣지 않고 바꾼다).
+        'uid': contiRows.first['uid'],
         'name': contiRows.first['name'],
+        'created_at': contiRows.first['created_at'],
         'items': items,
         'files': files,
       }),
@@ -367,8 +373,14 @@ class WorshipContiRepository {
   /// [exportContiFile] 로 만든 파일을 이 PC 의 콘티 목록에 새 콘티로 넣는다.
   /// 담겨 온 이미지는 `Application Support/imported_contis/<시각>/` 에 푼다
   /// (PPT 렌더 캐시처럼 저장한 콘티가 참조하므로 Caches 가 아니다).
-  /// 반환값은 새 콘티 id.
-  Future<int> importContiFile(String path, {Directory? filesDir}) async {
+  /// [keepUid] 면(클라우드에서 받기) 파일의 콘티 uid 를 그대로 쓰고, 같은 uid 의 콘티가 이미
+  /// 있으면 그것을 바꾼다 — 같은 콘티를 두 번 받아도 목록에 둘이 되지 않게. 아니면(파일 가져오기)
+  /// 늘 새 콘티다. 곡 항목은 곡 uid 로 이 PC 의 곡에 다시 잇는다. 반환값은 콘티 id.
+  Future<int> importContiFile(
+    String path, {
+    Directory? filesDir,
+    bool keepUid = false,
+  }) async {
     final Object? data;
     try {
       data = jsonDecode(await File(path).readAsString());
@@ -381,12 +393,16 @@ class WorshipContiRepository {
     final items = (data['items'] as List? ?? const []).whereType<Map>();
     final files = data['files'] as Map? ?? const {};
     final name = data['name'] as String? ?? '가져온 콘티';
+    final fileUid = data['uid'];
+    final uid = keepUid && fileUid is String && isValidContiUid(fileUid)
+        ? fileUid
+        : newSongUid();
 
     final dir =
         filesDir ??
         Directory(
           p.join(
-            (await getApplicationSupportDirectory()).path,
+            (await _supportDirectory()).path,
             'imported_contis',
             '${DateTime.now().millisecondsSinceEpoch}',
           ),
@@ -411,13 +427,26 @@ class WorshipContiRepository {
     final columns = await receivableItemColumns(db);
 
     final now = DateTime.now().millisecondsSinceEpoch;
-    final importedId = await db.transaction((txn) async {
+    final createdAt = keepUid && data['created_at'] is int
+        ? data['created_at'] as int
+        : now;
+    return db.transaction((txn) async {
+      if (keepUid) {
+        for (final old in await txn.query(
+          'worship_contis',
+          columns: ['id'],
+          where: 'uid = ?',
+          whereArgs: [uid],
+        )) {
+          await _deleteContiRows(txn, old['id'] as int);
+        }
+      }
       final contiId = await txn.insert('worship_contis', {
         'name': name,
-        'created_at': now,
-        'uid': newSongUid(),
-        'updated_at': now,
+        'created_at': createdAt,
+        'uid': uid,
       });
+      final songIdByUid = await _songIdsByUid(txn);
       var position = 0;
       for (final item in items) {
         final row = <String, Object?>{
@@ -429,14 +458,66 @@ class WorshipContiRepository {
           row['image_paths'] = imagePaths.split('\n').map(unpack).join('\n');
         }
         row['background'] = mapBackgroundPaths(row['background'], unpack);
+        final songUid = row['song_uid'];
+        if (songUid is String) row['song_id'] = songIdByUid(songUid);
         row['conti_id'] = contiId;
         row['position'] = position++;
         await txn.insert('worship_conti_items', row);
       }
       return contiId;
     });
-    onContisChanged?.call();
-    return importedId;
+  }
+
+  /// 콘티 uid 모양(32자리 hex). 클라우드 파일 이름으로 쓰므로 남이 쓴 값은 이 모양만 받는다.
+  static bool isValidContiUid(String uid) =>
+      RegExp(r'^[0-9a-f]{32}$').hasMatch(uid);
+
+  /// 콘티의 uid(클라우드 파일 이름). 예전 콘티라 없으면 지금 만든다.
+  Future<String> contiUid(int contiId) async {
+    final db = await _db.database;
+    await fillMissingSyncUids(db);
+    final rows = await db.query(
+      'worship_contis',
+      columns: ['uid'],
+      where: 'id = ?',
+      whereArgs: [contiId],
+    );
+    if (rows.isEmpty) throw StateError('콘티를 찾을 수 없습니다.');
+    return rows.first['uid'] as String;
+  }
+
+  /// 이 PC 의 콘티 uid → 콘티. 클라우드 목록에서 "이미 받은 콘티"를 가리는 데 쓴다.
+  Future<Map<String, WorshipConti>> contisByUid() async {
+    final contis = await listContis();
+    final db = await _db.database;
+    await fillMissingSyncUids(db);
+    final uids = {
+      for (final r in await db.query('worship_contis', columns: ['id', 'uid']))
+        r['id'] as int: r['uid'] as String?,
+    };
+    return {
+      for (final c in contis)
+        if (uids[c.id] != null) uids[c.id]!: c,
+    };
+  }
+
+  /// 곡 uid → 이 PC 의 곡 id. 합쳐진 uid(동기화)도 따라간다. 없으면 null.
+  static Future<int? Function(String)> _songIdsByUid(
+    DatabaseExecutor txn,
+  ) async {
+    final ids = {
+      for (final r in await txn.query(
+        'praise_songs',
+        columns: ['id', 'uid'],
+        where: 'uid IS NOT NULL',
+      ))
+        r['uid'] as String: r['id'] as int,
+    };
+    final aliases = {
+      for (final r in await txn.query('song_uid_aliases'))
+        r['alias'] as String: r['uid'] as String,
+    };
+    return (uid) => ids[resolveSongUid(aliases, uid)];
   }
 
   static const contiFileFormat = 'worship_slides_conti';
@@ -451,19 +532,6 @@ class WorshipContiRepository {
     if (json == null) return stored;
     for (final slot in _backgroundPathSlots(json)) {
       slot.set(map(slot.value));
-    }
-    return jsonEncode(json);
-  }
-
-  /// [mapBackgroundPaths] 의 비동기판(경로마다 파일을 올리는 동기화용). JSON 은 한 번만 푼다.
-  static Future<Object?> mapBackgroundPathsAsync(
-    Object? stored,
-    Future<String?> Function(String?) map,
-  ) async {
-    final json = _decodeBackground(stored);
-    if (json == null) return stored;
-    for (final slot in _backgroundPathSlots(json)) {
-      slot.set(await map(slot.value));
     }
     return jsonEncode(json);
   }
@@ -512,6 +580,8 @@ class WorshipContiRepository {
       item['song_title'] ??= row['cur_title'];
       item['song_lyrics'] ??= row['cur_lyrics'];
       item['song_english_lyrics'] ??= row['cur_english_lyrics'];
+      // 받는 PC 가 같은 곡(동기화로 uid 가 같은 곡)에 다시 잇는 데 쓴다.
+      item['song_uid'] ??= row['cur_song_uid'];
     }
     return item;
   }
@@ -528,28 +598,18 @@ class WorshipContiRepository {
 
   Future<void> deleteConti(int contiId) async {
     final db = await _db.database;
-    await db.transaction((txn) async {
-      final rows = await txn.query(
-        'worship_contis',
-        columns: ['uid'],
-        where: 'id = ?',
-        whereArgs: [contiId],
-      );
-      final uid = rows.firstOrNull?['uid'] as String?;
-      if (uid != null) {
-        // 다른 PC 에도 "지웠다"를 알린다.
-        await txn.insert('conti_tombstones', {
-          'uid': uid,
-          'deleted_at': DateTime.now().millisecondsSinceEpoch,
-        }, conflictAlgorithm: ConflictAlgorithm.replace);
-      }
-      await txn.delete(
-        'worship_conti_items',
-        where: 'conti_id = ?',
-        whereArgs: [contiId],
-      );
-      await txn.delete('worship_contis', where: 'id = ?', whereArgs: [contiId]);
-    });
-    onContisChanged?.call();
+    await db.transaction((txn) => _deleteContiRows(txn, contiId));
+  }
+
+  static Future<void> _deleteContiRows(
+    DatabaseExecutor txn,
+    int contiId,
+  ) async {
+    await txn.delete(
+      'worship_conti_items',
+      where: 'conti_id = ?',
+      whereArgs: [contiId],
+    );
+    await txn.delete('worship_contis', where: 'id = ?', whereArgs: [contiId]);
   }
 }

@@ -2,6 +2,10 @@ import 'dart:convert';
 
 import 'fnv_hash.dart';
 
+/// 공유 폴더 안에서 이 앱이 쓰는 폴더. 찬양 동기화 파일(`<기기 id>.json`)과
+/// 클라우드 콘티(`contis/`)가 여기 들어간다.
+const syncDirName = 'worship_slides_sync';
+
 // 남이 쓴 파일이라 값 모양을 믿지 않는다 — 모양이 틀린 값은 없는 것으로 본다(던지지 않는다).
 // 파일 하나·레코드 하나가 이상하다고 동기화 전체가 멈추면 안 된다.
 String? _str(Object? v) => v is String ? v : null;
@@ -165,8 +169,6 @@ class SyncSnapshot {
     this.deletedContent = const {},
     this.translations = const [],
     this.translationDeleted = const {},
-    this.contis = const [],
-    this.contiDeleted = const {},
   });
 
   static const format = 'worship_slides_song_sync';
@@ -197,27 +199,6 @@ class SyncSnapshot {
   /// 지운 보조 가사 [SyncTranslation.keyOf] → 지운 시각.
   final Map<String, int> translationDeleted;
 
-  final List<SyncConti> contis;
-
-  /// 지운 콘티 uid → 지운 시각.
-  final Map<String, int> contiDeleted;
-
-  SyncSnapshot withContis(List<SyncConti> contis, Map<String, int> deleted) =>
-      SyncSnapshot(
-        deviceId: deviceId,
-        deviceName: deviceName,
-        writer: writer,
-        writtenAt: writtenAt,
-        songs: songs,
-        deleted: this.deleted,
-        aliases: aliases,
-        deletedContent: deletedContent,
-        translations: translations,
-        translationDeleted: translationDeleted,
-        contis: contis,
-        contiDeleted: deleted,
-      );
-
   Map<String, Object?> toJson() => {
     'format': format,
     'version': 1,
@@ -239,8 +220,6 @@ class SyncSnapshot {
           'deleted_at': e.value,
         },
     ],
-    'contis': [for (final conti in contis) conti.toJson()],
-    'conti_deleted': contiDeleted,
   };
 
   static SyncSnapshot? fromJson(Object? raw) {
@@ -248,7 +227,6 @@ class SyncSnapshot {
     final songs = raw['songs'];
     final deleted = raw['deleted'];
     final aliases = raw['aliases'];
-    final contis = raw['contis'];
     final translations = raw['translations'];
     final translationDeleted = raw['translation_deleted'];
     return SyncSnapshot(
@@ -281,10 +259,6 @@ class SyncSnapshot {
               ): (e['deleted_at'] as num)
                   .toInt(),
       },
-      contis: contis is List
-          ? contis.map(SyncConti.fromJson).whereType<SyncConti>().toList()
-          : const [],
-      contiDeleted: _times(raw['conti_deleted']),
     );
   }
 
@@ -305,99 +279,17 @@ class SyncSnapshot {
       : const {};
 }
 
-/// 공유 폴더에 올리는 저장 콘티 하나. 콘티는 저장하면 고치지 않으므로(다시 저장 = 새 콘티)
-/// 실제로는 추가·삭제만 넘어간다. 그래도 곡처럼 "나중 것이 이긴다"로 맞춘다.
-class SyncConti {
-  const SyncConti({
-    required this.uid,
-    required this.updatedAt,
-    required this.name,
-    required this.createdAt,
-    required this.items,
-  });
-
-  final String uid;
-  final int updatedAt;
-  final String name;
-  final int createdAt;
-
-  /// `worship_conti_items` 행(id·conti_id·song_id·원본 PPT 경로 뺌). 곡 항목은 `song_uid` 를 싣는다.
-  /// 이미지 경로 자리는 [fileRef] 로 바뀌어 있다.
-  final List<Map<String, Object?>> items;
-
-  /// 경로 자리에 넣는 공유 파일 표시. 표시가 없는 경로는 그 PC 에 없던 파일(유실)이다.
-  static const _filePrefix = 'sync-file:';
-
-  static String fileRef(String name) => '$_filePrefix$name';
-
-  /// [fileRef] 면 파일 이름, 아니면 null.
-  static String? fileName(String? value) =>
-      value != null && value.startsWith(_filePrefix)
-      ? value.substring(_filePrefix.length)
-      : null;
-
-  /// 이 앱이 만드는 공유 파일 이름 모양(16자리 해시 + 확장자). 남이 보낸 이름은 이 모양만 받는다 —
-  /// '../', 드라이브 문자·NTFS 스트림(':'), NUL 같은 장치 이름이 끼어들 수 없다.
-  static final _safeName = RegExp(r'^[0-9a-f]{16}(\.[a-z0-9]{1,8})?$');
-
-  static bool isSafeFileName(String name) => _safeName.hasMatch(name);
-
-  /// 콘티는 저장하면 안 바뀌므로 고친 시각이 같으면 같은 콘티다. 다른 PC 가 다시 실어 보낸 사본이
-  /// 원본을 이기지 않게, 같으면 이미 가진 쪽을 둔다.
-  bool winsOver(SyncConti other) => updatedAt > other.updatedAt;
-
-  Map<String, Object?> toJson() => {
-    'uid': uid,
-    'updated_at': updatedAt,
-    'name': name,
-    'created_at': createdAt,
-    'items': items,
-  };
-
-  static SyncConti? fromJson(Object? raw) {
-    if (raw is! Map) return null;
-    final uid = _str(raw['uid']);
-    final name = _str(raw['name']);
-    final items = raw['items'];
-    if (uid == null || uid.isEmpty || name == null || items is! List) {
-      return null;
-    }
-    return SyncConti(
-      uid: uid,
-      updatedAt: _int(raw['updated_at']) ?? 0,
-      name: name,
-      createdAt: _int(raw['created_at']) ?? 0,
-      items: [
-        for (final item in items)
-          if (item is Map)
-            {
-              for (final e in item.entries)
-                if (e.key is String) e.key as String: e.value,
-            },
-      ],
-    );
-  }
-}
-
 /// 합치기 한 번에 바뀐 수.
 class SyncMergeResult {
   const SyncMergeResult({
     this.addedCount = 0,
     this.updatedCount = 0,
     this.deletedCount = 0,
-    this.pendingCount = 0,
-    this.stateChanged = false,
   });
 
   final int addedCount;
   final int updatedCount;
   final int deletedCount;
-
-  /// 콘티만: 파일이 아직 공유 폴더에 다 안 올라와 이번엔 못 받은 수.
-  final int pendingCount;
-
-  /// 곡·콘티 수는 그대로지만 내 파일에 실을 것(지운 기록·합친 uid)이 바뀌었다.
-  final bool stateChanged;
 
   bool get changed => addedCount + updatedCount + deletedCount > 0;
 }

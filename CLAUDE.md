@@ -17,7 +17,7 @@ flutter run -d macos          # 실행
 flutter build macos           # 빌드
 flutter analyze
 flutter test                  # test/ (페이지 파싱·슬라이드 렌더·헌금송 배경 굽기 등 단위 테스트)
-flutter test test/sync_test.dart      # 곡·콘티 동기화(여러 PC 흉내) 단위 테스트
+flutter test test/sync_test.dart      # 찬양 동기화·클라우드 콘티(여러 PC 흉내) 단위 테스트
 python3 python/test_render.py    # render 명령 self-check (LibreOffice 없으면 skip)
 python3 python/test_animation.py # 애니메이션 단계 펼치기 self-check (LibreOffice 불필요)
 python3 python/test_export_background.py # 항목별 배경 오버라이드 self-check (LibreOffice 불필요)
@@ -51,10 +51,10 @@ lib/
       praise_database.dart           -- SQLite 스키마 + 마이그레이션 (현재 version 17)
       praise_repository.dart         -- 곡 CRUD (searchSongs, replaceAllSongs, deleteSongsByIds ...)
       worship_conti_repository.dart  -- 콘티 저장/불러오기 (곡 가사 스냅샷까지 함께 보관)
-      sync_snapshot.dart             -- 동기화 파일 모양: SyncSnapshot(PC 한 대분) · SyncSong · SyncConti
-      song_sync_repository.dart      -- 곡 동기화 DB 쪽: 내 곡 스냅샷 만들기 + 다른 PC 스냅샷 합치기
-      conti_sync_repository.dart     -- 저장 콘티 동기화: 콘티 이미지 올리기/내려받기 + 합치기
-      sync_service.dart              -- 곡·콘티 동기화: 공유 폴더 설정(song_sync.json)·파일 읽고 쓰기·1분 타이머
+      sync_snapshot.dart             -- 찬양 동기화 파일 모양: SyncSnapshot(PC 한 대분) · SyncSong · SyncTranslation
+      song_sync_repository.dart      -- 찬양 동기화 DB 쪽: 내 찬양 스냅샷 만들기 + 다른 PC 스냅샷 합치기·미리 세기
+      conti_cloud_repository.dart    -- 클라우드 콘티: .wsconti 를 공유 폴더에 손으로 올리기/내려받기/지우기
+      sync_service.dart              -- 동기화 설정(song_sync.json)·찬양 동기화 버튼·켤 때 1회 확인·클라우드 콘티
       python_bridge.dart             -- Process.run으로 ppt_tool 실행 (import / render / export)
       export_style_store.dart        -- 스타일을 Application Support/export_style.json에 저장
       offering_design_store.dart     -- 헌금송 기본 디자인 → offering_design.json
@@ -78,7 +78,8 @@ lib/
       slide_render_view.dart         -- 미리보기/썸네일용 Flutter 슬라이드 렌더러
       offering_dialog.dart           -- 헌금송 디자인 등록 / 항목에 적용(높낮이) 다이얼로그
       offering_overlay_painter.dart  -- 헌금송 띠(라인 + 헌금 + 계좌) painter. 미리보기·PNG 공용
-      sync_dialog.dart               -- 동기화 설정 다이얼로그 (가져오기 메뉴 '곡·콘티 동기화', 상태 줄 표시)
+      sync_dialog.dart               -- 동기화 설정 (가져오기 메뉴 '찬양·콘티 동기화'·상태 줄): 폴더·찬양 동기화 버튼
+      cloud_conti_dialog.dart        -- 클라우드 콘티 목록: 내려받기(이미 있으면 바꾸기)·클라우드에서 지우기
   src/features/bible/
     data/bible_repository.dart       -- 역본·책·장·절 조회, JSON 임포트
     domain/bible_verse.dart
@@ -190,72 +191,42 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   색(`_main_lyrics_color`)과 같은 색인 영어 줄은 원곡 가사(`How great is our God`, `(x2)`)로 보고 본문에 남긴다.
   한글 줄이 없으면(영어 원곡) 흰색, 흰 줄도 없으면 가장 많이 쓴 색이 원본 색. 앱 화면의 "한글 가사"는 "원본 가사"로 부른다
 - **DB 위치**: 실행 파일 옆 (`worship_slides.db`). macOS는 `.app`에서 3단계 위. 앱 폴더를 통째로 옮겨도 데이터가 따라온다
-- **곡·콘티 동기화 (Google Drive 공유 드라이브 등)**: SQLite 파일을 드라이브에 두지 않는다 — 두 PC 가 동시에 쓰면
-  파일이 깨지거나 드라이브가 사본을 만든다. 대신 **PC 마다 자기 곡·저장 콘티 전부를 JSON 파일 하나로만 쓰고**
-  (`<고른 폴더>/worship_slides_sync/<기기 id>.json`, 기기 id 는 `Application Support/song_sync.json`) 다른 PC 들의 파일을 읽어 합친다.
-  앱은 드라이브 API 를 모른다 — Google Drive 데스크톱 앱이 PC 에 보여 주는 폴더면 된다(NAS·Dropbox 폴더도 된다).
+- **찬양·콘티 동기화 (Google Drive 공유 드라이브 등) — 모두 손으로 한다**: 처음엔 1분마다·고친 3초 뒤 자동으로 맞췄는데
+  자동이라서 생기는 문제(동시에 쓰기·반쯤 올라온 파일·재시도·시계 차이)가 끝없이 나와 **버튼을 누를 때만** 맞추도록 바꿨다.
+  자동으로 하는 건 **프로그램을 켤 때 한 번** 서버를 보고(`SyncService.checkForUpdates`) 새 찬양·바뀐 찬양·새 콘티가 있으면
+  알림 창으로 묻는 것뿐이다('나중에 / 콘티 보기 / 찬양 동기화'). 이 확인은 DB 를 안 바꾼다 — 실제 합치기를 트랜잭션 안에서
+  돌리고 되돌려 센다(`SongSyncRepository.preview`, 셈이 합치기와 똑같다)
+  - SQLite 파일을 드라이브에 두지 않는다(두 PC 가 동시에 쓰면 깨지거나 사본이 생긴다). 앱은 드라이브 API 를 모른다 —
+    Google Drive 데스크톱 앱이 PC 에 보여 주는 폴더면 된다(NAS·Dropbox 폴더도 된다). 폴더는 `Application Support/song_sync.json`
+  - **찬양 동기화 버튼**(`syncSongs`): PC 마다 자기 찬양 전부를 JSON 파일 하나로만 쓴다(`<폴더>/worship_slides_sync/<기기 id>.json`).
+    누르면 다른 PC 파일들을 읽어 합치고 내 파일을 쓴다. 찬양을 고치면 상태 줄에 '동기화 안 한 찬양 있음'만 뜬다(`hasLocalChanges`)
   - 곡마다 `praise_songs.uid`(무작위 32자 hex) + `updated_at`(ms, DB version 17). id 는 PC 마다·임포트마다 달라서 못 쓴다.
-    `PraiseRepository` 의 모든 쓰기가 `updated_at` 을 올리고 `onSongsChanged` 를 부른다 → 3초 모아 동기화.
-  - **보조 언어 가사는 곡과 따로 맞춘다** — (제목, 언어)마다 `song_translations.updated_at` + `translation_tombstones`.
-    곡 레코드에 실으면 같은 제목의 다른 곡·받는 쪽에만 있는 언어가 곡을 받을 때 통째로 지워졌다(리뷰에서 나옴)
-  - **곡마다 나중에 고친 쪽이 이긴다**(같은 시각이면 내용 문자열 비교로 — 어느 PC 에서든 같은 답). 지운 곡은 `song_tombstones`
-    에 남아 다른 PC 에서도 지운다. 지운 뒤에 다른 PC 에서 고쳤으면 고친 쪽이 이긴다(되살아난다). 전체 초기화도 다른 PC 로 번진다
-  - 두 PC 가 따로 가져온 같은 곡(제목·원본·영어 가사가 **똑같음**)은 작은 uid 로 합치고 `song_uid_aliases`(옛 uid → 지금 uid)에
-    남겨 파일에도 싣는다 — 다른 PC 파일에 옛 uid 가 남아 있어도 따라가게. **제목만 같고 가사가 다르면 합치지 않고 둘 다 남긴다**
-    (어느 쪽이 맞는지 모르니 사용자가 하나를 지우면 그게 번진다)
-  - 지운 기록(`song_tombstones`)에 **내용 해시**(`content_hash`, 제목·가사 FNV)도 남겨 파일에 싣는다(`deleted_content`).
-    동기화를 켜기 전에 한 PC 에서 지운 곡이 다른 PC 의 같은 곡(uid 만 다름)으로 되살아나지 않게 — 받는 쪽은 그 곡을 안 받고,
-    가진 쪽은 지운다. 단 지운 쪽이 같은 내용의 곡을 아직 갖고 있으면(일부러 하나만 지움) 번지지 않는다(`_ContentTombstones`)
-  - 기기 id 는 `song_sync.json` 에 둔다(임시 파일 → 이름 바꾸기로 쓴다. 깨졌으면 덮어쓰지 않고 '꺼짐 + 오류'로 알린다).
-    설정 폴더째 복제된 PC(마이그레이션)가 같은 id 로 서로 덮어쓰지 않게, 내 파일에 실행마다 새 표시(`writer`)와 쓴 시각
-    (`written_at`)을 싣고, 그 시각을 **파일보다 먼저** 설정에 남긴다(못 남기면 쓰지 않는다). 이번 실행에서 쓴 뒤 다른 표시로
-    바뀌었거나, 처음 볼 때 내 기록보다 늦게 쓰였으면 다른 PC 다 → 새 id 로 비킨다. 폴더를 바꿨다 돌아와도 옛 파일은 기록보다
-    일러서 오해하지 않는다. PC 이름은 쓰지 않는다 — macOS 는 망에 따라 호스트 이름이 바뀐다. `written_at` 은 내용 비교에서 뺀다
-  - 곡을 열었다 그냥 저장하면(`updateSong` 에 바뀐 게 없으면) 고친 시각을 올리지 않는다 — 다른 PC 의 새 수정을 덮지 않게
-  - 다른 PC 파일을 못 읽었으면(드라이브가 아직 내려받는 중) 받지 못한 콘티와 같은 간격(1분 → 30분)으로 다시 읽는다.
-    레코드 하나가 이상하면 그것만 버린다(파일 전체를 버리지 않는다).
-    콘티 이미지 하나를 못 올리면 그 콘티만 빼고 올린다(곡까지 막히지 않게). 남이 보낸 콘티 칸은 글자·숫자·null 만 받는다.
-    **남이 보낸 경로 중 `sync-file:` 이 아닌 것은 버린다**(이미지 자리는 없는 파일 `.missing` 으로) — 그대로 두면 이 PC 의 같은
-    경로에 있는 아무 파일이나 다음 동기화 때 공유 폴더로 올라간다. `image_source_path` 도 받지 않는다.
-    임시 파일 → 이름 바꾸기는 `atomic_file.dart`(`atomicWriteString`·`atomicCopy`) 한 곳, 지운 기록 합치기는 `keepLatest`
-  - 합치기에서 곡·콘티 수는 그대로여도 합친 uid·지운 기록이 바뀌면 `stateChanged` — 그때만 내 파일을 다시 만든다
-    (다른 PC 파일만 바뀌고 이 PC 에 들어온 게 없으면 다시 만들지 않는다)
-  - 새 곡 uid 를 내용 해시로 만들면 같은 곡끼리 uid 가 저절로 같아져 합치기 경로가 줄지만 **일부러 안 했다** — 이미 무작위
-    uid 를 가진 기존 곡(마이그레이션)과 고친 뒤의 곡(내용이 바뀌어도 uid 는 그대로)은 어차피 합치기 경로가 필요해서 코드가 줄지 않는다
-  - 예전 콘티(가사·제목 스냅샷이 빈 곡 항목)는 보낼 때 지금 곡으로 채운다(`.wsconti` 와 같다). 합칠 때마다 콘티 곡 항목의
-    `song_id` 를 `song_uid` 로 다시 맞춘다 — 곡보다 콘티가 먼저 왔거나, 잇던 곡이 지워졌다 다른 id 로 돌아온 경우
-  - 미디어 페이지는 유튜브만 넘긴다(동영상·음악 경로는 보낸 PC 의 로컬 경로라 받는 쪽에선 없거나 엉뚱한 파일이다)
-  - 합친 결과는 **내 파일을 쓰기 전에** 화면에 알린다(`onMerged`). 쓰기가 실패해도 이미 DB 에 들어온 곡이 화면에 안 보이는
-    일이 없게. 실패하면 다음 차례에 다시 쓴다. 콘티 이미지를 못 올리면 그 콘티 캐시를 버리고 1분 → 30분 간격으로 다시 본다
-  - 공유 `files/` 목록은 내 파일을 쓸 수도 있는 차례엔 늘(한 번만 읽어 넘긴다), 아무 일 없는 차례엔 10분에 한 번만 본다
-  - 합치기 반복 중에 uid 를 합치면(`_renameUid`) 뒤에 오는 옛 uid 의 판도 지금 uid 로 다룬다(안 그러면 중복 곡이 생긴다)
-  - `replaceAllSongs` 는 같은 곡의 uid 를 지키되 파일 이름이 바뀌었으면 고친 시각을 올린다
-  - 고치거나 지운 시각은 그 곡의 지금 시각보다 늘 늦게 찍는다(`PraiseRepository._after`) — 시계가 앞선 PC 에서 온 곡을
-    이 PC 에서 고치거나 지웠는데 시각이 더 일러 다음 합치기에 되돌아가지 않게. 콘티는 안 바뀌므로 지운 기록이 있으면 시각과
-    상관없이 지운 쪽이 이긴다
-  - 합친 uid 로 모인 두 곡이 그 뒤 따로 고쳐져 가사가 다르면 지우지 않고 한쪽에 새 uid 를 준다(가사가 다르면 둘 다 남긴다는 규칙)
-  - `.wsconti` 와 동기화는 항목 행 다듬기(`portableItemRow`)·받을 칸(`receivableItemColumns`)·배경 경로 바꾸기
-    (`mapBackgroundPaths[Async]`)를 같이 쓴다
-  - `load` 도 `setFolder`·동기화와 같은 큐로 돈다. 곡 내용 해시는 파일을 푸는 isolate 에서 미리 계산한다
-  - `replaceAllSongs` 는 같은 제목·가사 곡의 uid 를 그대로 쓴다(전체 교체가 "모두 삭제 + 새로 추가"로 번지지 않게)
-  - 앱이 켜져 있는 동안 시작할 때·1분마다·곡을 고친 3초 뒤에 맞춘다. 다른 PC 파일의 수정 시각·크기가 그대로이고 내 쪽 변경도 없으면
-    합치기를 건너뛴다. 내 파일은 내용이 바뀔 때만 임시 파일 → 이름 바꾸기로 쓴다. 파일 읽기·JSON 풀기/만들기는 `Isolate.run`
-    (곡 수천 곡이면 몇 MB 라 발표 넘기기가 끊긴다). 변경 표시(`_localDirty`)는 합치기 **전에** 끈다 — 끝에서 끄면 그 사이 수정을 놓친다.
-    `setFolder` 도 같은 큐로 돈다. 다른 PC 의 변경이 들어오면 곡 목록을 다시 읽는다
-    (콘티에 담긴 곡은 가사 스냅샷이라 그대로다)
-  - **저장 콘티**: `worship_contis.uid`·`updated_at`(version 17, 예전 콘티는 `created_at`), 지운 콘티는 `conti_tombstones`.
-    콘티는 저장하면 고치지 않으므로(다시 저장 = 새 콘티) 사실상 추가·삭제만 넘어간다. 곡 항목은 `song_uid` 를 싣고 받는 쪽이
-    자기 곡 id 로 잇는다(합쳐진 uid 도 따라간다). 곡을 먼저 합친 뒤 콘티를 합친다
-  - **콘티 이미지**(PPT 페이지·항목 배경·헌금송 PNG)는 `<폴더>/worship_slides_sync/files/` 에 올리고 경로 자리에
-    `sync-file:<이름>` 을 넣는다(`SyncConti.fileRef`). 이름 = 경로·크기·수정 시각의 FNV 해시(내용을 다 읽지 않으려고 —
-    렌더 캐시처럼 한 번 구운 파일은 안 바뀐다). 받는 PC 는 `Application Support/synced_files/<이름>` 으로 내려받고, 그 파일은
-    이름 그대로 다시 올리므로 사본이 늘지 않는다. **파일이 다 안 내려온 콘티는 이번엔 건너뛰고**(`pendingCount`) 1분부터 두 배씩
-    (최대 30분) 늘려 다시 본다. 받는 파일 이름은 항목에서 직접 모으고 `SyncConti.isSafeFileName`(16자리 hex + 확장자)만 받는다 —
-    `../`·`:`(NTFS 스트림)·`NUL` 같은 이름이 끼어들 수 없다. 누가 공유 `files/` 를 지우면 폴더 목록으로 알아채 다시 올린다.
-    곡 항목은 `worship_conti_items.song_uid` 에 곡 uid 를 적어 두어, 그 곡이 지워진 PC 를 거쳐 가도 링크가 남는다.
-    콘티는 안 바뀌므로 고친 시각이 같으면 먼저 가진 쪽을 둔다(다시 실어 보낸 사본이 원본을 이기지 않게)
-    동영상·음악은 싣지 않는다(`.wsconti` 와 같다). 공유 폴더 `files/` 는 지우지 않는다(다른 PC 콘티가 쓰고 있을 수 있다)
-  - 원본 PPT 경로(`image_source_path`)는 넘기지 않는다 — 받는 PC 에서 '원본 열어 수정'은 안 된다
+    **곡마다 나중에 고친 쪽이 이긴다**(같은 시각이면 내용 문자열 비교 — 어느 PC 에서든 같은 답). 지운 곡은 `song_tombstones` 에
+    남아 다른 PC 에서도 지운다(전체 초기화도). 지운 뒤 다른 PC 에서 고쳤으면 고친 쪽이 이긴다
+  - 보조 언어 가사는 곡과 따로 (제목, 언어)마다 맞춘다(`song_translations.updated_at` + `translation_tombstones`) — 곡 레코드에
+    실으면 같은 제목의 다른 곡·받는 쪽에만 있는 언어가 지워졌다
+  - 두 PC 가 따로 가져온 같은 곡(제목·원본·영어 가사가 **똑같음**)은 작은 uid 로 합치고 `song_uid_aliases`(옛 uid → 지금 uid)에 남겨
+    파일에도 싣는다. **제목만 같고 가사가 다르면 둘 다 남긴다.** 합친 뒤 따로 고쳐 가사가 달라졌으면 한쪽에 새 uid 를 준다.
+    합치기 반복 중에 uid 를 합치면(`_renameUid`) 뒤에 오는 옛 uid 의 판도 지금 uid 로 다룬다
+  - 지운 기록에 **내용 해시**(`content_hash`, 제목·가사 FNV)도 싣는다(`deleted_content`) — 동기화를 켜기 전에 한 PC 에서 지운 곡이
+    다른 PC 의 같은 곡(uid 만 다름)으로 되살아나지 않게. 지운 쪽이 같은 내용 곡을 아직 갖고 있으면 번지지 않는다(`_ContentTombstones`)
+  - 고치거나 지운 시각은 그 곡의 지금 시각보다 늘 늦게 찍는다(`PraiseRepository._after`, 시계가 앞선 PC 에서 온 곡 대비).
+    곡을 열었다 그냥 저장하면(`updateSong` 에 바뀐 게 없으면) 시각을 안 올린다. `replaceAllSongs` 는 같은 제목·가사 곡의 uid 를
+    그대로 쓰고(전체 교체가 "모두 삭제 + 새로 추가"로 번지지 않게) 파일 이름만 바뀌었으면 시각을 올린다
+  - 기기 id 가 겹치는 PC(설정 폴더째 복제·마이그레이션) 대비: 내 파일에 실행마다 새 표시(`writer`)와 쓴 시각(`written_at`)을 싣고,
+    그 시각을 **파일보다 먼저** 설정에 남긴다(못 남기면 쓰지 않는다). 이번 실행에서 쓴 뒤 다른 표시로 바뀌었거나, 처음 볼 때 내
+    기록보다 늦게 쓰였으면 다른 PC 다 → 새 id 로 비킨다. `written_at` 은 내용 비교에서 빼고(안 바뀌었으면 다시 안 쓴다) 맨 앞에 붙인다
+  - 다른 PC 파일을 못 읽으면(드라이브가 아직 내려받는 중) 그 PC 만 빼고 합치고 "N개 못 읽음, 잠시 뒤 다시 눌러 달라"고 알린다.
+    레코드 하나가 이상하면 그것만 버린다. 파일 읽기·JSON 풀기/만들기·곡 내용 해시는 `Isolate.run`(곡 수천 곡이면 몇 MB).
+    설정 읽기·폴더 바꾸기·동기화·확인은 한 큐로 차례대로 돈다. 임시 파일 → 이름 바꾸기는 `atomic_file.dart` 한 곳
+  - **콘티는 클라우드에 올리기·내려받기**(`ContiCloudRepository`, 자동 동기화 없음): '콘티 불러오기' 창의 콘티 옆 구름 버튼 = 올리기,
+    '클라우드에서 내려받기'(또는 동기화 창 '클라우드 콘티') = 목록에서 골라 받기·클라우드에서 지우기. 파일은 '파일로 내보내기'와 같은
+    `.wsconti`(이미지까지 base64 로 담김) = `<폴더>/worship_slides_sync/contis/<콘티 uid>.wsconti` + 목록용 정보 `<콘티 uid>.json`
+    (정보를 나중에 쓰므로 목록에 보이면 콘티 파일도 다 쓴 것). `worship_contis.uid`(version 17)가 파일 이름이라 같은 콘티를 다시 올리면
+    덮어쓰고, 다시 받으면 그 콘티를 바꾼다(`importContiFile(keepUid: true)`). '파일에서 가져오기'는 늘 새 콘티다.
+    정보 파일 uid 는 32자리 hex 만 받는다(파일 이름으로 쓰므로). 받을 때 곡 항목은 `worship_conti_items.song_uid` 로 그 PC 의 곡에
+    다시 잇는다(`.wsconti` 공통 — 예전 콘티는 내보낼 때 지금 곡의 uid·가사로 채운다, `portableItemRow`). 클라우드에서 지워도 이미
+    받은 PC 의 콘티는 남는다. 동영상·음악 파일은 안 실린다(`.wsconti` 와 같다)
   - 시계가 크게 틀린 PC 는 "나중에 고친 쪽" 판정이 틀릴 수 있다(OS 자동 시간 맞추기를 켜 두면 된다)
 - **DB 갱신** (`replaceAllSongs`): 전체 삭제 후 재삽입 (증분 갱신 아님)
 - **폴더 다시 가져오기** (`addNewSongs`): 같은 제목에 원본 가사까지 같으면 건너뛰고, 원본+보조 가사의 줄 모음

@@ -18,9 +18,6 @@ class SongSyncRepository {
 
   final PraiseDatabase _databaseProvider;
 
-  /// 이번 합치기에서 곡 수와 상관없이 내 파일에 실을 것(합친 uid·지운 기록)이 바뀌었는지.
-  bool _stateChanged = false;
-
   /// 이 PC 의 곡·보조 가사 전부를 공유 폴더에 쓸 모양으로.
   Future<SyncSnapshot> exportSnapshot({
     required String deviceId,
@@ -63,17 +60,37 @@ class SongSyncRepository {
   Future<SyncMergeResult> merge(List<SyncSnapshot> remotes) async {
     final db = await _databaseProvider.database;
     await fillMissingSyncUids(db);
-    _stateChanged = false;
-    return db.transaction((txn) async {
-      final songs = await _mergeSongs(txn, remotes);
-      final translations = await _mergeTranslations(txn, remotes);
-      return SyncMergeResult(
-        addedCount: songs.addedCount,
-        updatedCount: songs.updatedCount + translations,
-        deletedCount: songs.deletedCount,
-        stateChanged: _stateChanged,
-      );
-    });
+    return db.transaction((txn) => _mergeIn(txn, remotes));
+  }
+
+  /// 합치면 어떻게 될지만 센다(DB 는 그대로). 프로그램을 켤 때 "서버에 새 찬양이 있다"를
+  /// 알리는 데 쓴다 — 실제 합치기를 트랜잭션 안에서 돌리고 되돌리므로 셈이 합치기와 똑같다.
+  Future<SyncMergeResult> preview(List<SyncSnapshot> remotes) async {
+    final db = await _databaseProvider.database;
+    await fillMissingSyncUids(db);
+    late SyncMergeResult result;
+    try {
+      await db.transaction((txn) async {
+        result = await _mergeIn(txn, remotes);
+        throw const _Rollback();
+      });
+    } on _Rollback {
+      // 되돌렸다 — 셈만 남는다.
+    }
+    return result;
+  }
+
+  Future<SyncMergeResult> _mergeIn(
+    DatabaseExecutor txn,
+    List<SyncSnapshot> remotes,
+  ) async {
+    final songs = await _mergeSongs(txn, remotes);
+    final translations = await _mergeTranslations(txn, remotes);
+    return SyncMergeResult(
+      addedCount: songs.addedCount,
+      updatedCount: songs.updatedCount + translations,
+      deletedCount: songs.deletedCount,
+    );
   }
 
   // ── 곡 ──────────────────────────────────────────────────────────────
@@ -205,7 +222,6 @@ class SongSyncRepository {
           'deleted_at': entry.value,
           'content_hash': hash,
         }, conflictAlgorithm: ConflictAlgorithm.replace);
-        _stateChanged = true;
       }
     }
 
@@ -266,7 +282,6 @@ class SongSyncRepository {
     String uid,
   ) async {
     aliases[alias] = uid;
-    _stateChanged = true;
     await txn.insert('song_uid_aliases', {
       'alias': alias,
       'uid': uid,
@@ -284,7 +299,6 @@ class SongSyncRepository {
       final uid = canonical(song.uid);
       var current = _LocalSong(row['id'] as int, song);
       if (uid != song.uid) {
-        _stateChanged = true;
         await txn.update(
           'praise_songs',
           {'uid': uid},
@@ -422,7 +436,6 @@ class SongSyncRepository {
           'language': parts.last,
           'deleted_at': entry.value,
         }, conflictAlgorithm: ConflictAlgorithm.replace);
-        _stateChanged = true;
       }
     }
     return changed;
@@ -514,4 +527,9 @@ class _LocalSong {
 
   final int id;
   SyncSong song;
+}
+
+/// [SongSyncRepository.preview] 가 트랜잭션을 되돌리려고 던진다.
+class _Rollback implements Exception {
+  const _Rollback();
 }

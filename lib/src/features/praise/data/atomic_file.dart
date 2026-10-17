@@ -8,7 +8,7 @@ import 'praise_database.dart';
 ///
 /// 이름 바꾸기가 실패하면(Windows 에서 다른 프로그램이 [target] 을 잡고 있는 등)
 /// [target] 이 이미 있고 [overwrite] 가 아니면 그대로 둔다 — 같은 이름이면 같은 내용인
-/// 파일(공유 이미지)용. 아니면 다시 던진다.
+/// 파일(헌금송 PNG 캐시)용. 아니면 다시 던진다.
 Future<void> atomicWrite(
   File target,
   Future<void> Function(File temp) write, {
@@ -27,6 +27,3 @@ Future<void> atomicWrite(
 
 Future<void> atomicWriteString(File target, String text) =>
     atomicWrite(target, (temp) => temp.writeAsString(text, flush: true));
-
-Future<void> atomicCopy(File source, File target) =>
-    atomicWrite(target, (temp) => source.copy(temp.path), overwrite: false);
