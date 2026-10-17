@@ -23,7 +23,11 @@ class ClipboardEmptyException implements Exception {
   const ClipboardEmptyException();
 
   @override
-  String toString() => '클립보드에 악보 그림이 없습니다. 악보를 캡처하거나 복사한 뒤 다시 시도해 주세요.';
+  String toString() => Platform.isMacOS
+      // ⌘⇧4 는 파일로만 저장하고 클립보드에는 넣지 않는다.
+      ? '클립보드에 악보 그림이 없습니다. ⌘⇧4 는 캡처를 파일로만 저장합니다 — '
+            '⌘⌃⇧4(Control 추가)로 캡처하거나, 캡처한 파일을 Finder 에서 ⌘C 로 복사한 뒤 다시 시도해 주세요.'
+      : '클립보드에 악보 그림이 없습니다. 악보를 캡처하거나 복사한 뒤 다시 시도해 주세요.';
 }
 
 class TesseractMissingException implements Exception {
