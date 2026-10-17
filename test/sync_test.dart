@@ -582,7 +582,7 @@ void main() {
           SyncSnapshot(
             deviceId: 'odd',
             deviceName: 'odd',
-            songs: const [
+            songs: [
               SyncSong(
                 uid: 's1',
                 updatedAt: 1,
@@ -647,16 +647,68 @@ void main() {
       expect(await a.titles(), ['은혜:가사']);
       expect(await b.titles(), ['은혜:가사']);
     });
+  });
 
-    test('설정이 다른 PC 로 옮겨지면 기기 id 를 새로 만든다', () async {
-      final dir = await Directory(p.join(root.path, 'moved')).create();
-      File(p.join(dir.path, 'song_sync.json')).writeAsStringSync(
-        jsonEncode({
-          'folder': null,
-          'device_id': 'copied-id',
-          'device_name': '옛 PC',
-        }),
+  group('리뷰 3차', () {
+    /// [from] PC 의 설정 폴더를 통째로 복사한 PC (마이그레이션·복제).
+    Future<_Pc> clonePc(_Pc from, String name) async {
+      final dir = await Directory(p.join(root.path, name)).create();
+      File(
+        p.join(from.dir.path, 'song_sync.json'),
+      ).copySync(p.join(dir.path, 'song_sync.json'));
+      final db = await databaseFactoryFfi.openDatabase(
+        p.join(dir.path, 'a.db'),
       );
+      addTearDown(db.close);
+      await createPraiseSchema(db);
+      final database = PraiseDatabase.forTesting(db);
+      final sync = SyncService(
+        songs: SongSyncRepository(database: database),
+        contis: ContiSyncRepository(database: database),
+        settingsDirectory: () async => dir,
+        deviceName: name,
+        clock: () => now,
+      );
+      addTearDown(sync.dispose);
+      final repo = PraiseRepository(database: database)
+        ..onSongsChanged = sync.markLocalChanged;
+      final contis = WorshipContiRepository(database: database)
+        ..onContisChanged = sync.markLocalChanged;
+      await sync.load();
+      return _Pc(repo, contis, sync, dir);
+    }
+
+    test('설정이 복제된 PC 는 기기 id 를 새로 만들어 서로 덮어쓰지 않는다', () async {
+      final a = await newPc('A');
+      await a.repo.insertSong(song('은혜', '가사'));
+      await a.sync.syncNow();
+      final b = await clonePc(a, 'B');
+      expect(b.sync.deviceId, a.sync.deviceId);
+      // 복제 뒤 A 가 한 번 더 쓴다(설정의 마지막 표시는 복제 시점 것).
+      await a.repo.insertSong(song('축복', '가사'));
+      await a.sync.syncNow();
+      await b.repo.insertSong(song('사랑', '가사'));
+      await b.sync.syncNow();
+      expect(b.sync.deviceId, isNot(a.sync.deviceId));
+      await syncAll([a, b]);
+      expect(await a.titles(), ['사랑:가사', '은혜:가사', '축복:가사']);
+      expect(await b.titles(), ['사랑:가사', '은혜:가사', '축복:가사']);
+    });
+
+    test('같은 PC 를 다시 켜면 기기 id 가 그대로다', () async {
+      final a = await newPc('A');
+      await a.repo.insertSong(song('은혜', '가사'));
+      await a.sync.syncNow();
+      final again = await clonePc(a, 'A-다시');
+      // 같은 PC 를 다시 켠 것과 같다(설정의 마지막 표시 = 파일의 표시).
+      await again.sync.syncNow();
+      expect(again.sync.deviceId, a.sync.deviceId);
+    });
+
+    test('설정 파일이 깨졌으면 꺼진 것으로 덮어쓰지 않고 알린다', () async {
+      final dir = await Directory(p.join(root.path, 'broken')).create();
+      final settings = File(p.join(dir.path, 'song_sync.json'))
+        ..writeAsStringSync('{"folder": "/x", "dev');
       final db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
       addTearDown(db.close);
       await createPraiseSchema(db);
@@ -664,12 +716,91 @@ void main() {
         songs: SongSyncRepository(database: PraiseDatabase.forTesting(db)),
         contis: ContiSyncRepository(database: PraiseDatabase.forTesting(db)),
         settingsDirectory: () async => dir,
-        deviceName: '새 PC',
+        deviceName: 'X',
       );
       addTearDown(sync.dispose);
       await sync.load();
-      expect(sync.deviceId, isNot('copied-id'));
-      expect(sync.deviceId, hasLength(32));
+      expect(sync.status.value.lastError, contains('설정'));
+      expect(settings.readAsStringSync(), '{"folder": "/x", "dev');
+    });
+
+    test('계속 못 읽는 다른 PC 파일은 매번이 아니라 간격을 늘려 다시 읽는다', () async {
+      final a = await newPc('A');
+      final dir = p.join(shared, SyncService.syncDirName);
+      File(p.join(dir, 'broken.json')).writeAsStringSync('{깨짐');
+      await a.sync.syncNow();
+      final ownFile = File(p.join(dir, '${a.sync.deviceId}.json'));
+      final written = ownFile.lastModifiedSync();
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      // 1분이 안 지났으면 다시 읽지 않는다(아무것도 안 함).
+      final result = await a.sync.syncNow();
+      expect(result!.changed, isFalse);
+      expect(ownFile.lastModifiedSync(), written);
+    });
+
+    test('누가 공유 files/ 를 지우면 다시 올린다', () async {
+      final a = await newPc('A');
+      final b = await newPc('B');
+      await a.repo.insertSong(song('은혜', '가사'));
+      final page = File(p.join(a.dir.path, '0001.png'))..writeAsBytesSync([1]);
+      await a.contis.saveConti('콘티', [
+        (
+          uid: 1,
+          item: ImageStagingItem(sourceName: 'x', imagePaths: [page.path]),
+        ),
+      ]);
+      await a.sync.syncNow();
+      Directory(
+        p.join(shared, SyncService.syncDirName, SyncService.filesDirName),
+      ).deleteSync(recursive: true);
+      await a.sync.syncNow();
+      await b.sync.syncNow();
+      expect((await b.contis.listContis()).map((c) => c.name), ['콘티']);
+    });
+
+    test('바꾼 게 없이 저장하면 다른 PC 의 수정을 덮지 않는다', () async {
+      final a = await newPc('A');
+      final b = await newPc('B');
+      await a.repo.insertSong(song('은혜', '처음'));
+      await syncAll([a, b]);
+      final onA = (await a.songs()).single;
+      await a.repo.updateSong(
+        PraiseSong(
+          id: onA.id,
+          fileName: onA.fileName,
+          title: onA.title,
+          lyrics: 'A 가 고침',
+          englishLyrics: '',
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      final onB = (await b.songs()).single;
+      await b.repo.updateSong(onB); // 열었다가 그냥 저장
+      await syncAll([a, b]);
+      expect(await b.titles(), ['은혜:A 가 고침']);
+    });
+
+    test('다른 PC 를 거쳐 온 콘티도 곡 링크를 잃지 않는다', () async {
+      final a = await newPc('A');
+      final b = await newPc('B');
+      await a.repo.insertSong(song('은혜', '가사'));
+      final grace = (await a.songs()).single;
+      await a.contis.saveConti('콘티', [(uid: 1, item: SongStagingItem(grace))]);
+      await syncAll([a, b]);
+      // B 에서 곡만 지워도(콘티는 남음) B 가 다시 실어 보내는 콘티에는 곡 uid 가 남는다.
+      final onB = (await b.songs()).single;
+      await b.repo.deleteSongsByIds([onB.id!]);
+      await b.sync.syncNow();
+      final ownB = File(
+        p.join(shared, SyncService.syncDirName, '${b.sync.deviceId}.json'),
+      );
+      final json = jsonDecode(ownB.readAsStringSync()) as Map;
+      final items = ((json['contis'] as List).single as Map)['items'] as List;
+      expect((items.single as Map)['song_uid'], isA<String>());
+      // 새 PC C 는 A 의 곡(지운 기록보다 나중에 고치지 않았으므로 C 에도 없다)이 없어도 콘티를 받는다.
+      final c = await newPc('C');
+      await c.sync.syncNow();
+      expect((await c.contis.listContis()).map((x) => x.name), ['콘티']);
     });
   });
 }

@@ -81,7 +81,11 @@ class PraiseRepository {
         columns: ['uid', 'updated_at', 'title', 'lyrics', 'english_lyrics'],
       );
       String keyOf(Object? title, Object? lyrics, Object? english) =>
-          '$title\u0000$lyrics\u0000${english ?? ''}';
+          SyncSong.contentKeyOf(
+            title as String,
+            lyrics as String,
+            (english as String?) ?? '',
+          );
       final reusable = <String, List<Map<String, Object?>>>{};
       for (final row in old) {
         reusable
@@ -261,6 +265,21 @@ class PraiseRepository {
 
   Future<void> updateSong(PraiseSong song) async {
     final db = await _databaseProvider.database;
+    // 바뀐 게 없으면 고친 시각을 올리지 않는다 — 열었다 그냥 저장한 옛 가사가
+    // 다른 PC 에서 방금 고친 가사를 "더 최신"으로 덮지 않게.
+    final current = await db.query(
+      'praise_songs',
+      where: 'id = ?',
+      whereArgs: [song.id],
+      limit: 1,
+    );
+    final unchanged =
+        current.isNotEmpty &&
+        current.first['file_name'] == song.fileName &&
+        current.first['title'] == song.title &&
+        current.first['lyrics'] == song.lyrics &&
+        (current.first['english_lyrics'] ?? '') == song.englishLyrics;
+    if (unchanged) return;
     await db.update(
       'praise_songs',
       song.toMap()

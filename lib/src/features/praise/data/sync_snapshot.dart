@@ -2,10 +2,26 @@ import 'dart:convert';
 
 import 'fnv_hash.dart';
 
+// 남이 쓴 파일이라 값 모양을 믿지 않는다 — 모양이 틀린 값은 없는 것으로 본다(던지지 않는다).
+// 파일 하나·레코드 하나가 이상하다고 동기화 전체가 멈추면 안 된다.
+String? _str(Object? v) => v is String ? v : null;
+int? _int(Object? v) => v is num ? v.toInt() : null;
+
+/// 합쳐진 uid 를 따라가 지금 uid 를 찾는다(옛 uid → 지금 uid 사슬). 고리가 있어도 멈춘다.
+String resolveSongUid(Map<String, String> aliases, String uid) {
+  var current = uid;
+  for (var i = 0; i < 32; i++) {
+    final next = aliases[current];
+    if (next == null || next == current) break;
+    current = next;
+  }
+  return current;
+}
+
 /// 공유 폴더에 올리는 곡 한 곡. 보조 언어 가사는 곡이 아니라 제목에 묶여 있어서
 /// 따로([SyncTranslation]) 싣는다 — 같은 제목의 다른 곡과 같이 쓰기 때문이다.
 class SyncSong {
-  const SyncSong({
+  SyncSong({
     required this.uid,
     required this.updatedAt,
     required this.title,
@@ -22,16 +38,23 @@ class SyncSong {
   final String englishLyrics;
 
   /// 따로 가져온 같은 곡을 알아보는 키(제목·원본·영어 가사가 똑같음).
-  String get contentKey => '$title\u0000$lyrics\u0000$englishLyrics';
+  late final String contentKey = contentKeyOf(title, lyrics, englishLyrics);
 
   /// [contentKey] 의 짧은 해시. 지운 곡 기록에 가사 전체 대신 싣는다.
-  String get contentHash => contentHashOf(title, lyrics, englishLyrics);
+  /// 합치기에서 곡마다 여러 번 쓰므로 한 번만 계산한다.
+  late final String contentHash = fnvHex(utf8.encode(contentKey));
+
+  static String contentKeyOf(
+    String title,
+    String lyrics,
+    String englishLyrics,
+  ) => '$title\u0000$lyrics\u0000$englishLyrics';
 
   static String contentHashOf(
     String title,
     String lyrics,
     String englishLyrics,
-  ) => fnvHex(utf8.encode('$title\u0000$lyrics\u0000$englishLyrics'));
+  ) => fnvHex(utf8.encode(contentKeyOf(title, lyrics, englishLyrics)));
 
   /// 고친 시각이 같을 때 어느 쪽을 쓸지 정하는 키. PC 마다 같은 답이 나와야 한다.
   String get tieKey => '$contentKey\u0000$fileName';
@@ -61,22 +84,19 @@ class SyncSong {
 
   static SyncSong? fromJson(Object? raw) {
     if (raw is! Map) return null;
-    final uid = raw['uid'];
-    final title = raw['title'];
-    final lyrics = raw['lyrics'];
-    if (uid is! String ||
-        uid.isEmpty ||
-        title is! String ||
-        lyrics is! String) {
+    final uid = _str(raw['uid']);
+    final title = _str(raw['title']);
+    final lyrics = _str(raw['lyrics']);
+    if (uid == null || uid.isEmpty || title == null || lyrics == null) {
       return null;
     }
     return SyncSong(
       uid: uid,
-      updatedAt: (raw['updated_at'] as num?)?.toInt() ?? 0,
+      updatedAt: _int(raw['updated_at']) ?? 0,
       title: title,
-      fileName: raw['file_name'] as String? ?? '',
+      fileName: _str(raw['file_name']) ?? '',
       lyrics: lyrics,
-      englishLyrics: raw['english_lyrics'] as String? ?? '',
+      englishLyrics: _str(raw['english_lyrics']) ?? '',
     );
   }
 }
@@ -112,17 +132,15 @@ class SyncTranslation {
 
   static SyncTranslation? fromJson(Object? raw) {
     if (raw is! Map) return null;
-    final title = raw['title'];
-    final language = raw['language'];
-    final lyrics = raw['lyrics'];
-    if (title is! String || language is! String || lyrics is! String) {
-      return null;
-    }
+    final title = _str(raw['title']);
+    final language = _str(raw['language']);
+    final lyrics = _str(raw['lyrics']);
+    if (title == null || language == null || lyrics == null) return null;
     return SyncTranslation(
       title: title,
       language: language,
       lyrics: lyrics,
-      updatedAt: (raw['updated_at'] as num?)?.toInt() ?? 0,
+      updatedAt: _int(raw['updated_at']) ?? 0,
     );
   }
 }
@@ -136,6 +154,7 @@ class SyncSnapshot {
     required this.songs,
     required this.deleted,
     required this.aliases,
+    this.writer = '',
     this.deletedContent = const {},
     this.translations = const [],
     this.translationDeleted = const {},
@@ -147,6 +166,11 @@ class SyncSnapshot {
 
   final String deviceId;
   final String deviceName;
+
+  /// 이 파일을 쓴 앱 실행마다 새로 만드는 표시. 설정 폴더째 복제된 두 PC 가 같은 기기 id 로
+  /// 서로의 파일을 덮어쓰는지 알아보는 데 쓴다([SyncService]).
+  final String writer;
+
   final List<SyncSong> songs;
 
   /// 지운 곡 uid → 지운 시각.
@@ -172,6 +196,7 @@ class SyncSnapshot {
       SyncSnapshot(
         deviceId: deviceId,
         deviceName: deviceName,
+        writer: writer,
         songs: songs,
         deleted: this.deleted,
         aliases: aliases,
@@ -187,6 +212,7 @@ class SyncSnapshot {
     'version': 1,
     'device_id': deviceId,
     'device_name': deviceName,
+    'writer': writer,
     'songs': [for (final song in songs) song.toJson()],
     'deleted': deleted,
     'aliases': aliases,
@@ -213,8 +239,9 @@ class SyncSnapshot {
     final translations = raw['translations'];
     final translationDeleted = raw['translation_deleted'];
     return SyncSnapshot(
-      deviceId: raw['device_id'] as String? ?? '',
-      deviceName: raw['device_name'] as String? ?? '',
+      deviceId: _str(raw['device_id']) ?? '',
+      deviceName: _str(raw['device_name']) ?? '',
+      writer: _str(raw['writer']) ?? '',
       songs: songs is List
           ? songs.map(SyncSong.fromJson).whereType<SyncSong>().toList()
           : const [],
@@ -295,9 +322,15 @@ class SyncConti {
       ? value.substring(_filePrefix.length)
       : null;
 
-  bool winsOver(SyncConti other) => updatedAt != other.updatedAt
-      ? updatedAt > other.updatedAt
-      : jsonEncode(toJson()).compareTo(jsonEncode(other.toJson())) > 0;
+  /// 이 앱이 만드는 공유 파일 이름 모양(16자리 해시 + 확장자). 남이 보낸 이름은 이 모양만 받는다 —
+  /// '../', 드라이브 문자·NTFS 스트림(':'), NUL 같은 장치 이름이 끼어들 수 없다.
+  static final _safeName = RegExp(r'^[0-9a-f]{16}(\.[a-z0-9]{1,8})?$');
+
+  static bool isSafeFileName(String name) => _safeName.hasMatch(name);
+
+  /// 콘티는 저장하면 안 바뀌므로 고친 시각이 같으면 같은 콘티다. 다른 PC 가 다시 실어 보낸 사본이
+  /// 원본을 이기지 않게, 같으면 이미 가진 쪽을 둔다.
+  bool winsOver(SyncConti other) => updatedAt > other.updatedAt;
 
   Map<String, Object?> toJson() => {
     'uid': uid,
@@ -309,17 +342,17 @@ class SyncConti {
 
   static SyncConti? fromJson(Object? raw) {
     if (raw is! Map) return null;
-    final uid = raw['uid'];
-    final name = raw['name'];
+    final uid = _str(raw['uid']);
+    final name = _str(raw['name']);
     final items = raw['items'];
-    if (uid is! String || uid.isEmpty || name is! String || items is! List) {
+    if (uid == null || uid.isEmpty || name == null || items is! List) {
       return null;
     }
     return SyncConti(
       uid: uid,
-      updatedAt: (raw['updated_at'] as num?)?.toInt() ?? 0,
+      updatedAt: _int(raw['updated_at']) ?? 0,
       name: name,
-      createdAt: (raw['created_at'] as num?)?.toInt() ?? 0,
+      createdAt: _int(raw['created_at']) ?? 0,
       items: [
         for (final item in items)
           if (item is Map)

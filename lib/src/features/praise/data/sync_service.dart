@@ -94,7 +94,7 @@ class SyncService {
   static const _localFilesDirName = 'synced_files';
   static const _interval = Duration(minutes: 1);
   static const _debounce = Duration(seconds: 3);
-  static const _maxPendingRetry = Duration(minutes: 30);
+  static const _maxRetry = Duration(minutes: 30);
 
   final SongSyncRepository _songs;
   final ContiSyncRepository _contis;
@@ -108,6 +108,17 @@ class SyncService {
   void Function(SyncResult result)? onMerged;
 
   String? _deviceId;
+
+  /// 이번 실행이 쓰는 내 파일 표시([SyncSnapshot.writer]). 설정에는 마지막으로 쓴 값을 남긴다.
+  final String _writer = newSongUid();
+
+  /// 설정에 남은, 이 PC 가 마지막으로 쓴 내 파일 표시. 내 파일의 표시가 이것과 다르면
+  /// 다른 PC 가 같은 기기 id 로 쓴 것이다(설정 폴더째 복제·마이그레이션).
+  String? _lastWriter;
+
+  /// 내가 마지막으로 쓴 내 파일의 상태. 바뀌었으면 누가 썼는지 확인한다.
+  FileStat? _ownStat;
+
   Timer? _timer;
   Timer? _debounceTimer;
   Future<void> _queue = Future.value();
@@ -122,10 +133,10 @@ class SyncService {
   /// 마지막으로 쓴(또는 확인한) 내 파일 내용. 같으면 다시 쓰지 않는다.
   String? _lastWrittenText;
 
-  /// 받지 못한 콘티가 있을 때 다시 볼 시각. 1분부터 두 배씩 30분까지 늘린다 —
-  /// 파일이 영영 안 올라오는 콘티 때문에 매분 전체를 다시 읽지 않게.
-  DateTime? _nextPendingRetry;
-  Duration _pendingRetryDelay = _interval;
+  /// 받지 못한 콘티·못 읽은 다른 PC 파일이 있을 때 다시 볼 시각. 1분부터 두 배씩 30분까지
+  /// 늘린다 — 영영 안 고쳐지는 파일 때문에 매분 전체를 다시 읽지 않게.
+  DateTime? _nextRetry;
+  Duration _retryDelay = _interval;
 
   String get deviceId => _deviceId ?? '';
 
@@ -135,28 +146,31 @@ class SyncService {
   /// 저장해 둔 설정을 읽고, 폴더가 있으면 바로 한 번 맞춘 뒤 1분마다 맞춘다.
   Future<void> load() async {
     String? folder;
+    String? settingsError;
     try {
       final file = await _settings;
       if (await file.exists()) {
         final json = jsonDecode(await file.readAsString());
-        if (json is Map) {
-          folder = json['folder'] as String?;
-          // 설정 폴더째 다른 PC 로 옮겨졌으면(마이그레이션·복제) 기기 id 를 새로 만든다 —
-          // 두 PC 가 같은 id 면 서로의 파일을 덮어쓰고 서로를 "나"로 보고 건너뛴다.
-          if (json['device_name'] == _deviceName) {
-            _deviceId = json['device_id'] as String?;
-          }
-        }
+        if (json is! Map) throw const FormatException('설정 모양이 아닙니다');
+        folder = json['folder'] is String ? json['folder'] as String : null;
+        _deviceId = json['device_id'] is String
+            ? json['device_id'] as String
+            : null;
+        _lastWriter = json['writer'] is String
+            ? json['writer'] as String
+            : null;
       }
     } catch (error, stack) {
+      // 깨진 설정을 "꺼짐"으로 덮어쓰지 않는다 — 사용자가 폴더를 다시 고를 때까지 그대로 두고 알린다.
       await AppLogger.instance.error('동기화 설정 읽기 실패', error, stack);
+      settingsError = '동기화 설정을 읽지 못해 꺼 두었습니다. 폴더를 다시 골라 주세요.';
     }
     if (_deviceId == null || _deviceId!.isEmpty) {
       _deviceId = newSongUid();
-      await _saveSettings(folder);
+      if (settingsError == null) await _saveSettings(folder);
     }
     if (_disposed) return;
-    _setStatus(SyncStatus(folder: folder));
+    _setStatus(SyncStatus(folder: folder, lastError: settingsError));
     _restartTimer();
     if (folder != null) unawaited(syncNow());
   }
@@ -168,9 +182,10 @@ class SyncService {
       await _saveSettings(folder);
       _lastRemoteSignature = null;
       _lastWrittenText = null;
+      _ownStat = null;
       _localDirty = true;
-      _nextPendingRetry = null;
-      _pendingRetryDelay = _interval;
+      _nextRetry = null;
+      _retryDelay = _interval;
       _setStatus(SyncStatus(folder: folder));
       _restartTimer();
     });
@@ -216,17 +231,21 @@ class SyncService {
         : null;
   }
 
+  /// 임시 파일에 쓰고 이름을 바꾼다 — 쓰는 도중 꺼져도 설정이 반쯤 남지 않게.
   Future<void> _saveSettings(String? folder) async {
     try {
       final file = await _settings;
       await file.parent.create(recursive: true);
-      await file.writeAsString(
+      final temp = File('${file.path}.tmp');
+      await temp.writeAsString(
         jsonEncode({
           'folder': folder,
           'device_id': _deviceId,
-          'device_name': _deviceName,
+          'writer': _lastWriter,
         }),
+        flush: true,
       );
+      await temp.rename(file.path);
     } catch (error, stack) {
       await AppLogger.instance.error('동기화 설정 저장 실패', error, stack);
     }
@@ -245,6 +264,19 @@ class SyncService {
       }
       final dir = Directory(p.join(folder, syncDirName));
       await dir.create(recursive: true);
+      if (await _ownFileTakenByOther(p.join(dir.path, '$deviceId.json'))) {
+        // 설정 폴더째 복제된 다른 PC 가 같은 기기 id 를 쓰고 있다. 이 PC 가 새 id 로 비킨다 —
+        // 그대로 두면 서로의 파일을 덮어쓰고 서로를 "나"로 보고 건너뛴다.
+        final old = deviceId;
+        _deviceId = newSongUid();
+        _lastWrittenText = null;
+        _ownStat = null;
+        hadLocalChanges = true;
+        await _saveSettings(folder);
+        await AppLogger.instance.info(
+          '[sync] 기기 id 가 겹쳐 새로 만듦 $old → $deviceId',
+        );
+      }
       final ownPath = p.join(dir.path, '$deviceId.json');
       final sharedFiles = Directory(p.join(dir.path, filesDirName));
       final localFiles = Directory(
@@ -262,12 +294,17 @@ class SyncService {
       final remoteChanged = signature != _lastRemoteSignature;
       // 변경 표시는 읽자마자 끈다(사이에 await 가 없게). 이 뒤에 생긴 수정은
       // markLocalChanged 가 다시 켠다 — 나중에 끄면 그 사이 수정을 놓친다.
-      hadLocalChanges = _localDirty;
+      hadLocalChanges = hadLocalChanges || _localDirty;
       _localDirty = false;
       final ownMissing = !await File(ownPath).exists();
       final retryPending =
-          _nextPendingRetry != null && !_clock().isBefore(_nextPendingRetry!);
-      if (!remoteChanged && !hadLocalChanges && !ownMissing && !retryPending) {
+          _nextRetry != null && !_clock().isBefore(_nextRetry!);
+      final filesMissing = await _contis.sharedFilesMissing(sharedFiles);
+      if (!remoteChanged &&
+          !hadLocalChanges &&
+          !ownMissing &&
+          !filesMissing &&
+          !retryPending) {
         _setStatus(
           status.value.copyWith(
             syncing: false,
@@ -292,12 +329,16 @@ class SyncService {
       );
       final result = SyncResult(songs: songs, contis: contis);
       // 받지 못한 콘티만 다시 본 차례에 바뀐 게 없으면 내 파일은 그대로다.
-      if (remoteChanged || hadLocalChanges || ownMissing || result.changed) {
+      if (remoteChanged ||
+          hadLocalChanges ||
+          ownMissing ||
+          filesMissing ||
+          result.changed) {
         await _writeOwn(ownPath, sharedFiles, localFiles, force: ownMissing);
       }
-      // 못 읽은 파일이 있으면 기억하지 않는다 — 그 PC 가 다시 쓰기 전까지 영영 안 읽게 된다.
-      _lastRemoteSignature = read.failed ? null : signature;
-      _schedulePendingRetry(contis.pendingCount);
+      _lastRemoteSignature = signature;
+      // 받지 못한 콘티나 못 읽은 파일(드라이브가 아직 내려받는 중)이 있으면 조금 뒤에 다시 본다.
+      _scheduleRetry(contis.pendingCount > 0 || read.failed);
 
       _setStatus(
         status.value.copyWith(
@@ -335,17 +376,15 @@ class SyncService {
     }
   }
 
-  void _schedulePendingRetry(int pending) {
-    if (pending == 0) {
-      _nextPendingRetry = null;
-      _pendingRetryDelay = _interval;
+  void _scheduleRetry(bool needed) {
+    if (!needed) {
+      _nextRetry = null;
+      _retryDelay = _interval;
       return;
     }
-    _nextPendingRetry = _clock().add(_pendingRetryDelay);
-    final doubled = _pendingRetryDelay * 2;
-    _pendingRetryDelay = doubled > _maxPendingRetry
-        ? _maxPendingRetry
-        : doubled;
+    _nextRetry = _clock().add(_retryDelay);
+    final doubled = _retryDelay * 2;
+    _retryDelay = doubled > _maxRetry ? _maxRetry : doubled;
   }
 
   Future<List<File>> _remoteFiles(Directory dir, String ownPath) async {
@@ -410,10 +449,10 @@ class SyncService {
     final songs = await _songs.exportSnapshot(
       deviceId: deviceId,
       deviceName: _deviceName,
+      writer: _writer,
     );
     // 콘티 이미지를 먼저 올린다 — 다른 PC 가 콘티를 보고 파일을 찾을 때 있어야 한다.
     final contis = await _contis.export(
-      deviceId: deviceId,
       sharedFiles: sharedFiles,
       localFiles: localFiles,
     );
@@ -421,13 +460,6 @@ class SyncService {
     final text = await Isolate.run(() => jsonEncode(snapshot.toJson()));
     if (!force && text == _lastWrittenText) return;
     final file = File(path);
-    if (!force &&
-        _lastWrittenText == null &&
-        await file.exists() &&
-        await file.readAsString() == text) {
-      _lastWrittenText = text;
-      return;
-    }
     final temp = File('$path.tmp');
     await temp.writeAsString(text, flush: true);
     try {
@@ -437,5 +469,43 @@ class SyncService {
       await temp.delete().catchError((_) => temp);
     }
     _lastWrittenText = text;
+    _ownStat = await file.stat();
+    if (_lastWriter != _writer) {
+      _lastWriter = _writer;
+      await _saveSettings(status.value.folder);
+    }
+  }
+
+  /// 내 파일(이 기기 id)을 다른 PC 가 쓰고 있으면 true. 내가 쓴 뒤로 파일이 바뀌었을 때만
+  /// 파일 안의 표시(writer)를 읽어 본다.
+  Future<bool> _ownFileTakenByOther(String path) async {
+    final file = File(path);
+    final stat = await file.stat();
+    if (stat.type == FileSystemEntityType.notFound) return false;
+    final mine = _ownStat;
+    if (mine != null &&
+        stat.modified == mine.modified &&
+        stat.size == mine.size) {
+      return false;
+    }
+    final writer = await Isolate.run(() {
+      try {
+        final json = jsonDecode(File(path).readAsStringSync());
+        return json is Map && json['writer'] is String
+            ? json['writer'] as String
+            : null;
+      } catch (_) {
+        return null;
+      }
+    });
+    if (writer == null || writer.isEmpty || writer == _writer) {
+      if (writer == _writer) _ownStat = stat;
+      return false;
+    }
+    // 이번 실행에서 아직 안 썼으면, 지난 실행에서 내가 쓴 것인지 본다.
+    if (mine == null && (_lastWriter == null || writer == _lastWriter)) {
+      return false;
+    }
+    return true;
   }
 }

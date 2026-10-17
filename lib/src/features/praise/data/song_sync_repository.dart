@@ -22,12 +22,14 @@ class SongSyncRepository {
   Future<SyncSnapshot> exportSnapshot({
     required String deviceId,
     required String deviceName,
+    String writer = '',
   }) async {
     final db = await _databaseProvider.database;
     final rows = await db.query('praise_songs', orderBy: 'uid');
     return SyncSnapshot(
       deviceId: deviceId,
       deviceName: deviceName,
+      writer: writer,
       songs: [for (final row in rows) _songFromRow(row)],
       deleted: await _tombstones(db),
       deletedContent: {
@@ -76,15 +78,7 @@ class SongSyncRepository {
     List<SyncSnapshot> remotes,
   ) async {
     final aliases = await _mergeAliases(txn, remotes);
-    String canonical(String uid) {
-      var current = uid;
-      for (var i = 0; i < 32; i++) {
-        final next = aliases[current];
-        if (next == null || next == current) break;
-        current = next;
-      }
-      return current;
-    }
+    String canonical(String uid) => resolveSongUid(aliases, uid);
 
     final local = await _canonicalLocalRows(txn, canonical);
     final byContent = {

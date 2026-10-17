@@ -106,7 +106,8 @@ Future<void> createPraiseSchema(DatabaseExecutor db) async {
     song_title      TEXT,
     no_spacer       INTEGER,
     image_source_path TEXT,
-    media           TEXT
+    media           TEXT,
+    song_uid        TEXT
   )
 ''');
   await db.execute(_createSongTranslations);
@@ -460,6 +461,13 @@ Future<void> upgradePraiseSchema(DatabaseExecutor db, int oldVersion) async {
       'ALTER TABLE song_translations ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0',
     );
     await db.execute(_createTranslationTombstones);
+    // 콘티 곡 항목의 곡 uid. 다른 PC 로 넘길 때, 그 곡이 이 PC 에서 지워졌어도 링크를 잃지 않게.
+    await _addColumnIfMissing(
+      db,
+      'worship_conti_items',
+      'song_uid',
+      'ALTER TABLE worship_conti_items ADD COLUMN song_uid TEXT',
+    );
     await fillMissingSyncUids(db);
   }
 }

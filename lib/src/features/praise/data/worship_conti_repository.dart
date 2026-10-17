@@ -73,6 +73,21 @@ class WorshipContiRepository {
     final db = await _db.database;
     final now = DateTime.now().millisecondsSinceEpoch;
     final savedId = await db.transaction((txn) async {
+      final songIds = [
+        for (final e in stagingItems)
+          if (e.item case SongStagingItem(:final song) when song.id != null)
+            song.id!,
+      ];
+      final songUids = <int, String>{
+        if (songIds.isNotEmpty)
+          for (final r in await txn.query(
+            'praise_songs',
+            columns: ['id', 'uid'],
+            where: 'id IN (${List.filled(songIds.length, '?').join(', ')})',
+            whereArgs: songIds,
+          ))
+            if (r['uid'] != null) r['id'] as int: r['uid'] as String,
+      };
       final contiId = await txn.insert('worship_contis', {
         'name': name,
         'created_at': now,
@@ -88,6 +103,7 @@ class WorshipContiRepository {
             'position': i,
             'item_type': 'song',
             'song_id': item.song.id,
+            'song_uid': songUids[item.song.id],
             'song_title': item.song.title,
             'bible_reference': null,
             'bible_text': null,
