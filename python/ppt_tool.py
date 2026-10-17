@@ -1,5 +1,6 @@
 import concurrent.futures
 import copy
+import functools
 import hashlib
 import json
 import os
@@ -8,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unicodedata
 import zipfile
 from pathlib import Path
@@ -136,9 +138,21 @@ def extract_lines_from_shape(shape):
         return []
     lines = []
     for paragraph in shape.text_frame.paragraphs:
-        text = "".join(run.text for run in paragraph.runs).strip()
-        if text:
-            lines.append((text, _paragraph_color(paragraph)))
+        color = _paragraph_color(paragraph)
+        # 문단 안 줄바꿈(<a:br>, Shift+Enter)에서 줄을 나눈다. run 만 이어 붙이면
+        # 줄이 붙어 버린다('in historyDeath is beaten'). paragraph.text 는 필드
+        # (<a:fld>, 쪽 번호·날짜)까지 담으므로 쓰지 않고 run 과 br 만 본다.
+        parts = []
+        for child in paragraph._p:
+            tag = child.tag.rsplit("}", 1)[-1]
+            if tag == "r":
+                parts.append("".join(t.text or "" for t in child.iter(qn("a:t"))))
+            elif tag == "br":
+                parts.append("\n")
+        for text in "".join(parts).split("\n"):
+            text = text.strip()
+            if text:
+                lines.append((text, color))
     return lines
 
 
@@ -330,6 +344,48 @@ def get_libreoffice_executable():
     return None
 
 
+@functools.lru_cache(maxsize=None)
+def _libreoffice_env():
+    """LibreOffice 를 부를 때 쓸 환경 변수. macOS 에서만 손댄다(그 밖엔 None = 그대로).
+
+    macOS LibreOffice(26.8 에서 확인)는 글꼴을 fontconfig 로 찾는데, 기본 설정에 맥 글꼴 폴더가
+    없어서 시스템·사용자 한글 글꼴을 하나도 못 쓴다. 그러면 자기 내장 라틴·히브리 글꼴로 그려
+    한글이 통째로 빠진 PNG 가 나온다(글자는 PDF 에 있는데 보이지 않는다). 맥 글꼴 폴더를 적은
+    설정 파일을 FONTCONFIG_FILE 로 넘긴다. 사용자가 직접 정해 둔 값이 있으면 건드리지 않는다.
+    """
+    if sys.platform != "darwin" or os.environ.get("FONTCONFIG_FILE"):
+        return None
+    from glob import glob
+    from xml.sax.saxutils import escape
+
+    dirs = [
+        "/System/Library/Fonts",
+        "/Library/Fonts",
+        str(Path.home() / "Library" / "Fonts"),
+        # 앱 내장 무료 글꼴(FontLibrary 가 복사해 둔 곳)
+        str(Path.home() / "Library" / "Application Support" / "com.example.worshipSlides" / "fonts"),
+        # 필요할 때 내려받는 시스템 글꼴
+        *glob("/System/Library/AssetsV2/com_apple_MobileAsset_Font*"),
+    ]
+    conf_dir = get_cache_root().parent / "fontconfig"
+    conf = conf_dir / "fonts.conf"
+    text = (
+        '<?xml version="1.0"?>\n<!DOCTYPE fontconfig SYSTEM "fonts.dtd">\n<fontconfig>\n'
+        + "".join(f"  <dir>{escape(d)}</dir>\n" for d in dirs if os.path.isdir(d))
+        + f"  <cachedir>{escape(str(conf_dir / 'cache'))}</cachedir>\n</fontconfig>\n"
+    )
+    try:
+        if not conf.exists() or conf.read_text(encoding="utf-8") != text:
+            conf_dir.mkdir(parents=True, exist_ok=True)
+            # 다른 ppt_tool 프로세스의 soffice 가 반쯤 쓴 파일을 읽지 않게 바꿔치기로 쓴다.
+            tmp = conf_dir / f"fonts.conf.{os.getpid()}.{threading.get_ident()}.tmp"
+            tmp.write_text(text, encoding="utf-8")
+            os.replace(tmp, conf)
+    except OSError:
+        return None  # 설정을 못 쓰면 예전처럼(한글은 빠질 수 있어도 변환은 된다)
+    return {**os.environ, "FONTCONFIG_FILE": str(conf)}
+
+
 def convert_ppt_group_to_pptx(source_paths, output_dir):
     libreoffice = get_libreoffice_executable()
     if libreoffice is None:
@@ -348,6 +404,7 @@ def convert_ppt_group_to_pptx(source_paths, output_dir):
         check=True,
         capture_output=True,
         text=True,
+        env=_libreoffice_env(),
     )
 
     converted_map = {}
@@ -977,6 +1034,7 @@ def _convert_to_pdf(source_path, output_dir):
         check=True,
         capture_output=True,
         text=True,
+        env=_libreoffice_env(),
     )
 
     converted = sorted(output_dir.glob("*.pdf"))
@@ -987,7 +1045,9 @@ def _convert_to_pdf(source_path, output_dir):
 
 # 굽는 방식이 바뀌면 예전 캐시를 그대로 읽으면 안 되므로 키에 버전을 섞는다.
 # (예전 폴더는 저장된 콘티가 참조하고 있을 수 있어 지우지 않고 그냥 둔다.)
-RENDER_CACHE_VERSION = 2
+# 3: macOS 에서 한글이 빠지던 문제(_libreoffice_env) — 예전에 구운 PNG 는 한글이 없다.
+# macOS 만 올린다 — Windows 는 그대로라 다시 구울 이유가 없다(예전 폴더가 한 벌 더 생긴다).
+RENDER_CACHE_VERSION = 3 if sys.platform == "darwin" else 2
 
 
 def get_render_cache_key(source_path, expand_animation):
@@ -1330,19 +1390,26 @@ def _resolve_background(style, background):
 
 
 def _style_for_item(style, background):
-    """항목별 오버라이드에 실린 가사 세로 위치를 전역 style 위에 덮어쓴 style.
+    """항목별 오버라이드에 실린 가사 세로 위치·글꼴·크기·색을 전역 style 위에 덮어쓴 style.
 
     헌금송은 "가사는 헌금 띠 위쪽"을 위해 그 항목만 가사 기준선(text_position)과
-    미세 조정(text_offset_y)을 바꾼다. 찬양 가사에만 해당하고 성경 키는 건드리지 않는다.
+    미세 조정(text_offset_y)을 바꾸고, 설교 제목 페이지는 글꼴·크기·색까지 바꾼다.
+    찬양 가사 키에만 해당하고 성경 키는 건드리지 않는다.
     발표 창·미리보기(Dart)는 ExportStyle.withBackground 가 같은 일을 한다.
     """
     if not background:
         return style
     overrides = {
         key: background[key]
-        for key in ("text_position", "text_offset_y")
+        for key in (
+            "text_position", "text_offset_y", "font_family", "font_size", "text_color",
+            "english_font_size", "english_text_color",
+        )
         if background.get(key) is not None
     }
+    # 설교 부제는 디자인의 보조 언어 스위치와 상관없이 늘 보인다.
+    if background.get("sermon"):
+        overrides["include_english_lyrics"] = True
     if overrides.get("text_position") not in (None, "top", "middle", "bottom"):
         overrides.pop("text_position")
     return {**style, **overrides} if overrides else style
@@ -1406,8 +1473,13 @@ def add_song_slides(prs, song, style, background=None):
     lyrics_box_left, lyrics_box_width, lyrics_align = _lyrics_text_layout(
         lyrics_text_align_str
     )
-    korean_pages = _decode_pages(song["lyrics"])
-    english_pages = _decode_pages(song.get("english_lyrics", ""))
+    if song.get("type") == "blank":
+        # 문구 든 빈 페이지는 빈 줄이 있어도 한 장이다(발표 화면 _allSlides 와 같다).
+        korean_pages = [song.get("lyrics", "").strip()]
+        english_pages = [song.get("english_lyrics", "").strip()]
+    else:
+        korean_pages = _decode_pages(song["lyrics"])
+        english_pages = _decode_pages(song.get("english_lyrics", ""))
     page_count = max(len(korean_pages), len(english_pages))
 
     for index in range(page_count):
@@ -1448,12 +1520,12 @@ def add_song_slides(prs, song, style, background=None):
             _add_text_run(
                 english_paragraph,
                 english_page,
-                Pt(style["font_size"] * 0.8),
+                Pt(style.get("english_font_size") or style["font_size"] * 0.8),
                 english_color,
                 font_name,
             )
 
-        if show_song_title:
+        if show_song_title and song.get("title"):
             _add_title_textbox(slide, song.get("title", ""), style, is_bible=is_bible, font_name=font_name)
 
 
@@ -1505,8 +1577,17 @@ def export_presentation(payload_json):
     for index, song in enumerate(songs):
         # 항목별 배경 오버라이드. 없으면 전역 배경.
         background = song.get("background")
+        if background and background.get("font_family"):
+            _ensure_fonts_installed(background["font_family"],
+                                    background.get("font_files") or ())
         if song.get("type") == "blank":
-            _add_blank_slide(prs, style, background)
+            # 문구를 넣은 빈 페이지(설교 제목 등)는 가사 한 장처럼 그린다.
+            if song.get("lyrics") or song.get("english_lyrics"):
+                add_song_slides(
+                    prs, song, _style_for_item(style, background), background
+                )
+            else:
+                _add_blank_slide(prs, style, background)
         else:
             if song.get("type") == "image":
                 add_image_slides(prs, song, style, background)

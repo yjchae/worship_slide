@@ -55,9 +55,32 @@ def test_main_color_without_hangul():
     assert korean == "Amazing grace" and sub == "Gracia", (korean, sub)
 
 
+def test_line_break_inside_paragraph():
+    # 문단 안 줄바꿈(<a:br>)이 줄을 붙이지 않는다 ('historyDeath' 버그)
+    from pptx import Presentation
+    from pptx.util import Inches
+    from ppt_tool import extract_lines_from_shape
+
+    slide = Presentation().slides.add_slide(Presentation().slide_layouts[6])
+    box = slide.shapes.add_textbox(0, 0, Inches(4), Inches(2))
+    box.text_frame.text = "The greatest day in history\vDeath is beaten"
+    lines = [text for text, _ in extract_lines_from_shape(box)]
+    assert lines == ["The greatest day in history", "Death is beaten"], lines
+
+    # 쪽 번호 같은 필드(<a:fld>)는 가사 줄로 들어오지 않는다
+    from pptx.oxml.ns import qn
+    from lxml import etree
+    p = box.text_frame.paragraphs[0]._p
+    fld = etree.SubElement(p, qn("a:fld"), id="{B6F15528-21DE-4FAA-801E-634DDDAF4B2B}", type="slidenum")
+    etree.SubElement(fld, qn("a:t")).text = "7"
+    lines = [text for text, _ in extract_lines_from_shape(box)]
+    assert lines == ["The greatest day in history", "Death is beaten"], lines
+
+
 if __name__ == "__main__":
     test_is_sub_line()
     test_split()
     test_split_by_color()
     test_main_color_without_hangul()
+    test_line_break_inside_paragraph()
     print("OK")

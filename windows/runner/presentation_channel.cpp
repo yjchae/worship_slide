@@ -401,7 +401,8 @@ void PresentationChannel::Apply(const flutter::EncodableMap& data) {
   slide_.inclEng    = GetBool(s, "include_english_lyrics", true);
   slide_.eng        = HexRgb(GetStr(s, "english_text_color", "#fff176"), RGB(255,241,118));
   double baseSz     = GetDbl(s, "font_size", 30.0);
-  slide_.engSz      = baseSz * 0.8;
+  // 설교 부제처럼 따로 정한 크기가 있으면 그 값, 없으면 본문의 0.8 배.
+  slide_.engSz      = GetDbl(s, "english_font_size", baseSz * 0.8);
   slide_.fontFamily = W(GetStr(s, "font_family", ""));
 
   // 사용자가 추가한 폰트(FontLibrary). 이 프로세스에만 올려 두면 CreateFontW 가

@@ -337,7 +337,9 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
 
     let includeEnglish = (style["include_english_lyrics"] as? Bool) ?? true
     let englishColor = style["english_text_color"] as? String ?? "#fff176"
-    let englishFontSize = ((style["font_size"] as? Double) ?? 30) * 0.8
+    // 설교 부제처럼 따로 정한 크기가 있으면 그 값, 없으면 본문의 0.8 배.
+    let englishFontSize = (style["english_font_size"] as? Double)
+      ?? ((style["font_size"] as? Double) ?? 30) * 0.8
 
     // 본문 상자는 크기가 고정이고, 미세 조정(text_offset_y)이 그 상자를 통째로
     // 위아래로 민다. 미리보기(Dart)·PPTX 와 같은 규칙이다.

@@ -20,6 +20,7 @@ import '../data/app_logger.dart';
 import '../data/export_style_store.dart';
 import '../data/offering_background_composer.dart';
 import '../data/offering_design_store.dart';
+import '../data/sermon_design_store.dart';
 import '../data/background_image_library.dart';
 import '../data/font_library.dart';
 import '../data/libreoffice_installer.dart';
@@ -158,6 +159,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   OfferingDesign _offeringDesign = const OfferingDesign();
   // offering_design.json 이 있으면(한 번이라도 등록했으면) true. 배경·계좌 없이 등록해도 된다.
   bool _offeringRegistered = false;
+  // 설교 제목 페이지 기본 디자인. 마지막으로 쓴 디자인을 다음 설교 페이지가 이어받는다.
+  final SermonDesignStore _sermonStore = SermonDesignStore();
+  SlideBackground? _sermonDesign;
   PresenterPointerMode _pointerMode = PresenterPointerMode.off;
   double _pointerSize = 100;
   // 관객 화면 확대. 확대 영역은 슬라이드와 같은 비율이라 크기 하나(가로 비율)면 된다.
@@ -267,6 +271,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _loadSongs();
     _loadSavedStyle();
     _loadOfferingDesign();
+    _sermonStore.load().then((v) {
+      if (mounted && v != null) setState(() => _sermonDesign = v);
+    });
     _screenStore.load().then((v) {
       if (!mounted) return;
       setState(() {
@@ -580,7 +587,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
               stagingUid: entry.uid,
               mainText: pairs[j].korean,
               englishText: pairs[j].english,
-              title: song.title,
+              title: song.displayTitle,
               isBible: false,
               pageIndexInItem: j,
               background: background,
@@ -783,7 +790,11 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       return SingerPage(
         mainText: slide.mainText,
         // 디자인에서 보조 언어를 꺼 두면 싱어 화면에서도 뺀다(관객 화면과 같게).
-        englishText: _style.includeEnglishLyrics ? slide.englishText : '',
+        // 설교 부제는 이 스위치와 상관없이 보이므로 그 페이지 style 로 본다.
+        englishText:
+            _style.withBackground(slide.background).includeEnglishLyrics
+            ? slide.englishText
+            : '',
         title: slide.title,
         imagePath: slide.imagePath,
       );
@@ -1692,16 +1703,28 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     });
   }
 
+  /// 편집 탭 '새 페이지'가 들어갈 자리: 고른 항목 뒤, 없으면 맨 끝.
+  int _indexAfterSelectedItem() {
+    final selectedIndex = _stagingItems.indexWhere(
+      (e) => e.uid == _previewStagingUid,
+    );
+    return selectedIndex >= 0 ? selectedIndex + 1 : _stagingItems.length;
+  }
+
+  /// 발표 보기 '새 페이지'가 들어갈 자리: 현재 슬라이드가 속한 항목 바로 뒤.
+  /// 맨 앞 자동 빈 페이지(또는 빈 콘티)면 맨 앞.
+  int _indexAfterCurrentSlide() {
+    final slides = _allSlides;
+    final currentUid = slides.isEmpty
+        ? null
+        : slides[_currentSlideIndex.clamp(0, slides.length - 1)].stagingUid;
+    return _stagingItems.indexWhere((e) => e.uid == currentUid) + 1;
+  }
+
   void _addBlankItem() {
     setState(() {
       final uid = _nextUid++;
-      final selectedIndex = _stagingItems.indexWhere(
-        (e) => e.uid == _previewStagingUid,
-      );
-      final insertIndex = selectedIndex >= 0
-          ? selectedIndex + 1
-          : _stagingItems.length;
-      _stagingItems.insert(insertIndex, (
+      _stagingItems.insert(_indexAfterSelectedItem(), (
         uid: uid,
         item: const BlankStagingItem(),
       ));
@@ -1713,18 +1736,185 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   /// 곡 중간 페이지를 보고 있어도 곡을 쪼갤 수는 없으니 그 곡 뒤에 들어간다.
   /// 현재 슬라이드보다 뒤에 들어가므로 관객 화면과 현재 위치는 그대로다.
   Future<void> _addBlankAfterCurrentSlide() async {
-    final slides = _allSlides;
-    final currentUid = slides.isEmpty
-        ? null
-        : slides[_currentSlideIndex.clamp(0, slides.length - 1)].stagingUid;
-    // 맨 앞 자동 빈 페이지(또는 빈 콘티)면 -1 → 맨 앞에 들어간다.
-    final at = _stagingItems.indexWhere((e) => e.uid == currentUid);
     final uid = _nextUid++;
     setState(() {
-      _stagingItems.insert(at + 1, (uid: uid, item: const BlankStagingItem()));
+      _stagingItems.insert(_indexAfterCurrentSlide(), (
+        uid: uid,
+        item: const BlankStagingItem(),
+      ));
     });
     final index = _allSlides.indexWhere((s) => s.stagingUid == uid);
     if (index >= 0) await _editSlide(index);
+  }
+
+  // ── 설교 제목 페이지 ──────────────────────────────────────────────────
+  //
+  // 문구를 넣은 빈 페이지 + 항목별 배경 오버라이드(글꼴·크기·색까지 담은 것)다.
+  // 헌금송처럼 렌더러 네 곳은 따로 아는 게 없다 — withBackground 가 만든 style 을 받을 뿐이다.
+
+  Future<_SermonPageResult?> _showSermonDialog({
+    String title = '',
+    String subtitle = '',
+    SlideBackground? design,
+  }) {
+    var initial =
+        design ?? _sermonDesign ?? SlideBackground.sermonDefault(_style);
+    // 배경 모음에서 지운 이미지면 색만 남긴다(지난번 디자인이 가리키던 파일일 수 있다).
+    if (initial.hasImage && !File(initial.imagePath!).existsSync()) {
+      initial = initial.copyWith(imagePath: null);
+    }
+    return showDialog<_SermonPageResult>(
+      context: context,
+      builder: (_) => _SermonPageDialog(
+        initialTitle: title,
+        initialSubtitle: subtitle,
+        initialDesign: initial,
+        canRevert: design != null,
+        globalStyle: _style,
+        swatches: _swatches,
+        imageLibrary: _backgroundImages,
+      ),
+    );
+  }
+
+  Future<void> _addSermonPage(int Function() insertAt) async {
+    final result = await _showSermonDialog();
+    final design = result?.design;
+    if (result == null || design == null || !mounted) return;
+    final uid = _nextUid++;
+    setState(() {
+      _stagingItems.insert(insertAt(), (
+        uid: uid,
+        item: BlankStagingItem(
+          mainText: result.title,
+          englishText: result.subtitle,
+        ),
+      ));
+      _itemBackgrounds[uid] = design;
+      _previewStagingUid = uid;
+    });
+    await _rememberSermonDesign(design);
+    await _sendCurrentSlide();
+  }
+
+  Future<void> _editSermonPage(int uid) async {
+    final entry = _stagingItems.where((e) => e.uid == uid).firstOrNull;
+    final item = entry?.item;
+    if (item is! BlankStagingItem) return;
+    final result = await _showSermonDialog(
+      title: item.mainText,
+      subtitle: item.englishText,
+      design: _itemBackgrounds[uid],
+    );
+    if (result == null || !mounted) return;
+    final index = _stagingItems.indexWhere((e) => e.uid == uid);
+    if (index < 0) return;
+    setState(() {
+      final design = result.design;
+      _stagingItems[index] = (
+        uid: uid,
+        // 일반 빈 페이지로 되돌리면 부제는 본문 아래 줄로 합친다. 보조 줄에 두면
+        // 보조 언어 스위치를 따라 안내 없이 사라지거나 영어 가사 모양으로 나온다.
+        item: design == null
+            ? BlankStagingItem(
+                mainText: [
+                  result.title,
+                  result.subtitle,
+                ].where((t) => t.isNotEmpty).join('\n'),
+              )
+            : BlankStagingItem(
+                mainText: result.title,
+                englishText: result.subtitle,
+              ),
+      );
+      if (design == null) {
+        _itemBackgrounds.remove(uid); // 일반 빈 페이지로 되돌림
+      } else {
+        _itemBackgrounds[uid] = design;
+      }
+      _previewStagingUid = uid;
+    });
+    if (result.design != null) await _rememberSermonDesign(result.design!);
+    await _sendCurrentSlide();
+  }
+
+  /// 리본 '글자·위치 기본값': 찬양·말씀·제목의 글꼴·크기·정렬·세로 위치·미세 조정과
+  /// 설교 제목·헌금송 기본 디자인의 글꼴·크기·위치를 처음 값으로 되돌린다.
+  /// 색·배경·제목 표시·보조 언어 같은 설정은 그대로 둔다.
+  Future<void> _resetTextLayout() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('글자 크기·위치를 기본값으로'),
+        content: const Text(
+          '찬양·말씀·제목의 글꼴, 글자 크기, 정렬, 위치와\n'
+          '설교 제목·헌금송 기본 디자인의 글꼴·크기·위치를 처음 설정으로 되돌립니다.\n\n'
+          '색·배경·제목 표시·보조 언어 설정은 그대로입니다.\n'
+          '이미 콘티에 넣은 설교 제목·헌금송 페이지는 바뀌지 않습니다.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('되돌리기'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    const d = _defaultStyle;
+    final style = _style.copyWith(
+      fontFamily: d.fontFamily,
+      fontSize: d.fontSize,
+      bibleFontSize: d.bibleFontSize,
+      textPosition: d.textPosition,
+      bibleTextPosition: d.bibleTextPosition,
+      textOffsetY: d.textOffsetY,
+      bibleTextOffsetY: d.bibleTextOffsetY,
+      lyricsTextAlign: d.lyricsTextAlign,
+      bibleTextAlign: d.bibleTextAlign,
+      titleFontSize: d.titleFontSize,
+      bibleTitleFontSize: d.bibleTitleFontSize,
+      titleHorizontalPosition: d.titleHorizontalPosition,
+      titleVerticalPosition: d.titleVerticalPosition,
+      bibleTitleHorizontalPosition: d.bibleTitleHorizontalPosition,
+      bibleTitleVerticalPosition: d.bibleTitleVerticalPosition,
+      titleOffsetY: d.titleOffsetY,
+      bibleTitleOffsetY: d.bibleTitleOffsetY,
+    );
+
+    final sermon = _sermonDesign;
+    if (sermon != null) {
+      await _rememberSermonDesign(
+        sermon.withSermonDefaultText(style, includeColors: false),
+      );
+    }
+
+    if (_offeringRegistered) {
+      const od = OfferingDesign();
+      final offering = _offeringDesign.copyWith(
+        fontFamily: od.fontFamily,
+        labelFontSize: od.labelFontSize,
+        accountFontSize: od.accountFontSize,
+        bandCenterY: od.bandCenterY,
+        lyricsGap: od.lyricsGap,
+      );
+      if (offering != _offeringDesign) {
+        setState(() => _offeringDesign = offering);
+        await _offeringStore.save(offering);
+      }
+    }
+
+    await _updateStyle(style);
+  }
+
+  Future<void> _rememberSermonDesign(SlideBackground design) async {
+    _sermonDesign = design;
+    await _sermonStore.save(design);
   }
 
   /// 발표 보기 ⌘/Ctrl+C. 고른 페이지를 콘티 항목으로 떠 둔다.
@@ -1924,6 +2114,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   /// 콘티 항목 하나의 배경만 따로 지정한다(헌금송만 다른 배경 등).
   /// 다이얼로그에서 "전역 배경 사용"으로 되돌리면 오버라이드가 지워진다.
   Future<void> _editItemBackground(int uid) async {
+    if (_itemBackgrounds[uid]?.isSermon == true) return _editSermonPage(uid);
     final index = _stagingItems.indexWhere((e) => e.uid == uid);
     if (index < 0) return;
     final entry = _stagingItems[index];
@@ -3451,7 +3642,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               ),
                               onSaveConti: _saveConti,
                               onLoadConti: _loadContiDialog,
-                              onAddBlank: _addBlankItem,
+                              onAddBlank: (sermon) => sermon
+                                  ? _addSermonPage(_indexAfterSelectedItem)
+                                  : _addBlankItem(),
                               onSelect: (uid) {
                                 setState(() {
                                   _previewStagingUid = uid;
@@ -3499,7 +3692,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               onSlidesDelete: _deleteSlides,
                               onSlidesCopy: _copySlides,
                               onPaste: _pasteSlides,
-                              onAddPage: _addBlankAfterCurrentSlide,
+                              onAddPage: (sermon) => sermon
+                                  ? _addSermonPage(_indexAfterCurrentSlide)
+                                  : _addBlankAfterCurrentSlide(),
                               onPrev: _prevSlide,
                               onNext: _nextSlide,
                               onToggleBlackout: _toggleBlackout,
@@ -3626,6 +3821,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               offeringDesign: _offeringDesign,
                               onEditOffering: _editOfferingDesign,
                               imageLibrary: _backgroundImages,
+                              onResetTextLayout: _resetTextLayout,
                             );
 
                             // ── 콘티 + 검색 (가로 크기 조절 가능) ──
@@ -4335,7 +4531,7 @@ class _StagingPanel extends StatelessWidget {
   final VoidCallback onToggleCollapsed;
   final VoidCallback onSaveConti;
   final VoidCallback onLoadConti;
-  final VoidCallback onAddBlank;
+  final ValueChanged<bool> onAddBlank; // true = 설교 제목 페이지
 
   @override
   Widget build(BuildContext context) {
@@ -4408,12 +4604,13 @@ class _StagingPanel extends StatelessWidget {
                   style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
                 ),
                 const SizedBox(width: 4),
-                IconButton(
+                PopupMenuButton<bool>(
                   icon: const Icon(Icons.add_box_outlined, size: 18),
-                  tooltip: '빈 페이지 추가',
+                  tooltip: '새 페이지 추가',
                   style: compactIcon,
-                  color: cs.onSurfaceVariant,
-                  onPressed: onAddBlank,
+                  iconColor: cs.onSurfaceVariant,
+                  onSelected: onAddBlank,
+                  itemBuilder: (_) => _addPageMenuItems,
                 ),
                 IconButton(
                   icon: const Icon(Icons.save_outlined, size: 18),
@@ -4537,7 +4734,11 @@ class _StagingPanel extends StatelessWidget {
                                           children: [
                                             if (isBible) const _KindTag('성경'),
                                             if (isBlank)
-                                              const _KindTag('빈 페이지'),
+                                              _KindTag(
+                                                background?.isSermon == true
+                                                    ? '설교 제목'
+                                                    : '빈 페이지',
+                                              ),
                                             if (item is ImageStagingItem)
                                               const _KindTag('이미지'),
                                             if (background != null)
@@ -4616,8 +4817,10 @@ class _StagingPanel extends StatelessWidget {
                                       style: compactIcon,
                                       onPressed: () => onEditText(entry.uid),
                                     ),
+                                  // 설교 제목 페이지는 헌금송 배경을 걸면 글꼴·색이 사라지므로 뺀다.
                                   if (item is SongStagingItem ||
-                                      item is BlankStagingItem)
+                                      (item is BlankStagingItem &&
+                                          background?.isSermon != true))
                                     IconButton(
                                       icon: Icon(
                                         background?.isOffering == true
@@ -4646,6 +4849,8 @@ class _StagingPanel extends StatelessWidget {
                                     ),
                                     tooltip: background == null
                                         ? '이 항목만 배경 바꾸기'
+                                        : background.isSermon
+                                        ? '설교 제목 디자인 수정'
                                         : '이 항목의 배경 수정',
                                     style: compactIcon,
                                     onPressed: () =>
@@ -5699,11 +5904,15 @@ class _DesignRibbon extends StatefulWidget {
     required this.offeringDesign,
     required this.onEditOffering,
     required this.imageLibrary,
+    required this.onResetTextLayout,
   });
 
   final ExportStyle style;
   final List<Color> swatches;
   final List<Color> textSwatches;
+
+  /// 모든 글꼴·글자 크기·위치를 기본값으로(확인을 받는다).
+  final VoidCallback onResetTextLayout;
 
   /// 찬양 보조 가사로 고를 수 있는 언어 / 성경 보조로 고를 수 있는 역본.
   final List<String> subLanguages;
@@ -5815,6 +6024,16 @@ class _DesignRibbonState extends State<_DesignRibbon> {
               onTap: () => _selectTab(tab),
             ),
           const Spacer(),
+          TextButton.icon(
+            onPressed: widget.onResetTextLayout,
+            icon: const Icon(Icons.restart_alt_rounded, size: 16),
+            label: const Text('글자 크기·위치 기본값'),
+            style: TextButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+              foregroundColor: cs.onSurfaceVariant,
+              textStyle: const TextStyle(fontSize: 12),
+            ),
+          ),
           IconButton(
             tooltip: widget.isCollapsed ? '리본 펼치기' : '리본 접기',
             visualDensity: VisualDensity.compact,
@@ -7032,11 +7251,11 @@ class _PreviewBox extends StatelessWidget {
         isBible = false;
         imagePath = imagePaths.isEmpty ? null : imagePaths.first;
       case SongStagingItem(:final song):
-        sampleText = song.pages.isEmpty ? song.title : song.pages.first;
+        sampleText = song.pages.isEmpty ? song.displayTitle : song.pages.first;
         sampleEnglishText = song.englishPages.isEmpty
             ? ''
             : song.englishPages.first;
-        titleText = song.title;
+        titleText = song.displayTitle;
         isBible = false;
       case BibleStagingItem(:final text, :final reference, :final subText):
         sampleText = text;
@@ -8299,6 +8518,325 @@ class _BackgroundBadge extends StatelessWidget {
 /// 고르면 그 항목(과 뒤에 자동으로 붙는 여백)만 다른 배경으로 나간다.
 /// 결과로 `(background: null)` 을 돌려주면 "오버라이드 없음", 다이얼로그를 그냥
 /// 닫으면 null 이라 아무것도 바꾸지 않는다.
+/// 편집 탭·발표 보기 '새 페이지 추가' 메뉴. 값 true = 설교 제목 페이지.
+const List<PopupMenuEntry<bool>> _addPageMenuItems = [
+  PopupMenuItem(
+    value: false,
+    child: ListTile(
+      leading: Icon(Icons.crop_landscape_outlined),
+      title: Text('빈 페이지'),
+      subtitle: Text('찬양 디자인을 따라갑니다'),
+      dense: true,
+    ),
+  ),
+  PopupMenuItem(
+    value: true,
+    child: ListTile(
+      leading: Icon(Icons.title_rounded),
+      title: Text('설교 제목 페이지'),
+      subtitle: Text('글꼴·배경·색·크기를 따로 정합니다'),
+      dense: true,
+    ),
+  ),
+];
+
+/// design == null: 설교 디자인을 떼고 일반 빈 페이지로 되돌린다(고칠 때만).
+typedef _SermonPageResult = ({
+  String title,
+  String subtitle,
+  SlideBackground? design,
+});
+
+/// 설교 제목 페이지 만들기/고치기. 찬양 디자인과 따로 글꼴·위치·배경과
+/// 주제·부제(본문 말씀 등) 각각의 크기·색을 정한다. 부제는 렌더러의 보조 줄 자리에 들어간다.
+/// 고른 디자인은 다음 설교 페이지의 시작값으로 남는다(sermon_design.json).
+class _SermonPageDialog extends StatefulWidget {
+  const _SermonPageDialog({
+    required this.initialTitle,
+    required this.initialSubtitle,
+    required this.initialDesign,
+    required this.canRevert,
+    required this.globalStyle,
+    required this.swatches,
+    required this.imageLibrary,
+  });
+
+  final String initialTitle;
+  final String initialSubtitle;
+  final SlideBackground initialDesign;
+  final bool canRevert;
+  final ExportStyle globalStyle;
+  final List<Color> swatches;
+  final BackgroundImageLibrary imageLibrary;
+
+  @override
+  State<_SermonPageDialog> createState() => _SermonPageDialogState();
+}
+
+class _SermonPageDialogState extends State<_SermonPageDialog> {
+  late final TextEditingController _titleController = TextEditingController(
+    text: widget.initialTitle,
+  );
+  late final TextEditingController _subtitleController = TextEditingController(
+    text: widget.initialSubtitle,
+  );
+  late SlideBackground _design = widget.initialDesign;
+
+  // 입력칸은 글자를 칠 때 다시 그리지 않는다 — 미리보기·적용 버튼만 이 리스너로 갱신한다.
+  // 칠 때마다 다이얼로그를 통째로 다시 그리던 때 macOS 에서 한글이 자음·모음으로 갈라졌다.
+  late final Listenable _texts = Listenable.merge([
+    _titleController,
+    _subtitleController,
+  ]);
+
+  String get _titleNow => _titleController.text.trim();
+  String get _subtitleNow => _subtitleController.text.trim();
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _subtitleController.dispose();
+    super.dispose();
+  }
+
+  ExportStyle get _style => widget.globalStyle.withBackground(_design);
+
+  /// 글꼴·크기·색·위치를 처음 값(SlideBackground.sermonDefault)으로. 배경은 그대로 둔다.
+  void _resetText() => setState(
+    () => _design = _design.withSermonDefaultText(widget.globalStyle),
+  );
+
+  Future<Color?> _pickColor(String title, Color initial) => showDialog<Color>(
+    context: context,
+    builder: (ctx) => _HexColorDialog(
+      title: title,
+      initialColor: initial,
+      colors: widget.swatches,
+      inputFormatter: _hexInputFormatter,
+    ),
+  );
+
+  Widget _colorRow(String label, Color color, ValueChanged<Color> onPicked) {
+    final cs = Theme.of(context).colorScheme;
+    return OutlinedButton(
+      style: OutlinedButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.control),
+        ),
+      ),
+      onPressed: () async {
+        final picked = await _pickColor(label, color);
+        if (picked != null && mounted) onPicked(picked);
+      },
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(label, style: TextStyle(color: cs.onSurface)),
+          ),
+          Container(
+            width: 28,
+            height: 28,
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(AppRadius.control),
+              border: Border.all(color: Theme.of(context).dividerColor),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            colorToHex(color),
+            style: TextStyle(
+              color: cs.primary,
+              fontFeatures: const [FontFeature.tabularFigures()],
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final labelStyle = TextStyle(fontSize: 12, color: cs.onSurfaceVariant);
+    return AlertDialog(
+      title: const Text('설교 제목 페이지'),
+      content: SizedBox(
+        width: 460,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ListenableBuilder(
+                listenable: _texts,
+                builder: (_, _) => _PreviewBox(
+                  style: _style,
+                  previewItem: BlankStagingItem(
+                    mainText: _titleNow.isEmpty ? '설교 주제' : _titleNow,
+                    englishText: _subtitleNow,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _titleController,
+                autofocus: true,
+                // 예전 설교 페이지는 제목에 구절까지 여러 줄로 넣었다 — 한 줄 칸이면 둘째 줄이 안 보인다.
+                // 높이가 자라는 칸(minLines)은 쓰지 않는다. 기존 입력칸처럼 높이를 고정해 둔다
+                // (자라는 칸에서 macOS 한글 조합이 갈라진다는 보고가 있었다).
+                maxLines: 2,
+                decoration: const InputDecoration(
+                  labelText: '주제',
+                  hintText: '예) 복음통일',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _subtitleController,
+                decoration: const InputDecoration(
+                  labelText: '부제 (비워도 됩니다)',
+                  hintText: '예) 히브리서 11장 1절',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: _resetText,
+                  icon: const Icon(Icons.restart_alt_rounded, size: 18),
+                  label: const Text('글자 기본값으로'),
+                ),
+              ),
+              Text('글꼴', style: labelStyle),
+              const SizedBox(height: 6),
+              _FontFamilyPicker(
+                selected: _style.fontFamily,
+                onChanged: (family) => setState(
+                  () => _design = _design.copyWith(fontFamily: family),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text('주제 글자 크기 ${_style.fontSize.round()}pt', style: labelStyle),
+              Slider(
+                min: 20,
+                max: 120,
+                divisions: 100,
+                value: _style.fontSize.clamp(20, 120).toDouble(),
+                onChanged: (v) => setState(
+                  () => _design = _design.copyWith(fontSize: v.roundToDouble()),
+                ),
+              ),
+              Text(
+                '부제 글자 크기 ${_style.effectiveEnglishFontSize.round()}pt',
+                style: labelStyle,
+              ),
+              Slider(
+                min: 14,
+                max: 100,
+                divisions: 86,
+                value: _style.effectiveEnglishFontSize
+                    .clamp(14, 100)
+                    .toDouble(),
+                onChanged: (v) => setState(
+                  () => _design = _design.copyWith(
+                    subFontSize: v.roundToDouble(),
+                  ),
+                ),
+              ),
+              Text('세로 위치', style: labelStyle),
+              const SizedBox(height: 6),
+              SegmentedButton<VerticalTextPosition>(
+                segments: [
+                  for (final v in VerticalTextPosition.values)
+                    ButtonSegment(value: v, label: Text(v.label)),
+                ],
+                selected: {_style.textPosition},
+                onSelectionChanged: (v) => setState(
+                  () => _design = _design.copyWith(lyricsPosition: v.first),
+                ),
+              ),
+              const SizedBox(height: 12),
+              _colorRow(
+                '주제 글자 색상',
+                _style.textColor,
+                (c) => setState(() => _design = _design.copyWith(textColor: c)),
+              ),
+              const SizedBox(height: 8),
+              _colorRow(
+                '부제 글자 색상',
+                _style.englishTextColor,
+                (c) =>
+                    setState(() => _design = _design.copyWith(subTextColor: c)),
+              ),
+              const SizedBox(height: 8),
+              _colorRow(
+                '배경 색상',
+                _design.color,
+                (c) => setState(() => _design = _design.copyWith(color: c)),
+              ),
+              const SizedBox(height: 8),
+              Text('배경 이미지 (공통 모음)', style: labelStyle),
+              const SizedBox(height: 6),
+              BackgroundImageGallery(
+                library: widget.imageLibrary,
+                selected: _design.imagePath,
+                emptyColor: _design.color,
+                onChanged: (path) =>
+                    setState(() => _design = _design.copyWith(imagePath: path)),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        if (widget.canRevert)
+          TextButton(
+            onPressed: () => Navigator.of(context).pop<_SermonPageResult>((
+              title: _titleNow,
+              subtitle: _subtitleNow,
+              design: null,
+            )),
+            child: const Text('일반 빈 페이지로 되돌리기'),
+          ),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('취소'),
+        ),
+        ListenableBuilder(
+          listenable: _texts,
+          builder: (_, _) => FilledButton(
+            onPressed: _titleNow.isEmpty
+                ? null
+                : () => Navigator.of(context).pop((
+                    title: _titleNow,
+                    subtitle: _subtitleNow,
+                    // 글꼴·크기·색·위치를 모두 박아 둔다 — 나중에 찬양 디자인을 바꿔도
+                    // 설교 페이지는 그대로여야 한다.
+                    design: _design.copyWith(
+                      fontFamily: _style.fontFamily,
+                      fontSize: _style.fontSize,
+                      textColor: _style.textColor,
+                      subFontSize: _style.effectiveEnglishFontSize,
+                      subTextColor: _style.englishTextColor,
+                      lyricsPosition: _style.textPosition,
+                      lyricsOffsetY: _design.lyricsOffsetY ?? 0.0,
+                      offering: null,
+                      isSermon: true,
+                    ),
+                  )),
+            child: const Text('적용'),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _ItemBackgroundDialog extends StatefulWidget {
   const _ItemBackgroundDialog({
     required this.item,
@@ -8559,7 +9097,7 @@ class _PresenterConsole extends StatefulWidget {
   final ValueChanged<List<int>> onSlidesDelete;
   final ValueChanged<List<int>> onSlidesCopy;
   final VoidCallback onPaste;
-  final VoidCallback onAddPage;
+  final ValueChanged<bool> onAddPage; // true = 설교 제목 페이지
   final VoidCallback onPrev;
   final VoidCallback onNext;
   final VoidCallback onToggleBlackout;
@@ -9212,10 +9750,11 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
           tooltip: '다음 (→ Space)',
         ),
         const SizedBox(width: 4),
-        IconButton(
-          onPressed: widget.onAddPage,
+        PopupMenuButton<bool>(
           icon: const Icon(Icons.note_add_outlined),
           tooltip: '새 페이지 추가 (현재 항목 뒤)',
+          onSelected: widget.onAddPage,
+          itemBuilder: (_) => _addPageMenuItems,
         ),
         IconButton(
           onPressed: () =>
@@ -9252,9 +9791,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
           IconButton(
             onPressed: widget.onToggleSinger,
             icon: Icon(
-              widget.isSingerOpen
-                  ? Icons.mic_rounded
-                  : Icons.mic_none_rounded,
+              widget.isSingerOpen ? Icons.mic_rounded : Icons.mic_none_rounded,
             ),
             tooltip: widget.isSingerOpen
                 ? '싱어 화면 닫기'

@@ -266,12 +266,58 @@ def test_no_spacer():
         check("여백은 마지막 사이 한 장만", len(Presentation(str(output)).slides), 5)
 
 
+def test_sermon_page():
+    """설교 제목 페이지: 문구가 든 빈 페이지는 그 항목의 글꼴·크기·색으로 그린다."""
+    print("export (설교 제목 페이지)")
+    with tempfile.TemporaryDirectory() as tmp:
+        output = Path(tmp) / "sermon.pptx"
+        payload = {
+            "output_path": str(output),
+            "style": dict(_STYLE, show_song_title=True),
+            "songs": [
+                {
+                    "type": "blank",
+                    "title": "",
+                    "lyrics": "믿음의 경주",
+                    "english_lyrics": "히브리서 11장 1절",
+                    "background": {
+                        "color": BLANK_BG,
+                        "font_size": 60,
+                        "text_color": "#FFD700",
+                        "english_font_size": 36,
+                        "english_text_color": "#AABBCC",
+                        "sermon": True,
+                    },
+                },
+                {"type": "blank", "title": "", "lyrics": "", "english_lyrics": ""},
+                {"type": "blank", "title": "", "lyrics": "믿음의 경주\n\n히브리서 12:1",
+                 "english_lyrics": ""},
+            ],
+        }
+        export_presentation(json.dumps(payload))
+        slides = Presentation(str(output)).slides
+        check("빈 페이지 사이 여백 없음 + 빈 줄 있는 문구도 한 장", len(slides), 3)
+        check("설교 페이지 배경", slide_bg_hex(slides[0]), BLANK_BG)
+        check("제목 상자는 안 만든다", len(slides[0].shapes), 1)
+        run = slides[0].shapes[0].text_frame.paragraphs[0].runs[0]
+        check("설교 제목 문구", run.text, "믿음의 경주")
+        check("설교 제목 크기", run.font.size.pt, 60)
+        check("설교 제목 색", str(run.font.color.rgb), "FFD700")
+        # 전역 style 은 보조 언어를 꺼 뒀지만(include_english_lyrics False) 부제는 나온다.
+        sub_run = slides[0].shapes[0].text_frame.paragraphs[-1].runs[0]
+        check("부제 문구", sub_run.text, "히브리서 11장 1절")
+        check("부제 크기", sub_run.font.size.pt, 36)
+        check("부제 색", str(sub_run.font.color.rgb), "AABBCC")
+        check("문구 없는 빈 페이지는 그대로 빈 슬라이드", len(slides[1].shapes), 0)
+
+
 if __name__ == "__main__":
     test_resolve_background()
     test_export_per_item_background()
     test_export_without_background_key()
     test_per_item_lyrics_position()
     test_no_spacer()
+    test_sermon_page()
     if _failures:
         print(f"\n{len(_failures)}개 실패: {_failures}")
         raise SystemExit(1)

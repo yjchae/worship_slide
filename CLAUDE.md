@@ -256,6 +256,20 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
     모음에서 지우면 그 파일을 직접 쓰는 일반 항목 배경(저장한 콘티 포함)은 색만 남는다 — 삭제 전에 확인을 받는다.
     헌금송은 따로 구운 PNG 라 영향 없다
   - "항목 배경" 다이얼로그에서 색·이미지를 손으로 바꾸면 헌금송 정보와 가사 위치는 떨어져 나간다(일반 배경이 된다)
+- **설교 제목 페이지**: '새 페이지 추가'(편집 탭 콘티 머리줄·발표 보기 툴바) 메뉴에서 빈 페이지 / 설교 제목 페이지를 고른다.
+  설교 제목 페이지 = 문구가 든 `BlankStagingItem` + 항목별 배경 오버라이드. `SlideBackground` 에 `fontFamily`·`fontSize`·`textColor`·`isSermon`
+  (JSON `font_family`·`font_size`·`text_color`·`sermon`)을 얹었고 `withBackground()`·`_style_for_item` 이 가사 키만 덮어쓴다 —
+  DB 스키마는 그대로다. **주제 = 본문(`mainText`), 부제(예: 말씀 구절) = 보조 줄(`englishText`)**. 부제 크기·색은
+  `subFontSize`·`subTextColor`(JSON `english_font_size`·`english_text_color`) → style 의 `english_font_size`·`english_text_color`.
+  `english_font_size` 는 렌더러 네 곳이 읽는 새 키로, 없으면 예전처럼 본문의 0.8 배(`ExportStyle.effectiveEnglishFontSize`).
+  설교 페이지는 디자인의 보조 언어 스위치를 꺼도 부제가 보인다(`withBackground`·`_style_for_item` 이 `include_english_lyrics` 를 켠다).
+  마지막 디자인은 `sermon_design.json`(`SermonDesignStore`)에 남아 다음 설교 페이지의 시작값이 된다.
+  설교 페이지의 '배경' 버튼은 `_SermonPageDialog` 를 열고(일반 빈 페이지로 되돌리기 포함), 헌금송 버튼은 숨긴다.
+  PPTX 는 문구가 든 빈 페이지를 한 장의 가사 슬라이드로 그린다(예전엔 빈 페이지 문구가 PPTX 에서 빠졌다)
+- **표시용 제목** (`PraiseSong.displayTitle`): 발표 슬라이드 제목·콘티 목록·PPTX 는 '(와이드 스크린)'·'와이드스크린'·오타('와일드스크린',
+  '와이드 스크림')·'(와이드)'·'.ppt' 를 뗀 제목을 쓴다. DB 제목은 그대로 둔다 — `song_translations` 가 제목을 키로 쓴다
+- **문단 안 줄바꿈**: 가져오기(`extract_lines_from_shape`)는 run 과 `<a:br>` 만 이어 붙여 `<a:br>` 에서 줄을 나눈다(필드 `<a:fld>` 는 뺀다).
+  예전엔 run 만 이어 붙여 영어 가사가 'historyDeath' 처럼 붙었다. 다시 가져오기의 '나누기만 바뀐 곡' 판정은 공백 뺀 글자 모음 비교다
 - **외부 PPT 애니메이션**: LibreOffice가 PDF로 굽는 순간 애니메이션은 사라지고 "다 나타난 마지막
   상태" 한 장만 남는다. 그래서 PDF로 넘기기 전에 pptx의 `<p:timing>`(메인 시퀀스)을 읽어
   **클릭 한 번 = 페이지 한 장**으로 슬라이드를 복제해 둔다 (`expand_animation_steps`).
@@ -376,6 +390,10 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   성공 여부는 종료 코드가 아니라 **설치 후 `soffice` 가 실제로 있는지**로 가린다 — 찾는 경로는 `ppt_tool.py`
   `get_libreoffice_executable` 과 같아야 한다. 설치되면 하던 일을 다시 한다: 폴더 가져오기는 같은 폴더를 다시
   가져오고(이미 들어간 곡은 중복으로 건너뜀), PPT 이미지 넣기는 못 구운 파일만 다시 굽는다(뒤의 PDF 는 기다리지 않고 먼저 들어간다). 출력은 `app.log` 에 `[libreoffice]`
+- **macOS LibreOffice 글꼴** (`_libreoffice_env`): macOS LibreOffice(26.8 에서 확인)는 fontconfig 로 글꼴을 찾는데 기본 설정에
+  맥 글꼴 폴더가 없어 한글 글꼴을 하나도 못 쓴다 → 내장 라틴·히브리 글꼴로 그려 **한글이 통째로 빠진 PNG** 가 나왔다(PDF 엔 글자가 있다).
+  soffice 를 부를 때마다 맥 글꼴 폴더(+ 앱 내장 무료 글꼴 폴더)를 적은 `~/Library/Caches/worship_slides/fontconfig/fonts.conf` 를
+  `FONTCONFIG_FILE` 로 넘긴다. 사용자가 이미 `FONTCONFIG_FILE` 을 정해 뒀으면 건드리지 않는다. 이 수정으로 `RENDER_CACHE_VERSION` 은 macOS 만 3(Windows 는 2 그대로)
 - **PPT 렌더 캐시 위치**: `~/Library/Application Support/worship_slides/ppt_slides/<해시>/`.
   Caches가 아닌 이유 — 저장한 콘티가 나중에 이미지 유실로 깨지면 안 되기 때문.
   (`.ppt`→`.pptx` 변환 캐시는 유실돼도 되므로 `~/Library/Caches/worship_slides/ppt_import_cache/`)

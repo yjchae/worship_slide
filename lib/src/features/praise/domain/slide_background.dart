@@ -9,7 +9,7 @@ import 'offering_design.dart';
 ///
 /// 전역 [ExportStyle]의 배경(색 + 이미지)을 통째로 대체한다. "헌금송만 다른 배경"처럼
 /// 콘티의 일부 항목만 배경을 다르게 하고 싶을 때 쓴다. 배경 외의 디자인(글자 색·크기·
-/// 위치 등)은 전역 설정을 그대로 따른다.
+/// 위치 등)은 값을 담은 것만 덮어쓰고 나머지는 전역 설정을 따른다.
 ///
 /// 오버라이드가 없는 항목은 이 객체 자체가 `null` 이고, 전역 배경이 그대로 쓰인다.
 @immutable
@@ -20,6 +20,12 @@ class SlideBackground {
     this.offering,
     this.lyricsPosition,
     this.lyricsOffsetY,
+    this.fontFamily,
+    this.fontSize,
+    this.textColor,
+    this.subFontSize,
+    this.subTextColor,
+    this.isSermon = false,
   });
 
   /// 이 항목의 배경 색. 이미지가 없거나 파일이 사라졌을 때 그대로 보인다.
@@ -45,11 +51,59 @@ class SlideBackground {
 
   bool get hasLyricsOverride => lyricsPosition != null || lyricsOffsetY != null;
 
+  /// 이 항목만 글꼴·크기·글자 색을 바꾼다(가사·빈 페이지 문구. 성경은 해당 없음).
+  /// 설교 제목 페이지가 찬양 디자인과 따로 놀게 하려고 쓴다. null 이면 전역 설정 그대로.
+  /// 가사 위치처럼 [SlideBackgroundOverride.withBackground]·`ppt_tool.py _style_for_item` 이 덮어쓴다.
+  final String? fontFamily;
+  final double? fontSize;
+  final Color? textColor;
+
+  /// 본문 아래 보조 줄(설교 부제) 크기·색. null 이면 전역(본문의 0.8 배, 영어 가사 색).
+  final double? subFontSize;
+  final Color? subTextColor;
+
+  /// 설교 제목 페이지(주제 = 본문, 부제 = 보조 줄). 부제는 디자인의 보조 언어
+  /// 스위치와 상관없이 보이게 한다. 그 밖에는 콘티 목록 표시와 "배경 수정" 이
+  /// 어느 다이얼로그를 열지를 가른다.
+  final bool isSermon;
+
+  /// 설교 제목 페이지 기본 디자인.
+  factory SlideBackground.sermonDefault(ExportStyle style) => SlideBackground(
+    color: style.backgroundColor,
+    imagePath: style.backgroundImagePath,
+    fontFamily: style.fontFamily,
+    fontSize: 60,
+    textColor: style.textColor,
+    subFontSize: 34,
+    subTextColor: const Color(0xFFD0D0D0),
+    lyricsPosition: VerticalTextPosition.middle,
+    lyricsOffsetY: 0,
+    isSermon: true,
+  );
+
   /// 전역 스타일의 배경을 그대로 복사한 오버라이드 시작값.
   factory SlideBackground.fromStyle(ExportStyle style) => SlideBackground(
     color: style.backgroundColor,
     imagePath: style.backgroundImagePath,
   );
+
+  /// 글꼴·주제/부제 크기·위치(와 [includeColors] 면 글자 색)를 [sermonDefault] 값으로.
+  /// 배경은 그대로 둔다. 설교 다이얼로그·리본 '글자 크기·위치 기본값' 이 함께 쓴다.
+  SlideBackground withSermonDefaultText(
+    ExportStyle style, {
+    bool includeColors = true,
+  }) {
+    final d = SlideBackground.sermonDefault(style);
+    return copyWith(
+      fontFamily: d.fontFamily,
+      fontSize: d.fontSize,
+      subFontSize: d.subFontSize,
+      lyricsPosition: d.lyricsPosition,
+      lyricsOffsetY: d.lyricsOffsetY,
+      textColor: includeColors ? d.textColor : textColor,
+      subTextColor: includeColors ? d.subTextColor : subTextColor,
+    );
+  }
 
   bool get hasImage => imagePath != null && imagePath!.isNotEmpty;
 
@@ -59,6 +113,12 @@ class SlideBackground {
     Object? offering = _sentinel,
     Object? lyricsPosition = _sentinel,
     Object? lyricsOffsetY = _sentinel,
+    Object? fontFamily = _sentinel,
+    Object? fontSize = _sentinel,
+    Object? textColor = _sentinel,
+    Object? subFontSize = _sentinel,
+    Object? subTextColor = _sentinel,
+    bool? isSermon,
   }) {
     return SlideBackground(
       color: color ?? this.color,
@@ -74,6 +134,22 @@ class SlideBackground {
       lyricsOffsetY: identical(lyricsOffsetY, _sentinel)
           ? this.lyricsOffsetY
           : lyricsOffsetY as double?,
+      fontFamily: identical(fontFamily, _sentinel)
+          ? this.fontFamily
+          : fontFamily as String?,
+      fontSize: identical(fontSize, _sentinel)
+          ? this.fontSize
+          : (fontSize as num?)?.toDouble(),
+      textColor: identical(textColor, _sentinel)
+          ? this.textColor
+          : textColor as Color?,
+      subFontSize: identical(subFontSize, _sentinel)
+          ? this.subFontSize
+          : (subFontSize as num?)?.toDouble(),
+      subTextColor: identical(subTextColor, _sentinel)
+          ? this.subTextColor
+          : subTextColor as Color?,
+      isSermon: isSermon ?? this.isSermon,
     );
   }
 
@@ -83,6 +159,12 @@ class SlideBackground {
     if (offering != null) 'offering': offering!.toJson(),
     if (lyricsPosition != null) 'text_position': lyricsPosition!.name,
     if (lyricsOffsetY != null) 'text_offset_y': lyricsOffsetY,
+    if (fontFamily != null) 'font_family': fontFamily,
+    if (fontSize != null) 'font_size': fontSize,
+    if (textColor != null) 'text_color': colorToHex(textColor!),
+    if (subFontSize != null) 'english_font_size': subFontSize,
+    if (subTextColor != null) 'english_text_color': colorToHex(subTextColor!),
+    if (isSermon) 'sermon': true,
   };
 
   static SlideBackground? fromJson(Map<String, dynamic> json) {
@@ -92,6 +174,8 @@ class SlideBackground {
     final offering = json['offering'];
     final position = json['text_position'] as String?;
     final offsetY = (json['text_offset_y'] as num?)?.toDouble();
+    final fontSize = (json['font_size'] as num?)?.toDouble();
+    final subFontSize = (json['english_font_size'] as num?)?.toDouble();
     return SlideBackground(
       color: color,
       imagePath: (path == null || path.isEmpty) ? null : path,
@@ -102,6 +186,12 @@ class SlideBackground {
           .where((v) => v.name == position)
           .firstOrNull,
       lyricsOffsetY: offsetY == null ? null : clampTextOffsetY(offsetY),
+      fontFamily: json['font_family'] as String?,
+      fontSize: fontSize == null || fontSize <= 0 ? null : fontSize,
+      textColor: tryParseHexColor(json['text_color'] as String?),
+      subFontSize: subFontSize == null || subFontSize <= 0 ? null : subFontSize,
+      subTextColor: tryParseHexColor(json['english_text_color'] as String?),
+      isSermon: json['sermon'] == true,
     );
   }
 
@@ -128,11 +218,28 @@ class SlideBackground {
       other.imagePath == imagePath &&
       other.offering == offering &&
       other.lyricsPosition == lyricsPosition &&
-      other.lyricsOffsetY == lyricsOffsetY;
+      other.lyricsOffsetY == lyricsOffsetY &&
+      other.fontFamily == fontFamily &&
+      other.fontSize == fontSize &&
+      other.textColor == textColor &&
+      other.subFontSize == subFontSize &&
+      other.subTextColor == subTextColor &&
+      other.isSermon == isSermon;
 
   @override
-  int get hashCode =>
-      Object.hash(color, imagePath, offering, lyricsPosition, lyricsOffsetY);
+  int get hashCode => Object.hash(
+    color,
+    imagePath,
+    offering,
+    lyricsPosition,
+    lyricsOffsetY,
+    fontFamily,
+    fontSize,
+    textColor,
+    subFontSize,
+    subTextColor,
+    isSermon,
+  );
 
   static const Object _sentinel = Object();
 }
@@ -146,6 +253,12 @@ extension SlideBackgroundOverride on ExportStyle {
       backgroundImagePath: background.imagePath,
       textPosition: background.lyricsPosition,
       textOffsetY: background.lyricsOffsetY,
+      fontFamily: background.fontFamily,
+      fontSize: background.fontSize,
+      textColor: background.textColor,
+      englishFontSize: background.subFontSize ?? englishFontSize,
+      englishTextColor: background.subTextColor,
+      includeEnglishLyrics: background.isSermon ? true : null,
     );
   }
 }

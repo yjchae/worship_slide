@@ -123,6 +123,7 @@ class ExportStyleStore {
       ),
       fontFamily: (json['font_family'] as String?) ?? 'Pretendard',
       backgroundImagePath: json['background_image_path'] as String?,
+      englishFontSize: (json['english_font_size'] as num?)?.toDouble(),
     );
   }
 

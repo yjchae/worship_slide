@@ -109,6 +109,7 @@ class ExportStyle {
     this.backgroundImagePath,
     this.subLanguage = '영어',
     this.bibleSubVersion = '',
+    this.englishFontSize,
   });
 
   final double fontSize;
@@ -122,6 +123,11 @@ class ExportStyle {
   /// 가사/성경 본문 세로 미세 조정 (인치, + = 아래로)
   final double textOffsetY;
   final double bibleTextOffsetY;
+
+  /// 본문 아래 보조 줄(영어 가사·성경 보조 역본·설교 부제) 글자 크기.
+  /// null 이면 본문의 0.8 배(렌더러 네 곳의 원래 규칙). 설교 제목 페이지만 따로 정한다.
+  final double? englishFontSize;
+  double get effectiveEnglishFontSize => englishFontSize ?? fontSize * 0.8;
 
   /// 곡/성경 제목 세로 미세 조정 (인치, + = 아래로)
   final double titleOffsetY;
@@ -182,6 +188,7 @@ class ExportStyle {
       'background_image_path': backgroundImagePath,
       'sub_language': subLanguage,
       'bible_sub_version': bibleSubVersion,
+      if (englishFontSize != null) 'english_font_size': englishFontSize,
     };
   }
 
@@ -224,8 +231,7 @@ class ExportStyle {
       ),
       lyricsTextAlign: parseHorizontal(json['lyrics_text_align'] as String?),
       bibleTextAlign: parseHorizontal(json['bible_text_align'] as String?),
-      includeEnglishLyrics:
-          (json['include_english_lyrics'] as bool?) ?? true,
+      includeEnglishLyrics: (json['include_english_lyrics'] as bool?) ?? true,
       englishTextColor: parseHexColor(
         json['english_text_color'] as String?,
         const Color(0xFFFFF176),
@@ -259,6 +265,7 @@ class ExportStyle {
       backgroundImagePath: json['background_image_path'] as String?,
       subLanguage: (json['sub_language'] as String?) ?? '영어',
       bibleSubVersion: (json['bible_sub_version'] as String?) ?? '',
+      englishFontSize: (json['english_font_size'] as num?)?.toDouble(),
     );
   }
 
@@ -292,6 +299,7 @@ class ExportStyle {
     Object? backgroundImagePath = _sentinel,
     String? subLanguage,
     String? bibleSubVersion,
+    Object? englishFontSize = _sentinel,
   }) {
     return ExportStyle(
       fontSize: fontSize ?? this.fontSize,
@@ -333,6 +341,9 @@ class ExportStyle {
           : backgroundImagePath as String?,
       subLanguage: subLanguage ?? this.subLanguage,
       bibleSubVersion: bibleSubVersion ?? this.bibleSubVersion,
+      englishFontSize: identical(englishFontSize, _sentinel)
+          ? this.englishFontSize
+          : (englishFontSize as num?)?.toDouble(),
     );
   }
 

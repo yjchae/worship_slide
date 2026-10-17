@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart' show listEquals;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../domain/praise_song.dart';
@@ -19,13 +18,11 @@ class ImportSongsResult {
 }
 
 /// 원본 + 보조 가사의 줄 모음(순서·빈 줄 무시). 나누기만 다른 같은 곡이면 같다.
-List<String> _allLyricLines(String lyrics, String englishLyrics) =>
-    '$lyrics\n$englishLyrics'
-        .split('\n')
-        .map((line) => line.trim())
-        .where((line) => line.isNotEmpty)
-        .toList()
-      ..sort();
+// 공백·줄바꿈을 뺀 글자 모음(순서 무시). 줄을 나누는 규칙이 바뀌어도
+// (원본/보조 나누기, 문단 안 줄바꿈 살리기) 같은 가사면 같게 나온다.
+String _allLyricLines(String lyrics, String englishLyrics) =>
+    ('$lyrics$englishLyrics'.replaceAll(RegExp(r'\s'), '').split('')..sort())
+        .join();
 
 class PraiseRepository {
   PraiseRepository({PraiseDatabase? database})
@@ -71,15 +68,18 @@ class PraiseRepository {
         // 가사 줄은 그대로인데 원본/보조로 나눈 결과만 다르면(가져오기 규칙이 바뀜)
         // 새 곡을 만들지 않고 기존 곡을 고친다.
         final resplit = existing.where(
-          (row) => listEquals(
-            _allLyricLines(
-              row['lyrics'] as String,
-              (row['english_lyrics'] as String?) ?? '',
-            ),
-            newLines,
-          ),
+          (row) =>
+              _allLyricLines(
+                row['lyrics'] as String,
+                (row['english_lyrics'] as String?) ?? '',
+              ) ==
+              newLines,
         );
-        if (existing.any((row) => row['lyrics'] == song.lyrics)) {
+        if (existing.any(
+          (row) =>
+              row['lyrics'] == song.lyrics &&
+              (row['english_lyrics'] ?? '') == song.englishLyrics,
+        )) {
           skippedCount += 1;
         } else if (resplit.isNotEmpty) {
           await txn.update(
@@ -89,6 +89,8 @@ class PraiseRepository {
             whereArgs: [resplit.first['id']],
           );
           updatedCount += 1;
+        } else if (existing.any((row) => row['lyrics'] == song.lyrics)) {
+          skippedCount += 1;
         } else {
           await txn.insert('praise_songs', song.toMap()..remove('id'));
           insertedCount += 1;
