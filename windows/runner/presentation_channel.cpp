@@ -81,6 +81,7 @@ PresentationChannel::PresentationChannel(HWND main_hwnd)
 }
 
 PresentationChannel::~PresentationChannel() {
+  media_.reset();
   if (hwnd_) { DestroyWindow(hwnd_); hwnd_ = nullptr; }
   // 싱어 화면도 GDI+ 를 쓰므로 GdiplusShutdown 전에 내린다.
   singer_.reset();
@@ -178,12 +179,19 @@ void PresentationChannel::Setup(flutter::FlutterEngine* engine) {
           return;
         } else if (call.method_name() == "openWindow") {
           OpenWindow(chosen);
-          if (data) { Apply(*data); InvalidateRect(hwnd_, nullptr, TRUE); }
+          if (data) { Apply(*data); InvalidateRect(hwnd_, nullptr, TRUE); SyncMedia(); }
         } else if (call.method_name() == "updatePage") {
           if (data && hwnd_) {
             Apply(*data);
             InvalidateRect(hwnd_, nullptr, TRUE);
+            SyncMedia();
           }
+        } else if (call.method_name() == "mediaToggle") {
+          if (media_) media_->Run(L"window.toggle&&toggle()");
+        } else if (call.method_name() == "mediaSeek") {
+          const double t = num("t", 0.0);
+          if (media_ && std::isfinite(t))
+            media_->Run(L"window.seek&&seek(" + std::to_wstring((std::max)(t, 0.0)) + L")");
         } else if (call.method_name() == "zoom") {
           if (data) {
             zoom_on_ = false;
@@ -212,6 +220,14 @@ void PresentationChannel::Setup(flutter::FlutterEngine* engine) {
         } else if (call.method_name() == "blackout") {
           slide_.blackout = !slide_.blackout;
           if (hwnd_) InvalidateRect(hwnd_, nullptr, TRUE);
+          if (media_ && slide_.blackout) {
+            media_->Run(L"window.setBlack&&setBlack(true)");
+          } else if (media_) {
+            // 꺼진 사이 페이지를 넘겼으면 새 미디어로 바뀐다. 같은 미디어면 멈춘 자리에서 다시.
+            const bool same = !last_media_.key.empty() && last_media_.key == media_->current_key();
+            SyncMedia();
+            if (same) media_->Run(L"window.setBlack&&setBlack(false)");
+          }
         } else if (call.method_name() == "closeWindow") {
           CloseWindow();
         } else if (call.method_name() == "openSingerWindow") {
@@ -250,7 +266,7 @@ void PresentationChannel::OpenWindow(HMONITOR chosen) {
       // 발표 중에 모니터를 바꾸면 그 모니터 전체화면으로 옮긴다.
       MONITORINFO info = { sizeof(info) };
       GetMonitorInfo(chosen, &info);
-      SetWindowLongPtrW(hwnd_, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+      SetWindowLongPtrW(hwnd_, GWL_STYLE, WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN);
       SetWindowPos(hwnd_, HWND_TOPMOST, info.rcMonitor.left, info.rcMonitor.top,
                    info.rcMonitor.right - info.rcMonitor.left,
                    info.rcMonitor.bottom - info.rcMonitor.top,
@@ -294,7 +310,8 @@ void PresentationChannel::OpenWindow(HMONITOR chosen) {
     exStyle = 0;
   }
 
-  DWORD style = mi.second ? WS_POPUP : WS_OVERLAPPEDWINDOW;
+  // WS_CLIPCHILDREN: 포인터를 움직일 때마다 다시 그리는 GDI 가 미디어 레이어(자식 창)를 덮어 깜빡이지 않게.
+  DWORD style = (mi.second ? WS_POPUP : WS_OVERLAPPEDWINDOW) | WS_CLIPCHILDREN;
 
   hwnd_ = CreateWindowExW(
       exStyle, kClass, L"발표 화면", style,
@@ -304,10 +321,26 @@ void PresentationChannel::OpenWindow(HMONITOR chosen) {
 
   ShowWindow(hwnd_, SW_SHOW);
   UpdateWindow(hwnd_);
+  media_ = std::make_unique<MediaLayer>(hwnd_, [this](const std::wstring& json) {
+    if (main_) main_->InvokeMethod("mediaState", std::make_unique<EV>(Utf8(json)));
+  });
 }
 
 void PresentationChannel::CloseWindow() {
+  media_.reset();
   if (hwnd_) { DestroyWindow(hwnd_); hwnd_ = nullptr; }
+}
+
+void PresentationChannel::SyncMedia() {
+  if (!media_ || slide_.blackout) return;
+  double aspect = 0.0;  // 0 = 그대로 (같은 미디어면 처음 읽은 비율을 쓴다)
+  if (!last_media_.key.empty() && last_media_.key != media_->current_key() &&
+      last_media_.rect.size() == 4 && !slide_.imagePath.empty()) {
+    Gdiplus::Image image(slide_.imagePath.c_str());
+    if (image.GetLastStatus() == Gdiplus::Ok && image.GetHeight() > 0)
+      aspect = static_cast<double>(image.GetWidth()) / image.GetHeight();
+  }
+  media_->Update(last_media_.key.empty() ? nullptr : &last_media_, aspect);
 }
 
 // ── data parsing ──────────────────────────────────────────────────────────────
@@ -358,6 +391,21 @@ void PresentationChannel::Apply(const flutter::EncodableMap& data) {
   // style이 없을 때도 유지되도록 아래 early return보다 먼저 읽는다.
   const std::string* img = Get<std::string>(data, "image_path");
   slide_.imagePath = img ? W(*img) : std::wstring{};
+
+  last_media_ = MediaLayer::Media{};
+  if (const auto* m = Get<flutter::EncodableMap>(data, "media")) {
+    last_media_.key     = GetStr(*m, "key");
+    last_media_.kind    = GetStr(*m, "kind");
+    last_media_.html    = GetStr(*m, "html");
+    last_media_.fadeOut = GetDbl(*m, "fade_out", 0.0);
+    if (last_media_.kind != "youtube") last_media_.path = W(GetStr(*m, "source"));
+    if (const auto* r = Get<flutter::EncodableList>(*m, "rect")) {
+      for (const auto& v : *r) {
+        if (const auto* d = std::get_if<double>(&v)) last_media_.rect.push_back(*d);
+        else if (const auto* i = std::get_if<int32_t>(&v)) last_media_.rect.push_back(*i);
+      }
+    }
+  }
 
   const flutter::EncodableMap* style = nullptr;
   auto it = data.find(flutter::EncodableValue("style"));
@@ -793,6 +841,7 @@ LRESULT CALLBACK PresentationChannel::WndProc(
     case WM_CLOSE:
       if (s_) {
         if (s_->main_) s_->main_->InvokeMethod("presentationClosed", nullptr);
+        s_->media_.reset();
         s_->hwnd_ = nullptr;
       }
       DestroyWindow(hwnd);
@@ -800,7 +849,15 @@ LRESULT CALLBACK PresentationChannel::WndProc(
 
     case WM_SIZE:
       InvalidateRect(hwnd, nullptr, TRUE);
+      if (s_ && s_->media_) s_->media_->Layout();
       return 0;
+
+    case WM_TIMER:
+      if (wp == MediaLayer::kTimerId && s_ && s_->media_) {
+        s_->media_->OnTimer();
+        return 0;
+      }
+      break;
   }
   return DefWindowProcW(hwnd, msg, wp, lp);
 }

@@ -8,6 +8,7 @@
 #include <flutter/method_channel.h>
 #include <flutter/encodable_value.h>
 
+#include "media_layer.h"
 #include "singer_window.h"
 
 // gdiplus.h 는 NOMINMAX 충돌 때문에 .cpp 에서 순서를 맞춰 include 한다.
@@ -54,6 +55,8 @@ class PresentationChannel {
   void OpenWindow(HMONITOR chosen);
   void CloseWindow();
   void Apply(const flutter::EncodableMap& data);
+  // 지금 페이지의 미디어(last_media_)를 레이어에 넘긴다. 화면이 꺼져 있으면 미룬다.
+  void SyncMedia();
   void Paint(HDC hdc, RECT cli) const;
   // 단색 + (있으면) 배경 이미지. 이미지는 화면을 꽉 채운다(CSS background-size: cover).
   void PaintBackgroundImage(HDC hdc, int w, int h) const;
@@ -98,6 +101,9 @@ class PresentationChannel {
   std::unique_ptr<Channel> main_;
   // 싱어용 화면(현재 + 다음 페이지). 관객 화면과 따로 뜨는 두 번째 창.
   std::unique_ptr<SingerWindow> singer_;
+  // 슬라이드 위 동영상·음악·유튜브(WebView2). 발표 창과 같이 만들고 같이 없앤다.
+  std::unique_ptr<MediaLayer> media_;
+  MediaLayer::Media last_media_;  // key 가 비면 이 페이지엔 미디어가 없다
 
   static PresentationChannel* s_;
   static constexpr wchar_t kClass[] = L"WorshipPresentation";

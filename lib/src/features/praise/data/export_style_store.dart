@@ -124,6 +124,8 @@ class ExportStyleStore {
       fontFamily: (json['font_family'] as String?) ?? 'Pretendard',
       backgroundImagePath: json['background_image_path'] as String?,
       englishFontSize: (json['english_font_size'] as num?)?.toDouble(),
+      mediaFadeIn: (json['media_fade_in'] as num?)?.toDouble() ?? 1.0,
+      mediaFadeOut: (json['media_fade_out'] as num?)?.toDouble() ?? 2.0,
     );
   }
 

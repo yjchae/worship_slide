@@ -1,4 +1,5 @@
 import 'praise_song.dart';
+import 'slide_media.dart';
 
 sealed class StagingItem {
   const StagingItem();
@@ -61,14 +62,21 @@ class ImageStagingItem extends StagingItem {
   String get previewText => '${imagePaths.length}장';
 }
 
+/// 빈 페이지. [media] 가 있으면 동영상·음악·유튜브 페이지다 — 발표 창이 이 페이지
+/// 위에 미디어를 띄운다(음악은 소리만이라 문구·배경이 그대로 보인다).
 class BlankStagingItem extends StagingItem {
-  const BlankStagingItem({this.mainText = '', this.englishText = ''});
+  const BlankStagingItem({
+    this.mainText = '',
+    this.englishText = '',
+    this.media,
+  });
 
   final String mainText;
   final String englishText;
+  final SlideMedia? media;
 
   @override
-  String get displayTitle => '[ 빈 페이지 ]';
+  String get displayTitle => media?.label ?? '[ 빈 페이지 ]';
 
   @override
   String get previewText => mainText.replaceAll('\n', ' ');

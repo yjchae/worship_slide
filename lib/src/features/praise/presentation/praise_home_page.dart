@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:ui' show AppExitResponse;
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -35,6 +36,7 @@ import '../domain/export_style.dart';
 import '../domain/offering_design.dart';
 import '../domain/praise_song.dart';
 import '../domain/slide_background.dart';
+import '../domain/slide_media.dart';
 import '../domain/staging_item.dart';
 import 'background_image_gallery.dart';
 import 'libreoffice_install_dialog.dart';
@@ -64,6 +66,7 @@ class _SlideInfo {
     this.isAutoSpacer = false,
     this.imagePath,
     this.background,
+    this.media,
   });
   final int stagingUid;
   final String mainText;
@@ -79,6 +82,8 @@ class _SlideInfo {
   final String? imagePath;
   // 이 슬라이드에만 적용되는 배경. null 이면 전역 디자인의 배경을 쓴다.
   final SlideBackground? background;
+  // 동영상·음악·유튜브 페이지, 또는 동영상이 든 PPT 페이지.
+  final SlideMedia? media;
 }
 
 class _PraiseHomePageState extends State<PraiseHomePage>
@@ -295,6 +300,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
           if (mounted) setState(_resetPresentationState);
         case 'singerClosed':
           setState(() => _isSingerOpen = false);
+        case 'mediaState':
+          _mediaPlayback.value = MediaPlayback.tryParse(call.arguments);
         case 'singerKey':
           // 싱어 화면을 클릭해 포커스가 그쪽에 가 있어도 넘기기는 되게 한다.
           if (call.arguments == 'next') {
@@ -314,6 +321,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   @override
   void dispose() {
     _exitListener.dispose();
+    _mediaPlayback.dispose();
     _remoteSyncTimer?.cancel();
     _singerWeb.stop();
     _sourceWatcher.dispose();
@@ -576,6 +584,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
             pageIndexInItem: 0,
             isBlank: true,
             background: background,
+            media: item.media,
           ),
         );
       } else if (item is SongStagingItem) {
@@ -621,6 +630,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
               pageIndexInItem: j,
               imagePath: item.imagePaths[j],
               background: background,
+              media: _pptMedia(item.imagePaths[j]),
             ),
           );
         }
@@ -703,7 +713,33 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       totalPages: slides.length,
       style: _style.withBackground(slide?.background),
       imagePath: slide?.imagePath,
+      media: slide?.media,
+      mediaGroup: slide?.stagingUid,
     );
+  }
+
+  // PPT 페이지 이미지 옆 `.media.json`(ppt_tool render 가 동영상을 꺼내 둔 것). 페이지를
+  // 나누거나 복사해도 경로가 따라가므로 콘티 모델은 이걸 모른다. _allSlides 가 자주 불리니
+  // 한 번 읽은 결과를 기억한다 — 렌더 캐시는 굽고 나면 바뀌지 않는다.
+  final Map<String, SlideMedia?> _pptMediaCache = {};
+
+  SlideMedia? _pptMedia(String imagePath) {
+    final base = _pptMediaCache.putIfAbsent(imagePath, () {
+      final file = File(p.setExtension(imagePath, '.media.json'));
+      try {
+        if (!file.existsSync()) return null;
+        final json = jsonDecode(file.readAsStringSync()) as Map;
+        final video = p.join(p.dirname(imagePath), json['file'] as String);
+        return SlideMedia.fromJson({
+          'kind': 'video',
+          'source': video,
+          'rect': json['rect'],
+        });
+      } catch (_) {
+        return null;
+      }
+    });
+    return base?.copyWith(fadeIn: _style.mediaFadeIn, fadeOut: _style.mediaFadeOut);
   }
 
   Future<void> _openPresentation() async {
@@ -719,6 +755,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     }
     try {
       final pageData = _buildSlidePageData(_currentSlideIndex);
+      _noteSentMedia(pageData);
       await _presentationChannel.invokeMethod('openWindow', {
         ...pageData.toJson(),
         'screen': await _screenIndex(_audienceScreen),
@@ -748,6 +785,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     // 발표 창을 닫으면 네이티브 쪽 확대 상태도 함께 사라진다(macOS 는 컨트롤러를
     // 통째로 버린다). Dart 쪽만 켜져 있으면 다음 발표에서 어긋나므로 같이 끈다.
     _isZoomOn = false;
+    _sentMediaKey = null;
+    _mediaPlayback.value = null;
     _singerWeb.stop();
   }
 
@@ -1165,6 +1204,24 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   // 끌 때처럼 내용이 그대로면 다시 보내지 않는다(macOS 는 보낼 때마다 HTML 을 통째로 다시 읽는다).
   String? _lastSingerJson;
 
+  /// 관객 화면 미디어 레이어가 0.25초마다 보내는 재생 위치. 발표 보기 재생바만 다시 그린다
+  /// (이 큰 화면 전체를 setState 하지 않게). 미디어가 바뀌면 새 레이어가 보낼 때까지 null.
+  final ValueNotifier<MediaPlayback?> _mediaPlayback = ValueNotifier(null);
+  String? _sentMediaKey;
+
+  void _noteSentMedia(SlidePageData page) {
+    if (page.mediaKey == _sentMediaKey) return;
+    _sentMediaKey = page.mediaKey;
+    _mediaPlayback.value = null;
+  }
+
+  Future<void> _seekMedia(double seconds) async {
+    if (!_isPresentationOpen) return;
+    try {
+      await _presentationChannel.invokeMethod('mediaSeek', {'t': seconds});
+    } catch (_) {}
+  }
+
   Future<void> _sendSingerView([List<_SlideInfo>? slides]) async {
     if (!_isSingerOpen && !_singerWeb.isRunning) return;
     slides ??= _allSlides; // getter 가 매번 목록을 새로 만들므로 한 번만
@@ -1264,6 +1321,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     if (_isPresentationOpen) {
       try {
         final pageData = _buildSlidePageData(_currentSlideIndex, slides);
+        _noteSentMedia(pageData);
         await _presentationChannel.invokeMethod(
           'updatePage',
           pageData.toJson(),
@@ -1397,7 +1455,11 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         subText: newEnglish,
       );
     } else if (item is BlankStagingItem) {
-      newItem = BlankStagingItem(mainText: newMain, englishText: newEnglish);
+      newItem = BlankStagingItem(
+        mainText: newMain,
+        englishText: newEnglish,
+        media: item.media,
+      );
     } else {
       return;
     }
@@ -1418,6 +1480,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     if (index == -1) return;
     final item = _stagingItems[index].item;
     if (item is ImageStagingItem) return;
+    if (item is BlankStagingItem && item.media != null) {
+      return _editMediaPage(uid, item);
+    }
 
     final (mainText, subText, isBible) = switch (item) {
       SongStagingItem(:final song) => (song.lyrics, song.englishLyrics, false),
@@ -1465,9 +1530,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         text: newMain,
         subText: newSub,
       ),
-      BlankStagingItem() => BlankStagingItem(
+      BlankStagingItem(:final media) => BlankStagingItem(
         mainText: newMain,
         englishText: newSub,
+        media: media,
       ),
       _ => item,
     };
@@ -1836,6 +1902,89 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     });
     if (result.design != null) await _rememberSermonDesign(result.design!);
     await _sendCurrentSlide();
+  }
+
+  // ── 동영상·음악·유튜브 페이지 ─────────────────────────────────────────
+  //
+  // 빈 페이지 + SlideMedia 다. 발표 창은 페이지를 평소처럼 그리고 그 위 미디어 레이어에서
+  // 재생한다(음악은 소리만이라 문구·배경이 보인다). 저장·복사·나누기는 빈 페이지와 같다.
+
+  Future<void> _addPage(
+    _AddPageKind kind,
+    int Function() insertAt, {
+    required FutureOr<void> Function() onBlank,
+  }) async {
+    final media = kind.media;
+    if (kind == _AddPageKind.blank) {
+      await onBlank();
+    } else if (kind == _AddPageKind.sermon) {
+      await _addSermonPage(insertAt);
+    } else if (media != null) {
+      final result = await _showMediaDialog(kind: media);
+      if (result == null || !mounted) return;
+      final uid = _nextUid++;
+      setState(() {
+        _stagingItems.insert(insertAt(), (
+          uid: uid,
+          item: BlankStagingItem(mainText: result.text, media: result.media),
+        ));
+        _previewStagingUid = uid;
+      });
+      await _sendCurrentSlide();
+    }
+  }
+
+  Future<({SlideMedia media, String text})?> _showMediaDialog({
+    required MediaKind kind,
+    SlideMedia? initial,
+    String text = '',
+  }) {
+    return showDialog(
+      context: context,
+      builder: (_) => _MediaPageDialog(
+        kind: kind,
+        initial:
+            initial ??
+            SlideMedia(
+              kind: kind,
+              source: '',
+              fadeIn: _style.mediaFadeIn,
+              fadeOut: _style.mediaFadeOut,
+            ),
+        initialText: text,
+      ),
+    );
+  }
+
+  Future<void> _editMediaPage(int uid, BlankStagingItem item) async {
+    final media = item.media!;
+    final result = await _showMediaDialog(
+      kind: media.kind,
+      initial: media,
+      text: item.mainText,
+    );
+    if (result == null || !mounted) return;
+    final index = _stagingItems.indexWhere((e) => e.uid == uid);
+    if (index < 0) return;
+    setState(() {
+      _stagingItems[index] = (
+        uid: uid,
+        item: BlankStagingItem(
+          mainText: result.text,
+          englishText: item.englishText,
+          media: result.media,
+        ),
+      );
+    });
+    await _sendCurrentSlide();
+  }
+
+  /// 발표 보기 미디어 버튼: 재생 중이면 페이드 아웃 후 멈춤, 멈춰 있으면 페이드 인.
+  Future<void> _toggleMedia() async {
+    if (!_isPresentationOpen) return;
+    try {
+      await _presentationChannel.invokeMethod('mediaToggle');
+    } catch (_) {}
   }
 
   /// 리본 '글자·위치 기본값': 찬양·말씀·제목의 글꼴·크기·정렬·세로 위치·미세 조정과
@@ -3642,9 +3791,11 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               ),
                               onSaveConti: _saveConti,
                               onLoadConti: _loadContiDialog,
-                              onAddBlank: (sermon) => sermon
-                                  ? _addSermonPage(_indexAfterSelectedItem)
-                                  : _addBlankItem(),
+                              onAddBlank: (kind) => _addPage(
+                                kind,
+                                _indexAfterSelectedItem,
+                                onBlank: _addBlankItem,
+                              ),
                               onSelect: (uid) {
                                 setState(() {
                                   _previewStagingUid = uid;
@@ -3692,9 +3843,14 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               onSlidesDelete: _deleteSlides,
                               onSlidesCopy: _copySlides,
                               onPaste: _pasteSlides,
-                              onAddPage: (sermon) => sermon
-                                  ? _addSermonPage(_indexAfterCurrentSlide)
-                                  : _addBlankAfterCurrentSlide(),
+                              onAddPage: (kind) => _addPage(
+                                kind,
+                                _indexAfterCurrentSlide,
+                                onBlank: _addBlankAfterCurrentSlide,
+                              ),
+                              onToggleMedia: _toggleMedia,
+                              mediaPlayback: _mediaPlayback,
+                              onSeekMedia: _seekMedia,
                               onPrev: _prevSlide,
                               onNext: _nextSlide,
                               onToggleBlackout: _toggleBlackout,
@@ -4531,7 +4687,7 @@ class _StagingPanel extends StatelessWidget {
   final VoidCallback onToggleCollapsed;
   final VoidCallback onSaveConti;
   final VoidCallback onLoadConti;
-  final ValueChanged<bool> onAddBlank; // true = 설교 제목 페이지
+  final ValueChanged<_AddPageKind> onAddBlank;
 
   @override
   Widget build(BuildContext context) {
@@ -4604,7 +4760,7 @@ class _StagingPanel extends StatelessWidget {
                   style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
                 ),
                 const SizedBox(width: 4),
-                PopupMenuButton<bool>(
+                PopupMenuButton<_AddPageKind>(
                   icon: const Icon(Icons.add_box_outlined, size: 18),
                   tooltip: '새 페이지 추가',
                   style: compactIcon,
@@ -6144,6 +6300,35 @@ class _DesignRibbonState extends State<_DesignRibbon> {
         ],
       ),
       _RibbonGroup(
+        label: '미디어 페이드 (PPT 동영상 · 새 미디어 페이지)',
+        columns: [
+          _column([
+            _PropertyRow(
+              label: '페이드 인',
+              child: _ValueSlider(
+                value: _style.mediaFadeIn,
+                min: 0,
+                max: SlideMedia.maxFade,
+                divisions: (SlideMedia.maxFade * 2).round(),
+                digits: 1,
+                onChanged: (v) => _update(_style.copyWith(mediaFadeIn: v)),
+              ),
+            ),
+            _PropertyRow(
+              label: '페이드 아웃',
+              child: _ValueSlider(
+                value: _style.mediaFadeOut,
+                min: 0,
+                max: SlideMedia.maxFade,
+                divisions: (SlideMedia.maxFade * 2).round(),
+                digits: 1,
+                onChanged: (v) => _update(_style.copyWith(mediaFadeOut: v)),
+              ),
+            ),
+          ], width: 240),
+        ],
+      ),
+      _RibbonGroup(
         label: '헌금송',
         columns: [
           _column([
@@ -6737,6 +6922,7 @@ class _ValueSlider extends StatelessWidget {
     required this.max,
     required this.divisions,
     required this.onChanged,
+    this.digits = 0,
   });
 
   final double value;
@@ -6744,6 +6930,7 @@ class _ValueSlider extends StatelessWidget {
   final double max;
   final int divisions;
   final ValueChanged<double> onChanged;
+  final int digits;
 
   @override
   Widget build(BuildContext context) {
@@ -6758,7 +6945,7 @@ class _ValueSlider extends StatelessWidget {
             onChanged: onChanged,
           ),
         ),
-        _ValueBadge(text: value.toStringAsFixed(0)),
+        _ValueBadge(text: value.toStringAsFixed(digits)),
       ],
     );
   }
@@ -8518,10 +8705,25 @@ class _BackgroundBadge extends StatelessWidget {
 /// 고르면 그 항목(과 뒤에 자동으로 붙는 여백)만 다른 배경으로 나간다.
 /// 결과로 `(background: null)` 을 돌려주면 "오버라이드 없음", 다이얼로그를 그냥
 /// 닫으면 null 이라 아무것도 바꾸지 않는다.
-/// 편집 탭·발표 보기 '새 페이지 추가' 메뉴. 값 true = 설교 제목 페이지.
-const List<PopupMenuEntry<bool>> _addPageMenuItems = [
+/// 편집 탭·발표 보기 '새 페이지 추가' 메뉴에서 고르는 페이지 종류.
+enum _AddPageKind {
+  blank,
+  sermon,
+  video,
+  audio,
+  youtube;
+
+  MediaKind? get media => switch (this) {
+    video => MediaKind.video,
+    audio => MediaKind.audio,
+    youtube => MediaKind.youtube,
+    _ => null,
+  };
+}
+
+const List<PopupMenuEntry<_AddPageKind>> _addPageMenuItems = [
   PopupMenuItem(
-    value: false,
+    value: _AddPageKind.blank,
     child: ListTile(
       leading: Icon(Icons.crop_landscape_outlined),
       title: Text('빈 페이지'),
@@ -8530,11 +8732,39 @@ const List<PopupMenuEntry<bool>> _addPageMenuItems = [
     ),
   ),
   PopupMenuItem(
-    value: true,
+    value: _AddPageKind.sermon,
     child: ListTile(
       leading: Icon(Icons.title_rounded),
       title: Text('설교 제목 페이지'),
       subtitle: Text('글꼴·배경·색·크기를 따로 정합니다'),
+      dense: true,
+    ),
+  ),
+  PopupMenuDivider(),
+  PopupMenuItem(
+    value: _AddPageKind.video,
+    child: ListTile(
+      leading: Icon(Icons.movie_outlined),
+      title: Text('동영상 페이지'),
+      subtitle: Text('동영상 파일을 화면 가득 재생합니다'),
+      dense: true,
+    ),
+  ),
+  PopupMenuItem(
+    value: _AddPageKind.audio,
+    child: ListTile(
+      leading: Icon(Icons.music_note_outlined),
+      title: Text('음악 페이지'),
+      subtitle: Text('음악을 틀고 화면엔 문구·배경을 띄웁니다'),
+      dense: true,
+    ),
+  ),
+  PopupMenuItem(
+    value: _AddPageKind.youtube,
+    child: ListTile(
+      leading: Icon(Icons.smart_display_outlined),
+      title: Text('유튜브 페이지'),
+      subtitle: Text('유튜브 영상을 화면 가득 재생합니다 (인터넷 필요)'),
       dense: true,
     ),
   ),
@@ -9061,6 +9291,9 @@ class _PresenterConsole extends StatefulWidget {
     required this.onSlidesCopy,
     required this.onPaste,
     required this.onAddPage,
+    required this.onToggleMedia,
+    required this.mediaPlayback,
+    required this.onSeekMedia,
     required this.onPrev,
     required this.onNext,
     required this.onToggleBlackout,
@@ -9097,7 +9330,10 @@ class _PresenterConsole extends StatefulWidget {
   final ValueChanged<List<int>> onSlidesDelete;
   final ValueChanged<List<int>> onSlidesCopy;
   final VoidCallback onPaste;
-  final ValueChanged<bool> onAddPage; // true = 설교 제목 페이지
+  final ValueChanged<_AddPageKind> onAddPage;
+  final VoidCallback onToggleMedia;
+  final ValueListenable<MediaPlayback?> mediaPlayback;
+  final ValueChanged<double> onSeekMedia;
   final VoidCallback onPrev;
   final VoidCallback onNext;
   final VoidCallback onToggleBlackout;
@@ -9507,6 +9743,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
       totalPages: widget.slides.length,
       style: widget.style.withBackground(info.background),
       imagePath: info.imagePath,
+      media: info.media,
     );
   }
 
@@ -9541,9 +9778,18 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
     );
   }
 
+  /// 발표 중 지금 페이지에서 재생 중인 미디어. 있으면 헤더 아래 재생바가 붙는다.
+  SlideMedia? get _currentMedia {
+    if (!widget.isPresentationOpen || widget.slides.isEmpty) return null;
+    return widget
+        .slides[widget.currentIndex.clamp(0, widget.slides.length - 1)]
+        .media;
+  }
+
   /// 썸네일 줄이 가질 수 있는 가장 큰 높이. 헤더와 현재 슬라이드 최소 높이를 뺀 나머지.
   double _maxStripHeight(BoxConstraints constraints) {
-    const headerHeight = 58.0; // 헤더 + 아래 여백
+    final headerHeight =
+        58.0 + (_currentMedia != null ? _MediaBar.height : 0); // 헤더(+재생바) + 아래 여백
     final room =
         constraints.maxHeight -
         headerHeight -
@@ -9557,9 +9803,17 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
     // 창을 줄이면 저장해 둔 높이가 넘칠 수 있다. 값은 두고 그릴 때만 줄인다.
     final stripHeight = _view.stripHeight.clamp(_minStripHeight, maxStrip);
     _renderedStripHeight = stripHeight;
+    final media = _currentMedia;
     return Column(
       children: [
         _header(cs),
+        if (media != null)
+          _MediaBar(
+            media: media,
+            playback: widget.mediaPlayback,
+            onToggle: widget.onToggleMedia,
+            onSeek: widget.onSeekMedia,
+          ),
         const SizedBox(height: 10),
         Expanded(
           child: _view.showAllPages
@@ -9750,7 +10004,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
           tooltip: '다음 (→ Space)',
         ),
         const SizedBox(width: 4),
-        PopupMenuButton<bool>(
+        PopupMenuButton<_AddPageKind>(
           icon: const Icon(Icons.note_add_outlined),
           tooltip: '새 페이지 추가 (현재 항목 뒤)',
           onSelected: widget.onAddPage,
@@ -10729,6 +10983,324 @@ class _CloudflaredInstallButtonState extends State<_CloudflaredInstallButton> {
           ],
         );
       },
+    );
+  }
+}
+
+/// 동영상·음악·유튜브 페이지 만들기/고치기: 파일(또는 유튜브 주소) + 페이드 인/아웃 시간.
+/// 음악 페이지는 재생 중 화면에 띄울 문구도 받는다(빈 페이지 본문 자리).
+class _MediaPageDialog extends StatefulWidget {
+  const _MediaPageDialog({
+    required this.kind,
+    required this.initial,
+    required this.initialText,
+  });
+
+  final MediaKind kind;
+  final SlideMedia initial;
+  final String initialText;
+
+  @override
+  State<_MediaPageDialog> createState() => _MediaPageDialogState();
+}
+
+class _MediaPageDialogState extends State<_MediaPageDialog> {
+  // WKWebView(macOS)·WebView2(Windows) 가 둘 다 확실히 재생하는 형식만 고르게 한다.
+  static const _videoExtensions = ['mp4', 'm4v', 'mov', 'webm'];
+  static const _audioExtensions = ['mp3', 'm4a', 'aac', 'wav'];
+
+  late String _source = widget.initial.source;
+  late double _fadeIn = widget.initial.fadeIn;
+  late double _fadeOut = widget.initial.fadeOut;
+  late final _urlController = TextEditingController(
+    text: widget.kind == MediaKind.youtube ? widget.initial.source : '',
+  );
+  late final _textController = TextEditingController(text: widget.initialText);
+
+  bool get _isYoutube => widget.kind == MediaKind.youtube;
+
+  String? get _error {
+    if (_isYoutube) {
+      final url = _urlController.text.trim();
+      if (url.isEmpty) return null;
+      return youtubeId(url) == null ? '유튜브 영상 주소가 아닙니다' : null;
+    }
+    if (_source.isEmpty) return null;
+    return File(_source).existsSync() ? null : '파일을 찾을 수 없습니다';
+  }
+
+  bool get _canSave =>
+      _error == null &&
+      (_isYoutube ? _urlController.text.trim().isNotEmpty : _source.isNotEmpty);
+
+  @override
+  void dispose() {
+    _urlController.dispose();
+    _textController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pick() async {
+    await FilePicker.skipEntitlementsChecks();
+    final picked = await FilePicker.pickFiles(
+      dialogTitle: widget.kind == MediaKind.video ? '동영상 파일 선택' : '음악 파일 선택',
+      type: FileType.custom,
+      allowedExtensions: widget.kind == MediaKind.video
+          ? _videoExtensions
+          : _audioExtensions,
+    );
+    final path = picked?.paths.whereType<String>().firstOrNull;
+    if (path != null && mounted) setState(() => _source = path);
+  }
+
+  Widget _fadeRow(String label, double value, ValueChanged<double> onChanged) {
+    return Row(
+      children: [
+        SizedBox(width: 84, child: Text(label)),
+        Expanded(
+          child: Slider(
+            value: value,
+            max: SlideMedia.maxFade,
+            divisions: (SlideMedia.maxFade * 2).round(),
+            label: '${value.toStringAsFixed(1)}초',
+            onChanged: onChanged,
+          ),
+        ),
+        SizedBox(width: 48, child: Text('${value.toStringAsFixed(1)}초')),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final title = switch (widget.kind) {
+      MediaKind.video => '동영상 페이지',
+      MediaKind.audio => '음악 페이지',
+      MediaKind.youtube => '유튜브 페이지',
+    };
+    return AlertDialog(
+      title: Text(title),
+      content: SizedBox(
+        width: 460,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (_isYoutube)
+              TextField(
+                controller: _urlController,
+                autofocus: true,
+                decoration: InputDecoration(
+                  labelText: '유튜브 주소',
+                  hintText: 'https://www.youtube.com/watch?v=…',
+                  helperText: '주소의 시작 위치(t=90)도 따릅니다. 발표 PC 가 인터넷에 연결돼 있어야 합니다.',
+                  errorText: _error,
+                  border: const OutlineInputBorder(),
+                ),
+                onChanged: (_) => setState(() {}),
+              )
+            else
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _source.isEmpty ? '파일을 고르세요' : p.basename(_source),
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: _error != null ? cs.error : null,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    onPressed: _pick,
+                    icon: const Icon(Icons.folder_open_outlined, size: 18),
+                    label: const Text('파일 선택'),
+                  ),
+                ],
+              ),
+            if (!_isYoutube && _error != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  _error!,
+                  style: TextStyle(color: cs.error, fontSize: 12),
+                ),
+              ),
+            const SizedBox(height: 16),
+            _fadeRow('페이드 인', _fadeIn, (v) => setState(() => _fadeIn = v)),
+            _fadeRow('페이드 아웃', _fadeOut, (v) => setState(() => _fadeOut = v)),
+            Text(
+              '페이드 아웃은 다음 페이지로 넘길 때, 끝나기 직전, 발표 보기의 미디어 버튼으로 멈출 때 걸립니다.',
+              style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+            ),
+            if (widget.kind == MediaKind.audio) ...[
+              const SizedBox(height: 16),
+              TextField(
+                controller: _textController,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                  labelText: '화면 문구 (비워도 됩니다)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('취소'),
+        ),
+        FilledButton(
+          onPressed: _canSave
+              ? () => Navigator.pop(context, (
+                  media: SlideMedia(
+                    kind: widget.kind,
+                    source: _isYoutube ? _urlController.text.trim() : _source,
+                    fadeIn: _fadeIn,
+                    fadeOut: _fadeOut,
+                  ),
+                  text: widget.kind == MediaKind.audio
+                      ? _textController.text.trim()
+                      : '',
+                ))
+              : null,
+          child: const Text('확인'),
+        ),
+      ],
+    );
+  }
+}
+
+/// 발표 보기 재생바: 멈춤/재생(페이드) · 10초 앞뒤 · 끌어서 위치 옮기기.
+/// 관객 화면에는 아무것도 안 보인다 — 조작만 발표 창 미디어 레이어로 보낸다.
+class _MediaBar extends StatefulWidget {
+  const _MediaBar({
+    required this.media,
+    required this.playback,
+    required this.onToggle,
+    required this.onSeek,
+  });
+
+  static const double height = 44;
+
+  final SlideMedia media;
+  final ValueListenable<MediaPlayback?> playback;
+  final VoidCallback onToggle;
+  final ValueChanged<double> onSeek;
+
+  @override
+  State<_MediaBar> createState() => _MediaBarState();
+}
+
+class _MediaBarState extends State<_MediaBar> {
+  // 끄는 동안의 값. 놓을 때만 보낸다 — 끄는 중에 보내면 소리가 드드득 끊긴다.
+  double? _dragging;
+
+  static String _time(double seconds) {
+    final s = seconds.isFinite ? seconds.round() : 0;
+    final h = s ~/ 3600, m = (s % 3600) ~/ 60, sec = s % 60;
+    final mmss = '${m.toString().padLeft(h > 0 ? 2 : 1, '0')}:'
+        '${sec.toString().padLeft(2, '0')}';
+    return h > 0 ? '$h:$mmss' : mmss;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    // 슬라이더가 포커스를 가져가면 ←/→ 가 슬라이드 대신 슬라이더를 움직인다(리본과 같은 이유).
+    return ExcludeFocus(
+      child: SizedBox(
+        height: _MediaBar.height,
+        child: ValueListenableBuilder<MediaPlayback?>(
+          valueListenable: widget.playback,
+          builder: (context, state, _) {
+            final duration = state?.duration ?? 0;
+            final canSeek = duration > 0; // 유튜브 생방송·불러오는 중엔 0
+            final position = (_dragging ?? state?.position ?? 0)
+                .clamp(0.0, canSeek ? duration : 0.0)
+                .toDouble();
+            void jump(double delta) =>
+                widget.onSeek((position + delta).clamp(0.0, duration).toDouble());
+            return Row(
+              children: [
+                Icon(
+                  SlideRenderView.mediaIcon(widget.media.kind),
+                  size: 18,
+                  color: cs.onSurfaceVariant,
+                ),
+                IconButton(
+                  onPressed: canSeek ? () => jump(-10) : null,
+                  icon: const Icon(Icons.replay_10_rounded),
+                  tooltip: '10초 뒤로',
+                ),
+                IconButton(
+                  onPressed: state == null ? null : widget.onToggle,
+                  icon: Icon(
+                    state?.playing == true
+                        ? Icons.pause_rounded
+                        : Icons.play_arrow_rounded,
+                  ),
+                  tooltip: state?.playing == true
+                      ? '멈춤 (페이드 아웃 ${widget.media.fadeOut}초)'
+                      : '재생 (페이드 인 ${widget.media.fadeIn}초)',
+                ),
+                IconButton(
+                  onPressed: canSeek ? () => jump(10) : null,
+                  icon: const Icon(Icons.forward_10_rounded),
+                  tooltip: '10초 앞으로',
+                ),
+                SizedBox(
+                  width: 52,
+                  child: Text(
+                    state == null ? '--:--' : _time(position),
+                    textAlign: TextAlign.right,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontFeatures: [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: Slider(
+                    value: position,
+                    max: canSeek ? duration : 1,
+                    onChanged: canSeek
+                        ? (v) => setState(() => _dragging = v)
+                        : null,
+                    onChangeEnd: canSeek
+                        ? (v) {
+                            widget.onSeek(v);
+                            // 레이어가 새 위치를 보내오기 전까지 놓은 자리에 둔다.
+                            Future.delayed(
+                              const Duration(milliseconds: 400),
+                              () {
+                                if (mounted) setState(() => _dragging = null);
+                              },
+                            );
+                          }
+                        : null,
+                  ),
+                ),
+                SizedBox(
+                  width: 52,
+                  child: Text(
+                    state == null
+                        ? '재생 준비 중'
+                        : canSeek
+                        ? _time(duration)
+                        : '--:--',
+                    style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
     );
   }
 }

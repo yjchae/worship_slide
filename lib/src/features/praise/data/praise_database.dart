@@ -29,7 +29,7 @@ class PraiseDatabase {
     final dbPath = p.join(_dbDirectory, 'worship_slides.db');
     _database = await openDatabase(
       dbPath,
-      version: 15,
+      version: 16,
       onCreate: (db, version) => createPraiseSchema(db),
       onUpgrade: (db, oldVersion, newVersion) =>
           upgradePraiseSchema(db, oldVersion),
@@ -96,7 +96,8 @@ Future<void> createPraiseSchema(DatabaseExecutor db) async {
     bible_sub_text  TEXT,
     song_title      TEXT,
     no_spacer       INTEGER,
-    image_source_path TEXT
+    image_source_path TEXT,
+    media           TEXT
   )
 ''');
   await db.execute(_createSongTranslations);
@@ -311,6 +312,15 @@ Future<void> upgradePraiseSchema(DatabaseExecutor db, int oldVersion) async {
       'worship_conti_items',
       'image_source_path',
       "ALTER TABLE worship_conti_items ADD COLUMN image_source_path TEXT",
+    );
+  }
+  if (oldVersion < 16) {
+    // 동영상·음악·유튜브 페이지(빈 페이지 + 미디어). SlideMedia JSON.
+    await _addColumnIfMissing(
+      db,
+      'worship_conti_items',
+      'media',
+      "ALTER TABLE worship_conti_items ADD COLUMN media TEXT",
     );
   }
 }

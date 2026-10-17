@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../domain/export_style.dart';
+import '../domain/slide_media.dart';
 import 'slide_page_data.dart';
 
 /// 슬라이드 한 장을 렌더링하는 공유 위젯.
@@ -34,6 +35,55 @@ class SlideRenderView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final media = data.media;
+    if (media == null) return _buildSlide(context);
+    // 미리보기는 재생하지 않는다 — 무엇이 나갈지만 표시한다. 화면 전체 동영상·유튜브는
+    // 발표 창에서도 페이지를 덮으므로 검은 바탕, 음악·PPT 안 동영상은 페이지 위 작은 표시.
+    final covers = media.kind != MediaKind.audio && media.rect == null;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        if (covers) const ColoredBox(color: Colors.black) else _buildSlide(context),
+        Align(
+          alignment: covers ? Alignment.center : Alignment.topRight,
+          child: FractionallySizedBox(
+            widthFactor: covers ? 0.8 : 0.4,
+            heightFactor: covers ? 0.3 : 0.14,
+            child: FittedBox(
+              alignment: covers ? Alignment.center : Alignment.topRight,
+              child: Container(
+                margin: const EdgeInsets.all(6),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(mediaIcon(media.kind), color: Colors.white, size: 18),
+                    const SizedBox(width: 6),
+                    Text(
+                      media.label,
+                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  static IconData mediaIcon(MediaKind kind) => switch (kind) {
+    MediaKind.video => Icons.movie_outlined,
+    MediaKind.audio => Icons.music_note_outlined,
+    MediaKind.youtube => Icons.smart_display_outlined,
+  };
+
+  Widget _buildSlide(BuildContext context) {
     final style = data.style;
     final isBible = data.isBible;
     final backgroundImage = _backgroundImageFile(style);

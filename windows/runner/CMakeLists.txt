@@ -9,6 +9,7 @@ project(runner LANGUAGES CXX)
 add_executable(${BINARY_NAME} WIN32
   "flutter_window.cpp"
   "main.cpp"
+  "media_layer.cpp"
   "ocr_channel.cpp"
   "presentation_channel.cpp"
   "singer_window.cpp"
@@ -43,6 +44,17 @@ target_link_libraries(${BINARY_NAME} PRIVATE "gdiplus.lib")
 target_link_libraries(${BINARY_NAME} PRIVATE "shell32.lib")
 # 악보 가사 OCR(Windows.Media.Ocr, C++/WinRT)
 target_link_libraries(${BINARY_NAME} PRIVATE "windowsapp.lib")
+# 발표 창 미디어 레이어(동영상·음악·유튜브). NuGet 패키지(zip)를 받아 헤더와 정적 로더만 쓴다 —
+# 정적 로더라 WebView2Loader.dll 을 같이 배포할 필요가 없다. 런타임은 Windows 10/11 기본 탑재.
+include(FetchContent)
+FetchContent_Declare(webview2
+  URL https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.3967.48/microsoft.web.webview2.1.0.3967.48.nupkg
+  URL_HASH SHA256=c66357ac7f324ec9bcafe5241706a023b4122d8c22300c31de4b0eb220db689e
+  DOWNLOAD_NAME webview2.zip
+)
+FetchContent_MakeAvailable(webview2)
+target_include_directories(${BINARY_NAME} PRIVATE "${webview2_SOURCE_DIR}/build/native/include")
+target_link_libraries(${BINARY_NAME} PRIVATE "${webview2_SOURCE_DIR}/build/native/x64/WebView2LoaderStatic.lib" "version.lib")
 # C++/WinRT 는 C++17 이면 <experimental/coroutine> 을 끌어오는데, 최신 MSVC 는 이를 에러(STL1011)로 막는다.
 target_compile_features(${BINARY_NAME} PRIVATE cxx_std_20)
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")

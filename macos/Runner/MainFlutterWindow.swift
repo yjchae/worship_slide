@@ -12,6 +12,8 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
   /// 창이 닫힐 때 한 번 호출된다. NotificationCenter 옵저버를 쓰면 창마다 하나씩
   /// 쌓이고(제거를 안 함) 해제된 창 주소로 남아 다음 발표에서 오작동한다.
   var onClose: (() -> Void)?
+  /// 미디어 레이어의 재생 위치 JSON(문자열 그대로). 발표 보기 재생바가 받는다.
+  var onMediaState: ((String) -> Void)?
 
   convenience init() {
     let window = NSWindow(
@@ -38,7 +40,15 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
       NSEvent.removeMonitor(monitor)
       keyMonitor = nil
     }
+    // 페이드를 기다리지 않고 바로 끊는다 — 창이 사라졌는데 소리만 남으면 안 된다.
+    if let view = mediaView { Self.stopMedia(view) }
+    mediaView = nil
+    mediaKey = nil
     onClose?()
+  }
+
+  func windowDidResize(_ notification: Notification) {
+    layoutMedia()
   }
 
   func show(on screen: NSScreen? = nil) {
@@ -119,6 +129,122 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
     if _isBlackout { return }
     let html = buildHTML(data: data)
     webView.loadHTMLString(html, baseURL: nil)
+    updateMedia(data["media"] as? [String: Any])
+  }
+
+  // ── 미디어 레이어 ─────────────────────────────────────────────────────
+  // 동영상·음악·유튜브는 슬라이드 WKWebView 위에 얹은 두 번째 WKWebView 에서 튼다.
+  // 슬라이드는 페이지·디자인이 바뀔 때마다 HTML 을 통째로 다시 굽는데, 그때마다 재생이
+  // 처음으로 돌아가면 안 되기 때문이다. 같은 key 면 레이어를 그대로 둔다.
+  // 페이드는 레이어 페이지(Dart mediaPlayerHtml)의 JS 가 한다. 여기선 부르기만 한다.
+
+  private var mediaView: WKWebView?
+  private var mediaKey: String?
+  private var mediaKind = ""
+  private var mediaRect: [Double]?
+  private var mediaFadeOut = 0.0
+  private var mediaAspect = 16.0 / 9.0  // PPT 안 동영상 레터박스용 페이지 이미지 비율
+
+  private func updateMedia(_ media: [String: Any]?) {
+    let key = media?["key"] as? String
+    if key == mediaKey { layoutMedia(); return }
+    retireMedia()
+    guard let media = media, let key = key, let html = media["html"] as? String,
+          let content = window?.contentView else { return }
+
+    let config = WKWebViewConfiguration()
+    config.mediaTypesRequiringUserActionForPlayback = []  // 소리 있는 자동 재생
+    // 페이드 아웃 중인 옛 레이어도 위치를 보내므로 지금 레이어 것만 넘긴다.
+    config.userContentController.add(MediaMessageProxy { [weak self] message in
+      guard let self = self, message.webView === self.mediaView,
+            let json = message.body as? String else { return }
+      self.onMediaState?(json)
+    }, name: "media")
+    let view = WKWebView(frame: .zero, configuration: config)
+    // 투명 — 동영상이 페이드 아웃하면 아래 슬라이드가 비친다(그대로 겹쳐 넘어간다).
+    view.setValue(false, forKey: "drawsBackground")
+    content.addSubview(view, positioned: .above, relativeTo: webView)
+    mediaView = view
+    mediaKey = key
+    mediaKind = media["kind"] as? String ?? ""
+    mediaRect = (media["rect"] as? [NSNumber])?.map { $0.doubleValue }
+    mediaFadeOut = (media["fade_out"] as? NSNumber)?.doubleValue ?? 0
+    mediaAspect = 16.0 / 9.0
+    if mediaRect != nil, let path = _lastData?["image_path"] as? String,
+       let rep = NSImageRep(contentsOfFile: path), rep.pixelsHigh > 0 {
+      mediaAspect = Double(rep.pixelsWide) / Double(rep.pixelsHigh)
+    }
+    layoutMedia()
+
+    if mediaKind == "youtube" {
+      // 유튜브는 출처(Referer) 없는 페이지에서 재생을 막는다(오류 153). file:// 도 출처가 없다.
+      view.loadHTMLString(html, baseURL: URL(string: "https://localhost/"))
+    } else {
+      // 로컬 파일은 file:// 페이지여야 읽힌다. loadHTMLString(baseURL: nil) 은 못 읽는다.
+      let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("worship_media_\(UUID().uuidString).html")
+      do {
+        try html.write(to: url, atomically: true, encoding: .utf8)
+        view.loadFileURL(url, allowingReadAccessTo: URL(fileURLWithPath: "/"))
+      } catch {
+        NSLog("[media] 임시 HTML 을 쓰지 못했습니다: \(error)")
+      }
+    }
+  }
+
+  /// 지금 레이어를 페이드 아웃시키고 다 줄어들면 치운다. 새 레이어는 바로 뜨므로 겹쳐 넘어간다.
+  private func retireMedia() {
+    guard let old = mediaView else { return }
+    mediaView = nil
+    mediaKey = nil
+    old.evaluateJavaScript("window.fadeOut&&fadeOut()", completionHandler: nil)
+    // 그 사이 창이 닫혀도(self 가 없어도) 치우도록 self 를 잡지 않는다.
+    DispatchQueue.main.asyncAfter(deadline: .now() + mediaFadeOut + 0.2) {
+      Self.stopMedia(old)
+    }
+  }
+
+  private static func stopMedia(_ view: WKWebView) {
+    let page = view.url
+    // 빈 페이지로 바꿔 재생을 확실히 끊는다(뷰가 늦게 해제돼도 소리가 안 남는다).
+    view.configuration.userContentController.removeScriptMessageHandler(forName: "media")
+    view.loadHTMLString("", baseURL: nil)
+    view.removeFromSuperview()
+    if let url = page, url.isFileURL, url.lastPathComponent.hasPrefix("worship_media_") {
+      try? FileManager.default.removeItem(at: url)
+    }
+  }
+
+  private func layoutMedia() {
+    guard let view = mediaView, let bounds = window?.contentView?.bounds else { return }
+    if mediaKind == "audio" {
+      // 소리만 — 화면엔 안 보이게 한 점짜리. 숨기면(isHidden) WebKit 이 재생을 멈출 수 있다.
+      view.frame = NSRect(x: 0, y: 0, width: 1, height: 1)
+      return
+    }
+    guard let r = mediaRect, r.count == 4 else { view.frame = bounds; return }
+    // PPT 안 동영상: 슬라이드 좌표(0~1)를 레터박스 안쪽 사각형으로. 이미지 슬라이드가
+    // object-fit:contain 이라 창 비율이 다르면 위아래(좌우)가 남는다.
+    let aspect = mediaAspect
+    let w = Double(bounds.width), h = Double(bounds.height)
+    let sw = min(w, h * aspect), sh = sw / aspect
+    let left = (w - sw) / 2, top = (h - sh) / 2
+    // Cocoa 는 아래가 0 이다.
+    view.frame = NSRect(
+      x: left + r[0] * sw,
+      y: h - (top + (r[1] + r[3]) * sh),
+      width: r[2] * sw,
+      height: r[3] * sh)
+  }
+
+  /// 발표 보기 미디어 버튼: 재생 중이면 페이드 아웃 후 멈춤, 멈춰 있으면 페이드 인.
+  func toggleMedia() {
+    mediaView?.evaluateJavaScript("window.toggle&&toggle()", completionHandler: nil)
+  }
+
+  func seekMedia(to seconds: Double) {
+    guard seconds.isFinite else { return }
+    mediaView?.evaluateJavaScript("window.seek&&seek(\(max(seconds, 0)))", completionHandler: nil)
   }
 
   func toggleBlackout() {
@@ -132,9 +258,17 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
       </head><body></body></html>
       """
       webView.loadHTMLString(html, baseURL: nil)
+      mediaView?.evaluateJavaScript("window.setBlack&&setBlack(true)", completionHandler: nil)
     } else {
       if let d = _lastData {
         webView.loadHTMLString(buildHTML(data: d), baseURL: nil)
+        // 꺼진 사이 페이지를 넘겼으면 새 미디어로 바뀐다. 같은 미디어면 멈춘 자리에서 다시.
+        let media = d["media"] as? [String: Any]
+        let same = (media?["key"] as? String) == mediaKey
+        updateMedia(media)
+        if same {
+          mediaView?.evaluateJavaScript("window.setBlack&&setBlack(false)", completionHandler: nil)
+        }
       }
     }
   }
@@ -698,6 +832,19 @@ private class SingerWindow: NSWindow {
 
 /// userContentController 는 핸들러를 강하게 잡으므로 컨트롤러를 직접 넣지 않고
 /// 클로저만 든 얇은 객체를 넣는다(컨트롤러 ↔ 웹뷰 순환 참조 방지).
+/// WKUserContentController 는 핸들러를 강하게 잡는다. 컨트롤러를 직접 넘기면 순환 참조라 클로저로 감싼다.
+private class MediaMessageProxy: NSObject, WKScriptMessageHandler {
+  private let onMessage: (WKScriptMessage) -> Void
+
+  init(onMessage: @escaping (WKScriptMessage) -> Void) { self.onMessage = onMessage }
+
+  func userContentController(
+    _ controller: WKUserContentController, didReceive message: WKScriptMessage
+  ) {
+    onMessage(message)
+  }
+}
+
 private class SingerMessageProxy: NSObject, WKScriptMessageHandler {
   private let onToggle: () -> Void
 
@@ -913,6 +1060,9 @@ class MainFlutterWindow: NSWindow {
             self?.presentationController = nil
             self?.mainPresentationChannel?.invokeMethod("presentationClosed", arguments: nil)
           }
+          ctrl.onMediaState = { [weak self] json in
+            self?.mainPresentationChannel?.invokeMethod("mediaState", arguments: json)
+          }
           self.presentationController = ctrl
           let screens = NSScreen.screens
           ctrl.show(on: chosen ?? (screens.count > 1 ? screens[1] : nil))
@@ -946,6 +1096,14 @@ class MainFlutterWindow: NSWindow {
 
       case "blackout":
         self.presentationController?.toggleBlackout()
+        result(nil)
+
+      case "mediaToggle":
+        self.presentationController?.toggleMedia()
+        result(nil)
+
+      case "mediaSeek":
+        self.presentationController?.seekMedia(to: (data?["t"] as? NSNumber)?.doubleValue ?? 0)
         result(nil)
 
       case "closeWindow":

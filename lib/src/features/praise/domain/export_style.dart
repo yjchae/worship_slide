@@ -110,6 +110,8 @@ class ExportStyle {
     this.subLanguage = '영어',
     this.bibleSubVersion = '',
     this.englishFontSize,
+    this.mediaFadeIn = 1.0,
+    this.mediaFadeOut = 2.0,
   });
 
   final double fontSize;
@@ -157,6 +159,11 @@ class ExportStyle {
   /// 성경 본문 아래 함께 띄울 역본. 빈 문자열이면 표시하지 않는다.
   final String bibleSubVersion;
 
+  /// PPT 안 동영상의 페이드 시간(초), 새 동영상·음악 페이지의 시작값.
+  /// 렌더러는 읽지 않는다 — 페이지마다 `media` 에 담겨 간다.
+  final double mediaFadeIn;
+  final double mediaFadeOut;
+
   Map<String, dynamic> toJson() {
     return {
       'font_size': fontSize,
@@ -189,6 +196,8 @@ class ExportStyle {
       'sub_language': subLanguage,
       'bible_sub_version': bibleSubVersion,
       if (englishFontSize != null) 'english_font_size': englishFontSize,
+      'media_fade_in': mediaFadeIn,
+      'media_fade_out': mediaFadeOut,
     };
   }
 
@@ -266,6 +275,8 @@ class ExportStyle {
       subLanguage: (json['sub_language'] as String?) ?? '영어',
       bibleSubVersion: (json['bible_sub_version'] as String?) ?? '',
       englishFontSize: (json['english_font_size'] as num?)?.toDouble(),
+      mediaFadeIn: (json['media_fade_in'] as num?)?.toDouble() ?? 1.0,
+      mediaFadeOut: (json['media_fade_out'] as num?)?.toDouble() ?? 2.0,
     );
   }
 
@@ -300,6 +311,8 @@ class ExportStyle {
     String? subLanguage,
     String? bibleSubVersion,
     Object? englishFontSize = _sentinel,
+    double? mediaFadeIn,
+    double? mediaFadeOut,
   }) {
     return ExportStyle(
       fontSize: fontSize ?? this.fontSize,
@@ -344,6 +357,8 @@ class ExportStyle {
       englishFontSize: identical(englishFontSize, _sentinel)
           ? this.englishFontSize
           : (englishFontSize as num?)?.toDouble(),
+      mediaFadeIn: mediaFadeIn ?? this.mediaFadeIn,
+      mediaFadeOut: mediaFadeOut ?? this.mediaFadeOut,
     );
   }
 

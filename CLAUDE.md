@@ -24,6 +24,7 @@ python3 python/test_export_text.py       # 가사 줄바꿈 self-check (LibreOff
 python3 python/test_export_position.py   # 본문·제목 세로 미세 조정 self-check (LibreOffice 불필요)
 python3 python/test_split_language.py    # 한/보조 언어 줄 나누기 self-check (LibreOffice 불필요)
 python3 python/test_sheet_lyrics.py      # 악보 가사 추출 self-check (Tesseract 없으면 OCR 부분만 skip)
+python3 python/test_media.py             # PPT 안 동영상 꺼내기 self-check (LibreOffice 불필요)
 
 # 배포용 전체 빌드 (PyInstaller + Flutter 릴리즈 + dist/ 구성)
 ./scripts/build.sh    # macOS
@@ -46,7 +47,7 @@ lib/
   src/app_colors.dart                -- 앱 화면 색·둥글기 토큰 (슬라이드·발표 창·PPTX 색과 무관)
   src/features/praise/
     data/
-      praise_database.dart           -- SQLite 스키마 + 마이그레이션 (현재 version 15)
+      praise_database.dart           -- SQLite 스키마 + 마이그레이션 (현재 version 16)
       praise_repository.dart         -- 곡 CRUD (searchSongs, replaceAllSongs, deleteSongsByIds ...)
       worship_conti_repository.dart  -- 콘티 저장/불러오기 (곡 가사 스냅샷까지 함께 보관)
       python_bridge.dart             -- Process.run으로 ppt_tool 실행 (import / render / export)
@@ -82,9 +83,9 @@ lib/
 
 발표 화면은 Flutter가 아니라 **네이티브 창**이다. MethodChannel 3개로 제어한다.
 
-- `worship_slides/presentation` — Dart → 네이티브: open / updatePage / toggleBlackout / close,
+- `worship_slides/presentation` — Dart → 네이티브: open / updatePage / toggleBlackout / close / mediaToggle / mediaSeek,
   싱어 화면 openSingerWindow / updateSinger / closeSingerWindow
-- `worship_slides/presentation_main` — 네이티브 → Dart: `presentationClosed`, `singerClosed`,
+- `worship_slides/presentation_main` — 네이티브 → Dart: `presentationClosed`, `singerClosed`, `mediaState`(재생 위치 JSON),
   `singerKey`(`"next"`/`"prev"` — 싱어 화면에 포커스가 있을 때 누른 넘기기 키)
 - `worship_slides/save_panel` — 저장 위치 선택 (macOS NSSavePanel)
 - `worship_slides/ocr` — 악보 가사 줄 이미지 OCR: `isAvailable` / `recognize({paths})`
@@ -256,6 +257,25 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
     모음에서 지우면 그 파일을 직접 쓰는 일반 항목 배경(저장한 콘티 포함)은 색만 남는다 — 삭제 전에 확인을 받는다.
     헌금송은 따로 구운 PNG 라 영향 없다
   - "항목 배경" 다이얼로그에서 색·이미지를 손으로 바꾸면 헌금송 정보와 가사 위치는 떨어져 나간다(일반 배경이 된다)
+- **미디어(동영상·음악·유튜브)**: '새 페이지 추가' 메뉴의 동영상/음악/유튜브 페이지 = `BlankStagingItem.media`(`SlideMedia`,
+  DB `worship_conti_items.media` JSON, version 16). PPT 안 동영상은 `ppt_tool render` 가 페이지 PNG 옆에
+  `NNNN.media.json`({file, rect}) + 동영상을 꺼내 두고(`extract_slide_videos`, 재생 가능한 mp4·m4v·mov·webm 만) Dart `_pptMedia` 가 찾는다 —
+  나누기·복사가 이미지 경로만 옮겨도 따라간다. `.wsconti` 에는 동영상이 안 실린다(포스터 이미지만).
+  - 발표 창은 슬라이드 위에 **미디어 레이어**(macOS 두 번째 WKWebView, Windows WebView2 자식 창 `media_layer.cpp`)를 얹는다.
+    레이어 페이지 HTML·페이드 JS 는 Dart `mediaPlayerHtml` 하나다(`SlidePageData.toJson` 의 `media.html`). 네이티브는 `fadeOut()`·`toggle()`·`setBlack(on)`·`seek(초)` 만 부른다.
+    **재생바**: 레이어 페이지가 0.25초마다 `{"t","d","p"}` 를 올리고(macOS `webkit.messageHandlers.media`, Windows `chrome.webview.postMessage` — 지금 레이어 것만)
+    네이티브가 `presentation_main` `mediaState` 로 넘긴다 → `MediaPlayback` → 발표 보기 헤더 아래 `_MediaBar`(멈춤/재생·10초 앞뒤·끌기 = `mediaSeek {t}`).
+    큰 화면 setState 를 피하려고 `ValueNotifier` 로만 다시 그린다. 관객 화면엔 재생바가 없다
+    `media.key`(항목 uid + 종류·경로·자리)가 같으면 페이지를 다시 그려도 끊지 않는다 — PPT 애니메이션 단계는 이어서 재생된다.
+    바뀌면 옛 레이어를 페이드 아웃시켜 `fade_out` 초 뒤 치우고 새 레이어는 바로 띄운다. 음악은 1×1 크기(숨기면 재생이 멈출 수 있다)
+  - 페이드: 소리는 0~1 을 제곱해 볼륨으로, 동영상은 투명도까지. 페이드 인은 실제 재생 시작(`playing`·유튜브 PLAYING)부터 센다.
+    끝나기 `fade_out` 초 전부터 자동으로 줄인다. PPT 동영상 페이드 = 리본 '공통' `ExportStyle.mediaFadeIn/Out`, 미디어 페이지는 항목마다
+  - 유튜브는 출처 없는 페이지(file://·NavigateToString)에서 재생을 막아서(오류 153) macOS 는 `loadHTMLString(baseURL: https://localhost/)`,
+    Windows 는 임시 HTML 을 가상 호스트 `https://app.worship/` 로 띄운다. 로컬 파일은 macOS `loadFileURL`, Windows `https://media.worship/`(파일 폴더 매핑)
+  - Windows 는 NuGet `Microsoft.Web.WebView2`(정적 로더, `windows/runner/CMakeLists.txt` FetchContent)를 쓴다. 런타임이 없으면 레이어만 안 뜬다.
+    배경이 불투명 검정이라 페이드 아웃이 슬라이드가 아니라 검정으로 빠진다(macOS 는 투명). 발표 창은 `WS_CLIPCHILDREN`
+  - 확대·포인터는 미디어 레이어를 따라가지 않는다(레이어 아래에 그려진다). PPTX 내보내기는 미디어 페이지를 빈/문구 페이지로 낸다
+  - MuPDF 는 경고를 stdout 에 찍어 결과 JSON 을 깨뜨린다(동영상 PPT 의 PDF 'Screen annotations') — render 에서 끈다
 - **설교 제목 페이지**: '새 페이지 추가'(편집 탭 콘티 머리줄·발표 보기 툴바) 메뉴에서 빈 페이지 / 설교 제목 페이지를 고른다.
   설교 제목 페이지 = 문구가 든 `BlankStagingItem` + 항목별 배경 오버라이드. `SlideBackground` 에 `fontFamily`·`fontSize`·`textColor`·`isSermon`
   (JSON `font_family`·`font_size`·`text_color`·`sermon`)을 얹었고 `withBackground()`·`_style_for_item` 이 가사 키만 덮어쓴다 —

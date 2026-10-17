@@ -11,6 +11,7 @@ import sys
 import tempfile
 import threading
 import unicodedata
+import urllib.parse
 import zipfile
 from pathlib import Path
 
@@ -1015,6 +1016,123 @@ def expand_animation_steps(source_pptx, output_pptx):
 
 RENDER_IMAGE_WIDTH = 1920
 
+_P14_NS = "http://schemas.microsoft.com/office/powerpoint/2010/main"
+# 발표 창(WKWebView·WebView2)이 둘 다 재생하는 형식만 꺼낸다. wmv·avi 는 포스터만 남는다.
+PLAYABLE_VIDEO_EXTENSIONS = frozenset({".mp4", ".m4v", ".mov", ".webm"})
+
+
+def _slide_video(slide_root, rels, slide_size):
+    """슬라이드 맨 위 단계의 첫 동영상 → (패키지 안 이름 | 바깥 경로, 외부 여부, [x, y, w, h]). 없으면 None.
+
+    ponytail: 그룹 안 동영상(좌표가 그룹 기준이라 환산이 필요)과 한 장에 둘째 동영상부터는 건너뛴다.
+    """
+    tree = slide_root.find(f"{_p('cSld')}/{_p('spTree')}")
+    if tree is None:
+        return None
+    for pic in tree.findall(_p("pic")):
+        nv = pic.find(f"{_p('nvPicPr')}/{_p('nvPr')}")
+        video = None if nv is None else nv.find(_a("videoFile"))
+        if video is None:
+            continue
+        # 내장 파일은 p14:media r:embed 가, 연결만 한 파일은 a:videoFile r:link 가 가리킨다.
+        media = nv.find(f".//{{{_P14_NS}}}media")
+        rel_ids = [
+            media.get(f"{{{_R_NS}}}embed") if media is not None else None,
+            video.get(f"{{{_R_NS}}}link"),
+        ]
+        rel = next((rels[r] for r in rel_ids if r in rels), None)
+        xfrm = pic.find(f"{_p('spPr')}/{_a('xfrm')}")
+        if rel is None or xfrm is None:
+            continue
+        off, ext = xfrm.find(_a("off")), xfrm.find(_a("ext"))
+        if off is None or ext is None:
+            continue
+        width, height = slide_size
+        rect = [
+            int(off.get("x", 0)) / width,
+            int(off.get("y", 0)) / height,
+            int(ext.get("cx", 0)) / width,
+            int(ext.get("cy", 0)) / height,
+        ]
+        target, external = rel
+        if not external:
+            target = os.path.normpath(os.path.join("ppt/slides", target)).replace("\\", "/")
+        return target, external, [round(min(max(v, 0.0), 1.0), 5) for v in rect]
+    return None
+
+
+def extract_slide_videos(pptx_path, out_dir, page_count, source_dir):
+    """동영상이 든 페이지마다 렌더 PNG 옆에 `NNNN.media.json`({file, rect})과 동영상을 둔다.
+
+    앱은 페이지 이미지 경로만 들고 다니므로(나누기·복사 그대로) 옆 파일로 찾는다.
+    같은 동영상(애니메이션 단계로 복제된 슬라이드)은 파일 하나를 같이 가리킨다 — 앱이
+    같은 파일이면 페이지를 넘겨도 끊지 않고 이어서 튼다. 페이지 수가 PDF 와 안 맞으면 아무것도 안 둔다.
+    """
+    out_dir = Path(out_dir)
+    with zipfile.ZipFile(pptx_path) as archive:
+        names = set(archive.namelist())
+        presentation = _parse_xml(archive.read("ppt/presentation.xml"))
+        presentation_rels = _parse_xml(archive.read("ppt/_rels/presentation.xml.rels"))
+        size = presentation.find(_p("sldSz"))
+        slide_size = (
+            (int(size.get("cx")), int(size.get("cy"))) if size is not None else (12192000, 6858000)
+        )
+        slide_id_list = presentation.find(_p("sldIdLst"))
+        order = [] if slide_id_list is None else _slide_parts_in_order(presentation_rels, slide_id_list)
+
+        pages = []
+        for _, part_name in order:
+            if part_name not in names:
+                continue
+            slide_root = _parse_xml(archive.read(part_name))
+            # LibreOffice 는 숨긴 슬라이드를 PDF 에 넣지 않는다. 번호를 PDF 쪽에 맞춘다.
+            if slide_root.get("show") == "0":
+                continue
+            rels_name = f"ppt/slides/_rels/{Path(part_name).name}.rels"
+            rels = {}
+            if rels_name in names:
+                for relationship in _parse_xml(archive.read(rels_name)):
+                    rels[relationship.get("Id")] = (
+                        relationship.get("Target") or "",
+                        relationship.get("TargetMode") == "External",
+                    )
+            pages.append(_slide_video(slide_root, rels, slide_size))
+        if len(pages) != page_count:
+            return 0
+
+        written = {}
+        found = 0
+        for index, video in enumerate(pages, start=1):
+            if video is None:
+                continue
+            target, external, rect = video
+            extension = Path(target).suffix.lower()
+            if extension not in PLAYABLE_VIDEO_EXTENSIONS:
+                continue
+            if target not in written:
+                file_name = f"video_{hashlib.sha1(target.encode('utf-8')).hexdigest()[:10]}{extension}"
+                destination = out_dir / file_name
+                if external:
+                    # 연결만 한 동영상: file:///C:/a.mp4 또는 PPT 기준 상대 경로.
+                    linked = target[len("file:///"):] if target.startswith("file:///") else target
+                    linked = Path(urllib.parse.unquote(linked))
+                    if not linked.is_absolute():
+                        linked = Path(source_dir) / linked
+                    if not linked.is_file():
+                        continue
+                    shutil.copyfile(linked, destination)
+                else:
+                    if target not in names:
+                        continue
+                    with archive.open(target) as src, open(destination, "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+                written[target] = file_name
+            (out_dir / f"{index:04d}.media.json").write_text(
+                json.dumps({"file": written[target], "rect": rect}), encoding="utf-8"
+            )
+            found += 1
+        return found
+
 
 def _convert_to_pdf(source_path, output_dir):
     libreoffice = get_libreoffice_executable()
@@ -1047,7 +1165,8 @@ def _convert_to_pdf(source_path, output_dir):
 # (예전 폴더는 저장된 콘티가 참조하고 있을 수 있어 지우지 않고 그냥 둔다.)
 # 3: macOS 에서 한글이 빠지던 문제(_libreoffice_env) — 예전에 구운 PNG 는 한글이 없다.
 # macOS 만 올린다 — Windows 는 그대로라 다시 구울 이유가 없다(예전 폴더가 한 벌 더 생긴다).
-RENDER_CACHE_VERSION = 3 if sys.platform == "darwin" else 2
+# +1: PPT 안 동영상을 꺼내 둔다(extract_slide_videos) — 예전 폴더엔 동영상이 없다.
+RENDER_CACHE_VERSION = 4 if sys.platform == "darwin" else 3
 
 
 def get_render_cache_key(source_path, expand_animation):
@@ -1127,6 +1246,11 @@ def render_presentation_images(file_path, expand_animation=True):
 
     import pymupdf
 
+    # MuPDF 는 경고를 stdout 에 찍는다 — 앱이 읽는 결과 JSON 이 깨진다. 동영상이 든 PPT 를
+    # LibreOffice 가 PDF 로 바꾸면 'cannot create appearance stream for Screen annotations' 가 나온다.
+    pymupdf.TOOLS.mupdf_display_errors(False)
+    pymupdf.TOOLS.mupdf_display_warnings(False)
+
     # 도중에 실패해도 반쪽짜리 캐시가 남지 않도록 임시 폴더에 굽고 마지막에 옮긴다.
     staging_dir = target_dir.with_name(f"{target_dir.name}.partial")
     shutil.rmtree(staging_dir, ignore_errors=True)
@@ -1157,6 +1281,15 @@ def render_presentation_images(file_path, expand_animation=True):
 
         if page_count == 0:
             raise RuntimeError(f"페이지가 없습니다: {source_name}")
+
+        if not is_pdf and Path(render_source).suffix.lower() == ".pptx":
+            try:
+                extract_slide_videos(render_source, staging_dir, page_count, source_path.parent)
+            except Exception as error:  # 동영상을 못 꺼내도 페이지 이미지는 그대로 쓴다
+                print(
+                    json.dumps({"warning": f"PPT 동영상을 건너뜁니다: {error}"}, ensure_ascii=True),
+                    file=sys.stderr,
+                )
 
         (staging_dir / "meta.json").write_text(
             json.dumps({"animated": animated}), encoding="utf-8"

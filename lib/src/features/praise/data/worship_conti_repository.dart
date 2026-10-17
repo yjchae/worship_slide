@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../domain/praise_song.dart';
 import '../domain/slide_background.dart';
+import '../domain/slide_media.dart';
 import '../domain/staging_item.dart';
 import '../domain/worship_conti.dart';
 import 'praise_database.dart';
@@ -119,6 +120,7 @@ class WorshipContiRepository {
             'bible_text': null,
             'blank_text': item.mainText,
             'blank_english_text': item.englishText,
+            'media': SlideMedia.encode(item.media),
           };
         } else {
           continue;
@@ -255,6 +257,7 @@ class WorshipContiRepository {
           item: BlankStagingItem(
             mainText: row['blank_text'] as String? ?? '',
             englishText: row['blank_english_text'] as String? ?? '',
+            media: SlideMedia.decode(row['media']),
           ),
         ));
       }
