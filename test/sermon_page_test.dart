@@ -45,6 +45,19 @@ void main() {
     expect(style.textPosition, VerticalTextPosition.middle);
     expect(style.bibleFontSize, 30); // 성경 키는 그대로
 
+    // 부제: 따로 정한 크기·색, 보조 언어 스위치를 꺼도 보인다.
+    final withSub = global
+        .copyWith(includeEnglishLyrics: false)
+        .withBackground(
+          restored.copyWith(
+            subFontSize: 36,
+            subTextColor: const Color(0xFFAABBCC),
+          ),
+        );
+    expect(withSub.effectiveEnglishFontSize, 36);
+    expect(withSub.englishTextColor, const Color(0xFFAABBCC));
+    expect(withSub.includeEnglishLyrics, isTrue);
+
     // 글꼴 값이 없는 예전 배경(헌금송 등)은 전역 글꼴을 그대로 쓴다.
     final plain = global.withBackground(
       const SlideBackground(color: Color(0xFF123456)),
@@ -52,5 +65,34 @@ void main() {
     expect(plain.fontFamily, global.fontFamily);
     expect(plain.fontSize, 30);
     expect(plain.textColor, Colors.white);
+    expect(plain.effectiveEnglishFontSize, 24); // 예전처럼 본문의 0.8 배
+    expect(plain.includeEnglishLyrics, isTrue);
+    expect(
+      global
+          .copyWith(includeEnglishLyrics: false)
+          .withBackground(const SlideBackground(color: Color(0xFF123456)))
+          .includeEnglishLyrics,
+      isFalse,
+    );
+  });
+
+  test('설교 글자 기본값: 크기·위치만 되돌리고 배경은 둔다, 색은 고를 수 있다', () {
+    final custom = SlideBackground.sermonDefault(global).copyWith(
+      color: const Color(0xFF112233),
+      fontSize: 90,
+      subFontSize: 50,
+      textColor: const Color(0xFFFF0000),
+      lyricsPosition: VerticalTextPosition.top,
+    );
+    final keepColors = custom.withSermonDefaultText(
+      global,
+      includeColors: false,
+    );
+    expect(keepColors.fontSize, 60);
+    expect(keepColors.subFontSize, 34);
+    expect(keepColors.lyricsPosition, VerticalTextPosition.middle);
+    expect(keepColors.textColor, const Color(0xFFFF0000));
+    expect(keepColors.color, const Color(0xFF112233));
+    expect(custom.withSermonDefaultText(global).textColor, global.textColor);
   });
 }

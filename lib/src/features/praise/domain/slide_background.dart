@@ -23,6 +23,8 @@ class SlideBackground {
     this.fontFamily,
     this.fontSize,
     this.textColor,
+    this.subFontSize,
+    this.subTextColor,
     this.isSermon = false,
   });
 
@@ -56,8 +58,13 @@ class SlideBackground {
   final double? fontSize;
   final Color? textColor;
 
-  /// 설교 제목 페이지. 렌더러는 보지 않고, 콘티 목록 표시와 "배경 수정" 이 어느
-  /// 다이얼로그를 열지만 가른다.
+  /// 본문 아래 보조 줄(설교 부제) 크기·색. null 이면 전역(본문의 0.8 배, 영어 가사 색).
+  final double? subFontSize;
+  final Color? subTextColor;
+
+  /// 설교 제목 페이지(주제 = 본문, 부제 = 보조 줄). 부제는 디자인의 보조 언어
+  /// 스위치와 상관없이 보이게 한다. 그 밖에는 콘티 목록 표시와 "배경 수정" 이
+  /// 어느 다이얼로그를 열지를 가른다.
   final bool isSermon;
 
   /// 설교 제목 페이지 기본 디자인.
@@ -65,8 +72,10 @@ class SlideBackground {
     color: style.backgroundColor,
     imagePath: style.backgroundImagePath,
     fontFamily: style.fontFamily,
-    fontSize: 54,
+    fontSize: 60,
     textColor: style.textColor,
+    subFontSize: 34,
+    subTextColor: const Color(0xFFD0D0D0),
     lyricsPosition: VerticalTextPosition.middle,
     lyricsOffsetY: 0,
     isSermon: true,
@@ -77,6 +86,24 @@ class SlideBackground {
     color: style.backgroundColor,
     imagePath: style.backgroundImagePath,
   );
+
+  /// 글꼴·주제/부제 크기·위치(와 [includeColors] 면 글자 색)를 [sermonDefault] 값으로.
+  /// 배경은 그대로 둔다. 설교 다이얼로그·리본 '글자 크기·위치 기본값' 이 함께 쓴다.
+  SlideBackground withSermonDefaultText(
+    ExportStyle style, {
+    bool includeColors = true,
+  }) {
+    final d = SlideBackground.sermonDefault(style);
+    return copyWith(
+      fontFamily: d.fontFamily,
+      fontSize: d.fontSize,
+      subFontSize: d.subFontSize,
+      lyricsPosition: d.lyricsPosition,
+      lyricsOffsetY: d.lyricsOffsetY,
+      textColor: includeColors ? d.textColor : textColor,
+      subTextColor: includeColors ? d.subTextColor : subTextColor,
+    );
+  }
 
   bool get hasImage => imagePath != null && imagePath!.isNotEmpty;
 
@@ -89,6 +116,8 @@ class SlideBackground {
     Object? fontFamily = _sentinel,
     Object? fontSize = _sentinel,
     Object? textColor = _sentinel,
+    Object? subFontSize = _sentinel,
+    Object? subTextColor = _sentinel,
     bool? isSermon,
   }) {
     return SlideBackground(
@@ -114,6 +143,12 @@ class SlideBackground {
       textColor: identical(textColor, _sentinel)
           ? this.textColor
           : textColor as Color?,
+      subFontSize: identical(subFontSize, _sentinel)
+          ? this.subFontSize
+          : (subFontSize as num?)?.toDouble(),
+      subTextColor: identical(subTextColor, _sentinel)
+          ? this.subTextColor
+          : subTextColor as Color?,
       isSermon: isSermon ?? this.isSermon,
     );
   }
@@ -127,6 +162,8 @@ class SlideBackground {
     if (fontFamily != null) 'font_family': fontFamily,
     if (fontSize != null) 'font_size': fontSize,
     if (textColor != null) 'text_color': colorToHex(textColor!),
+    if (subFontSize != null) 'english_font_size': subFontSize,
+    if (subTextColor != null) 'english_text_color': colorToHex(subTextColor!),
     if (isSermon) 'sermon': true,
   };
 
@@ -138,6 +175,7 @@ class SlideBackground {
     final position = json['text_position'] as String?;
     final offsetY = (json['text_offset_y'] as num?)?.toDouble();
     final fontSize = (json['font_size'] as num?)?.toDouble();
+    final subFontSize = (json['english_font_size'] as num?)?.toDouble();
     return SlideBackground(
       color: color,
       imagePath: (path == null || path.isEmpty) ? null : path,
@@ -151,6 +189,8 @@ class SlideBackground {
       fontFamily: json['font_family'] as String?,
       fontSize: fontSize == null || fontSize <= 0 ? null : fontSize,
       textColor: tryParseHexColor(json['text_color'] as String?),
+      subFontSize: subFontSize == null || subFontSize <= 0 ? null : subFontSize,
+      subTextColor: tryParseHexColor(json['english_text_color'] as String?),
       isSermon: json['sermon'] == true,
     );
   }
@@ -182,6 +222,8 @@ class SlideBackground {
       other.fontFamily == fontFamily &&
       other.fontSize == fontSize &&
       other.textColor == textColor &&
+      other.subFontSize == subFontSize &&
+      other.subTextColor == subTextColor &&
       other.isSermon == isSermon;
 
   @override
@@ -194,6 +236,8 @@ class SlideBackground {
     fontFamily,
     fontSize,
     textColor,
+    subFontSize,
+    subTextColor,
     isSermon,
   );
 
@@ -212,6 +256,9 @@ extension SlideBackgroundOverride on ExportStyle {
       fontFamily: background.fontFamily,
       fontSize: background.fontSize,
       textColor: background.textColor,
+      englishFontSize: background.subFontSize ?? englishFontSize,
+      englishTextColor: background.subTextColor,
+      includeEnglishLyrics: background.isSermon ? true : null,
     );
   }
 }

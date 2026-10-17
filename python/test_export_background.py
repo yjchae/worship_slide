@@ -279,11 +279,13 @@ def test_sermon_page():
                     "type": "blank",
                     "title": "",
                     "lyrics": "믿음의 경주",
-                    "english_lyrics": "",
+                    "english_lyrics": "히브리서 11장 1절",
                     "background": {
                         "color": BLANK_BG,
                         "font_size": 60,
                         "text_color": "#FFD700",
+                        "english_font_size": 36,
+                        "english_text_color": "#AABBCC",
                         "sermon": True,
                     },
                 },
@@ -301,6 +303,11 @@ def test_sermon_page():
         check("설교 제목 문구", run.text, "믿음의 경주")
         check("설교 제목 크기", run.font.size.pt, 60)
         check("설교 제목 색", str(run.font.color.rgb), "FFD700")
+        # 전역 style 은 보조 언어를 꺼 뒀지만(include_english_lyrics False) 부제는 나온다.
+        sub_run = slides[0].shapes[0].text_frame.paragraphs[-1].runs[0]
+        check("부제 문구", sub_run.text, "히브리서 11장 1절")
+        check("부제 크기", sub_run.font.size.pt, 36)
+        check("부제 색", str(sub_run.font.color.rgb), "AABBCC")
         check("문구 없는 빈 페이지는 그대로 빈 슬라이드", len(slides[1].shapes), 0)
 
 

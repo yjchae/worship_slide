@@ -1353,9 +1353,15 @@ def _style_for_item(style, background):
         return style
     overrides = {
         key: background[key]
-        for key in ("text_position", "text_offset_y", "font_family", "font_size", "text_color")
+        for key in (
+            "text_position", "text_offset_y", "font_family", "font_size", "text_color",
+            "english_font_size", "english_text_color",
+        )
         if background.get(key) is not None
     }
+    # 설교 부제는 디자인의 보조 언어 스위치와 상관없이 늘 보인다.
+    if background.get("sermon"):
+        overrides["include_english_lyrics"] = True
     if overrides.get("text_position") not in (None, "top", "middle", "bottom"):
         overrides.pop("text_position")
     return {**style, **overrides} if overrides else style
@@ -1466,7 +1472,7 @@ def add_song_slides(prs, song, style, background=None):
             _add_text_run(
                 english_paragraph,
                 english_page,
-                Pt(style["font_size"] * 0.8),
+                Pt(style.get("english_font_size") or style["font_size"] * 0.8),
                 english_color,
                 font_name,
             )

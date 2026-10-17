@@ -259,7 +259,11 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
 - **설교 제목 페이지**: '새 페이지 추가'(편집 탭 콘티 머리줄·발표 보기 툴바) 메뉴에서 빈 페이지 / 설교 제목 페이지를 고른다.
   설교 제목 페이지 = 문구가 든 `BlankStagingItem` + 항목별 배경 오버라이드. `SlideBackground` 에 `fontFamily`·`fontSize`·`textColor`·`isSermon`
   (JSON `font_family`·`font_size`·`text_color`·`sermon`)을 얹었고 `withBackground()`·`_style_for_item` 이 가사 키만 덮어쓴다 —
-  렌더러·DB 스키마는 그대로다. 마지막 디자인은 `sermon_design.json`(`SermonDesignStore`)에 남아 다음 설교 페이지의 시작값이 된다.
+  DB 스키마는 그대로다. **주제 = 본문(`mainText`), 부제(예: 말씀 구절) = 보조 줄(`englishText`)**. 부제 크기·색은
+  `subFontSize`·`subTextColor`(JSON `english_font_size`·`english_text_color`) → style 의 `english_font_size`·`english_text_color`.
+  `english_font_size` 는 렌더러 네 곳이 읽는 새 키로, 없으면 예전처럼 본문의 0.8 배(`ExportStyle.effectiveEnglishFontSize`).
+  설교 페이지는 디자인의 보조 언어 스위치를 꺼도 부제가 보인다(`withBackground`·`_style_for_item` 이 `include_english_lyrics` 를 켠다).
+  마지막 디자인은 `sermon_design.json`(`SermonDesignStore`)에 남아 다음 설교 페이지의 시작값이 된다.
   설교 페이지의 '배경' 버튼은 `_SermonPageDialog` 를 열고(일반 빈 페이지로 되돌리기 포함), 헌금송 버튼은 숨긴다.
   PPTX 는 문구가 든 빈 페이지를 한 장의 가사 슬라이드로 그린다(예전엔 빈 페이지 문구가 PPTX 에서 빠졌다)
 - **표시용 제목** (`PraiseSong.displayTitle`): 발표 슬라이드 제목·콘티 목록·PPTX 는 '(와이드 스크린)'·'와이드스크린'·오타('와일드스크린',

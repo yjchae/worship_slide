@@ -193,7 +193,7 @@ class SlideRenderView extends StatelessWidget {
                                   text: '\n${data.englishText}',
                                   style: TextStyle(
                                     color: style.englishTextColor,
-                                    fontSize: style.fontSize * 0.8 * fontScale,
+                                    fontSize: style.effectiveEnglishFontSize * fontScale,
                                     fontFamily: style.fontFamily,
                                     fontWeight: FontWeight.w700,
                                     height: 1.3,
