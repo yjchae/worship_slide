@@ -10,6 +10,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 import ppt_tool
 from ppt_tool import (
     clean_lyric_line,
+    erase_staff_symbols,
+    lyric_line_boxes_by_system,
+    restore_lyric_band,
     ends_with_word_break,
     find_skew_angle,
     order_lyric_lines,
@@ -77,6 +80,11 @@ def test_is_chord_line():
     assert is_chord_line("Am/E F#m7")
     assert not is_chord_line("거룩하신 주님께")
     assert not is_chord_line("Am I not yours")
+    # 띄어쓰기를 잃고 마디 번호·위첨자가 섞인 OCR 결과도 코드 줄이다.
+    assert is_chord_line("9.CG’DmCFCG’C")
+    assert is_chord_line("u.4DmMCFCG’C")
+    assert not is_chord_line("God Bless America")
+    assert not is_chord_line("Every morning I will sing")
 
 
 def test_find_staff_systems():
@@ -148,6 +156,37 @@ def test_prepare_sheet_image():
     # 줄 간격 8px → 표준(22px) 쯤으로 커진다.
     assert abs(systems[0][2] - ppt_tool._TARGET_STAFF_SPACING) < 3, systems
     assert abs(find_skew_angle(gray, staff_threshold)) < 0.5
+
+
+def test_erase_staff_symbols_keeps_lyrics_under_low_notes():
+    """오선 아래로 길게 내려온 음표가 가사 첫 줄에 붙어도 가사 줄을 잃지 않는다.
+
+    예전엔 음표+가사 첫 줄이 한 덩어리로 잡혀 '덧줄 음표'로 통째로 버려졌다."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    spacing = 22
+    image = Image.new("L", (900, 420), 255)
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.truetype(str(FONT_PATH), 50)
+    for line in range(5):
+        y = 60 + line * spacing
+        draw.line((40, y, 860, y), fill=0, width=2)
+    staff_bottom = 60 + 4 * spacing
+    # 기둥이 오선에서 내려와 가사 바로 위까지 닿은 음표들 (덧줄 음표 자리)
+    for x in range(120, 800, 90):
+        draw.line((x, staff_bottom - spacing, x, staff_bottom + 60), fill=0, width=3)
+        draw.ellipse((x - 14, staff_bottom + 50, x + 2, staff_bottom + 64), fill=0)
+    draw.text((80, staff_bottom + 56), "주 님 의 사 랑", font=font, fill=0)
+    draw.text((80, staff_bottom + 120), "거 룩 한 이 름", font=font, fill=0)
+
+    systems = find_staff_systems(ppt_tool.row_dark_ratios(image, 160))
+    assert len(systems) == 1, systems
+    cleaned, mask = erase_staff_symbols(image, 160, systems)
+    boxes = lyric_line_boxes_by_system(systems, ppt_tool.row_dark_ratios(cleaned, 160))[0]
+    assert len(boxes) == 2, boxes
+    # 가사 높이 안의 글자는 되살리고, 줄을 꿰뚫는 기둥은 지운 채로 둔다.
+    restored = restore_lyric_band(image, cleaned, mask, *boxes[0], 4)
+    assert restored.crop((0, boxes[0][0], 900, boxes[0][1])).getextrema()[0] < 100
 
 
 def test_otsu_threshold():
@@ -275,6 +314,7 @@ if __name__ == "__main__":
     test_ends_with_word_break()
     test_otsu_threshold()
     test_prepare_sheet_image()
+    test_erase_staff_symbols_keeps_lyrics_under_low_notes()
     test_extract_pdf_with_text_layer()
     test_extract_sheet_music_lyrics()
     print("OK")

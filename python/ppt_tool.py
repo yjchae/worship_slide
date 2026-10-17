@@ -1803,6 +1803,24 @@ def lyric_line_boxes_by_system(systems, ratios):
         if len(groups) > 1 and groups[0][0] == top:
             groups.pop(0)
         result.append(groups)
+
+    # 가사 줄보다 확 얇은 덩어리(붙임줄 ‿, 맨 아래 저작권 문구, 지우고 남은 음표 조각)는 버린다.
+    # 소문자뿐인 짧은 영어 줄(`for ever`)도 한글 줄 높이의 60% 쯤이라, 40% 미만은 무조건,
+    # 60% 미만은 띠 맨 위(오선 바로 아래 = 음표 조각 자리)에 있고 아래에 줄이 더 있을 때만 버린다.
+    heights = sorted(end - start + 1 for groups in result for start, end in groups)
+    if heights:
+        median = heights[len(heights) // 2]
+        result = [
+            [
+                (start, end)
+                for index, (start, end) in enumerate(groups)
+                if end - start + 1 >= median * 0.4
+                and not (
+                    index == 0 and len(groups) > 1 and end - start + 1 < median * 0.6
+                )
+            ]
+            for groups in result
+        ]
     return result
 
 
@@ -1850,9 +1868,20 @@ def is_lyric_line(text):
 
 
 def is_chord_line(text):
-    """C G7 Am/E 처럼 코드 기호만 있는 줄. 띠에 섞여 들어온 코드행을 버린다."""
+    """C G7 Am/E 처럼 코드 기호만 있는 줄. 띠에 섞여 들어온 코드행을 버린다.
+
+    OCR 은 코드 사이 띄어쓰기를 자주 잃고(`CG’DmCFCG’C`) 마디 번호·위첨자를 섞으므로,
+    낱말 검사에 더해 '영문자 대부분이 코드 뿌리음(A~G 대문자)·m' 인지도 본다.
+    영어 가사는 소문자가 대부분이고 한글 가사는 영문자가 없어 걸리지 않는다."""
     tokens = text.split()
-    return bool(tokens) and all(_CHORD_TOKEN_RE.match(token) for token in tokens)
+    if tokens and all(_CHORD_TOKEN_RE.match(token) for token in tokens):
+        return True
+    if _HANGUL_RE.search(text):
+        return False
+    letters = re.findall("[A-Za-z]", text)
+    roots = sum(1 for letter in letters if letter in "ABCDEFG")
+    chordish = roots + sum(1 for letter in letters if letter in "mb")
+    return roots >= 3 and chordish >= len(letters) * 0.75
 
 
 def ends_with_word_break(raw_line):
@@ -1870,7 +1899,7 @@ def _lyric_line_image(gray, threshold, top, bottom, spacing):
       Tesseract 가 기둥을 l·1·| 로 읽거나, 한 줄을 통째로 숫자로 읽는 원인이었다
     - 오선 폭 전체가 아니라 글자가 있는 곳만 남기고 흰 여백을 두른다
     - 글 줄 높이를 _TARGET_LINE_HEIGHT 로 맞춘 뒤 흑백으로 굳힌다"""
-    from PIL import Image
+    from PIL import Image, ImageFilter
 
     reach = max(int(spacing * 2), 6)
     window_top = max(top - reach, 0)
@@ -1944,6 +1973,9 @@ def _lyric_line_image(gray, threshold, top, bottom, spacing):
             Image.LANCZOS,
         )
     binary = cleaned.point(lambda value: 0 if value < threshold else 255)
+    # 획을 1px 씩 굵힌다. 손글씨풍 가사 글꼴은 획이 가늘어 '라'·'나' 를 통째로 빠뜨렸다
+    # (실제 악보 사진에서 줄 평균 72% → 75%, 인쇄체 시험 악보는 그대로).
+    binary = binary.filter(ImageFilter.MinFilter(3))
     border = 12
     framed = Image.new("L", (binary.width + border * 2, binary.height + border * 2), 255)
     framed.paste(binary, (border, border))
@@ -2181,10 +2213,84 @@ def _load_sheet_pages(source_path, work_dir):
     return pages
 
 
+def erase_staff_symbols(gray, threshold, systems):
+    """오선과 거기 이어진 모든 획(음표 머리·기둥·꼬리·붙임줄·마디선)을 흰색으로 지운다.
+
+    오선 다섯 줄은 마디선으로 이어져 있고 음표는 기둥으로 오선에 닿으므로, 오선에서
+    번져 나가면 한 단의 악보 기호가 한 덩어리로 지워지고 가사·코드 글자만 남는다.
+    낮은 음표가 오선 아래로 길게 내려온 악보는 음표와 가사 첫 줄이 한 글 줄로 붙어
+    잡히고, 그 줄을 '덧줄 음표'로 보고 통째로 버려서 가사가 사라졌다."""
+    from PIL import Image
+
+    width, height = gray.size
+    ink = bytearray(gray.point(lambda value: 1 if value < threshold else 0).tobytes())
+    stack = []
+    for top, _bottom, spacing in systems:
+        for line in range(5):
+            center = int(round(top + line * spacing))
+            for row in range(max(center - 1, 0), min(center + 2, height)):
+                offset = row * width
+                stack.extend(offset + x for x in range(width) if ink[offset + x])
+
+    erased = bytearray(width * height)
+    while stack:
+        index = stack.pop()
+        if not ink[index]:
+            continue
+        ink[index] = 0
+        erased[index] = 255
+        x = index % width
+        if x > 0 and ink[index - 1]:
+            stack.append(index - 1)
+        if x < width - 1 and ink[index + 1]:
+            stack.append(index + 1)
+        if index >= width and ink[index - width]:
+            stack.append(index - width)
+        if index + width < width * height and ink[index + width]:
+            stack.append(index + width)
+
+    mask = Image.frombytes("L", (width, height), bytes(erased))
+    # 획 가장자리의 옅은 테두리(안티에일리어싱·JPEG 번짐)까지 한 칸 더 지운다.
+    from PIL import ImageFilter
+
+    mask = mask.filter(ImageFilter.MaxFilter(3))
+    cleaned = gray.copy()
+    cleaned.paste(255, mask=mask)
+    return cleaned, mask
+
+
+def restore_lyric_band(original, cleaned, mask, top, bottom, margin):
+    """지운 악보 기호 가운데 가사 줄 높이 안에 든 것은 되살린다 (기둥만 빼고).
+
+    음표 머리가 글자에 닿아 있으면 글자까지 같이 지워진다('함께' → '께').
+    줄 높이를 거의 다 꿰뚫는 세로 기둥만 지운 채로 두고 나머지는 원래대로 돌린다."""
+    from PIL import Image, ImageChops
+
+    band = (0, max(top - margin, 0), original.width, min(bottom + margin + 1, original.height))
+    band_height = band[3] - band[1]
+    if band_height <= 0:
+        return cleaned
+    band_mask = mask.crop(band)
+    # 열마다 지운 비율 → 80% 넘게 꿰뚫린 열(기둥)만 255.
+    columns = band_mask.resize((band_mask.width, 1), Image.BOX)
+    keep_erased = columns.point(lambda value: 255 if value >= 204 else 0).resize(
+        band_mask.size, Image.NEAREST
+    )
+    restore = ImageChops.subtract(band_mask, keep_erased)
+    if restore.getbbox() is None:
+        return cleaned
+    result = cleaned.copy()
+    result.paste(original.crop(band), band[:2], mask=restore)
+    return result
+
+
 def _ocr_page_lines(executable, languages, image, work_dir, page_index, pool):
     """그림 한 쪽 → 단마다의 [(가사 줄, 이어짐)] 목록, 찾은 오선 단 수."""
-    gray, staff_threshold, threshold = prepare_sheet_image(image)
-    systems = find_staff_systems(row_dark_ratios(gray, staff_threshold))
+    original, staff_threshold, threshold = prepare_sheet_image(image)
+    systems = find_staff_systems(row_dark_ratios(original, staff_threshold))
+    gray, mask = original, None
+    if systems:
+        gray, mask = erase_staff_symbols(original, staff_threshold, systems)
     ratios = row_dark_ratios(gray, threshold)
     if not systems:
         # 오선을 못 찾으면 쪽 전체를 한 번에 읽는다 (가사만 있는 스캔 등).
@@ -2198,7 +2304,12 @@ def _ocr_page_lines(executable, languages, image, work_dir, page_index, pool):
         spacing = systems[system_index][2]
         system_jobs = []
         for box_index, (top, bottom) in enumerate(boxes):
-            line_image = _lyric_line_image(gray, threshold, top, bottom, spacing)
+            source = gray
+            if mask is not None:
+                source = restore_lyric_band(
+                    original, gray, mask, top, bottom, max(int(spacing * 0.3), 2)
+                )
+            line_image = _lyric_line_image(source, threshold, top, bottom, spacing)
             if line_image is None:
                 continue
             path = work_dir / f"p{page_index:03d}_s{system_index:02d}_l{box_index:02d}.png"
