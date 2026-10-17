@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math';
 
 import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -29,7 +30,7 @@ class PraiseDatabase {
     final dbPath = p.join(_dbDirectory, 'worship_slides.db');
     _database = await openDatabase(
       dbPath,
-      version: 16,
+      version: 17,
       onCreate: (db, version) => createPraiseSchema(db),
       onUpgrade: (db, oldVersion, newVersion) =>
           upgradePraiseSchema(db, oldVersion),
@@ -47,9 +48,14 @@ Future<void> createPraiseSchema(DatabaseExecutor db) async {
     file_name TEXT NOT NULL,
     title TEXT NOT NULL,
     lyrics TEXT NOT NULL,
-    english_lyrics TEXT NOT NULL DEFAULT ''
+    english_lyrics TEXT NOT NULL DEFAULT '',
+    uid TEXT,
+    updated_at INTEGER NOT NULL DEFAULT 0
   )
 ''');
+  await db.execute(_createSongUidIndex);
+  await db.execute(_createSongTombstones);
+  await db.execute(_createSongUidAliases);
   await db.execute('''
   CREATE TABLE bible_verses (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -114,6 +120,39 @@ const _createSongTranslations = '''
     PRIMARY KEY (song_title, language)
   )
 ''';
+
+// ── 곡 동기화 (공유 드라이브) ─────────────────────────────────────────
+//
+// 곡 id 는 PC 마다 다르고 임포트마다 바뀌므로, PC 사이에서 같은 곡을 가리키는
+// 데는 `uid`(무작위 32자 hex)를 쓴다. `updated_at`(ms) 이 큰 쪽이 이긴다.
+
+const _createSongUidIndex =
+    'CREATE INDEX IF NOT EXISTS idx_praise_songs_uid ON praise_songs(uid)';
+
+/// 지운 곡. 다른 PC 에 "이 곡은 지웠다"를 알려야 하므로 행을 지워도 uid 는 남긴다.
+const _createSongTombstones = '''
+  CREATE TABLE IF NOT EXISTS song_tombstones (
+    uid        TEXT PRIMARY KEY,
+    deleted_at INTEGER NOT NULL
+  )
+''';
+
+/// 두 PC 가 따로 가져온 같은 곡(제목·가사가 똑같음)은 작은 uid 하나로 합친다.
+/// 큰 쪽 uid → 작은 쪽 uid. 다른 PC 의 파일에 옛 uid 가 아직 남아 있어도 따라가게.
+const _createSongUidAliases = '''
+  CREATE TABLE IF NOT EXISTS song_uid_aliases (
+    alias TEXT PRIMARY KEY,
+    uid   TEXT NOT NULL
+  )
+''';
+
+final _uidRandom = Random.secure();
+
+/// 곡 동기화용 uid. 무작위 128비트 hex.
+String newSongUid() => List.generate(
+  16,
+  (_) => _uidRandom.nextInt(256).toRadixString(16).padLeft(2, '0'),
+).join();
 
 /// 이미 그 컬럼이 있으면 조용히 건너뛴다. `user_version`이 실제 스키마보다
 /// 뒤처진 DB(예: 예전 업그레이드가 중간에 실패해 롤백된 경우)를 다시 열어도
@@ -322,6 +361,37 @@ Future<void> upgradePraiseSchema(DatabaseExecutor db, int oldVersion) async {
       'media',
       "ALTER TABLE worship_conti_items ADD COLUMN media TEXT",
     );
+  }
+  if (oldVersion < 17) {
+    // 곡 동기화: PC 사이 곡 식별자 + 고친 시각 + 지운 곡 기록.
+    await _addColumnIfMissing(
+      db,
+      'praise_songs',
+      'uid',
+      'ALTER TABLE praise_songs ADD COLUMN uid TEXT',
+    );
+    await _addColumnIfMissing(
+      db,
+      'praise_songs',
+      'updated_at',
+      'ALTER TABLE praise_songs ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0',
+    );
+    await db.execute(_createSongUidIndex);
+    await db.execute(_createSongTombstones);
+    await db.execute(_createSongUidAliases);
+    final rows = await db.query(
+      'praise_songs',
+      columns: ['id'],
+      where: 'uid IS NULL',
+    );
+    for (final row in rows) {
+      await db.update(
+        'praise_songs',
+        {'uid': newSongUid()},
+        where: 'id = ?',
+        whereArgs: [row['id']],
+      );
+    }
   }
 }
 

@@ -30,22 +30,78 @@ class PraiseRepository {
 
   final PraiseDatabase _databaseProvider;
 
+  /// 곡·보조 가사가 바뀔 때마다 부른다. 곡 동기화가 공유 폴더에 다시 쓰는 신호.
+  void Function()? onSongsChanged;
+
+  static int _now() => DateTime.now().millisecondsSinceEpoch;
+
+  /// 새로 넣는 곡의 행. 동기화용 uid 와 고친 시각을 붙인다.
+  static Map<String, Object?> _newSongRow(PraiseSong song, int now) =>
+      song.toMap()
+        ..remove('id')
+        ..['uid'] = newSongUid()
+        ..['updated_at'] = now;
+
+  /// 지운 곡을 다른 PC 에 알리려고 uid 를 남긴다.
+  static Future<void> _addTombstones(
+    DatabaseExecutor txn,
+    Iterable<Map<String, Object?>> rows,
+    int now,
+  ) async {
+    for (final row in rows) {
+      final uid = row['uid'] as String?;
+      if (uid == null) continue;
+      await txn.insert('song_tombstones', {
+        'uid': uid,
+        'deleted_at': now,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+  }
+
+  /// 같은 제목·가사의 곡은 uid 를 그대로 쓴다 — 전체 교체가 다른 PC 에서
+  /// "모든 곡 삭제 + 새로 추가"로 번지지 않게.
   Future<void> replaceAllSongs(
     List<PraiseSong> songs, {
     Future<void> Function(int savedCount)? onSongSaved,
   }) async {
     final db = await _databaseProvider.database;
+    final now = _now();
     await db.transaction((txn) async {
+      final old = await txn.query(
+        'praise_songs',
+        columns: ['uid', 'updated_at', 'title', 'lyrics', 'english_lyrics'],
+      );
+      String keyOf(Object? title, Object? lyrics, Object? english) =>
+          '$title\u0000$lyrics\u0000${english ?? ''}';
+      final reusable = <String, List<Map<String, Object?>>>{};
+      for (final row in old) {
+        reusable
+            .putIfAbsent(
+              keyOf(row['title'], row['lyrics'], row['english_lyrics']),
+              () => [],
+            )
+            .add(row);
+      }
       await txn.delete('praise_songs');
       var savedCount = 0;
       for (final song in songs) {
-        await txn.insert('praise_songs', song.toMap()..remove('id'));
+        final row = _newSongRow(song, now);
+        final same =
+            reusable[keyOf(song.title, song.lyrics, song.englishLyrics)];
+        if (same != null && same.isNotEmpty) {
+          final kept = same.removeLast();
+          row['uid'] = kept['uid'] ?? row['uid'];
+          row['updated_at'] = kept['updated_at'] ?? now;
+        }
+        await txn.insert('praise_songs', row);
         savedCount += 1;
         if (onSongSaved != null) {
           await onSongSaved(savedCount);
         }
       }
+      await _addTombstones(txn, reusable.values.expand((rows) => rows), now);
     });
+    onSongsChanged?.call();
   }
 
   Future<ImportSongsResult> addNewSongs(
@@ -53,7 +109,8 @@ class PraiseRepository {
     Future<void> Function(int savedCount, int skippedCount)? onProgress,
   }) async {
     final db = await _databaseProvider.database;
-    return db.transaction((txn) async {
+    final now = _now();
+    final result = await db.transaction((txn) async {
       var insertedCount = 0;
       var skippedCount = 0;
       var updatedCount = 0;
@@ -84,7 +141,11 @@ class PraiseRepository {
         } else if (resplit.isNotEmpty) {
           await txn.update(
             'praise_songs',
-            {'lyrics': song.lyrics, 'english_lyrics': song.englishLyrics},
+            {
+              'lyrics': song.lyrics,
+              'english_lyrics': song.englishLyrics,
+              'updated_at': now,
+            },
             where: 'id = ?',
             whereArgs: [resplit.first['id']],
           );
@@ -92,7 +153,7 @@ class PraiseRepository {
         } else if (existing.any((row) => row['lyrics'] == song.lyrics)) {
           skippedCount += 1;
         } else {
-          await txn.insert('praise_songs', song.toMap()..remove('id'));
+          await txn.insert('praise_songs', _newSongRow(song, now));
           insertedCount += 1;
         }
         if (onProgress != null) {
@@ -105,11 +166,23 @@ class PraiseRepository {
         updatedCount: updatedCount,
       );
     });
+    if (result.insertedCount > 0 || result.updatedCount > 0) {
+      onSongsChanged?.call();
+    }
+    return result;
   }
 
   Future<void> clearAllSongs() async {
     final db = await _databaseProvider.database;
-    await db.delete('praise_songs');
+    await db.transaction((txn) async {
+      await _addTombstones(
+        txn,
+        await txn.query('praise_songs', columns: ['uid']),
+        _now(),
+      );
+      await txn.delete('praise_songs');
+    });
+    onSongsChanged?.call();
   }
 
   Future<void> deleteSongsByIds(List<int> ids) async {
@@ -119,11 +192,24 @@ class PraiseRepository {
 
     final db = await _databaseProvider.database;
     final placeholders = List.filled(ids.length, '?').join(', ');
-    await db.delete(
-      'praise_songs',
-      where: 'id IN ($placeholders)',
-      whereArgs: ids,
-    );
+    await db.transaction((txn) async {
+      await _addTombstones(
+        txn,
+        await txn.query(
+          'praise_songs',
+          columns: ['uid'],
+          where: 'id IN ($placeholders)',
+          whereArgs: ids,
+        ),
+        _now(),
+      );
+      await txn.delete(
+        'praise_songs',
+        where: 'id IN ($placeholders)',
+        whereArgs: ids,
+      );
+    });
+    onSongsChanged?.call();
   }
 
   Future<List<PraiseSong>> searchSongs(
@@ -160,17 +246,38 @@ class PraiseRepository {
 
   Future<void> insertSong(PraiseSong song) async {
     final db = await _databaseProvider.database;
-    await db.insert('praise_songs', song.toMap()..remove('id'));
+    await db.insert('praise_songs', _newSongRow(song, _now()));
+    onSongsChanged?.call();
   }
 
   Future<void> updateSong(PraiseSong song) async {
     final db = await _databaseProvider.database;
     await db.update(
       'praise_songs',
-      song.toMap()..remove('id'),
+      song.toMap()
+        ..remove('id')
+        ..['updated_at'] = _now(),
       where: 'id = ?',
       whereArgs: [song.id],
     );
+    onSongsChanged?.call();
+  }
+
+  /// 보조 가사는 제목에 묶여 있으므로, 그 제목의 곡을 "고쳐졌다"고 표시해
+  /// 동기화 때 같이 넘어가게 한다.
+  static Future<void> _touchTitles(
+    DatabaseExecutor txn,
+    Iterable<String> titles,
+    int now,
+  ) async {
+    for (final title in titles) {
+      await txn.update(
+        'praise_songs',
+        {'updated_at': now},
+        where: 'title = ?',
+        whereArgs: [title],
+      );
+    }
   }
 
   // ── 보조 언어 가사 ──────────────────────────────────────────────────
@@ -230,7 +337,27 @@ class PraiseRepository {
       throw ArgumentError('영어 가사는 praise_songs.english_lyrics 에 저장한다');
     }
     final db = await _databaseProvider.database;
+    final now = _now();
     await db.transaction((txn) async {
+      final before = {
+        for (final r in await txn.query(
+          'song_translations',
+          where: 'language = ?',
+          whereArgs: [language],
+        ))
+          r['song_title'] as String: r['lyrics'] as String,
+      };
+      await _touchTitles(
+        txn,
+        lyricsByTitle.entries
+            .where(
+              (e) =>
+                  (before[e.key] ?? '') !=
+                  (e.value.trim().isEmpty ? '' : e.value),
+            )
+            .map((e) => e.key),
+        now,
+      );
       for (final entry in lyricsByTitle.entries) {
         if (entry.value.trim().isEmpty) {
           await txn.delete(
@@ -247,6 +374,7 @@ class PraiseRepository {
         }, conflictAlgorithm: ConflictAlgorithm.replace);
       }
     });
+    onSongsChanged?.call();
   }
 
   Future<int> countTranslations(String language) async {
@@ -261,11 +389,25 @@ class PraiseRepository {
 
   Future<void> deleteLanguage(String language) async {
     final db = await _databaseProvider.database;
-    await db.delete(
-      'song_translations',
-      where: 'language = ?',
-      whereArgs: [language],
-    );
+    await db.transaction((txn) async {
+      final rows = await txn.query(
+        'song_translations',
+        columns: ['song_title'],
+        where: 'language = ?',
+        whereArgs: [language],
+      );
+      await _touchTitles(
+        txn,
+        rows.map((r) => r['song_title'] as String),
+        _now(),
+      );
+      await txn.delete(
+        'song_translations',
+        where: 'language = ?',
+        whereArgs: [language],
+      );
+    });
+    onSongsChanged?.call();
   }
 
   // ── 곡 모음 파일 (다른 PC 와 합치기) ────────────────────────────────
@@ -318,7 +460,8 @@ class PraiseRepository {
       throw const FormatException('곡 모음 파일이 아닙니다.');
     }
     final db = await _databaseProvider.database;
-    return db.transaction((txn) async {
+    final now = _now();
+    final result = await db.transaction((txn) async {
       // 정규화한 제목 → (DB 에 있는 실제 제목, 영어 가사가 비었는지)
       final existing = <String, ({int id, String title, bool noEnglish})>{};
       for (final row in await txn.query('praise_songs')) {
@@ -354,6 +497,8 @@ class PraiseRepository {
             'title': title,
             'lyrics': lyrics,
             'english_lyrics': english,
+            'uid': newSongUid(),
+            'updated_at': now,
           });
           existing[key] = (
             id: id,
@@ -368,7 +513,7 @@ class PraiseRepository {
           if (found.noEnglish && english.trim().isNotEmpty) {
             await txn.update(
               'praise_songs',
-              {'english_lyrics': english},
+              {'english_lyrics': english, 'updated_at': now},
               where: 'id = ?',
               whereArgs: [found.id],
             );
@@ -392,7 +537,10 @@ class PraiseRepository {
             'language': language,
             'lyrics': text,
           }, conflictAlgorithm: ConflictAlgorithm.ignore);
-          if (id != 0) subLyricsAdded += 1;
+          if (id != 0) {
+            subLyricsAdded += 1;
+            await _touchTitles(txn, [dbTitle], now);
+          }
         }
       }
       return SongBundleImportResult(
@@ -401,6 +549,10 @@ class PraiseRepository {
         subLyricsAddedCount: subLyricsAdded,
       );
     });
+    if (result.addedCount > 0 || result.subLyricsAddedCount > 0) {
+      onSongsChanged?.call();
+    }
+    return result;
   }
 
   Future<int> countSongs() async {

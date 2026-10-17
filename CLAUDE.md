@@ -17,6 +17,7 @@ flutter run -d macos          # 실행
 flutter build macos           # 빌드
 flutter analyze
 flutter test                  # test/ (페이지 파싱·슬라이드 렌더·헌금송 배경 굽기 등 단위 테스트)
+flutter test test/song_sync_test.dart # 곡 동기화(여러 PC 흉내) 단위 테스트
 python3 python/test_render.py    # render 명령 self-check (LibreOffice 없으면 skip)
 python3 python/test_animation.py # 애니메이션 단계 펼치기 self-check (LibreOffice 불필요)
 python3 python/test_export_background.py # 항목별 배경 오버라이드 self-check (LibreOffice 불필요)
@@ -47,9 +48,11 @@ lib/
   src/app_colors.dart                -- 앱 화면 색·둥글기 토큰 (슬라이드·발표 창·PPTX 색과 무관)
   src/features/praise/
     data/
-      praise_database.dart           -- SQLite 스키마 + 마이그레이션 (현재 version 16)
+      praise_database.dart           -- SQLite 스키마 + 마이그레이션 (현재 version 17)
       praise_repository.dart         -- 곡 CRUD (searchSongs, replaceAllSongs, deleteSongsByIds ...)
       worship_conti_repository.dart  -- 콘티 저장/불러오기 (곡 가사 스냅샷까지 함께 보관)
+      song_sync_repository.dart      -- 곡 동기화 DB 쪽: 내 곡 스냅샷 만들기 + 다른 PC 스냅샷 합치기
+      song_sync_service.dart         -- 곡 동기화: 공유 폴더 설정(song_sync.json)·파일 읽고 쓰기·1분 타이머
       python_bridge.dart             -- Process.run으로 ppt_tool 실행 (import / render / export)
       export_style_store.dart        -- 스타일을 Application Support/export_style.json에 저장
       offering_design_store.dart     -- 헌금송 기본 디자인 → offering_design.json
@@ -73,6 +76,7 @@ lib/
       slide_render_view.dart         -- 미리보기/썸네일용 Flutter 슬라이드 렌더러
       offering_dialog.dart           -- 헌금송 디자인 등록 / 항목에 적용(높낮이) 다이얼로그
       offering_overlay_painter.dart  -- 헌금송 띠(라인 + 헌금 + 계좌) painter. 미리보기·PNG 공용
+      song_sync_dialog.dart          -- 곡 동기화 설정 다이얼로그 (가져오기 메뉴 '곡 동기화', 상태 줄 표시)
   src/features/bible/
     data/bible_repository.dart       -- 역본·책·장·절 조회, JSON 임포트
     domain/bible_verse.dart
@@ -184,6 +188,23 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   색(`_main_lyrics_color`)과 같은 색인 영어 줄은 원곡 가사(`How great is our God`, `(x2)`)로 보고 본문에 남긴다.
   한글 줄이 없으면(영어 원곡) 흰색, 흰 줄도 없으면 가장 많이 쓴 색이 원본 색. 앱 화면의 "한글 가사"는 "원본 가사"로 부른다
 - **DB 위치**: 실행 파일 옆 (`worship_slides.db`). macOS는 `.app`에서 3단계 위. 앱 폴더를 통째로 옮겨도 데이터가 따라온다
+- **곡 동기화 (Google Drive 공유 드라이브 등)**: SQLite 파일을 드라이브에 두지 않는다 — 두 PC 가 동시에 쓰면
+  파일이 깨지거나 드라이브가 사본을 만든다. 대신 **PC 마다 자기 곡 전부를 JSON 파일 하나로만 쓰고**
+  (`<고른 폴더>/worship_slides_sync/<기기 id>.json`, 기기 id 는 `Application Support/song_sync.json`) 다른 PC 들의 파일을 읽어 합친다.
+  앱은 드라이브 API 를 모른다 — Google Drive 데스크톱 앱이 PC 에 보여 주는 폴더면 된다(NAS·Dropbox 폴더도 된다).
+  - 곡마다 `praise_songs.uid`(무작위 32자 hex) + `updated_at`(ms, DB version 17). id 는 PC 마다·임포트마다 달라서 못 쓴다.
+    `PraiseRepository` 의 모든 쓰기가 `updated_at` 을 올리고 `onSongsChanged` 를 부른다 → 3초 모아 동기화.
+    보조 언어 가사는 제목에 묶여 있으므로 고치면 그 제목 곡의 `updated_at` 을 올리고(`_touchTitles`), 곡 레코드에 같이 실린다
+  - **곡마다 나중에 고친 쪽이 이긴다**(같은 시각이면 내용 문자열 비교로 — 어느 PC 에서든 같은 답). 지운 곡은 `song_tombstones`
+    에 남아 다른 PC 에서도 지운다. 지운 뒤에 다른 PC 에서 고쳤으면 고친 쪽이 이긴다(되살아난다). 전체 초기화도 다른 PC 로 번진다
+  - 두 PC 가 따로 가져온 같은 곡(제목·원본·영어 가사가 **똑같음**)은 작은 uid 로 합치고 `song_uid_aliases`(옛 uid → 지금 uid)에
+    남겨 파일에도 싣는다 — 다른 PC 파일에 옛 uid 가 남아 있어도 따라가게. **제목만 같고 가사가 다르면 합치지 않고 둘 다 남긴다**
+    (어느 쪽이 맞는지 모르니 사용자가 하나를 지우면 그게 번진다)
+  - `replaceAllSongs` 는 같은 제목·가사 곡의 uid 를 그대로 쓴다(전체 교체가 "모두 삭제 + 새로 추가"로 번지지 않게)
+  - 앱이 켜져 있는 동안 시작할 때·1분마다·곡을 고친 3초 뒤에 맞춘다. 다른 PC 파일의 수정 시각·크기가 그대로이고 내 쪽 변경도 없으면
+    합치기를 건너뛴다. 내 파일은 내용이 바뀔 때만 임시 파일 → 이름 바꾸기로 쓴다. 다른 PC 의 변경이 들어오면 곡 목록을 다시 읽는다
+    (콘티에 담긴 곡은 가사 스냅샷이라 그대로다). **콘티는 동기화하지 않는다** — `.wsconti` 파일로 옮긴다
+  - 시계가 크게 틀린 PC 는 "나중에 고친 쪽" 판정이 틀릴 수 있다(OS 자동 시간 맞추기를 켜 두면 된다)
 - **DB 갱신** (`replaceAllSongs`): 전체 삭제 후 재삽입 (증분 갱신 아님)
 - **폴더 다시 가져오기** (`addNewSongs`): 같은 제목에 원본 가사까지 같으면 건너뛰고, 원본+보조 가사의 줄 모음
   (순서 무시)이 같으면 나누기 규칙만 바뀐 것으로 보고 **기존 곡을 고친다**(새 곡을 만들지 않는다). 나머지는 새로 넣는다

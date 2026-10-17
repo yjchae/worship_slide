@@ -29,6 +29,7 @@ import '../data/praise_repository.dart';
 import '../data/python_bridge.dart';
 import '../data/screen_choice_store.dart';
 import '../data/singer_web_server.dart';
+import '../data/song_sync_service.dart';
 import '../data/source_file_watcher.dart';
 import '../data/worship_conti_repository.dart';
 import '../domain/worship_conti.dart';
@@ -45,6 +46,7 @@ import 'offering_overlay_painter.dart';
 import 'singer_view_data.dart';
 import 'slide_page_data.dart';
 import 'slide_render_view.dart';
+import 'song_sync_dialog.dart';
 
 class PraiseHomePage extends StatefulWidget {
   const PraiseHomePage({super.key});
@@ -122,6 +124,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   );
 
   final PraiseRepository _repository = PraiseRepository();
+  // 공유 폴더(Google Drive 공유 드라이브)로 여러 PC 의 곡을 맞춘다.
+  final SongSyncService _songSync = SongSyncService();
   final PythonBridge _pythonBridge = PythonBridge();
   final ExportStyleStore _styleStore = ExportStyleStore();
   final OfferingDesignStore _offeringStore = OfferingDesignStore();
@@ -274,6 +278,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       animationDuration: Duration.zero,
     )..addListener(_onMainTabChanged);
     _loadSongs();
+    _repository.onSongsChanged = _songSync.markLocalChanged;
+    _songSync.onMerged = (_) {
+      if (!mounted) return;
+      _loadSongs();
+      _loadSubLanguages();
+    };
+    _songSync.load();
     _loadSavedStyle();
     _loadOfferingDesign();
     _sermonStore.load().then((v) {
@@ -325,6 +336,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _remoteSyncTimer?.cancel();
     _singerWeb.stop();
     _sourceWatcher.dispose();
+    _repository.onSongsChanged = null;
+    _songSync.dispose();
     HardwareKeyboard.instance.removeHandler(_handleStartKey);
     _mainTabController
       ..removeListener(_onMainTabChanged)
@@ -3492,7 +3505,11 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('전체 초기화'),
-        content: const Text('저장된 찬양 DB를 모두 삭제합니다. 계속할까요?'),
+        content: Text(
+          _songSync.status.value.enabled
+              ? '저장된 찬양 DB를 모두 삭제합니다.\n곡 동기화가 켜져 있어 같은 폴더를 쓰는 다른 PC 의 곡도 지워집니다. 계속할까요?'
+              : '저장된 찬양 DB를 모두 삭제합니다. 계속할까요?',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -3759,6 +3776,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               _importSheetMusic(fromClipboard: true),
                           onExportSongsPressed: _exportSongBundle,
                           onImportSongsPressed: _importSongBundle,
+                          onSongSyncPressed: () =>
+                              SongSyncDialog.show(context, _songSync),
                           onExtractLogsPressed: _showExtractLogsDialog,
                           isCheckingUpdate: _isCheckingUpdate,
                           hasUpdate: _pendingUpdate != null,
@@ -4050,6 +4069,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                           importTotalCount: _importTotalCount,
                           importSavedCount: _importSavedCount,
                           packageInfo: _packageInfo,
+                          syncStatus: _songSync.status,
+                          onSyncPressed: () =>
+                              SongSyncDialog.show(context, _songSync),
                         ),
                       ],
                     );
@@ -4354,6 +4376,7 @@ class _TopBar extends StatelessWidget {
     required this.onPasteSheetPressed,
     required this.onExportSongsPressed,
     required this.onImportSongsPressed,
+    required this.onSongSyncPressed,
     required this.onExtractLogsPressed,
     required this.isCheckingUpdate,
     required this.hasUpdate,
@@ -4371,6 +4394,7 @@ class _TopBar extends StatelessWidget {
   final VoidCallback onPasteSheetPressed;
   final VoidCallback onExportSongsPressed;
   final VoidCallback onImportSongsPressed;
+  final VoidCallback onSongSyncPressed;
   final VoidCallback onExtractLogsPressed;
   final bool isCheckingUpdate;
   final bool hasUpdate;
@@ -4459,6 +4483,12 @@ class _TopBar extends StatelessWidget {
                 Icons.file_download_outlined,
                 '곡 모음 가져오기',
                 subtitle: '같은 제목은 건너뜁니다',
+              ),
+              _item(
+                onSongSyncPressed,
+                Icons.sync_rounded,
+                '곡 동기화',
+                subtitle: 'Google Drive 공유 폴더로 여러 PC',
               ),
               const PopupMenuDivider(),
               _item(onExtractLogsPressed, Icons.description_outlined, '로그 추출'),
@@ -4566,6 +4596,8 @@ class _StatusBar extends StatelessWidget {
     required this.importTotalCount,
     required this.importSavedCount,
     required this.packageInfo,
+    required this.syncStatus,
+    required this.onSyncPressed,
   });
 
   final int storedCount;
@@ -4575,6 +4607,8 @@ class _StatusBar extends StatelessWidget {
   final int importTotalCount;
   final int importSavedCount;
   final Future<PackageInfo> packageInfo;
+  final ValueListenable<SongSyncStatus> syncStatus;
+  final VoidCallback onSyncPressed;
 
   @override
   Widget build(BuildContext context) {
@@ -4605,6 +4639,44 @@ class _StatusBar extends StatelessWidget {
                       fontWeight: FontWeight.w500,
                     ),
             ),
+          ),
+          ValueListenableBuilder<SongSyncStatus>(
+            valueListenable: syncStatus,
+            builder: (context, sync, _) {
+              if (!sync.enabled) return const SizedBox.shrink();
+              final failed = sync.lastError != null;
+              final label = sync.syncing
+                  ? '동기화 중'
+                  : failed
+                  ? '동기화 실패'
+                  : sync.lastSyncAt == null
+                  ? '동기화 대기'
+                  : '동기화 ${songSyncAgo(sync.lastSyncAt!)}';
+              final color = failed ? cs.error : cs.onSurfaceVariant;
+              return Padding(
+                padding: const EdgeInsets.only(right: 12),
+                child: Tooltip(
+                  message: sync.lastError ?? sync.folder!,
+                  child: InkWell(
+                    onTap: onSyncPressed,
+                    borderRadius: BorderRadius.circular(AppRadius.control),
+                    child: Row(
+                      children: [
+                        Icon(
+                          failed
+                              ? Icons.sync_problem_rounded
+                              : Icons.sync_rounded,
+                          size: 13,
+                          color: color,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(label, style: style.copyWith(color: color)),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
           ),
           FutureBuilder<PackageInfo>(
             future: packageInfo,
@@ -9789,7 +9861,8 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
   /// 썸네일 줄이 가질 수 있는 가장 큰 높이. 헤더와 현재 슬라이드 최소 높이를 뺀 나머지.
   double _maxStripHeight(BoxConstraints constraints) {
     final headerHeight =
-        58.0 + (_currentMedia != null ? _MediaBar.height : 0); // 헤더(+재생바) + 아래 여백
+        58.0 +
+        (_currentMedia != null ? _MediaBar.height : 0); // 헤더(+재생바) + 아래 여백
     final room =
         constraints.maxHeight -
         headerHeight -
@@ -11094,7 +11167,8 @@ class _MediaPageDialogState extends State<_MediaPageDialog> {
                 decoration: InputDecoration(
                   labelText: '유튜브 주소',
                   hintText: 'https://www.youtube.com/watch?v=…',
-                  helperText: '주소의 시작 위치(t=90)도 따릅니다. 발표 PC 가 인터넷에 연결돼 있어야 합니다.',
+                  helperText:
+                      '주소의 시작 위치(t=90)도 따릅니다. 발표 PC 가 인터넷에 연결돼 있어야 합니다.',
                   errorText: _error,
                   border: const OutlineInputBorder(),
                 ),
@@ -11107,9 +11181,7 @@ class _MediaPageDialogState extends State<_MediaPageDialog> {
                     child: Text(
                       _source.isEmpty ? '파일을 고르세요' : p.basename(_source),
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: _error != null ? cs.error : null,
-                      ),
+                      style: TextStyle(color: _error != null ? cs.error : null),
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -11203,7 +11275,8 @@ class _MediaBarState extends State<_MediaBar> {
   static String _time(double seconds) {
     final s = seconds.isFinite ? seconds.round() : 0;
     final h = s ~/ 3600, m = (s % 3600) ~/ 60, sec = s % 60;
-    final mmss = '${m.toString().padLeft(h > 0 ? 2 : 1, '0')}:'
+    final mmss =
+        '${m.toString().padLeft(h > 0 ? 2 : 1, '0')}:'
         '${sec.toString().padLeft(2, '0')}';
     return h > 0 ? '$h:$mmss' : mmss;
   }
@@ -11223,8 +11296,9 @@ class _MediaBarState extends State<_MediaBar> {
             final position = (_dragging ?? state?.position ?? 0)
                 .clamp(0.0, canSeek ? duration : 0.0)
                 .toDouble();
-            void jump(double delta) =>
-                widget.onSeek((position + delta).clamp(0.0, duration).toDouble());
+            void jump(double delta) => widget.onSeek(
+              (position + delta).clamp(0.0, duration).toDouble(),
+            );
             return Row(
               children: [
                 Icon(
