@@ -260,7 +260,7 @@ class PythonBridge {
         final Map<String, dynamic> json = switch (entry.item) {
           SongStagingItem(:final song) => {
             'type': 'song',
-            'title': song.title,
+            'title': song.displayTitle,
             'lyrics': song.lyrics,
             'english_lyrics': song.englishLyrics,
           },
@@ -270,11 +270,11 @@ class PythonBridge {
             'lyrics': text,
             'english_lyrics': subText,
           },
-          BlankStagingItem() => {
+          BlankStagingItem(:final mainText, :final englishText) => {
             'type': 'blank',
             'title': '',
-            'lyrics': '',
-            'english_lyrics': '',
+            'lyrics': mainText,
+            'english_lyrics': englishText,
           },
           ImageStagingItem(:final sourceName, :final imagePaths) => {
             'type': 'image',
@@ -284,7 +284,14 @@ class PythonBridge {
             'image_paths': imagePaths,
           },
         };
-        json['background'] = entry.background?.toJson();
+        final background = entry.background;
+        json['background'] = background == null
+            ? null
+            : {
+                ...background.toJson(),
+                if (background.fontFamily != null)
+                  'font_files': FontLibrary.filesFor(background.fontFamily!),
+              };
         if (entry.noSpacer) json['no_spacer'] = true;
         return json;
       }).toList(),

@@ -11,7 +11,7 @@ class SongStagingItem extends StagingItem {
   final PraiseSong song;
 
   @override
-  String get displayTitle => song.title;
+  String get displayTitle => song.displayTitle;
 
   @override
   String get previewText =>

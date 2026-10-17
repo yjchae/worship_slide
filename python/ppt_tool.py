@@ -136,9 +136,21 @@ def extract_lines_from_shape(shape):
         return []
     lines = []
     for paragraph in shape.text_frame.paragraphs:
-        text = "".join(run.text for run in paragraph.runs).strip()
-        if text:
-            lines.append((text, _paragraph_color(paragraph)))
+        color = _paragraph_color(paragraph)
+        # 문단 안 줄바꿈(<a:br>, Shift+Enter)에서 줄을 나눈다. run 만 이어 붙이면
+        # 줄이 붙어 버린다('in historyDeath is beaten'). paragraph.text 는 필드
+        # (<a:fld>, 쪽 번호·날짜)까지 담으므로 쓰지 않고 run 과 br 만 본다.
+        parts = []
+        for child in paragraph._p:
+            tag = child.tag.rsplit("}", 1)[-1]
+            if tag == "r":
+                parts.append("".join(t.text or "" for t in child.iter(qn("a:t"))))
+            elif tag == "br":
+                parts.append("\n")
+        for text in "".join(parts).split("\n"):
+            text = text.strip()
+            if text:
+                lines.append((text, color))
     return lines
 
 
@@ -1330,17 +1342,18 @@ def _resolve_background(style, background):
 
 
 def _style_for_item(style, background):
-    """항목별 오버라이드에 실린 가사 세로 위치를 전역 style 위에 덮어쓴 style.
+    """항목별 오버라이드에 실린 가사 세로 위치·글꼴·크기·색을 전역 style 위에 덮어쓴 style.
 
     헌금송은 "가사는 헌금 띠 위쪽"을 위해 그 항목만 가사 기준선(text_position)과
-    미세 조정(text_offset_y)을 바꾼다. 찬양 가사에만 해당하고 성경 키는 건드리지 않는다.
+    미세 조정(text_offset_y)을 바꾸고, 설교 제목 페이지는 글꼴·크기·색까지 바꾼다.
+    찬양 가사 키에만 해당하고 성경 키는 건드리지 않는다.
     발표 창·미리보기(Dart)는 ExportStyle.withBackground 가 같은 일을 한다.
     """
     if not background:
         return style
     overrides = {
         key: background[key]
-        for key in ("text_position", "text_offset_y")
+        for key in ("text_position", "text_offset_y", "font_family", "font_size", "text_color")
         if background.get(key) is not None
     }
     if overrides.get("text_position") not in (None, "top", "middle", "bottom"):
@@ -1406,8 +1419,13 @@ def add_song_slides(prs, song, style, background=None):
     lyrics_box_left, lyrics_box_width, lyrics_align = _lyrics_text_layout(
         lyrics_text_align_str
     )
-    korean_pages = _decode_pages(song["lyrics"])
-    english_pages = _decode_pages(song.get("english_lyrics", ""))
+    if song.get("type") == "blank":
+        # 문구 든 빈 페이지는 빈 줄이 있어도 한 장이다(발표 화면 _allSlides 와 같다).
+        korean_pages = [song.get("lyrics", "").strip()]
+        english_pages = [song.get("english_lyrics", "").strip()]
+    else:
+        korean_pages = _decode_pages(song["lyrics"])
+        english_pages = _decode_pages(song.get("english_lyrics", ""))
     page_count = max(len(korean_pages), len(english_pages))
 
     for index in range(page_count):
@@ -1453,7 +1471,7 @@ def add_song_slides(prs, song, style, background=None):
                 font_name,
             )
 
-        if show_song_title:
+        if show_song_title and song.get("title"):
             _add_title_textbox(slide, song.get("title", ""), style, is_bible=is_bible, font_name=font_name)
 
 
@@ -1505,8 +1523,17 @@ def export_presentation(payload_json):
     for index, song in enumerate(songs):
         # 항목별 배경 오버라이드. 없으면 전역 배경.
         background = song.get("background")
+        if background and background.get("font_family"):
+            _ensure_fonts_installed(background["font_family"],
+                                    background.get("font_files") or ())
         if song.get("type") == "blank":
-            _add_blank_slide(prs, style, background)
+            # 문구를 넣은 빈 페이지(설교 제목 등)는 가사 한 장처럼 그린다.
+            if song.get("lyrics") or song.get("english_lyrics"):
+                add_song_slides(
+                    prs, song, _style_for_item(style, background), background
+                )
+            else:
+                _add_blank_slide(prs, style, background)
         else:
             if song.get("type") == "image":
                 add_image_slides(prs, song, style, background)

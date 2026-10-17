@@ -56,6 +56,29 @@ class PraiseSong {
     };
   }
 
+  /// 발표 화면에 보일 제목. PPT 파일 이름에서 온 '(와이드 스크린)'·'와이드스크린'·
+  /// 오타('와일드스크린', '와이드 스크림')·'(와이드)' 표시와 '.ppt' 확장자를 뗀다.
+  /// DB 제목은 그대로 둔다 — 보조 언어 가사(song_translations)가 제목을 키로 쓴다.
+  String get displayTitle => cleanDisplayTitle(title);
+
+  static final _wideMark = RegExp(r'와\s*[이일]{1,2}\s*드(?:\s*스\s*크\s*[린림])?');
+
+  static String cleanDisplayTitle(String title) {
+    var t = title.replaceFirst(RegExp(r'\.pptx?$', caseSensitive: false), '');
+    if (_wideMark.hasMatch(t)) {
+      t = t
+          .replaceAll(_wideMark, '')
+          .replaceAll(RegExp(r'\(\s*\)'), ' ')
+          .replaceAll(RegExp(r'\(\s+'), '(')
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+      // '(와일드스크린 그 사랑 감사해)' 처럼 제목 전체가 괄호 안에 있던 경우
+      final wrapped = RegExp(r'^\(([^()]*)\)$').firstMatch(t);
+      if (wrapped != null) t = wrapped.group(1)!.trim();
+    }
+    return t.isEmpty ? title.trim() : t.trim();
+  }
+
   static String _cleanTitle(String title) =>
       title.replaceAll(RegExp(r'\s*\(\s*와이드 스크린\s*\)\s*', caseSensitive: false), '').trim();
 

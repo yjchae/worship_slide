@@ -256,6 +256,16 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
     모음에서 지우면 그 파일을 직접 쓰는 일반 항목 배경(저장한 콘티 포함)은 색만 남는다 — 삭제 전에 확인을 받는다.
     헌금송은 따로 구운 PNG 라 영향 없다
   - "항목 배경" 다이얼로그에서 색·이미지를 손으로 바꾸면 헌금송 정보와 가사 위치는 떨어져 나간다(일반 배경이 된다)
+- **설교 제목 페이지**: '새 페이지 추가'(편집 탭 콘티 머리줄·발표 보기 툴바) 메뉴에서 빈 페이지 / 설교 제목 페이지를 고른다.
+  설교 제목 페이지 = 문구가 든 `BlankStagingItem` + 항목별 배경 오버라이드. `SlideBackground` 에 `fontFamily`·`fontSize`·`textColor`·`isSermon`
+  (JSON `font_family`·`font_size`·`text_color`·`sermon`)을 얹었고 `withBackground()`·`_style_for_item` 이 가사 키만 덮어쓴다 —
+  렌더러·DB 스키마는 그대로다. 마지막 디자인은 `sermon_design.json`(`SermonDesignStore`)에 남아 다음 설교 페이지의 시작값이 된다.
+  설교 페이지의 '배경' 버튼은 `_SermonPageDialog` 를 열고(일반 빈 페이지로 되돌리기 포함), 헌금송 버튼은 숨긴다.
+  PPTX 는 문구가 든 빈 페이지를 한 장의 가사 슬라이드로 그린다(예전엔 빈 페이지 문구가 PPTX 에서 빠졌다)
+- **표시용 제목** (`PraiseSong.displayTitle`): 발표 슬라이드 제목·콘티 목록·PPTX 는 '(와이드 스크린)'·'와이드스크린'·오타('와일드스크린',
+  '와이드 스크림')·'(와이드)'·'.ppt' 를 뗀 제목을 쓴다. DB 제목은 그대로 둔다 — `song_translations` 가 제목을 키로 쓴다
+- **문단 안 줄바꿈**: 가져오기(`extract_lines_from_shape`)는 run 과 `<a:br>` 만 이어 붙여 `<a:br>` 에서 줄을 나눈다(필드 `<a:fld>` 는 뺀다).
+  예전엔 run 만 이어 붙여 영어 가사가 'historyDeath' 처럼 붙었다. 다시 가져오기의 '나누기만 바뀐 곡' 판정은 공백 뺀 글자 모음 비교다
 - **외부 PPT 애니메이션**: LibreOffice가 PDF로 굽는 순간 애니메이션은 사라지고 "다 나타난 마지막
   상태" 한 장만 남는다. 그래서 PDF로 넘기기 전에 pptx의 `<p:timing>`(메인 시퀀스)을 읽어
   **클릭 한 번 = 페이지 한 장**으로 슬라이드를 복제해 둔다 (`expand_animation_steps`).
