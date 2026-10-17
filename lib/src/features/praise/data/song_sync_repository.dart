@@ -8,6 +8,8 @@ import 'sync_snapshot.dart';
 /// - 지운 곡은 `song_tombstones` 에 남는다. 지운 뒤에 다른 PC 에서 고쳤으면 고친 쪽이 이긴다
 /// - 두 PC 가 따로 가져온 같은 곡(제목·가사가 똑같음)은 작은 uid 로 합친다(`song_uid_aliases`)
 /// - 제목은 같아도 가사가 다르면 합치지 않는다 — 어느 쪽이 맞는지 모르니 둘 다 남긴다
+/// - 지운 기록에는 내용 해시도 남긴다. 동기화를 켜기 전에 지운 곡이 다른 PC 의 같은 곡(uid 는 다름)으로
+///   되살아나지 않게 — 단, 지운 쪽이 같은 내용의 곡을 아직 갖고 있으면(일부러 하나만 지움) 건드리지 않는다
 /// - 보조 언어 가사는 (제목, 언어)마다 따로 맞춘다. 곡을 받는다고 그 제목의 가사를 덮지 않는다
 ///   (같은 제목의 다른 곡이 같이 쓰고, 받는 쪽에만 있는 언어가 지워지면 안 된다)
 class SongSyncRepository {
@@ -22,13 +24,20 @@ class SongSyncRepository {
     required String deviceName,
   }) async {
     final db = await _databaseProvider.database;
-    await fillMissingSyncUids(db);
     final rows = await db.query('praise_songs', orderBy: 'uid');
     return SyncSnapshot(
       deviceId: deviceId,
       deviceName: deviceName,
       songs: [for (final row in rows) _songFromRow(row)],
       deleted: await _tombstones(db),
+      deletedContent: {
+        for (final r in await db.query(
+          'song_tombstones',
+          where: 'content_hash IS NOT NULL',
+          orderBy: 'uid',
+        ))
+          r['uid'] as String: r['content_hash'] as String,
+      },
       aliases: {
         for (final r in await db.query('song_uid_aliases', orderBy: 'alias'))
           r['alias'] as String: r['uid'] as String,
@@ -44,7 +53,8 @@ class SongSyncRepository {
     );
   }
 
-  /// 다른 PC 들의 파일을 이 PC 의 DB 에 합친다.
+  /// 다른 PC 들의 파일을 이 PC 의 DB 에 합친다. 동기화 한 번에 가장 먼저 불린다 —
+  /// uid 없는 행 채우기도 여기서 한 번만 한다.
   Future<SyncMergeResult> merge(List<SyncSnapshot> remotes) async {
     final db = await _databaseProvider.database;
     await fillMissingSyncUids(db);
@@ -82,8 +92,17 @@ class SongSyncRepository {
     };
 
     // 지운 곡: 이 PC 기록 + 다른 PC 기록 중 가장 늦은 시각.
-    final storedTombstones = await _tombstones(txn);
+    final storedRows = await txn.query('song_tombstones');
+    final storedTombstones = {
+      for (final r in storedRows) r['uid'] as String: r['deleted_at'] as int,
+    };
+    final storedContent = {
+      for (final r in storedRows)
+        if (r['content_hash'] != null)
+          r['uid'] as String: r['content_hash'] as String,
+    };
     final tombstones = <String, int>{};
+    final tombstoneContent = <String, String>{};
     void addTombstone(String uid, int at) {
       final key = canonical(uid);
       final before = tombstones[key];
@@ -91,9 +110,25 @@ class SongSyncRepository {
     }
 
     storedTombstones.forEach(addTombstone);
+    storedContent.forEach(
+      (uid, hash) => tombstoneContent[canonical(uid)] = hash,
+    );
     for (final remote in remotes) {
       remote.deleted.forEach(addTombstone);
+      remote.deletedContent.forEach(
+        (uid, hash) => tombstoneContent.putIfAbsent(canonical(uid), () => hash),
+      );
     }
+    final deletedByContent = _ContentTombstones(
+      canonical: canonical,
+      local: [
+        for (final e in storedTombstones.entries)
+          if (storedContent[e.key] != null)
+            (uid: e.key, hash: storedContent[e.key]!, at: e.value),
+      ],
+      localLive: {for (final mine in local.values) mine.song.contentHash},
+      remotes: remotes,
+    );
 
     // 다른 PC 들에서 곡마다 가장 최신 판 하나.
     final newest = <String, SyncSong>{};
@@ -133,6 +168,7 @@ class SongSyncRepository {
         }
       }
 
+      if (mine == null && deletedByContent.hides(song)) continue;
       if (mine == null) {
         final id = await txn.insert('praise_songs', _rowOf(song));
         local[uid] = _LocalSong(id, song);
@@ -146,6 +182,15 @@ class SongSyncRepository {
       }
     }
 
+    // 다른 PC 가 지운 곡과 내용이 같은 이 PC 의 곡(uid 만 다름)도 지운다.
+    for (final mine in local.values.toList()) {
+      final at = deletedByContent.remoteDeletedAt(mine.song);
+      if (at == null) continue;
+      final before = tombstones[mine.song.uid];
+      if (before == null || at > before) tombstones[mine.song.uid] = at;
+      tombstoneContent[mine.song.uid] = mine.song.contentHash;
+    }
+
     var deleted = 0;
     for (final entry in tombstones.entries) {
       final mine = local[entry.key];
@@ -155,10 +200,13 @@ class SongSyncRepository {
         deleted += 1;
       }
       // 이미 같은 기록이 있으면 다시 쓰지 않는다(지운 기록은 계속 쌓인다).
-      if (storedTombstones[entry.key] != entry.value) {
+      final hash = tombstoneContent[entry.key];
+      if (storedTombstones[entry.key] != entry.value ||
+          storedContent[entry.key] != hash) {
         await txn.insert('song_tombstones', {
           'uid': entry.key,
           'deleted_at': entry.value,
+          'content_hash': hash,
         }, conflictAlgorithm: ConflictAlgorithm.replace);
       }
     }
@@ -384,6 +432,61 @@ class SongSyncRepository {
       SyncTranslation.keyOf(r['song_title'] as String, r['language'] as String):
           r['deleted_at'] as int,
   };
+}
+
+/// 내용 해시가 달린 지운 기록으로 "uid 는 다르지만 같은 곡"을 가린다.
+/// 지운 쪽(이 PC 또는 다른 PC 한 대)이 같은 내용의 곡을 아직 갖고 있으면 일부러 하나만
+/// 지운 것이므로 다른 곡에 번지지 않는다.
+class _ContentTombstones {
+  _ContentTombstones({
+    required String Function(String) canonical,
+    required List<({String uid, String hash, int at})> local,
+    required Set<String> localLive,
+    required List<SyncSnapshot> remotes,
+  }) : _canonical = canonical {
+    // 이 PC 기록: 이 PC 에 같은 내용 곡이 남아 있으면 쓰지 않는다.
+    for (final t in local) {
+      if (!localLive.contains(t.hash)) _add(_local, t.uid, t.hash, t.at);
+    }
+    for (final remote in remotes) {
+      final live = {for (final s in remote.songs) s.contentHash};
+      remote.deletedContent.forEach((uid, hash) {
+        final at = remote.deleted[uid];
+        if (at != null && !live.contains(hash)) _add(_remote, uid, hash, at);
+      });
+    }
+  }
+
+  final String Function(String) _canonical;
+  final _local = <String, List<({String uid, int at})>>{};
+  final _remote = <String, List<({String uid, int at})>>{};
+
+  void _add(
+    Map<String, List<({String uid, int at})>> into,
+    String uid,
+    String hash,
+    int at,
+  ) => into.putIfAbsent(hash, () => []).add((uid: _canonical(uid), at: at));
+
+  /// 다른 PC 의 곡 [song] 이 이 PC·다른 PC 에서 지운 곡과 같은 내용이라 받지 말아야 하면 true.
+  bool hides(SyncSong song) =>
+      _deletedAt(_local, song) != null || _deletedAt(_remote, song) != null;
+
+  /// 이 PC 의 곡 [song] 을 다른 PC 가 (다른 uid 로) 지웠으면 그 시각.
+  int? remoteDeletedAt(SyncSong song) => _deletedAt(_remote, song);
+
+  static int? _deletedAt(
+    Map<String, List<({String uid, int at})>> from,
+    SyncSong song,
+  ) {
+    int? latest;
+    for (final t
+        in from[song.contentHash] ?? const <({String uid, int at})>[]) {
+      if (t.uid == song.uid || t.at < song.updatedAt) continue;
+      if (latest == null || t.at > latest) latest = t.at;
+    }
+    return latest;
+  }
 }
 
 class _LocalSong {

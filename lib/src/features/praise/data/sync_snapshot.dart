@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'fnv_hash.dart';
+
 /// 공유 폴더에 올리는 곡 한 곡. 보조 언어 가사는 곡이 아니라 제목에 묶여 있어서
 /// 따로([SyncTranslation]) 싣는다 — 같은 제목의 다른 곡과 같이 쓰기 때문이다.
 class SyncSong {
@@ -21,6 +23,15 @@ class SyncSong {
 
   /// 따로 가져온 같은 곡을 알아보는 키(제목·원본·영어 가사가 똑같음).
   String get contentKey => '$title\u0000$lyrics\u0000$englishLyrics';
+
+  /// [contentKey] 의 짧은 해시. 지운 곡 기록에 가사 전체 대신 싣는다.
+  String get contentHash => contentHashOf(title, lyrics, englishLyrics);
+
+  static String contentHashOf(
+    String title,
+    String lyrics,
+    String englishLyrics,
+  ) => fnvHex(utf8.encode('$title\u0000$lyrics\u0000$englishLyrics'));
 
   /// 고친 시각이 같을 때 어느 쪽을 쓸지 정하는 키. PC 마다 같은 답이 나와야 한다.
   String get tieKey => '$contentKey\u0000$fileName';
@@ -125,6 +136,7 @@ class SyncSnapshot {
     required this.songs,
     required this.deleted,
     required this.aliases,
+    this.deletedContent = const {},
     this.translations = const [],
     this.translationDeleted = const {},
     this.contis = const [],
@@ -143,6 +155,9 @@ class SyncSnapshot {
   /// 합쳐진 옛 uid → 지금 uid.
   final Map<String, String> aliases;
 
+  /// 지운 곡 uid → 그 곡의 [SyncSong.contentHash] (아는 것만).
+  final Map<String, String> deletedContent;
+
   final List<SyncTranslation> translations;
 
   /// 지운 보조 가사 [SyncTranslation.keyOf] → 지운 시각.
@@ -160,6 +175,7 @@ class SyncSnapshot {
         songs: songs,
         deleted: this.deleted,
         aliases: aliases,
+        deletedContent: deletedContent,
         translations: translations,
         translationDeleted: translationDeleted,
         contis: contis,
@@ -174,6 +190,7 @@ class SyncSnapshot {
     'songs': [for (final song in songs) song.toJson()],
     'deleted': deleted,
     'aliases': aliases,
+    'deleted_content': deletedContent,
     'translations': [for (final t in translations) t.toJson()],
     'translation_deleted': [
       for (final e in translationDeleted.entries)
@@ -202,13 +219,8 @@ class SyncSnapshot {
           ? songs.map(SyncSong.fromJson).whereType<SyncSong>().toList()
           : const [],
       deleted: _times(deleted),
-      aliases: aliases is Map
-          ? {
-              for (final e in aliases.entries)
-                if (e.key is String && e.value is String)
-                  e.key as String: e.value as String,
-            }
-          : const {},
+      aliases: _strings(aliases),
+      deletedContent: _strings(raw['deleted_content']),
       translations: translations is List
           ? translations
                 .map(SyncTranslation.fromJson)
@@ -234,6 +246,14 @@ class SyncSnapshot {
       contiDeleted: _times(raw['conti_deleted']),
     );
   }
+
+  static Map<String, String> _strings(Object? raw) => raw is Map
+      ? {
+          for (final e in raw.entries)
+            if (e.key is String && e.value is String)
+              e.key as String: e.value as String,
+        }
+      : const {};
 
   static Map<String, int> _times(Object? raw) => raw is Map
       ? {

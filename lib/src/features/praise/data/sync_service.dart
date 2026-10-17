@@ -141,7 +141,11 @@ class SyncService {
         final json = jsonDecode(await file.readAsString());
         if (json is Map) {
           folder = json['folder'] as String?;
-          _deviceId = json['device_id'] as String?;
+          // 설정 폴더째 다른 PC 로 옮겨졌으면(마이그레이션·복제) 기기 id 를 새로 만든다 —
+          // 두 PC 가 같은 id 면 서로의 파일을 덮어쓰고 서로를 "나"로 보고 건너뛴다.
+          if (json['device_name'] == _deviceName) {
+            _deviceId = json['device_id'] as String?;
+          }
         }
       }
     } catch (error, stack) {
@@ -217,7 +221,11 @@ class SyncService {
       final file = await _settings;
       await file.parent.create(recursive: true);
       await file.writeAsString(
-        jsonEncode({'folder': folder, 'device_id': _deviceId}),
+        jsonEncode({
+          'folder': folder,
+          'device_id': _deviceId,
+          'device_name': _deviceName,
+        }),
       );
     } catch (error, stack) {
       await AppLogger.instance.error('동기화 설정 저장 실패', error, stack);
@@ -252,10 +260,14 @@ class SyncService {
       ].join('\n');
 
       final remoteChanged = signature != _lastRemoteSignature;
-      hadLocalChanges = _localDirty || !await File(ownPath).exists();
+      // 변경 표시는 읽자마자 끈다(사이에 await 가 없게). 이 뒤에 생긴 수정은
+      // markLocalChanged 가 다시 켠다 — 나중에 끄면 그 사이 수정을 놓친다.
+      hadLocalChanges = _localDirty;
+      _localDirty = false;
+      final ownMissing = !await File(ownPath).exists();
       final retryPending =
           _nextPendingRetry != null && !_clock().isBefore(_nextPendingRetry!);
-      if (!remoteChanged && !hadLocalChanges && !retryPending) {
+      if (!remoteChanged && !hadLocalChanges && !ownMissing && !retryPending) {
         _setStatus(
           status.value.copyWith(
             syncing: false,
@@ -265,12 +277,10 @@ class SyncService {
         );
         return const SyncResult();
       }
-      // 이 뒤에 생긴 수정은 markLocalChanged 가 다시 켠다 — 끝에서 끄면 그 수정을 놓친다.
-      _localDirty = false;
 
       final read = await _readSnapshots(remoteFiles);
       final snapshots = [
-        for (final snapshot in read)
+        for (final snapshot in read.snapshots)
           if (snapshot.deviceId != deviceId) snapshot,
       ];
       // 곡을 먼저 합쳐야 콘티의 곡 항목이 이 PC 의 곡에 이어진다.
@@ -282,10 +292,11 @@ class SyncService {
       );
       final result = SyncResult(songs: songs, contis: contis);
       // 받지 못한 콘티만 다시 본 차례에 바뀐 게 없으면 내 파일은 그대로다.
-      if (remoteChanged || hadLocalChanges || result.changed) {
-        await _writeOwn(ownPath, sharedFiles, localFiles);
+      if (remoteChanged || hadLocalChanges || ownMissing || result.changed) {
+        await _writeOwn(ownPath, sharedFiles, localFiles, force: ownMissing);
       }
-      _lastRemoteSignature = signature;
+      // 못 읽은 파일이 있으면 기억하지 않는다 — 그 PC 가 다시 쓰기 전까지 영영 안 읽게 된다.
+      _lastRemoteSignature = read.failed ? null : signature;
       _schedulePendingRetry(contis.pendingCount);
 
       _setStatus(
@@ -354,7 +365,9 @@ class SyncService {
 
   /// 다른 PC 파일을 읽어 푼다. 곡이 수천 곡이면 파일마다 몇 MB 라서 화면 스레드가
   /// 멈추지 않게 별도 isolate 에서 읽고 푼다.
-  Future<List<SyncSnapshot>> _readSnapshots(List<File> files) async {
+  Future<({List<SyncSnapshot> snapshots, bool failed})> _readSnapshots(
+    List<File> files,
+  ) async {
     final paths = [for (final f in files) f.path];
     final read = await Isolate.run(
       () => [
@@ -372,24 +385,28 @@ class SyncService {
       ],
     );
     final result = <SyncSnapshot>[];
+    var failed = false;
     for (final r in read) {
       if (r.snapshot != null) {
         result.add(r.snapshot!);
       } else if (r.error != null) {
         // 드라이브가 아직 내려받는 중이거나 다른 PC 가 쓰는 중이면 다음 차례에 다시 읽는다.
+        failed = true;
         await AppLogger.instance.info('[sync] 읽기 건너뜀 ${r.error}');
       }
     }
-    return result;
+    return (snapshots: result, failed: failed);
   }
 
   /// 내 파일은 내용이 바뀌었을 때만 쓴다(드라이브가 쓸데없이 올리지 않게).
   /// 임시 파일에 쓰고 이름을 바꿔, 다른 PC 가 반쯤 쓴 파일을 읽지 않게 한다.
+  /// [force] 면 내용이 같아도 쓴다(내 파일이 사라졌을 때).
   Future<void> _writeOwn(
     String path,
     Directory sharedFiles,
-    Directory localFiles,
-  ) async {
+    Directory localFiles, {
+    bool force = false,
+  }) async {
     final songs = await _songs.exportSnapshot(
       deviceId: deviceId,
       deviceName: _deviceName,
@@ -402,9 +419,10 @@ class SyncService {
     );
     final snapshot = songs.withContis(contis.contis, contis.deleted);
     final text = await Isolate.run(() => jsonEncode(snapshot.toJson()));
-    if (text == _lastWrittenText) return;
+    if (!force && text == _lastWrittenText) return;
     final file = File(path);
-    if (_lastWrittenText == null &&
+    if (!force &&
+        _lastWrittenText == null &&
         await file.exists() &&
         await file.readAsString() == text) {
       _lastWrittenText = text;

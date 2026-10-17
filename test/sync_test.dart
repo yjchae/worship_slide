@@ -518,4 +518,158 @@ void main() {
     a.sync.dispose();
     await running;
   });
+
+  group('리뷰 2차', () {
+    test('공유 폴더를 바꾸면 콘티 이미지를 새 폴더에도 올린다', () async {
+      final a = await newPc('A');
+      await a.repo.insertSong(song('은혜', '가사'));
+      final page = File(p.join(a.dir.path, '0001.png'))..writeAsBytesSync([1]);
+      await a.contis.saveConti('콘티', [
+        (
+          uid: 1,
+          item: ImageStagingItem(sourceName: 'x', imagePaths: [page.path]),
+        ),
+      ]);
+      await a.sync.syncNow();
+      final other = p.join(root.path, '다른 공유 드라이브');
+      await Directory(other).create();
+      await a.sync.setFolder(other);
+      final files = Directory(
+        p.join(other, SyncService.syncDirName, SyncService.filesDirName),
+      );
+      expect(files.listSync(), hasLength(1));
+    });
+
+    test('내 파일이 지워지면 다시 쓴다', () async {
+      final a = await newPc('A');
+      await a.repo.insertSong(song('은혜', '가사'));
+      await a.sync.syncNow();
+      final own = File(
+        p.join(shared, SyncService.syncDirName, '${a.sync.deviceId}.json'),
+      );
+      own.deleteSync();
+      await a.sync.syncNow();
+      expect(own.existsSync(), isTrue);
+    });
+
+    test('못 읽은 다른 PC 파일은 다음 차례에 다시 읽는다', () async {
+      final a = await newPc('A');
+      final b = await newPc('B');
+      await a.repo.insertSong(song('은혜', '가사'));
+      await a.sync.syncNow();
+      final aFile = File(
+        p.join(shared, SyncService.syncDirName, '${a.sync.deviceId}.json'),
+      );
+      final good = aFile.readAsStringSync();
+      final modified = aFile.lastModifiedSync();
+      // 드라이브가 아직 다 못 내려받은 상태 — 크기·수정 시각은 같은데 내용이 깨져 있다.
+      aFile.writeAsStringSync('x' * good.length);
+      aFile.setLastModifiedSync(modified);
+      await b.sync.syncNow();
+      expect(await b.songs(), isEmpty);
+      aFile.writeAsStringSync(good);
+      aFile.setLastModifiedSync(modified);
+      await b.sync.syncNow();
+      expect(await b.titles(), ['은혜:가사']);
+    });
+
+    test('모양이 이상한 콘티 항목은 건너뛰고 나머지는 맞춘다', () async {
+      final b = await newPc('B');
+      File(
+        p.join(shared, SyncService.syncDirName, 'odd.json'),
+      ).writeAsStringSync(
+        jsonEncode(
+          SyncSnapshot(
+            deviceId: 'odd',
+            deviceName: 'odd',
+            songs: const [
+              SyncSong(
+                uid: 's1',
+                updatedAt: 1,
+                title: '은혜',
+                fileName: '',
+                lyrics: '가사',
+                englishLyrics: '',
+              ),
+            ],
+            deleted: const {},
+            aliases: const {},
+            contis: [
+              SyncConti(
+                uid: 'c1',
+                updatedAt: 1,
+                name: '이상한 콘티',
+                createdAt: 1,
+                items: [
+                  {
+                    'item_type': 'blank',
+                    'background': {'nested': true},
+                  },
+                ],
+              ),
+            ],
+          ).toJson(),
+        ),
+      );
+      await b.sync.syncNow();
+      expect(b.sync.status.value.lastError, isNull);
+      expect(await b.titles(), ['은혜:가사']);
+      expect(await b.contis.listContis(), isEmpty);
+    });
+
+    test('동기화를 켜기 전에 지운 곡은 다른 PC 의 같은 곡으로 살아나지 않는다', () async {
+      final a = await newPc('A', join: false);
+      final b = await newPc('B', join: false);
+      for (final pc in [a, b]) {
+        await pc.repo.addNewSongs([song('은혜', '가사'), song('축복', '가사')]);
+      }
+      final grace = (await a.songs()).firstWhere((s) => s.title == '은혜');
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      await a.repo.deleteSongsByIds([grace.id!]);
+      await a.sync.setFolder(shared);
+      await b.sync.setFolder(shared);
+      await syncAll([a, b]);
+      expect(await a.titles(), ['축복:가사']);
+      expect(await b.titles(), ['축복:가사']);
+    });
+
+    test('같은 내용 곡 둘 중 하나만 지우면 나머지는 다른 PC 로도 간다', () async {
+      // 같은 내용의 곡은 동기화하면 하나로 합쳐지지만, 합치기 전에 한쪽에서 하나만 지운 경우.
+      final a = await newPc('A', join: false);
+      final b = await newPc('B');
+      await a.repo.insertSong(song('은혜', '가사'));
+      await a.repo.insertSong(song('은혜', '가사'));
+      final first = (await a.songs()).first;
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      await a.repo.deleteSongsByIds([first.id!]);
+      await a.sync.setFolder(shared);
+      await syncAll([a, b]);
+      expect(await a.titles(), ['은혜:가사']);
+      expect(await b.titles(), ['은혜:가사']);
+    });
+
+    test('설정이 다른 PC 로 옮겨지면 기기 id 를 새로 만든다', () async {
+      final dir = await Directory(p.join(root.path, 'moved')).create();
+      File(p.join(dir.path, 'song_sync.json')).writeAsStringSync(
+        jsonEncode({
+          'folder': null,
+          'device_id': 'copied-id',
+          'device_name': '옛 PC',
+        }),
+      );
+      final db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
+      addTearDown(db.close);
+      await createPraiseSchema(db);
+      final sync = SyncService(
+        songs: SongSyncRepository(database: PraiseDatabase.forTesting(db)),
+        contis: ContiSyncRepository(database: PraiseDatabase.forTesting(db)),
+        settingsDirectory: () async => dir,
+        deviceName: '새 PC',
+      );
+      addTearDown(sync.dispose);
+      await sync.load();
+      expect(sync.deviceId, isNot('copied-id'));
+      expect(sync.deviceId, hasLength(32));
+    });
+  });
 }

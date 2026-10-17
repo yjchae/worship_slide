@@ -2,6 +2,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../domain/praise_song.dart';
 import 'praise_database.dart';
+import 'sync_snapshot.dart';
 
 class ImportSongsResult {
   const ImportSongsResult({
@@ -42,7 +43,10 @@ class PraiseRepository {
         ..['uid'] = newSongUid()
         ..['updated_at'] = now;
 
-  /// 지운 곡을 다른 PC 에 알리려고 uid 를 남긴다.
+  static const _tombstoneColumns = ['uid', 'title', 'lyrics', 'english_lyrics'];
+
+  /// 지운 곡을 다른 PC 에 알리려고 uid 와 내용 해시를 남긴다.
+  /// [rows] 에는 [_tombstoneColumns] 가 있어야 한다.
   static Future<void> _addTombstones(
     DatabaseExecutor txn,
     Iterable<Map<String, Object?>> rows,
@@ -54,6 +58,11 @@ class PraiseRepository {
       await txn.insert('song_tombstones', {
         'uid': uid,
         'deleted_at': now,
+        'content_hash': SyncSong.contentHashOf(
+          row['title'] as String,
+          row['lyrics'] as String,
+          (row['english_lyrics'] as String?) ?? '',
+        ),
       }, conflictAlgorithm: ConflictAlgorithm.replace);
     }
   }
@@ -177,7 +186,7 @@ class PraiseRepository {
     await db.transaction((txn) async {
       await _addTombstones(
         txn,
-        await txn.query('praise_songs', columns: ['uid']),
+        await txn.query('praise_songs', columns: _tombstoneColumns),
         _now(),
       );
       await txn.delete('praise_songs');
@@ -197,7 +206,7 @@ class PraiseRepository {
         txn,
         await txn.query(
           'praise_songs',
-          columns: ['uid'],
+          columns: _tombstoneColumns,
           where: 'id IN ($placeholders)',
           whereArgs: ids,
         ),

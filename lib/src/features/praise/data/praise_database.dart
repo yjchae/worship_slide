@@ -145,10 +145,13 @@ const _createSongUidIndex =
     'CREATE INDEX IF NOT EXISTS idx_praise_songs_uid ON praise_songs(uid)';
 
 /// 지운 곡. 다른 PC 에 "이 곡은 지웠다"를 알려야 하므로 행을 지워도 uid 는 남긴다.
+/// `content_hash`(제목·가사 해시)는 다른 PC 가 따로 가져온 같은 곡을 알아보는 데 쓴다 —
+/// 동기화를 켜기 전에 지운 곡이 다른 PC 의 같은 곡으로 되살아나지 않게.
 const _createSongTombstones = '''
   CREATE TABLE IF NOT EXISTS song_tombstones (
-    uid        TEXT PRIMARY KEY,
-    deleted_at INTEGER NOT NULL
+    uid          TEXT PRIMARY KEY,
+    deleted_at   INTEGER NOT NULL,
+    content_hash TEXT
   )
 ''';
 
@@ -430,6 +433,12 @@ Future<void> upgradePraiseSchema(DatabaseExecutor db, int oldVersion) async {
     );
     await db.execute(_createSongUidIndex);
     await db.execute(_createSongTombstones);
+    await _addColumnIfMissing(
+      db,
+      'song_tombstones',
+      'content_hash',
+      'ALTER TABLE song_tombstones ADD COLUMN content_hash TEXT',
+    );
     await db.execute(_createSongUidAliases);
     await _addColumnIfMissing(
       db,
