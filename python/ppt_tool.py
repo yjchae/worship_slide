@@ -1546,6 +1546,12 @@ _SHEET_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".pdf"}
 _STAFF_ROW_RATIO = 0.45
 # 글자가 있다고 볼 가로 검은 비율. 가사 한 줄은 폭의 1%도 안 되는 일이 있다.
 _TEXT_ROW_RATIO = 0.004
+# 그림 악보는 오선 줄 간격이 이 크기(px)가 되게 맞춘 뒤 읽는다 (300dpi 인쇄 악보쯤).
+_TARGET_STAFF_SPACING = 22
+# OCR 에 넘기는 가사 한 줄의 글자 높이(px). Tesseract 는 30~50px 글자를 가장 잘 읽는다.
+_TARGET_LINE_HEIGHT = 48
+# 줄마다 Tesseract 를 여럿 동시에 띄우므로 하나가 코어를 다 잡지 않게 한다.
+_TESSERACT_ENV = {**os.environ, "OMP_THREAD_LIMIT": "1"}
 
 _LYRIC_HYPHEN_RE = re.compile(
     "[ \t\u00a0]*[-\u2010\u2011\u2012\u2013\u2014\u2015\uff0d][ \t\u00a0]*"
@@ -1601,6 +1607,105 @@ def row_dark_ratios(image, threshold=160):
     column = dark.resize((1, gray.height), Image.BOX)
     # 폭이 1이라 tobytes() 가 행마다 한 바이트씩 준다 (getdata() 는 곧 없어진다).
     return [value / 255 for value in column.tobytes()]
+
+
+def otsu_threshold(gray):
+    """밝기 히스토그램을 두 무리(글자·바탕)로 가장 잘 가르는 값. 이 값보다 어두우면 글자."""
+    histogram = gray.histogram()
+    total = sum(histogram)
+    weighted_total = sum(index * count for index, count in enumerate(histogram))
+    best_variance, best = -1.0, 160
+    dark_count, dark_weighted = 0, 0
+    for value, count in enumerate(histogram):
+        dark_count += count
+        light_count = total - dark_count
+        if dark_count == 0:
+            continue
+        if light_count == 0:
+            break
+        dark_weighted += value * count
+        dark_mean = dark_weighted / dark_count
+        light_mean = (weighted_total - dark_weighted) / light_count
+        variance = dark_count * light_count * (dark_mean - light_mean) ** 2
+        if variance > best_variance:
+            best_variance, best = variance, value + 1
+    return best
+
+
+def flatten_background(gray):
+    """그림자·누런 종이·회색 캡처 바탕을 흰색으로 펴고 대비를 끝까지 늘린다.
+
+    바탕 밝기를 크게 흐린 '최댓값 지도'로 어림한 뒤 그 차이만 남긴다.
+    폰으로 찍은 악보는 한쪽이 어두워서 고정 문턱(160)으로는 오선이 끊겨 보였다."""
+    from PIL import Image, ImageChops, ImageFilter, ImageOps
+
+    small = gray.resize(
+        (max(gray.width // 16, 1), max(gray.height // 16, 1)), Image.BOX
+    )
+    background = (
+        small.filter(ImageFilter.MaxFilter(5))
+        .filter(ImageFilter.GaussianBlur(2))
+        .resize(gray.size, Image.BILINEAR)
+    )
+    flat = ImageChops.invert(ImageChops.subtract(background, gray))
+    return ImageOps.autocontrast(flat, cutoff=(0, 1))
+
+
+def find_skew_angle(gray, threshold, max_angle=4.0, step=0.2):
+    """오선이 가장 반듯하게 눕는 회전각(도). 기울어진 사진·스캔본용.
+
+    오선이 수평이면 몇몇 행에 검은 픽셀이 몰려 '행 비율 제곱합'이 가장 커진다."""
+    from PIL import Image
+
+    scale = min(1.0, 1000 / max(gray.width, 1))
+    small = gray.resize(
+        (max(int(gray.width * scale), 1), max(int(gray.height * scale), 1)), Image.BOX
+    )
+    # 글자를 흰색(255)으로 둬야 돌릴 때 생기는 빈 모서리(0)가 글자로 안 잡힌다.
+    ink = small.point(lambda value: 255 if value < threshold else 0)
+
+    def score(angle):
+        rotated = ink.rotate(angle, resample=Image.BILINEAR, expand=True, fillcolor=0)
+        column = rotated.resize((1, rotated.height), Image.BOX)
+        return sum((value / 255) ** 2 for value in column.tobytes())
+
+    steps = int(max_angle / step)
+    angles = [index * step for index in range(-steps, steps + 1)]
+    scores = {angle: score(angle) for angle in angles}
+    best = max(angles, key=lambda angle: scores[angle])
+    # 반듯한 악보에서 흔들리지 않게, 0도보다 확실히 나을 때만 돌린다.
+    return best if scores[best] > scores[0.0] * 1.02 else 0.0
+
+
+def prepare_sheet_image(image):
+    """OCR 할 그림 악보를 다듬는다 → (회색 이미지, 오선 문턱값, 글자 문턱값).
+
+    바탕 펴기 → 기울기 바로잡기 → 오선 줄 간격이 _TARGET_STAFF_SPACING 이 되게 크기 맞추기.
+    캡처한 작은 악보(줄 간격 7~8px)는 1·2절 가사 줄 사이 틈이 1~2px 뿐이라
+    두 줄이 한 덩어리로 잡혀 아무것도 못 읽었다."""
+    from PIL import Image
+
+    gray = flatten_background(image.convert("L"))
+    # 문턱값이 둘이다. 흐린 그림의 가는 오선은 옅은 회색이라 Otsu 값(넉넉함)으로 찾고,
+    # 글 줄은 160 을 넘기지 않는 값으로 찾는다 — 흐리거나 JPEG 로 뭉개진 그림은 바탕 얼룩까지
+    # 글자로 잡혀 1·2절 가사 줄 사이 틈이 사라진다. 오선은 행의 45% 를 넘어야 하므로 얼룩에 안 속는다.
+    staff_threshold = otsu_threshold(gray)
+    text_threshold = min(staff_threshold, 160)
+    angle = find_skew_angle(gray, staff_threshold)
+    if angle:
+        gray = gray.rotate(angle, resample=Image.BICUBIC, expand=True, fillcolor=255)
+
+    systems = find_staff_systems(row_dark_ratios(gray, staff_threshold))
+    if systems:
+        spacings = sorted(spacing for _top, _bottom, spacing in systems)
+        factor = _TARGET_STAFF_SPACING / spacings[len(spacings) // 2]
+        if not 0.85 <= factor <= 1.15:
+            factor = min(factor, 4.0)
+            gray = gray.resize(
+                (max(int(gray.width * factor), 1), max(int(gray.height * factor), 1)),
+                Image.LANCZOS,
+            )
+    return gray, staff_threshold, text_threshold
 
 
 def find_staff_systems(ratios, min_ratio=_STAFF_ROW_RATIO):
@@ -1662,10 +1767,12 @@ def text_row_groups(ratios, top, bottom, max_blank_gap=2, min_height=3):
     return [(top_row, end_row) for top_row, end_row in groups if end_row - top_row >= min_height]
 
 
-def lyric_line_boxes(systems, ratios):
-    """오선 단 목록 → 오선 아래 가사 한 줄씩의 (위, 아래) 목록."""
+def lyric_line_boxes_by_system(systems, ratios):
+    """오선 단 목록 → 단마다 [오선 아래 가사 한 줄씩의 (위, 아래)].
+
+    단 하나 아래의 줄들은 위에서부터 1절, 2절 ... 이다."""
     height = len(ratios)
-    boxes = []
+    result = []
     for index, (_, bottom, spacing) in enumerate(systems):
         top = int(bottom + spacing * 0.3)
         next_top = systems[index + 1][0] if index + 1 < len(systems) else None
@@ -1674,20 +1781,34 @@ def lyric_line_boxes(systems, ratios):
             if next_top is not None
             else int(min(height, bottom + spacing * 8))
         )
-        groups = text_row_groups(ratios, top, band_bottom)
+        # 줄 간격의 절반도 안 되는 얇은 덩어리는 글자가 아니다 (음표 꼬리 끝, 붙임줄).
+        # 먼저 걸러야 한다 — 가사와 코드 사이에 끼면 아래 '어느 단에 더 붙었나' 비교가 틀린다.
+        groups = [
+            (start, end)
+            for start, end in text_row_groups(ratios, top, band_bottom)
+            if end - start + 1 >= spacing * 0.5
+        ]
         # 위쪽(가사 줄·오선)보다 아래 단에 더 붙어 있으면 그 단의 것이다
         # (코드 기호, 오선 위로 삐져나온 음표). 둘 다 붙을 수 있어 끝에서부터 걷어 낸다.
         while next_top is not None and groups:
             last_start, last_end = groups[-1]
             above = last_start - (groups[-2][1] if len(groups) > 1 else bottom)
-            if next_top - last_end >= above:
+            # 다음 단 윗선에 한 줄 간격 안으로 붙은 덩어리는 거리와 상관없이 그 단의 음표다.
+            # 흐린 그림에서는 음표 기둥이 글 줄로 잡혀 코드 줄과 오선 사이를 메운다.
+            attached = next_top - last_end <= spacing
+            if not attached and next_top - last_end >= above:
                 break
             groups.pop()
         # 띠 첫 행부터 검으면 오선에 붙은 덧줄 음표다. 그 아래 줄이 가사다.
         if len(groups) > 1 and groups[0][0] == top:
             groups.pop(0)
-        boxes.extend(groups)
-    return boxes
+        result.append(groups)
+    return result
+
+
+def lyric_line_boxes(systems, ratios):
+    """오선 단 목록 → 오선 아래 가사 한 줄씩의 (위, 아래) 목록."""
+    return [box for boxes in lyric_line_boxes_by_system(systems, ratios) for box in boxes]
 
 
 def _is_single_syllable(token):
@@ -1719,7 +1840,7 @@ def clean_lyric_line(line):
     text = unicodedata.normalize("NFC", line)
     text = text.replace("|", " ")  # 마디선을 글자로 읽은 것
     text = _LYRIC_HYPHEN_RE.sub("", text)
-    text = re.sub("[ \t\u00a0]+", " ", text).strip()
+    text = re.sub("[ \t ]+", " ", text).strip()
     return join_single_syllables(text)
 
 
@@ -1734,6 +1855,131 @@ def is_chord_line(text):
     return bool(tokens) and all(_CHORD_TOKEN_RE.match(token) for token in tokens)
 
 
+def ends_with_word_break(raw_line):
+    """영어 낱말이 단 끝에서 하이픈으로 끊겼는지 (`Lift -` ↵ `ing`).
+
+    한글 줄 끝 하이픈은 '음을 끌라'는 표시라 다음 줄과 붙이면 안 된다."""
+    match = re.search(r"([A-Za-z])[ \t ]*[-‐‑–－]+[ \t ]*$", raw_line)
+    return match is not None
+
+
+def _lyric_line_image(gray, threshold, top, bottom, spacing):
+    """가사 한 줄을 OCR 에 넘길 이미지로 자른다.
+
+    - 줄 위아래에서 들어온 획(음표 기둥이 가사 사이로 내려온 것 등)은 지운다.
+      Tesseract 가 기둥을 l·1·| 로 읽거나, 한 줄을 통째로 숫자로 읽는 원인이었다
+    - 오선 폭 전체가 아니라 글자가 있는 곳만 남기고 흰 여백을 두른다
+    - 글 줄 높이를 _TARGET_LINE_HEIGHT 로 맞춘 뒤 흑백으로 굳힌다"""
+    from PIL import Image
+
+    reach = max(int(spacing * 2), 6)
+    window_top = max(top - reach, 0)
+    window_bottom = min(bottom + 1 + reach, gray.height)
+    window = gray.crop((0, window_top, gray.width, window_bottom))
+    ink = window.point(lambda value: 255 if value < threshold else 0)
+    pixels = ink.load()
+    width, height = ink.size
+
+    # 글 줄에서 한 줄 간격쯤 떨어진 행에 걸친 덩어리는 글자가 아니라 바깥에서 들어온 획이다.
+    # 바로 옆 행은 f·l 윗부분, g·y 아랫부분, 'ㅎ' 꼭지처럼 글자 일부일 수 있다
+    # (글 줄 경계는 검은 비율로 잡아서, 솟은 글자 몇 개만 있는 행은 경계 밖으로 빠진다).
+    seed_gap = max(int(spacing), 4)
+    margin = max(int(spacing * 0.5), 3)
+    seed_rows = [
+        row
+        for row in (top - window_top - seed_gap, bottom - window_top + seed_gap)
+        if 0 <= row < height
+    ]
+    band_top = top - window_top - margin
+    band_bottom = bottom - window_top + margin
+    stem_width = max(int(spacing * 0.4), 3)
+    removed = []
+    for seed_row in seed_rows:
+        for seed_x in range(width):
+            if pixels[seed_x, seed_row] != 255:
+                continue
+            component = []
+            stack = [(seed_x, seed_row)]
+            pixels[seed_x, seed_row] = 0
+            while stack:
+                x, y = stack.pop()
+                component.append((x, y))
+                for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                    if 0 <= nx < width and 0 <= ny < height and pixels[nx, ny] == 255:
+                        pixels[nx, ny] = 0
+                        stack.append((nx, ny))
+            in_band = [x for x, y in component if band_top <= y < band_bottom]
+            # 글 줄 안에서 기둥처럼 가늘면 통째로 지운다. 넓으면 흐린 그림에서 음표가 글자에
+            # 붙어 버린 것이라 글자를 살리고 바깥 부분만 지운다 (어차피 잘려 나간다).
+            if not in_band or max(in_band) - min(in_band) < stem_width:
+                removed.extend(component)
+
+    keep_top = max(top - window_top - margin + 1, 0)
+    keep_bottom = min(bottom - window_top + margin, height)
+    cleaned = window.copy()
+    if removed:
+        cleaned_pixels = cleaned.load()
+        # 획 가장자리의 옅은 테두리(안티에일리어싱)까지 한 칸 더 지운다.
+        for x, y in removed:
+            for nx in (x - 1, x, x + 1):
+                if 0 <= nx < width:
+                    cleaned_pixels[nx, y] = 255
+    cleaned = cleaned.crop((0, keep_top, width, keep_bottom))
+
+    bbox = cleaned.point(lambda value: 255 if value < threshold else 0).getbbox()
+    if bbox is None:
+        return None
+    pad = max(int(spacing), 4)
+    cleaned = cleaned.crop(
+        (max(bbox[0] - pad, 0), 0, min(bbox[2] + pad, cleaned.width), cleaned.height)
+    )
+
+    cleaned = _squeeze_gaps(cleaned, threshold, max_gap=int((bottom - top + 1) * 0.6))
+
+    factor = _TARGET_LINE_HEIGHT / max(bottom - top + 1, 1)
+    factor = max(0.5, min(factor, 4.0))
+    if abs(factor - 1) > 0.1:
+        cleaned = cleaned.resize(
+            (max(int(cleaned.width * factor), 1), max(int(cleaned.height * factor), 1)),
+            Image.LANCZOS,
+        )
+    binary = cleaned.point(lambda value: 0 if value < threshold else 255)
+    border = 12
+    framed = Image.new("L", (binary.width + border * 2, binary.height + border * 2), 255)
+    framed.paste(binary, (border, border))
+    return framed
+
+
+def _squeeze_gaps(image, threshold, max_gap):
+    """글자 사이 빈 칸이 max_gap 보다 넓으면 max_gap 으로 줄인다.
+
+    가사는 음표 자리에 맞춰 띄엄띄엄 놓여서 낱말 사이가 글자 몇 개만큼 빈다.
+    Tesseract 는 그런 큰 틈 뒤의 낱말을 확신도 0 으로 읽거나 숫자 잡음을 지어낸다."""
+    from PIL import Image
+
+    if max_gap < 2:
+        return image
+    ink = image.point(lambda value: 255 if value < threshold else 0)
+    columns = ink.resize((image.width, 1), Image.BOX).tobytes()
+    keep = []
+    blank = 0
+    for x, value in enumerate(columns):
+        blank = blank + 1 if value == 0 else 0
+        if blank <= max_gap:
+            keep.append(x)
+    if len(keep) == image.width:
+        return image
+    squeezed = Image.new("L", (len(keep), image.height), 255)
+    # 이어진 열 묶음째로 붙여 넣는다 (열 하나씩은 느리다).
+    start = 0
+    for index in range(1, len(keep) + 1):
+        if index == len(keep) or keep[index] != keep[index - 1] + 1:
+            strip = image.crop((keep[start], 0, keep[index - 1] + 1, image.height))
+            squeezed.paste(strip, (start, 0))
+            start = index
+    return squeezed
+
+
 def _run_tesseract(executable, image_path, language, psm):
     result = subprocess.run(
         [executable, str(image_path), "stdout", "-l", language, "--psm", psm],
@@ -1741,26 +1987,89 @@ def _run_tesseract(executable, image_path, language, psm):
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=_TESSERACT_ENV,
     )
     return result.stdout or "" if result.returncode == 0 else ""
 
 
-def _ocr_lines(executable, image, language, work_dir, name, psm="7"):
-    from PIL import Image
+def _run_tesseract_words(executable, image_path, language, psm):
+    """한 줄 OCR → [(낱말, 확신도 0~100)]. 확신도로 언어 후보를 고르고 잡음을 거른다."""
+    result = subprocess.run(
+        [executable, str(image_path), "stdout", "-l", language, "--psm", psm, "tsv"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=_TESSERACT_ENV,
+    )
+    if result.returncode != 0:
+        return []
+    words = []
+    for row in (result.stdout or "").splitlines()[1:]:
+        columns = row.split("\t")
+        if len(columns) < 12 or columns[0] != "5":
+            continue
+        text = columns[11].strip()
+        try:
+            confidence = float(columns[10])
+        except ValueError:
+            continue
+        if text and confidence >= 0:
+            words.append((unicodedata.normalize("NFC", text), confidence))
+    return words
 
-    # 아주 작은 글씨만 키운다. 글자 높이 17px 쯤을 2배로 키우면 오히려
-    # '은혜를' → 'false' 처럼 엉뚱하게 읽는다.
-    if image.height < 24:
-        image = image.resize((image.width * 2, image.height * 2), Image.LANCZOS)
+
+def _words_score(words):
+    """글자 수로 가중한 평균 확신도. 글자 없는 토막(음표를 읽은 숫자·기호)은 확신도 0 으로 친다."""
+    weighted = 0.0
+    total = 0
+    for index, (text, conf) in enumerate(words):
+        letters = len(_LYRIC_LETTER_RE.findall(text))
+        if letters:
+            weighted += letters * conf
+            total += letters
+        elif not _keep_word(text, conf, index):
+            total += len(text)
+    return weighted / total if total else 0.0
+
+
+def _keep_word(text, confidence, index):
+    """음표·기둥을 잘못 읽은 토막을 버린다. 하이픈과 맨 앞 절 번호(`1.`)는 남긴다."""
+    if _LYRIC_LETTER_RE.search(text):
+        # 음표 기둥을 l·i·j 로 읽은 것. 'I'·'a' 는 진짜 낱말이라 남긴다.
+        return not (text in ("l", "i", "j", "J") and confidence < 60)
+    if _LYRIC_HYPHEN_RE.fullmatch(text):
+        return True
+    return index == 0 and re.fullmatch(r"\d{1,2}[.)]", text) is not None
+
+
+def _ocr_lyric_line(executable, image_path, languages):
+    """가사 한 줄을 언어마다 따로 읽어 확신도가 가장 높은 결과를 고른다.
+
+    kor+eng 를 한 번에 쓰면 한 줄 안에서 음절마다 언어를 오가며 읽어서,
+    한글 줄을 통째로 영문 잡음으로 읽거나('뽑의노래로' → 'ol Layae') 영어 줄 속
+    음절을 한글로 읽었다. 가사 한 줄은 거의 늘 한 언어라 언어별로 읽어 비교한다."""
+    candidates = [
+        _run_tesseract_words(executable, image_path, language, "7")
+        for language in languages
+    ]
+    words = max(candidates, key=_words_score)
+    joined = " ".join(text for text, _ in words)
+    latin_line = len(re.findall("[A-Za-z]", joined)) > len(_HANGUL_RE.findall(joined))
+    kept = []
+    for index, (text, conf) in enumerate(words):
+        if text == "|" and latin_line:
+            kept.append("I")  # 영어 줄의 외따로 선 세로 막대는 대명사 I 다
+        elif _keep_word(text, conf, index):
+            kept.append(text)
+    return " ".join(kept)
+
+
+def _ocr_lines(executable, image, language, work_dir, name, psm="7"):
+    """쪽 전체(오선을 못 찾은 경우)를 여러 줄 모드로 읽는다."""
     image_path = work_dir / f"{name}.png"
     image.save(image_path)
-
     text = _run_tesseract(executable, image_path, language, psm)
-    # kor+eng 는 한글 줄 속 음절 몇 개를 영어로 읽는다 ('예배' → 'of mh').
-    # 한글 줄이면 한국어만으로 다시 읽는다.
-    if "+" in language and _HANGUL_RE.search(text):
-        text = _run_tesseract(executable, image_path, "kor", psm) or text
-
     lines = [clean_lyric_line(line) for line in text.splitlines()]
     return [line for line in lines if is_lyric_line(line) and not is_chord_line(line)]
 
@@ -1773,20 +2082,70 @@ def _pdf_page_words(page, scale):
     ]
 
 
-def _words_to_lyric_lines(words, boxes):
-    """글자가 박힌 PDF는 OCR 없이 띠 안의 낱말을 x 순서로 이어 붙인다."""
+def _finish_line(raw):
+    """OCR/PDF 원문 한 줄 → (가사 한 줄, 다음 단에 낱말이 이어지는지). 가사가 아니면 None."""
+    text = clean_lyric_line(raw)
+    if not is_lyric_line(text) or is_chord_line(text):
+        return None
+    return text, ends_with_word_break(raw)
+
+
+def _words_to_system_lines(words, boxes):
     lines = []
     for top, bottom in boxes:
         inside = sorted(
             (word for word in words if top <= word[1] <= bottom),
             key=lambda word: word[0],
         )
-        if not inside:
-            continue
-        text = clean_lyric_line(" ".join(word[2] for word in inside))
-        if is_lyric_line(text) and not is_chord_line(text):
-            lines.append(text)
+        if inside:
+            line = _finish_line(" ".join(word[2] for word in inside))
+            if line:
+                lines.append(line)
     return lines
+
+
+def _words_to_lyric_lines(words, boxes):
+    """글자가 박힌 PDF는 OCR 없이 띠 안의 낱말을 x 순서로 이어 붙인다."""
+    return [text for text, _ in _words_to_system_lines(words, boxes)]
+
+
+def order_lyric_lines(system_lines):
+    """단마다 [(1절 줄), (2절 줄), ...] → 절 순서로 편 가사 줄. 빈 문자열 = 절 사이 빈 줄.
+
+    악보는 한 단 아래에 1·2절을 겹쳐 적어서, 위에서 아래로 읽으면 1절과 2절이
+    한 줄씩 엇갈려 나온다. 줄 수가 같은 단이 이어진 구간마다 1절을 끝까지,
+    빈 줄, 2절을 끝까지 ... 순서로 편다. 한 줄짜리 단(후렴)은 그대로 둔다."""
+    runs = []
+    for lines in system_lines:
+        if not lines:
+            continue
+        if runs and len(runs[-1][0]) == len(lines):
+            runs[-1].append(lines)
+        else:
+            runs.append([lines])
+
+    verses_out = []
+    for run in runs:
+        for verse in range(len(run[0])):
+            verses_out.append([lines[verse] for lines in run])
+
+    result = []
+    for index, verse in enumerate(verses_out):
+        if index > 0:
+            result.append("")
+        result.extend(_join_broken_words(verse))
+    return result
+
+
+def _join_broken_words(lines):
+    """`Lift -` ↵ `ing up my` 처럼 단 끝에서 끊긴 영어 낱말을 앞 줄에 붙인다."""
+    texts = [text for text, _ in lines]
+    for index, (_, broken) in enumerate(lines[:-1]):
+        following = texts[index + 1].split(" ", 1)
+        if broken and following[0] and re.match("[A-Za-z]", following[0]):
+            texts[index] += following[0]
+            texts[index + 1] = following[1] if len(following) > 1 else ""
+    return [text for text in texts if text]
 
 
 def _load_sheet_pages(source_path, work_dir):
@@ -1822,6 +2181,38 @@ def _load_sheet_pages(source_path, work_dir):
     return pages
 
 
+def _ocr_page_lines(executable, languages, image, work_dir, page_index, pool):
+    """그림 한 쪽 → 단마다의 [(가사 줄, 이어짐)] 목록, 찾은 오선 단 수."""
+    gray, staff_threshold, threshold = prepare_sheet_image(image)
+    systems = find_staff_systems(row_dark_ratios(gray, staff_threshold))
+    ratios = row_dark_ratios(gray, threshold)
+    if not systems:
+        # 오선을 못 찾으면 쪽 전체를 한 번에 읽는다 (가사만 있는 스캔 등).
+        lines = _ocr_lines(
+            executable, gray, "+".join(languages), work_dir, f"p{page_index:03d}", psm="6"
+        )
+        return [[(line, False) for line in lines]], 0
+
+    jobs = []
+    for system_index, boxes in enumerate(lyric_line_boxes_by_system(systems, ratios)):
+        spacing = systems[system_index][2]
+        system_jobs = []
+        for box_index, (top, bottom) in enumerate(boxes):
+            line_image = _lyric_line_image(gray, threshold, top, bottom, spacing)
+            if line_image is None:
+                continue
+            path = work_dir / f"p{page_index:03d}_s{system_index:02d}_l{box_index:02d}.png"
+            line_image.save(path)
+            system_jobs.append(pool.submit(_ocr_lyric_line, executable, path, languages))
+        jobs.append(system_jobs)
+
+    system_lines = []
+    for system_jobs in jobs:
+        lines = [_finish_line(job.result()) for job in system_jobs]
+        system_lines.append([line for line in lines if line])
+    return system_lines, len(systems)
+
+
 def extract_sheet_music_lyrics(file_path):
     """악보 이미지(PDF 포함)에서 오선 아래 가사만 뽑아 낸다."""
     source_path = Path(file_path)
@@ -1838,58 +2229,42 @@ def extract_sheet_music_lyrics(file_path):
         if needs_ocr and executable is None:
             return {"error": "tesseract_missing"}
         language = get_tesseract_language(executable) if executable else ""
+        # 줄마다 언어별로 따로 읽어 비교한다 (kor+eng → kor, eng).
+        languages = language.split("+") if language else []
 
-        lines = []
+        system_lines = []
         staff_count = 0
-        for page_index, (image, words) in enumerate(pages):
-            ratios = row_dark_ratios(image)
-            systems = find_staff_systems(ratios)
-            staff_count += len(systems)
-            boxes = lyric_line_boxes(systems, ratios)
-            if words:
-                # 오선을 못 찾으면 쪽 전체의 글 줄을 그대로 쓴다.
-                lines.extend(
-                    _words_to_lyric_lines(
-                        words, boxes or text_row_groups(ratios, 0, len(ratios))
+        workers = max(1, min(8, os.cpu_count() or 1))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            for page_index, (image, words) in enumerate(pages):
+                if words:
+                    ratios = row_dark_ratios(image)
+                    systems = find_staff_systems(ratios)
+                    staff_count += len(systems)
+                    by_system = lyric_line_boxes_by_system(systems, ratios)
+                    if not any(by_system):
+                        # 오선을 못 찾으면 쪽 전체의 글 줄을 그대로 쓴다.
+                        by_system = [text_row_groups(ratios, 0, len(ratios))]
+                    system_lines.extend(
+                        _words_to_system_lines(words, boxes) for boxes in by_system
                     )
+                    continue
+                page_lines, page_staffs = _ocr_page_lines(
+                    executable, languages, image, work_dir, page_index, pool
                 )
-                continue
-            if not boxes:
-                # 오선을 못 찾으면 쪽 전체를 한 번에 읽는다 (가사만 있는 스캔 등).
-                lines.extend(
-                    _ocr_lines(
-                        executable,
-                        image,
-                        language,
-                        work_dir,
-                        f"p{page_index:03d}",
-                        psm="6",
-                    )
-                )
-                continue
-            for box_index, (top, bottom) in enumerate(boxes):
-                # 글자에 딱 붙여 자르면 인식률이 떨어진다. 위아래로 조금 남긴다.
-                crop = image.crop(
-                    (0, max(top - 6, 0), image.width, min(bottom + 7, image.height))
-                )
-                lines.extend(
-                    _ocr_lines(
-                        executable,
-                        crop,
-                        language,
-                        work_dir,
-                        f"p{page_index:03d}_l{box_index:03d}",
-                    )
-                )
+                system_lines.extend(page_lines)
+                staff_count += page_staffs
     finally:
         for image, _words in pages:
             image.close()
         shutil.rmtree(work_dir, ignore_errors=True)
 
+    ordered = order_lyric_lines(system_lines)
     return {
         "source_name": unicodedata.normalize("NFC", source_path.name),
-        "lyrics": "\n".join(lines),
-        "lines": lines,
+        # 빈 줄 = 절이 바뀌는 곳 (앱에서는 페이지 나눔이 된다).
+        "lyrics": "\n".join(ordered),
+        "lines": [line for line in ordered if line],
         "page_count": len(pages),
         "staff_count": staff_count,
         "language": language,

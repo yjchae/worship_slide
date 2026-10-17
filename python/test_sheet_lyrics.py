@@ -10,6 +10,11 @@ sys.path.insert(0, str(Path(__file__).parent))
 import ppt_tool
 from ppt_tool import (
     clean_lyric_line,
+    ends_with_word_break,
+    find_skew_angle,
+    order_lyric_lines,
+    otsu_threshold,
+    prepare_sheet_image,
     join_single_syllables,
     extract_sheet_music_lyrics,
     find_staff_systems,
@@ -94,6 +99,63 @@ def test_find_staff_systems():
     # 글 줄 세 개를 다 찾되, 아래 단에 붙은 코드 줄만 가사에서 빠진다.
     assert text_row_groups(ratios, 143, 248) == [(160, 174), (180, 194), (232, 243)]
     assert lyric_line_boxes(systems, ratios) == [(160, 174), (180, 194)]
+
+
+def test_order_lyric_lines():
+    # 한 단 아래 1·2절이 겹쳐 있으면 1절을 끝까지, 빈 줄, 2절을 끝까지 편다.
+    systems = [
+        [("주님의 사랑", False), ("거룩한 이름", False)],
+        [("나를 감싸네", False), ("높이 부르며", False)],
+    ]
+    assert order_lyric_lines(systems) == [
+        "주님의 사랑", "나를 감싸네", "", "거룩한 이름", "높이 부르며",
+    ]
+    # 한 줄짜리 단만 있으면 그대로, 빈 단은 건너뛴다.
+    assert order_lyric_lines([[("가", False)], [], [("나", False)]]) == ["가", "나"]
+    # 단 끝에서 하이픈으로 끊긴 영어 낱말은 앞 줄에 붙인다.
+    broken = [[("for me Lift", True)], [("ing up my hands", False)]]
+    assert order_lyric_lines(broken) == ["for me Lifting", "up my hands"]
+
+
+def test_ends_with_word_break():
+    assert ends_with_word_break("for me Lift -")
+    assert ends_with_word_break("Lift-")
+    # 한글 줄 끝 하이픈은 '음을 끌라'는 표시라 이어 붙이지 않는다.
+    assert not ends_with_word_break("주 님 의 사 랑 -")
+    assert not ends_with_word_break("for me")
+
+
+def test_prepare_sheet_image():
+    """그림자 진 회색 바탕 + 기울어진 작은 캡처도 오선을 반듯하게, 표준 크기로 편다."""
+    from PIL import Image, ImageDraw
+
+    image = Image.new("L", (600, 300), 255)
+    draw = ImageDraw.Draw(image)
+    for line in range(5):
+        y = 100 + line * 8
+        draw.line((30, y, 570, y), fill=0, width=1)
+    # 왼쪽이 어두운 그림자 + 회색 종이
+    from PIL import ImageChops
+
+    shade = Image.linear_gradient("L").rotate(90).resize(image.size)
+    shaded = ImageChops.multiply(image, shade.point(lambda value: 140 + value * 115 // 255))
+    tilted = shaded.rotate(2.0, resample=Image.BICUBIC, expand=True, fillcolor=150)
+
+    gray, staff_threshold, text_threshold = prepare_sheet_image(tilted)
+    assert text_threshold <= 160 and text_threshold <= staff_threshold
+    systems = find_staff_systems(ppt_tool.row_dark_ratios(gray, staff_threshold))
+    assert len(systems) == 1, systems
+    # 줄 간격 8px → 표준(22px) 쯤으로 커진다.
+    assert abs(systems[0][2] - ppt_tool._TARGET_STAFF_SPACING) < 3, systems
+    assert abs(find_skew_angle(gray, staff_threshold)) < 0.5
+
+
+def test_otsu_threshold():
+    from PIL import Image
+
+    image = Image.new("L", (100, 100), 240)
+    image.paste(30, (0, 0, 100, 20))
+    assert 30 < otsu_threshold(image) <= 240
 
 
 def _draw_sheet(path):
@@ -209,6 +271,10 @@ if __name__ == "__main__":
     test_is_chord_line()
     test_find_staff_systems()
     test_lyric_line_boxes_skips_notes_and_chords()
+    test_order_lyric_lines()
+    test_ends_with_word_break()
+    test_otsu_threshold()
+    test_prepare_sheet_image()
     test_extract_pdf_with_text_layer()
     test_extract_sheet_music_lyrics()
     print("OK")
