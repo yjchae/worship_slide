@@ -556,8 +556,15 @@ const singerPageHtml =
   .box{position:relative;border-radius:1.4vh;overflow:hidden;min-height:0;}
   .stage{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
     padding:1.6vh 3vw;transform-origin:0 0;}
+  #panes{flex:1;min-height:0;display:flex;flex-direction:column;gap:1.4vh;}
+  #side{flex:37;min-height:0;display:flex;flex-direction:column;gap:1.4vh;}
   #current{flex:63;background:#1b2028;border:2px solid #5a6472;}
-  #next{flex:37;background:#0f1215;border:1px solid #232930;}
+  #next{flex:1;background:#0f1215;border:1px solid #232930;}
+  /* 좌우 배치(휴대폰마다 따로 기억) */
+  body.row #panes{flex-direction:row;gap:2vw;}
+  body.row #label{border-top:none;padding-top:0;margin-top:0;}
+  #layout{flex:none;background:#1b2028;color:#e6e9ee;border:1px solid #3a424d;border-radius:.8vh;
+    font:inherit;font-size:2vh;font-weight:700;padding:.3em .7em;}
   .fit{width:100%;max-height:100%;text-align:center;line-height:1.3;font-weight:700;}
   .main,.sub{white-space:pre;}
   .wrap .main,.wrap .sub{white-space:pre-wrap;word-break:keep-all;}
@@ -571,11 +578,14 @@ const singerPageHtml =
     -webkit-touch-callout:none;}
   .remote #current{flex:none;aspect-ratio:16/9;width:min(100%,calc(46vh*16/9));
     width:min(100%,calc(46dvh*16/9));align-self:center;}
+  .remote.row #current{width:min(62%,calc(60vh*16/9));width:min(62%,calc(60dvh*16/9));}
   .remote #current .stage{padding:0;}
   .remote #current .fit{padding:0 4%;}
+  .remote #side{flex:1;}
   .remote #next{flex:none;aspect-ratio:16/9;width:calc(min(100%,calc(46vh*16/9))*.62);
     width:calc(min(100%,calc(46dvh*16/9))*.62);align-self:center;}
-  .remote #bar{margin-top:auto;}
+  .remote.row #side{justify-content:center;}
+  .remote.row #next{width:100%;}
   .remote #note{display:block;flex:none;max-height:16vh;overflow:auto;touch-action:pan-y;white-space:pre-wrap;
     font-size:2.3vh;line-height:1.4;color:#e6e9ee;background:#1a1f26;border-left:3px solid #ffd54f;
     border-radius:.8vh;padding:1vh 3vw;}
@@ -592,11 +602,13 @@ const singerPageHtml =
   #flash.r{right:0;background:linear-gradient(to left,rgba(255,213,79,.45),transparent);}
   #flash.show{opacity:1;transition:none;}
 </style></head><body>
-  <header><span id="title"></span><span id="badge"></span><span id="page"></span></header>
-  <div class="box" id="current"></div>
+  <header><span id="title"></span><span id="badge"></span><span id="page"></span>
+    <button id="layout"></button></header>
+  <div id="panes">
+    <div class="box" id="current"></div>
+    <div id="side"><div id="label">다음</div><div class="box" id="next"></div></div>
+  </div>
   <div id="note"></div>
-  <div id="label">다음</div>
-  <div class="box" id="next"></div>
   <div id="bar"><button id="black"><span>화면 끄기 (길게 누르기)</span></button></div>
   <div id="flash"></div>
 <script>
@@ -614,21 +626,37 @@ function fill(box, page, empty){
   if(page.english_text) f.appendChild(el('div','sub',page.english_text));
   st.appendChild(f);
 }
-function fitAll(){
-  document.querySelectorAll('.stage').forEach(function(box){
-    var e=box.querySelector('.fit'); if(!e) return;
-    var cs=getComputedStyle(box);
-    var h=box.clientHeight-parseFloat(cs.paddingTop)-parseFloat(cs.paddingBottom);
-    function fit(){
-      var lo=8, hi=Math.max(12,h*0.45);
-      for(var i=0;i<18;i++){ var mid=(lo+hi)/2; e.style.fontSize=mid+'px';
-        if(e.scrollHeight<=h+1 && e.scrollWidth<=e.clientWidth+1) lo=mid; else hi=mid; }
-      e.style.fontSize=lo+'px'; return lo;
-    }
-    e.classList.remove('wrap');
-    if(fit() < window.innerHeight*0.035){ e.classList.add('wrap'); fit(); }
-  });
+// 글자 크기를 상자에 맞추고 그 크기를 돌려준다(가사가 아니면 null). cap = 넘지 않을 크기.
+function fitBox(id, cap){
+  var box=document.querySelector('#'+id+' .stage'), e=box&&box.querySelector('.fit'); if(!e) return null;
+  var cs=getComputedStyle(box);
+  var h=box.clientHeight-parseFloat(cs.paddingTop)-parseFloat(cs.paddingBottom);
+  function fit(){
+    var hi=Math.min(cap,Math.max(12,h*0.45)), lo=Math.min(8,hi);
+    for(var i=0;i<18;i++){ var mid=(lo+hi)/2; e.style.fontSize=mid+'px';
+      if(e.scrollHeight<=h+1 && e.scrollWidth<=e.clientWidth+1) lo=mid; else hi=mid; }
+    e.style.fontSize=lo+'px'; return lo;
+  }
+  e.classList.remove('wrap');
+  var s=fit();
+  if(s<cap-0.5 && s<window.innerHeight*0.035){ e.classList.add('wrap'); s=fit(); }
+  return s;
 }
+// 다음 페이지 글자는 현재 페이지보다 늘 작게(짧은 가사라도 현재보다 크게 보이지 않게).
+function fitAll(){
+  var c=fitBox('current',Infinity);
+  fitBox('next',c?c*0.75:Infinity);
+}
+// 위아래 / 좌우 배치. 휴대폰(브라우저)마다 따로 기억한다.
+function setLayout(row){
+  document.body.classList.toggle('row',row);
+  document.getElementById('layout').textContent=row?'⇅ 위아래':'⇆ 좌우';
+  try{ localStorage.setItem('singer_layout',row?'row':'col'); }catch(_){}
+  fitAll(); if(REMOTE) showZoom();
+}
+document.getElementById('layout').addEventListener('click',function(){
+  setLayout(!document.body.classList.contains('row'));
+});
 function render(d){
   var cur=d.current||{}, next=d.next;
   document.getElementById('title').textContent=cur.title||'';
@@ -769,7 +797,7 @@ if(REMOTE){
   // 메모칸 위는 위아래 밀기를 브라우저에 맡긴다(긴 메모 스크롤). 좌우 밀기는 그대로 넘기기.
   function own(e){ if(!e.target.closest('#note')) e.preventDefault(); }
   document.addEventListener('touchstart',function(e){
-    if(e.target.closest('#bar')) return;
+    if(e.target.closest('#bar,#layout')) return;
     own(e);
     begin(e,g);
   },{passive:false});
@@ -834,5 +862,8 @@ function keepAwake(){
 }
 keepAwake();
 document.addEventListener('visibilitychange', keepAwake);
+// 저장해 둔 배치(맨 끝에서 — showZoom 이 쓰는 zoom 이 정해진 뒤에).
+var savedLayout=null; try{ savedLayout=localStorage.getItem('singer_layout'); }catch(_){}
+setLayout(savedLayout==='row');
 </script></body></html>
 ''';
