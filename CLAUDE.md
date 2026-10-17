@@ -329,6 +329,11 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
     줄 구조·절 순서는 맞고 남은 오류는 손글씨풍 글자 오인식(`을`→`옹`, `믿`→`민`) — Tesseract 자체의 한계다
   - 오선 사이 띠에서 **끝에서부터** 아래 단에 더 붙은 덩어리(코드·위로 삐진 음표)를 걷어 내고,
     띠 첫 행부터 검은 첫 덩어리(오선에 붙은 덧줄 음표)도 버린다
+  - **오선 없는 가사·코드 악보**(쪽 전체를 한 번에 읽는 경로): 맨 윗줄이 다른 줄보다 1.5배 넘게 크면 제목으로 보고 뺀다.
+    `<verse1>`·`[Chorus]`·`후렴` 같은 구조 표시는 `_SECTION_LINE` → 절 나눔(빈 줄)이 된다(`_SECTION_BREAK`).
+    괄호 안 연주 메모(`(verse로 갈땐 D/A)`, `(F# if keyup)`)는 코드나 key 가 들어 있을 때만 지운다(`(x2)` 는 남김).
+    코드 줄 판별은 앞의 구조 표시(`Inter Bb F Eb`)를 떼고 보고, OCR 이 뭉갠 코드(`Bo`=B♭, `DIC`=D/C)도 줄의 60% 이상이면 코드다
+  - 여러 쪽 PDF(콘티 전체)는 모든 쪽을 읽어 **한 곡으로 합친다**(사용자가 고른 방식 — 곡별로 나누지 않는다)
   - **클립보드 붙여넣기** (`sheet --clipboard`, '악보 가져오기' 옆 붙여넣기 버튼): Pillow `ImageGrab.grabclipboard()`
     라 Dart 쪽 클립보드 패키지가 필요 없다. **macOS 는 예외** — Pillow 가 부르는 osascript 가 붙여넣기 허용 창(화면에 안 뜸)에서 멈춰서, 앱(`worship_slides/ocr` `clipboardImage`)이 직접 읽어 파일 경로로 넘긴다. 진행 창엔 '취소'가 있다. 복사한 파일 경로 목록도 받는다. 없으면 `{"error": "clipboard_empty"}`.
     투명 배경 그림은 흰 바탕에 얹어서 읽는다
@@ -340,7 +345,9 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
     - Windows: Windows.Media.Ocr 한국어 엔진(**한국어 언어 팩/OCR 기능이 깔려 있어야** 함, 영문도 같이 읽는다). C++/WinRT
       `.get()` 은 UI(STA) 스레드에서 못 기다려서 작업 스레드에서 읽고 메시지 전용 창으로 UI 스레드에 넘겨 응답한다.
       확신도를 안 줘서 1.0. `OcrEngine.MaxImageDimension` 을 넘는 그림은 못 읽으므로 Python 이 긴 변을 2500px 로 줄여 보낸다
-    - OS OCR 용 줄 이미지는 흑백으로 굳히지 않는다(`binarize=False`). 굳히고 굵힌 글자는 Tesseract 용이다
+    - OS OCR 용 줄 이미지는 흑백으로 굳히지 않는다(`binarize=False`). 굳히고 굵힌 글자는 Tesseract 용이다.
+      대신 **절반으로 줄이고 흰 여백을 두른다**(`_native_line_image`) — Vision 이 글자 높이 48px·여백 없는 띄엄띄엄한 줄을
+      빈 결과로 돌려줬다(콘티 PDF 한 쪽에서 13줄 중 10줄). Windows OCR 에서는 확인 못 했다
     - `isAvailable` 이 false(옛 macOS, 한국어 OCR 없는 Windows)거나 `recognize` 가 PlatformException 이면 Tesseract 로 읽는다.
       답은 앱이 켜져 있는 동안 기억한다
     - **이 경로는 이 레포의 리눅스 환경에서 실행해 보지 못했다**(Swift·C++ 는 CI 에서만 컴파일). 정확도 수치는 Tesseract 기준이다

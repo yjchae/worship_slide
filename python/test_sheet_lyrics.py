@@ -127,6 +127,31 @@ def test_is_chord_line():
     assert is_chord_line("u.4DmMCFCG’C")
     assert not is_chord_line("God Bless America")
     assert not is_chord_line("Every morning I will sing")
+    # 구조 표시가 앞에 붙은 코드 줄, ♭·/ 를 뭉갠 코드 (콘티 PDF 에서 실제로 나온 것).
+    assert is_chord_line("Inter Bb F Eb Gm F Eb")
+    assert is_chord_line("Bo F Eo Bo FED")
+    assert is_chord_line("C DIC Bm7 B/DA Em7 Am7 D7sus4 GsusA G GlB")
+    assert not is_chord_line("Go and tell it")
+
+
+def test_sheet_without_staff_sections():
+    """오선 없는 가사·코드 악보: 제목·구조 표시·코드·연주 메모를 걷어 내고 구조 표시에서 절을 나눈다."""
+    finish = ppt_tool._finish_line
+    assert finish("<verse1>") == ppt_tool._SECTION_LINE
+    assert finish("cbridge>") == ppt_tool._SECTION_LINE
+    assert finish("A/C# D E F#m E A (verse로 갈땐 D/A)") == ppt_tool._CHORD_LINE
+    assert finish("다시오실 그이름 (F# if keyup)") == ("다시오실 그이름", False)
+    assert finish("주님 찬양해 (x2)") == ("주님 찬양해 (x2)", False)
+
+    def row(text, y, h=0.02):
+        return {"text": text, "confidence": 1.0, "x": 0.1, "y": y, "w": 0.5, "h": h}
+
+    page = [row("기묘자", 0.02, 0.05), row("<verse1>", 0.1), row("한 아기가 났고", 0.15),
+            row("A D E", 0.2), row("<verse2>", 0.3), row("알파와 오메가", 0.35)]
+    lines = [ppt_tool._finish_line(line) for line in ppt_tool._native_page_lines(page)]
+    job = {"systems": [[{"page_image": "p"}]]}
+    systems = ppt_tool.resolve_sheet_lines(job, None, lambda _path: lines)
+    assert order_lyric_lines(systems) == ["한아기가 났고", "", "알파와 오메가"], systems
 
 
 def test_find_staff_systems():
@@ -484,6 +509,7 @@ if __name__ == "__main__":
     test_join_single_syllables()
     test_is_lyric_line()
     test_is_chord_line()
+    test_sheet_without_staff_sections()
     test_finish_line_keeps_unread_slot()
     test_kept_words()
     test_lyric_line_boxes_keeps_tight_last_verse()

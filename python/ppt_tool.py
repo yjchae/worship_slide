@@ -1565,6 +1565,19 @@ _HANGUL_RE = re.compile(r"[\uac00-\ud7a3]")
 _CHORD_TOKEN_RE = re.compile(
     r"^[A-G][#b\u266f\u266d]?(m|M|maj|min|sus|dim|aug|add)?[0-9]*(/[A-G][#b]?)?$"
 )
+# OCR 이 뭉갠 코드: ♭ → o·S, / → I·l·1 (`Bo`, `DIC`, `GlB`). 줄의 대부분이 이렇게 생겼을 때만 코드로 본다.
+_LOOSE_CHORD_TOKEN_RE = re.compile(
+    r"^[A-G][#b\u266f\u266doS]?(m|M|maj|min|sus|dim|aug|add)?[0-9]*([/Il1][A-G][#b\u266f\u266d]?)?$"
+)
+# 곡 구조 표시 (`<verse1>`, `[Chorus]`, `Bridge 2:`, `후렴`). OCR 이 `<` 를 `c`·`〈` 로 읽기도 한다.
+_SECTION_LABEL = (
+    r"[\(\[<\u3008]?c?(?:intro|verse|pre-?chorus|chorus|bridge|inter(?:lude)?|outro|tag|"
+    r"ending|coda|refrain|후렴|전주|간주|후주|브릿지|브리지)[0-9]?[a-z0-9]?[\)\]>\u3009]?:?"
+)
+_SECTION_LINE_RE = re.compile(f"^{_SECTION_LABEL}$", re.IGNORECASE)
+_SECTION_PREFIX_RE = re.compile(f"^{_SECTION_LABEL}\\s+", re.IGNORECASE)
+# 괄호 안 연주 메모 (`(verse로 갈땐 D/A)`, `(F# if keyup)`). 코드나 key 가 들어 있을 때만 지운다 — `(x2)` 는 남긴다.
+_NOTE_RE = re.compile(r"\([^()]*(?:\b[A-G][#b]?(?:m|/|\b)|[Kk]ey)[^()]*\)")
 
 
 def get_tesseract_executable():
@@ -1926,10 +1939,16 @@ def is_chord_line(text):
     OCR 은 코드 사이 띄어쓰기를 자주 잃고(`CG’DmCFCG’C`) 마디 번호·위첨자를 섞으므로,
     낱말 검사에 더해 '영문자 대부분이 코드 뿌리음(A~G 대문자)·m' 인지도 본다.
     영어 가사는 소문자가 대부분이고 한글 가사는 영문자가 없어 걸리지 않는다."""
+    text = _SECTION_PREFIX_RE.sub("", text)
     tokens = text.split()
     if tokens and all(_CHORD_TOKEN_RE.match(token) for token in tokens):
         return True
     if _HANGUL_RE.search(text):
+        return False
+    if len(tokens) >= 3 and sum(
+        1 for token in tokens if _LOOSE_CHORD_TOKEN_RE.match(token)
+    ) >= len(tokens) * 0.6:
+        return True
         return False
     letters = re.findall("[A-Za-z]", text)
     roots = sum(1 for letter in letters if letter in "ABCDEFG")
@@ -2195,6 +2214,9 @@ def _pdf_page_words(page, scale):
 
 # _finish_line 결과: 코드 줄이라 아예 빼야 하는 줄.
 _CHORD_LINE = "chord"
+_SECTION_LINE = "section"
+# 단 목록 사이에 끼워 절을 끊는 표시 (order_lyric_lines). 오선 없는 쪽의 `<verse2>` 자리.
+_SECTION_BREAK = [_SECTION_LINE]
 
 
 def _is_lyric(line):
@@ -2205,10 +2227,13 @@ def _is_lyric(line):
 def _finish_line(raw):
     """OCR/PDF 원문 한 줄 → (가사 한 줄, 다음 단에 낱말이 이어지는지).
 
-    코드 줄이면 _CHORD_LINE, 읽지 못한 줄(글자가 두 자도 안 됨)이면 None.
+    코드 줄이면 _CHORD_LINE, 곡 구조 표시(`<verse1>`)면 _SECTION_LINE,
+    읽지 못한 줄(글자가 두 자도 안 됨)이면 None.
     둘을 가르는 이유 — 코드 줄은 띠에 잘못 섞여 들어온 줄이라 빼면 되지만, 못 읽은 줄은
     진짜 가사 줄 자리라 자리를 비워 둬야 1·2절 순서가 밀리지 않는다 (order_lyric_lines)."""
-    text = clean_lyric_line(raw)
+    text = clean_lyric_line(_NOTE_RE.sub(" ", raw))
+    if _SECTION_LINE_RE.match(text.replace(" ", "")):
+        return _SECTION_LINE
     # 코드 판별이 먼저다 — 코드 하나짜리 줄('G')도 글자가 두 자 미만이라 못 읽은 줄이 될 뻔한다.
     if is_chord_line(text):
         return _CHORD_LINE
@@ -2247,13 +2272,18 @@ def order_lyric_lines(system_lines):
     빈 줄, 2절을 끝까지 ... 순서로 편다. 한 줄짜리 단(후렴)은 그대로 둔다."""
     system_lines = _trim_unread_lines(system_lines)
     runs = []
+    new_run = False
     for lines in system_lines:
+        if lines == _SECTION_BREAK:
+            new_run = True
+            continue
         if not any(lines):
             continue
-        if runs and len(runs[-1][0]) == len(lines):
+        if runs and not new_run and len(runs[-1][0]) == len(lines):
             runs[-1].append(lines)
         else:
             runs.append([lines])
+        new_run = False
 
     verses_out = []
     for run in runs:
@@ -2464,6 +2494,17 @@ def _fit_within(image, max_side):
     )
 
 
+def _native_line_image(image):
+    """OS OCR 용 줄 이미지: 절반으로 줄이고 흰 여백을 두른다.
+
+    Vision 은 글자가 띄엄띄엄 놓인 큰 줄 이미지(글자 높이 48px, 여백 없음)를 통째로 못 찾고
+    빈 결과를 자주 낸다(콘티 PDF 7쪽에서 줄 13개 중 10개). 이렇게 하면 다 읽었다."""
+    from PIL import Image, ImageOps
+
+    image = image.resize((max(image.width // 2, 1), max(image.height // 2, 1)), Image.LANCZOS)
+    return ImageOps.expand(image, border=image.height, fill=255)
+
+
 def _layout_image_page(image, work_dir, page_index, native=False):
     """그림 한 쪽 → (단마다의 줄 항목 목록, 찾은 오선 단 수). 줄 이미지는 work_dir 에 저장한다.
 
@@ -2499,6 +2540,8 @@ def _layout_image_page(image, work_dir, page_index, native=False):
             if line_image is None:
                 continue
             path = work_dir / f"p{page_index:03d}_s{system_index:02d}_l{box_index:02d}.png"
+            if native:
+                line_image = _native_line_image(line_image)
             _fit_within(line_image, max_side).save(path)
             items.append({"image": str(path)})
         layout.append(items)
@@ -2567,14 +2610,18 @@ def ocr_image_paths(job):
 def resolve_sheet_lines(job, read_line, read_page):
     """줄 항목을 실제 가사 줄로 바꾼다 → 단마다의 [(가사 줄, 이어짐)].
 
-    read_line(경로) → _finish_line 결과, read_page(경로) → (가사 줄, 이어짐) 목록.
+    read_line(경로) → _finish_line 결과, read_page(경로) → _finish_line 결과 목록.
     못 읽은 줄은 None 으로 자리를 남기고 코드 줄은 뺀다 (_finish_line 참고).
     쪽 전체에서 읽은 줄은 한 줄씩 따로 단으로 둔다 — 한 단에 넣으면 절 정리가
     줄마다 다른 절로 보고 사이사이 빈 줄을 넣는다."""
     systems = []
     for items in job["systems"]:
         if items and "page_image" in items[0]:
-            systems.extend([line] for line in read_page(items[0]["page_image"]))
+            for line in read_page(items[0]["page_image"]):
+                if line == _SECTION_LINE:
+                    systems.append(list(_SECTION_BREAK))
+                elif _is_lyric(line):
+                    systems.append([line])
             continue
         lines = []
         for item in items:
@@ -2582,7 +2629,7 @@ def resolve_sheet_lines(job, read_line, read_page):
                 (item["text"], item["continues"]) if "text" in item
                 else read_line(item["image"])
             )
-            if line != _CHORD_LINE:
+            if line not in (_CHORD_LINE, _SECTION_LINE):
                 lines.append(line)
         systems.append(lines)
     return systems
@@ -2619,7 +2666,7 @@ def _read_with_tesseract(job, executable, languages):
 
         def read_page(path):
             text = _run_tesseract(executable, path, "+".join(languages), "6")
-            return [line for line in map(_finish_line, text.splitlines()) if _is_lyric(line)]
+            return [_finish_line(line) for line in text.splitlines()]
 
         return resolve_sheet_lines(job, read_line, read_page)
 
@@ -2694,6 +2741,10 @@ def _native_page_lines(observations):
                 rows[-1] = (min(top, row_top), max(bottom, row_bottom), members + [observation])
                 continue
         rows.append((top, bottom, [observation]))
+    # 맨 윗줄이 다른 줄보다 확 크면 곡 제목이다 (오선 없는 가사·코드 악보).
+    heights = sorted(bottom - top for top, bottom, _members in rows)
+    if len(rows) >= 3 and rows[0][1] - rows[0][0] > heights[len(heights) // 2] * 1.5:
+        rows = rows[1:]
     return [_native_line_text(members) for _top, _bottom, members in rows]
 
 
@@ -2708,8 +2759,7 @@ def finish_sheet_lines(job_path, ocr_path):
         return _finish_line(_native_line_text(results.get(path) or []))
 
     def read_page(path):
-        lines = map(_finish_line, _native_page_lines(results.get(path) or []))
-        return [line for line in lines if _is_lyric(line)]
+        return [_finish_line(line) for line in _native_page_lines(results.get(path) or [])]
 
     return _sheet_result(job, resolve_sheet_lines(job, read_line, read_page), "native")
 
