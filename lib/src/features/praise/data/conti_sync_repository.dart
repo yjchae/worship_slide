@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'app_logger.dart';
+import 'atomic_file.dart';
 import 'fnv_hash.dart';
 import 'praise_database.dart';
 import 'sync_snapshot.dart';
@@ -56,7 +57,8 @@ class ContiSyncRepository {
     final present = await _listNames(sharedFiles);
     final contis = await db.query('worship_contis', orderBy: 'uid');
     final items = await db.rawQuery('''
-      SELECT wci.*, ps.uid AS cur_song_uid
+      SELECT wci.*, ps.uid AS cur_song_uid, ps.title AS cur_title,
+             ps.lyrics AS cur_lyrics, ps.english_lyrics AS cur_english_lyrics
       FROM worship_conti_items wci
       LEFT JOIN praise_songs ps ON ps.id = wci.song_id
       ORDER BY wci.conti_id, wci.position
@@ -66,6 +68,8 @@ class ContiSyncRepository {
       itemsByConti.putIfAbsent(row['conti_id'] as int, () => []).add(row);
     }
 
+    // 지운 콘티의 캐시는 버린다 — 남아 있으면 그 파일이 사라졌다고 매번 다시 맞춘다.
+    _exported.removeWhere((uid, _) => !contis.any((c) => c['uid'] == uid));
     final result = <SyncConti>[];
     for (final conti in contis) {
       final uid = conti['uid'] as String;
@@ -135,8 +139,18 @@ class ContiSyncRepository {
         ..remove('conti_id')
         ..remove('song_id')
         ..remove('cur_song_uid')
+        ..remove('cur_title')
+        ..remove('cur_lyrics')
+        ..remove('cur_english_lyrics')
         // 원본 PPT 경로는 이 PC 에서만 뜻이 있다.
         ..remove('image_source_path');
+      if (row['item_type'] == 'song') {
+        // 예전(DB version 7·13 전) 콘티는 가사·제목 스냅샷이 비어 있다. 받는 PC 에 그 곡이
+        // 없으면 항목이 통째로 빠지므로 지금 곡으로 채운다(.wsconti 내보내기와 같다).
+        item['song_title'] ??= row['cur_title'];
+        item['song_lyrics'] ??= row['cur_lyrics'];
+        item['song_english_lyrics'] ??= row['cur_english_lyrics'];
+      }
       // 저장할 때 적어 둔 곡 uid 를 먼저 쓴다 — 받은 콘티의 곡이 이 PC 에 없어도 링크가 남는다.
       item['song_uid'] ??= row['cur_song_uid'];
       if (item['song_uid'] == null) item.remove('song_uid');
@@ -167,20 +181,14 @@ class ContiSyncRepository {
   }) async {
     final db = await _databaseProvider.database;
 
-    final tombstones = <String, int>{};
-    void addTombstone(String uid, int at) {
-      final before = tombstones[uid];
-      if (before == null || at > before) tombstones[uid] = at;
-    }
-
     final storedTombstones = {
       for (final r in await db.query('conti_tombstones'))
         r['uid'] as String: r['deleted_at'] as int,
     };
-    storedTombstones.forEach(addTombstone);
+    final tombstones = Map<String, int>.of(storedTombstones);
     final newest = <String, SyncConti>{};
     for (final remote in remotes) {
-      remote.contiDeleted.forEach(addTombstone);
+      remote.contiDeleted.forEach((uid, at) => keepLatest(tombstones, uid, at));
       for (final conti in remote.contis) {
         final before = newest[conti.uid];
         if (before == null || conti.winsOver(before)) {
@@ -203,7 +211,7 @@ class ContiSyncRepository {
         'PRAGMA table_info(worship_conti_items)',
       ))
         c['name'] as String,
-    }..removeAll(['id', 'conti_id', 'song_id']);
+    }..removeAll(['id', 'conti_id', 'song_id', 'image_source_path']);
 
     // 받을 콘티를 고르고 파일부터 내려받는다(DB 트랜잭션을 파일 복사 동안 잡고 있지 않게).
     final incoming = <({SyncConti conti, List<Map<String, Object?>> rows})>[];
@@ -286,12 +294,14 @@ class ContiSyncRepository {
           if (imagePaths != null) {
             row['image_paths'] = imagePaths
                 .split('\n')
-                .map((v) => _localPath(v, localFiles))
+                .map(
+                  (v) => _receivedPath(v, localFiles) ?? _missing(localFiles),
+                )
                 .join('\n');
           }
           row['background'] = WorshipContiRepository.mapBackgroundPaths(
             row['background'],
-            (v) => _localPath(v, localFiles),
+            (v) => _receivedPath(v, localFiles),
           );
           // 합쳐진 uid 도 따라간다. 이 PC 에 없는 곡이면 null — 콘티는 가사 스냅샷을 들고 있어
           // 곡이 없어도 불러와진다.
@@ -305,7 +315,25 @@ class ContiSyncRepository {
         }
       }
 
+      // 곡보다 콘티가 먼저 온 경우(그 곡을 가진 PC 파일을 이번엔 못 읽음 등) 곡이 들어온 뒤에 잇는다.
+      for (final r in await txn.query(
+        'worship_conti_items',
+        columns: ['id', 'song_uid'],
+        where: 'song_uid IS NOT NULL AND song_id IS NULL',
+      )) {
+        final songId =
+            songIdByUid[resolveSongUid(aliases, r['song_uid'] as String)];
+        if (songId == null) continue;
+        await txn.update(
+          'worship_conti_items',
+          {'song_id': songId},
+          where: 'id = ?',
+          whereArgs: [r['id']],
+        );
+      }
+
       var deleted = 0;
+      var stateChanged = false;
       final localNow = {
         for (final r in await txn.query(
           'worship_contis',
@@ -329,6 +357,7 @@ class ContiSyncRepository {
             where: 'id = ?',
             whereArgs: [mine.id],
           );
+          _exported.remove(entry.key);
           deleted += 1;
         }
         if (storedTombstones[entry.key] != entry.value) {
@@ -336,6 +365,7 @@ class ContiSyncRepository {
             'uid': entry.key,
             'deleted_at': entry.value,
           }, conflictAlgorithm: ConflictAlgorithm.replace);
+          stateChanged = true;
         }
       }
       return SyncMergeResult(
@@ -343,6 +373,7 @@ class ContiSyncRepository {
         updatedCount: updated,
         deletedCount: deleted,
         pendingCount: pending,
+        stateChanged: stateChanged,
       );
     });
   }
@@ -372,18 +403,8 @@ class ContiSyncRepository {
     }
     if (present.contains(name)) return name;
     final target = File(p.join(sharedFiles.path, name));
-    if (!await target.exists()) {
-      await sharedFiles.create(recursive: true);
-      final temp = File('${target.path}.${newSongUid()}.tmp');
-      try {
-        await local.copy(temp.path);
-        await temp.rename(target.path);
-      } on FileSystemException {
-        await temp.delete().catchError((_) => temp);
-        // 다른 PC 가 같은 파일을 먼저 올렸으면(이름이 같으면 내용도 같다) 그걸로 된다.
-        if (!await target.exists()) rethrow;
-      }
-    }
+    // 다른 PC 가 같은 파일을 먼저 올렸으면(이름이 같으면 내용도 같다) 그걸로 된다.
+    if (!await target.exists()) await atomicCopy(local, target);
     present.add(name);
     return name;
   }
@@ -455,23 +476,25 @@ class ContiSyncRepository {
       if (await local.exists()) continue;
       final shared = File(p.join(sharedFiles.path, name));
       if (!await shared.exists()) return false;
-      await localFiles.create(recursive: true);
-      final temp = File('${local.path}.tmp');
       try {
-        await shared.copy(temp.path);
-        await temp.rename(local.path);
+        await atomicCopy(shared, local);
       } on FileSystemException {
-        await temp.delete().catchError((_) => temp);
         return false;
       }
     }
     return true;
   }
 
-  static String? _localPath(String? value, Directory localFiles) {
+  /// 받은 경로 값 → 이 PC 경로. 공유 파일 표시가 아닌 값(보낸 PC 의 로컬 경로)은 버린다 —
+  /// 그대로 두면 이 PC 의 같은 경로에 있는 아무 파일이나 다음 동기화 때 공유 폴더로 올라간다.
+  static String? _receivedPath(String? value, Directory localFiles) {
     final name = SyncConti.fileName(value);
-    return name == null ? value : p.join(localFiles.path, name);
+    return name == null ? null : p.join(localFiles.path, name);
   }
+
+  /// 이미지 페이지 자리를 지키는 없는 파일 경로. 불러오기가 '유실'로 센다.
+  static String _missing(Directory localFiles) =>
+      p.join(localFiles.path, '.missing');
 
   static Future<Object?> _mapBackgroundAsync(
     Object? stored,

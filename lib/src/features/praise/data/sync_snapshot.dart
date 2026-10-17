@@ -7,6 +7,12 @@ import 'fnv_hash.dart';
 String? _str(Object? v) => v is String ? v : null;
 int? _int(Object? v) => v is num ? v.toInt() : null;
 
+/// [into] 에 [key] 의 시각을 넣는다. 이미 있으면 더 늦은 쪽을 남긴다(지운 기록 합치기).
+void keepLatest(Map<String, int> into, String key, int at) {
+  final before = into[key];
+  if (before == null || at > before) into[key] = at;
+}
+
 /// 합쳐진 uid 를 따라가 지금 uid 를 찾는다(옛 uid → 지금 uid 사슬). 고리가 있어도 멈춘다.
 String resolveSongUid(Map<String, String> aliases, String uid) {
   var current = uid;
@@ -155,6 +161,7 @@ class SyncSnapshot {
     required this.deleted,
     required this.aliases,
     this.writer = '',
+    this.writtenAt = 0,
     this.deletedContent = const {},
     this.translations = const [],
     this.translationDeleted = const {},
@@ -170,6 +177,9 @@ class SyncSnapshot {
   /// 이 파일을 쓴 앱 실행마다 새로 만드는 표시. 설정 폴더째 복제된 두 PC 가 같은 기기 id 로
   /// 서로의 파일을 덮어쓰는지 알아보는 데 쓴다([SyncService]).
   final String writer;
+
+  /// 이 파일을 쓴 시각(ms, 그 PC 기준). [writer] 와 같이 복제 PC 를 알아보는 데 쓴다.
+  final int writtenAt;
 
   final List<SyncSong> songs;
 
@@ -197,6 +207,7 @@ class SyncSnapshot {
         deviceId: deviceId,
         deviceName: deviceName,
         writer: writer,
+        writtenAt: writtenAt,
         songs: songs,
         deleted: this.deleted,
         aliases: aliases,
@@ -213,6 +224,8 @@ class SyncSnapshot {
     'device_id': deviceId,
     'device_name': deviceName,
     'writer': writer,
+    // 0 이면 싣지 않는다 — SyncService 가 쓸 때 앞에 붙인다(내용 비교에서 빼려고).
+    if (writtenAt != 0) 'written_at': writtenAt,
     'songs': [for (final song in songs) song.toJson()],
     'deleted': deleted,
     'aliases': aliases,
@@ -242,6 +255,7 @@ class SyncSnapshot {
       deviceId: _str(raw['device_id']) ?? '',
       deviceName: _str(raw['device_name']) ?? '',
       writer: _str(raw['writer']) ?? '',
+      writtenAt: _int(raw['written_at']) ?? 0,
       songs: songs is List
           ? songs.map(SyncSong.fromJson).whereType<SyncSong>().toList()
           : const [],
@@ -372,6 +386,7 @@ class SyncMergeResult {
     this.updatedCount = 0,
     this.deletedCount = 0,
     this.pendingCount = 0,
+    this.stateChanged = false,
   });
 
   final int addedCount;
@@ -380,6 +395,9 @@ class SyncMergeResult {
 
   /// 콘티만: 파일이 아직 공유 폴더에 다 안 올라와 이번엔 못 받은 수.
   final int pendingCount;
+
+  /// 곡·콘티 수는 그대로지만 내 파일에 실을 것(지운 기록·합친 uid)이 바뀌었다.
+  final bool stateChanged;
 
   bool get changed => addedCount + updatedCount + deletedCount > 0;
 }

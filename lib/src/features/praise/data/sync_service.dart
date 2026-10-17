@@ -8,6 +8,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import 'app_logger.dart';
+import 'atomic_file.dart';
 import 'conti_sync_repository.dart';
 import 'praise_database.dart';
 import 'song_sync_repository.dart';
@@ -112,9 +113,10 @@ class SyncService {
   /// 이번 실행이 쓰는 내 파일 표시([SyncSnapshot.writer]). 설정에는 마지막으로 쓴 값을 남긴다.
   final String _writer = newSongUid();
 
-  /// 설정에 남은, 이 PC 가 마지막으로 쓴 내 파일 표시. 내 파일의 표시가 이것과 다르면
-  /// 다른 PC 가 같은 기기 id 로 쓴 것이다(설정 폴더째 복제·마이그레이션).
-  String? _lastWriter;
+  /// 이 PC 가 마지막으로 내 파일을 쓴 시각(ms). 설정에 남기고, **파일보다 먼저** 저장한다.
+  /// 그래서 내 파일의 시각이 이보다 늦고 표시도 내 것이 아니면 다른 PC 가 같은 기기 id 로
+  /// 쓴 것이다(설정 폴더째 복제·마이그레이션). 폴더를 바꿨다 돌아와도 옛 파일은 이보다 이르다.
+  int? _lastWrittenAt;
 
   /// 내가 마지막으로 쓴 내 파일의 상태. 바뀌었으면 누가 썼는지 확인한다.
   FileStat? _ownStat;
@@ -156,8 +158,8 @@ class SyncService {
         _deviceId = json['device_id'] is String
             ? json['device_id'] as String
             : null;
-        _lastWriter = json['writer'] is String
-            ? json['writer'] as String
+        _lastWrittenAt = json['written_at'] is int
+            ? json['written_at'] as int
             : null;
       }
     } catch (error, stack) {
@@ -231,23 +233,21 @@ class SyncService {
         : null;
   }
 
-  /// 임시 파일에 쓰고 이름을 바꾼다 — 쓰는 도중 꺼져도 설정이 반쯤 남지 않게.
-  Future<void> _saveSettings(String? folder) async {
+  /// 임시 파일에 쓰고 이름을 바꾼다 — 쓰는 도중 꺼져도 설정이 반쯤 남지 않게. 실패하면 false.
+  Future<bool> _saveSettings(String? folder) async {
     try {
-      final file = await _settings;
-      await file.parent.create(recursive: true);
-      final temp = File('${file.path}.tmp');
-      await temp.writeAsString(
+      await atomicWriteString(
+        await _settings,
         jsonEncode({
           'folder': folder,
           'device_id': _deviceId,
-          'writer': _lastWriter,
+          'written_at': _lastWrittenAt,
         }),
-        flush: true,
       );
-      await temp.rename(file.path);
+      return true;
     } catch (error, stack) {
       await AppLogger.instance.error('동기화 설정 저장 실패', error, stack);
+      return false;
     }
   }
 
@@ -328,12 +328,13 @@ class SyncService {
         localFiles: localFiles,
       );
       final result = SyncResult(songs: songs, contis: contis);
-      // 받지 못한 콘티만 다시 본 차례에 바뀐 게 없으면 내 파일은 그대로다.
-      if (remoteChanged ||
-          hadLocalChanges ||
+      // 다른 PC 파일만 바뀌고 이 PC 에 들어온 게 없으면 내 파일은 그대로다 — 다시 만들지 않는다.
+      if (hadLocalChanges ||
           ownMissing ||
           filesMissing ||
-          result.changed) {
+          result.changed ||
+          songs.stateChanged ||
+          contis.stateChanged) {
         await _writeOwn(ownPath, sharedFiles, localFiles, force: ownMissing);
       }
       _lastRemoteSignature = signature;
@@ -446,6 +447,9 @@ class SyncService {
     Directory localFiles, {
     bool force = false,
   }) async {
+    // 시각은 늘 앞으로만 간다(시계가 같은 ms 를 돌려줘도).
+    final now = _clock().millisecondsSinceEpoch;
+    final writtenAt = now > (_lastWrittenAt ?? 0) ? now : _lastWrittenAt! + 1;
     final songs = await _songs.exportSnapshot(
       deviceId: deviceId,
       deviceName: _deviceName,
@@ -457,23 +461,27 @@ class SyncService {
       localFiles: localFiles,
     );
     final snapshot = songs.withContis(contis.contis, contis.deleted);
-    final text = await Isolate.run(() => jsonEncode(snapshot.toJson()));
-    if (!force && text == _lastWrittenText) return;
+    // 쓴 시각은 내용 비교에서 뺀다 — 넣으면 바뀐 게 없어도 매번 다시 쓴다.
+    final body = await Isolate.run(() => jsonEncode(snapshot.toJson()));
+    if (!force && body == _lastWrittenText) return;
+    final text = '{"written_at":$writtenAt,${body.substring(1)}';
+    // 쓴 시각을 설정에 먼저 남긴다. 못 남기면 쓰지 않는다 — 남기지 못한 채 쓰면 다음 실행이
+    // 내 파일을 "다른 PC 가 쓴 것"으로 오해한다.
+    final previous = _lastWrittenAt;
+    _lastWrittenAt = writtenAt;
+    if (!await _saveSettings(status.value.folder)) {
+      _lastWrittenAt = previous;
+      throw const FileSystemException('동기화 설정을 저장하지 못했습니다.');
+    }
     final file = File(path);
-    final temp = File('$path.tmp');
-    await temp.writeAsString(text, flush: true);
     try {
-      await temp.rename(path);
+      await atomicWriteString(file, text);
     } on FileSystemException {
+      // 드라이브가 파일을 잡고 있어 이름 바꾸기가 막히면 바로 덮어쓴다.
       await file.writeAsString(text, flush: true);
-      await temp.delete().catchError((_) => temp);
     }
-    _lastWrittenText = text;
+    _lastWrittenText = body;
     _ownStat = await file.stat();
-    if (_lastWriter != _writer) {
-      _lastWriter = _writer;
-      await _saveSettings(status.value.folder);
-    }
   }
 
   /// 내 파일(이 기기 id)을 다른 PC 가 쓰고 있으면 true. 내가 쓴 뒤로 파일이 바뀌었을 때만
@@ -488,24 +496,27 @@ class SyncService {
         stat.size == mine.size) {
       return false;
     }
-    final writer = await Isolate.run(() {
+    final found = await Isolate.run(() {
       try {
         final json = jsonDecode(File(path).readAsStringSync());
-        return json is Map && json['writer'] is String
-            ? json['writer'] as String
-            : null;
+        if (json is! Map) return null;
+        return (
+          writer: json['writer'] is String ? json['writer'] as String : '',
+          at: json['written_at'] is int ? json['written_at'] as int : 0,
+        );
       } catch (_) {
         return null;
       }
     });
-    if (writer == null || writer.isEmpty || writer == _writer) {
-      if (writer == _writer) _ownStat = stat;
+    if (found == null || found.writer.isEmpty) return false;
+    if (found.writer == _writer) {
+      _ownStat = stat;
       return false;
     }
-    // 이번 실행에서 아직 안 썼으면, 지난 실행에서 내가 쓴 것인지 본다.
-    if (mine == null && (_lastWriter == null || writer == _lastWriter)) {
-      return false;
-    }
-    return true;
+    // 이번 실행에서 내가 쓴 뒤에 다른 표시로 바뀌었다 = 다른 PC.
+    if (mine != null) return true;
+    // 이번 실행에서 처음 본다: 지난번에 내가 쓴 뒤에 누가 썼으면 다른 PC.
+    final mineAt = _lastWrittenAt;
+    return mineAt != null && found.at > mineAt;
   }
 }

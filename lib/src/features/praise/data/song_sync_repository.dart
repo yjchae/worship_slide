@@ -18,11 +18,15 @@ class SongSyncRepository {
 
   final PraiseDatabase _databaseProvider;
 
+  /// 이번 합치기에서 곡 수와 상관없이 내 파일에 실을 것(합친 uid·지운 기록)이 바뀌었는지.
+  bool _stateChanged = false;
+
   /// 이 PC 의 곡·보조 가사 전부를 공유 폴더에 쓸 모양으로.
   Future<SyncSnapshot> exportSnapshot({
     required String deviceId,
     required String deviceName,
     String writer = '',
+    int writtenAt = 0,
   }) async {
     final db = await _databaseProvider.database;
     final rows = await db.query('praise_songs', orderBy: 'uid');
@@ -30,6 +34,7 @@ class SongSyncRepository {
       deviceId: deviceId,
       deviceName: deviceName,
       writer: writer,
+      writtenAt: writtenAt,
       songs: [for (final row in rows) _songFromRow(row)],
       deleted: await _tombstones(db),
       deletedContent: {
@@ -60,6 +65,7 @@ class SongSyncRepository {
   Future<SyncMergeResult> merge(List<SyncSnapshot> remotes) async {
     final db = await _databaseProvider.database;
     await fillMissingSyncUids(db);
+    _stateChanged = false;
     return db.transaction((txn) async {
       final songs = await _mergeSongs(txn, remotes);
       final translations = await _mergeTranslations(txn, remotes);
@@ -67,6 +73,7 @@ class SongSyncRepository {
         addedCount: songs.addedCount,
         updatedCount: songs.updatedCount + translations,
         deletedCount: songs.deletedCount,
+        stateChanged: _stateChanged,
       );
     });
   }
@@ -97,11 +104,8 @@ class SongSyncRepository {
     };
     final tombstones = <String, int>{};
     final tombstoneContent = <String, String>{};
-    void addTombstone(String uid, int at) {
-      final key = canonical(uid);
-      final before = tombstones[key];
-      if (before == null || at > before) tombstones[key] = at;
-    }
+    void addTombstone(String uid, int at) =>
+        keepLatest(tombstones, canonical(uid), at);
 
     storedTombstones.forEach(addTombstone);
     storedContent.forEach(
@@ -180,8 +184,7 @@ class SongSyncRepository {
     for (final mine in local.values.toList()) {
       final at = deletedByContent.remoteDeletedAt(mine.song);
       if (at == null) continue;
-      final before = tombstones[mine.song.uid];
-      if (before == null || at > before) tombstones[mine.song.uid] = at;
+      keepLatest(tombstones, mine.song.uid, at);
       tombstoneContent[mine.song.uid] = mine.song.contentHash;
     }
 
@@ -202,6 +205,7 @@ class SongSyncRepository {
           'deleted_at': entry.value,
           'content_hash': hash,
         }, conflictAlgorithm: ConflictAlgorithm.replace);
+        _stateChanged = true;
       }
     }
 
@@ -262,6 +266,7 @@ class SongSyncRepository {
     String uid,
   ) async {
     aliases[alias] = uid;
+    _stateChanged = true;
     await txn.insert('song_uid_aliases', {
       'alias': alias,
       'uid': uid,
@@ -279,6 +284,7 @@ class SongSyncRepository {
       final uid = canonical(song.uid);
       var current = _LocalSong(row['id'] as int, song);
       if (uid != song.uid) {
+        _stateChanged = true;
         await txn.update(
           'praise_songs',
           {'uid': uid},
@@ -356,10 +362,9 @@ class SongSyncRepository {
     final tombstones = Map<String, int>.of(storedTombstones);
     final newest = <String, SyncTranslation>{};
     for (final remote in remotes) {
-      remote.translationDeleted.forEach((key, at) {
-        final before = tombstones[key];
-        if (before == null || at > before) tombstones[key] = at;
-      });
+      remote.translationDeleted.forEach(
+        (key, at) => keepLatest(tombstones, key, at),
+      );
       for (final t in remote.translations) {
         if (t.language == PraiseRepository.defaultSubLanguage ||
             t.lyrics.trim().isEmpty) {
@@ -403,6 +408,7 @@ class SongSyncRepository {
           'language': parts.last,
           'deleted_at': entry.value,
         }, conflictAlgorithm: ConflictAlgorithm.replace);
+        _stateChanged = true;
       }
     }
     return changed;

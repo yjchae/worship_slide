@@ -689,6 +689,9 @@ void main() {
       await a.sync.syncNow();
       await b.repo.insertSong(song('사랑', '가사'));
       await b.sync.syncNow();
+      // 먼저 쓴 쪽의 파일을 다른 쪽이 덮으면, 덮인 쪽이 다음 차례에 알아채 새 id 로 비킨다
+      // (어느 쪽이 비키든 된다).
+      await syncAll([a, b]);
       expect(b.sync.deviceId, isNot(a.sync.deviceId));
       await syncAll([a, b]);
       expect(await a.titles(), ['사랑:가사', '은혜:가사', '축복:가사']);
@@ -801,6 +804,156 @@ void main() {
       final c = await newPc('C');
       await c.sync.syncNow();
       expect((await c.contis.listContis()).map((x) => x.name), ['콘티']);
+    });
+  });
+
+  group('리뷰 4차', () {
+    /// 다른 PC 가 쓴 것처럼 공유 폴더에 동기화 파일을 넣는다.
+    void writePeer(String id, SyncSnapshot snapshot) => File(
+      p.join(shared, SyncService.syncDirName, '$id.json'),
+    ).writeAsStringSync(jsonEncode(snapshot.toJson()));
+
+    test('다른 PC 콘티가 이 PC 의 로컬 경로를 가리켜도 그 파일을 올리지 않는다', () async {
+      final b = await newPc('B');
+      final secret = File(p.join(root.path, 'secret.png'))
+        ..writeAsBytesSync([9]);
+      writePeer(
+        'evil',
+        SyncSnapshot(
+          deviceId: 'evil',
+          deviceName: 'evil',
+          songs: const [],
+          deleted: const {},
+          aliases: const {},
+          contis: [
+            SyncConti(
+              uid: 'c1',
+              updatedAt: 1,
+              name: '콘티',
+              createdAt: 1,
+              items: [
+                {
+                  'item_type': 'image',
+                  'image_paths': secret.path,
+                  'image_source_path': secret.path,
+                },
+              ],
+            ),
+          ],
+        ),
+      );
+      await b.sync.syncNow();
+      b.sync.markLocalChanged();
+      await b.sync.syncNow();
+      final files = Directory(
+        p.join(shared, SyncService.syncDirName, SyncService.filesDirName),
+      );
+      expect(files.existsSync() ? files.listSync() : const [], isEmpty);
+      final list = await b.contis.listContis();
+      final loaded = await b.contis.loadConti(list.single.id, 1);
+      expect(loaded.items, isEmpty); // 이미지가 없는 항목은 유실로 센다
+      expect(loaded.missingCount, 1);
+    });
+
+    test('콘티가 곡보다 먼저 와도 곡이 들어오면 잇는다', () async {
+      final b = await newPc('B');
+      SyncConti conti() => SyncConti(
+        uid: 'c1',
+        updatedAt: 1,
+        name: '콘티',
+        createdAt: 1,
+        items: [
+          {
+            'item_type': 'song',
+            'song_uid': 's1',
+            'song_title': '은혜',
+            'song_lyrics': '가사',
+          },
+        ],
+      );
+      writePeer(
+        'p1',
+        SyncSnapshot(
+          deviceId: 'p1',
+          deviceName: 'p1',
+          songs: const [],
+          deleted: const {},
+          aliases: const {},
+          contis: [conti()],
+        ),
+      );
+      await b.sync.syncNow();
+      writePeer(
+        'p2',
+        SyncSnapshot(
+          deviceId: 'p2',
+          deviceName: 'p2',
+          songs: [
+            SyncSong(
+              uid: 's1',
+              updatedAt: 1,
+              title: '은혜',
+              fileName: '',
+              lyrics: '가사',
+              englishLyrics: '',
+            ),
+          ],
+          deleted: const {},
+          aliases: const {},
+        ),
+      );
+      await b.sync.syncNow();
+      final list = await b.contis.listContis();
+      final loaded = await b.contis.loadConti(list.single.id, 1);
+      final item = loaded.items.single.item as SongStagingItem;
+      expect(item.song.id, (await b.songs()).single.id);
+    });
+
+    test('예전 콘티(가사 스냅샷 없음)는 지금 곡 가사로 채워 보낸다', () async {
+      final a = await newPc('A');
+      await a.repo.insertSong(song('은혜', '지금 가사'));
+      final grace = (await a.songs()).single;
+      final id = await a.contis.saveConti('예전 콘티', [
+        (uid: 1, item: SongStagingItem(grace)),
+      ]);
+      final db = await databaseFactoryFfi.openDatabase(
+        p.join(a.dir.path, 'a.db'),
+      );
+      addTearDown(db.close);
+      await db.update(
+        'worship_conti_items',
+        {'song_lyrics': null, 'song_title': null},
+        where: 'conti_id = ?',
+        whereArgs: [id],
+      );
+      a.sync.markLocalChanged();
+      await a.sync.syncNow();
+      final own = File(
+        p.join(shared, SyncService.syncDirName, '${a.sync.deviceId}.json'),
+      );
+      final json = jsonDecode(own.readAsStringSync()) as Map;
+      final item =
+          (((json['contis'] as List).single as Map)['items'] as List).single
+              as Map;
+      expect(item['song_lyrics'], '지금 가사');
+      expect(item['song_title'], '은혜');
+    });
+
+    test('제목에 (와이드 스크린) 이 붙은 곡도 그냥 저장하면 고친 시각이 그대로다', () async {
+      final a = await newPc('A');
+      await a.repo.insertSong(song('은혜 (와이드 스크린)', '가사'));
+      final loaded = (await a.songs()).single;
+      expect(loaded.title, '은혜');
+      final before = await a.sync.syncNow();
+      expect(before, isNotNull);
+      final own = File(
+        p.join(shared, SyncService.syncDirName, '${a.sync.deviceId}.json'),
+      );
+      final text = own.readAsStringSync();
+      await a.repo.updateSong(loaded);
+      a.sync.markLocalChanged();
+      await a.sync.syncNow();
+      expect(own.readAsStringSync(), text);
     });
   });
 }

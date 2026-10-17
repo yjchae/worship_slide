@@ -273,12 +273,14 @@ class PraiseRepository {
       whereArgs: [song.id],
       limit: 1,
     );
+    // 편집 화면은 fromMap 으로 읽은 곡(제목의 '(와이드 스크린)' 을 뗀 것)을 돌려주므로 같은 방법으로 읽어 비교한다.
+    final before = current.isEmpty ? null : PraiseSong.fromMap(current.first);
     final unchanged =
-        current.isNotEmpty &&
-        current.first['file_name'] == song.fileName &&
-        current.first['title'] == song.title &&
-        current.first['lyrics'] == song.lyrics &&
-        (current.first['english_lyrics'] ?? '') == song.englishLyrics;
+        before != null &&
+        before.fileName == song.fileName &&
+        before.title == song.title &&
+        before.lyrics == song.lyrics &&
+        before.englishLyrics == song.englishLyrics;
     if (unchanged) return;
     await db.update(
       'praise_songs',
@@ -361,6 +363,7 @@ class PraiseRepository {
     }
     final db = await _databaseProvider.database;
     final now = _now();
+    var changed = false;
     await db.transaction((txn) async {
       // 바뀐 것만 고친 시각을 올린다 — 그대로 둔 가사가 다른 PC 의 수정을 덮지 않게.
       final before = {
@@ -381,9 +384,11 @@ class PraiseRepository {
             whereArgs: [entry.key, language],
           );
           await _addTranslationTombstone(txn, entry.key, language, now);
+          changed = true;
           continue;
         }
         if (old == entry.value) continue;
+        changed = true;
         await txn.insert('song_translations', {
           'song_title': entry.key,
           'language': language,
@@ -392,7 +397,7 @@ class PraiseRepository {
         }, conflictAlgorithm: ConflictAlgorithm.replace);
       }
     });
-    onSongsChanged?.call();
+    if (changed) onSongsChanged?.call();
   }
 
   Future<int> countTranslations(String language) async {
