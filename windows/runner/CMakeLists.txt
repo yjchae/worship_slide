@@ -9,6 +9,7 @@ project(runner LANGUAGES CXX)
 add_executable(${BINARY_NAME} WIN32
   "flutter_window.cpp"
   "main.cpp"
+  "ocr_channel.cpp"
   "presentation_channel.cpp"
   "singer_window.cpp"
   "utils.cpp"
@@ -40,6 +41,8 @@ target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
 target_link_libraries(${BINARY_NAME} PRIVATE "gdiplus.lib")
 # 원본 PPT 열기(ShellExecuteW)
 target_link_libraries(${BINARY_NAME} PRIVATE "shell32.lib")
+# 악보 가사 OCR(Windows.Media.Ocr, C++/WinRT)
+target_link_libraries(${BINARY_NAME} PRIVATE "windowsapp.lib")
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.

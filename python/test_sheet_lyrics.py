@@ -2,6 +2,7 @@
 
 줄 찾기·하이픈 정리와 글자가 박힌 PDF 는 Tesseract 없이도 돌고,
 그림 악보 OCR 검증만 Tesseract가 있을 때 돈다."""
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -189,6 +190,73 @@ def test_erase_staff_symbols_keeps_lyrics_under_low_notes():
     assert restored.crop((0, boxes[0][0], 900, boxes[0][1])).getextrema()[0] < 100
 
 
+def test_native_ocr_two_stage():
+    """앱의 OS 내장 OCR 경로: 줄 이미지 내보내기(1단계) → 읽은 결과로 마무리(2단계)."""
+    import json
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        sheet_path = Path(temp_dir) / "sheet.png"
+        _draw_sheet(sheet_path)
+        out_dir = Path(temp_dir) / "lines"
+        stage1 = ppt_tool.export_sheet_lines(str(sheet_path), str(out_dir))
+        assert stage1["needs_ocr"] is True, stage1
+        images = stage1["images"]
+        # 첫 단 2줄(1·2절) + 나머지 단 1줄씩
+        assert len(images) == 4, images
+        assert all(Path(path).exists() for path in images)
+
+        # OS OCR 흉내: 한 줄이 여러 덩어리로, 순서도 뒤섞여 온다.
+        fake = {
+            images[0]: [
+                {"text": "사 랑 하 심 은", "confidence": 0.9, "x": 0.5, "y": 0.1, "w": 0.4, "h": 0.8},
+                {"text": "1. 예 - 수", "confidence": 0.9, "x": 0.05, "y": 0.1, "w": 0.3, "h": 0.8},
+                {"text": "♩♪", "confidence": 0.2, "x": 0.95, "y": 0.1, "w": 0.05, "h": 0.8},
+            ],
+            images[1]: [{"text": "2. 거룩하신 주님께", "confidence": 0.8, "x": 0.1}],
+            images[2]: [{"text": "주 - 님 의 사 랑", "confidence": 1.0, "x": 0.1}],
+            images[3]: [{"text": "G D Em C", "confidence": 0.9, "x": 0.1}],
+        }
+        ocr_path = Path(temp_dir) / "ocr.json"
+        ocr_path.write_text(json.dumps(fake, ensure_ascii=False), encoding="utf-8")
+        result = ppt_tool.finish_sheet_lines(stage1["job"], str(ocr_path))
+
+    assert result["language"] == "native", result
+    assert result["staff_count"] == 3, result
+    # 1절 → 빈 줄 → 2절 → 빈 줄 → 한 줄짜리 단들. 코드 줄은 빠진다.
+    assert result["lines"] == ["1. 예수사랑하심은", "2. 거룩하신 주님께", "주님의사랑"], result
+    assert result["lyrics"] == "1. 예수사랑하심은\n\n2. 거룩하신 주님께\n\n주님의사랑", result
+
+
+def test_native_page_without_staff():
+    """오선이 없는 쪽(가사만 있는 그림)은 쪽 전체를 넘기고, 받은 줄을 위에서부터 한 줄씩 쓴다."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        path = Path(temp_dir) / "lyrics.png"
+        image = Image.new("L", (600, 300), 255)
+        ImageDraw.Draw(image).text(
+            (40, 40), "주님의 사랑", font=ImageFont.truetype(str(FONT_PATH), 40), fill=0
+        )
+        image.save(path)
+        stage1 = ppt_tool.export_sheet_lines(str(path), str(Path(temp_dir) / "out"))
+        assert len(stage1["images"]) == 1, stage1
+        job = json.loads(Path(stage1["job"]).read_text(encoding="utf-8"))
+        assert "page_image" in job["systems"][0][0], job
+
+        page = stage1["images"][0]
+        fake = {page: [
+            {"text": "나를 감싸네", "confidence": 0.9, "x": 0.1, "y": 0.5, "w": 0.5, "h": 0.1},
+            {"text": "주님의", "confidence": 0.9, "x": 0.1, "y": 0.1, "w": 0.3, "h": 0.1},
+            {"text": "사랑", "confidence": 0.9, "x": 0.5, "y": 0.11, "w": 0.2, "h": 0.1},
+        ]}
+        ocr_path = Path(temp_dir) / "ocr.json"
+        ocr_path.write_text(json.dumps(fake, ensure_ascii=False), encoding="utf-8")
+        result = ppt_tool.finish_sheet_lines(stage1["job"], str(ocr_path))
+
+    # 같은 높이의 두 덩어리는 한 줄, 줄 사이에 빈 줄(절 나눔)이 끼지 않는다.
+    assert result["lyrics"] == "주님의 사랑\n나를 감싸네", result
+
+
 def test_otsu_threshold():
     from PIL import Image
 
@@ -315,6 +383,8 @@ if __name__ == "__main__":
     test_otsu_threshold()
     test_prepare_sheet_image()
     test_erase_staff_symbols_keeps_lyrics_under_low_notes()
+    test_native_ocr_two_stage()
+    test_native_page_without_staff()
     test_extract_pdf_with_text_layer()
     test_extract_sheet_music_lyrics()
     print("OK")

@@ -1,6 +1,7 @@
 import Cocoa
 import FlutterMacOS
 import UniformTypeIdentifiers
+import Vision
 import WebKit
 
 // ── 발표 창 ──────────────────────────────────────────────────────────────────
@@ -717,6 +718,75 @@ private func htmlEscape(_ text: String) -> String {
 
 // ── MainFlutterWindow ─────────────────────────────────────────────────────
 
+// ── 악보 가사 OCR (Vision) ───────────────────────────────────────────────────
+//
+// 오선·가사 줄 찾기는 Python(ppt_tool sheet --ocr-lines)이 하고, 잘라 낸 가사 줄
+// 이미지 읽기만 여기서 한다. Tesseract 보다 손글씨풍 가사 글꼴을 훨씬 잘 읽는다.
+// 한국어는 Vision 의 정확 모드 3번째 판(macOS 13 이상)부터 된다.
+
+enum SheetTextRecognizer {
+  static let languages = ["ko-KR", "en-US"]
+
+  /// 이 Mac 의 Vision 이 한국어 가사를 읽을 수 있는지.
+  static var isAvailable: Bool {
+    guard #available(macOS 13.0, *) else { return false }
+    let request = makeRequest()
+    let supported = (try? request.supportedRecognitionLanguages()) ?? []
+    return supported.contains("ko-KR")
+  }
+
+  @available(macOS 13.0, *)
+  private static func makeRequest() -> VNRecognizeTextRequest {
+    let request = VNRecognizeTextRequest()
+    request.revision = VNRecognizeTextRequestRevision3
+    request.recognitionLevel = .accurate
+    request.recognitionLanguages = languages
+    // 사전 교정은 음표마다 떨어뜨린 음절('주 의 인 자')을 엉뚱한 낱말로 바꿀 수 있어 끈다.
+    request.usesLanguageCorrection = false
+    return request
+  }
+
+  /// 이미지 경로마다 찾은 글 덩어리 목록. 좌표는 0~1, 위가 0 (Python 쪽 약속).
+  static func recognize(paths: [String]) -> [String: [[String: Any]]] {
+    guard #available(macOS 13.0, *) else { return [:] }
+    var out: [String: [[String: Any]]] = [:]
+    let lock = NSLock()
+    DispatchQueue.concurrentPerform(iterations: paths.count) { index in
+      let path = paths[index]
+      let found = observations(at: path)
+      lock.lock()
+      out[path] = found
+      lock.unlock()
+    }
+    return out
+  }
+
+  @available(macOS 13.0, *)
+  private static func observations(at path: String) -> [[String: Any]] {
+    let request = makeRequest()
+    let handler = VNImageRequestHandler(url: URL(fileURLWithPath: path), options: [:])
+    do {
+      try handler.perform([request])
+    } catch {
+      NSLog("[sheet-ocr] %@: %@", path, error.localizedDescription)
+      return []
+    }
+    return (request.results ?? []).compactMap { observation in
+      guard let best = observation.topCandidates(1).first else { return nil }
+      // Vision 좌표는 아래가 0 이라 뒤집는다.
+      let box = observation.boundingBox
+      return [
+        "text": best.string,
+        "confidence": Double(best.confidence),
+        "x": Double(box.minX),
+        "y": Double(1 - box.maxY),
+        "w": Double(box.width),
+        "h": Double(box.height),
+      ]
+    }
+  }
+}
+
 class MainFlutterWindow: NSWindow {
   private var presentationController: PresentationWindowController?
   private var singerController: SingerWindowController?
@@ -763,6 +833,24 @@ class MainFlutterWindow: NSWindow {
 
     // ── 발표 채널 ─────────────────────────────────────────────────────────
     let messenger = flutterViewController.engine.binaryMessenger
+
+    // ── 악보 OCR 채널 ─────────────────────────────────────────────────────
+    let ocrChannel = FlutterMethodChannel(name: "worship_slides/ocr", binaryMessenger: messenger)
+    ocrChannel.setMethodCallHandler { call, result in
+      switch call.method {
+      case "isAvailable":
+        result(SheetTextRecognizer.isAvailable)
+      case "recognize":
+        let paths = (call.arguments as? [String: Any])?["paths"] as? [String] ?? []
+        // 줄 수십 장을 읽는 데 몇 초 걸린다. 메인 스레드를 막지 않게 뒤에서 읽는다.
+        DispatchQueue.global(qos: .userInitiated).async {
+          let found = SheetTextRecognizer.recognize(paths: paths)
+          DispatchQueue.main.async { result(found) }
+        }
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
     mainPresentationChannel = FlutterMethodChannel(
       name: "worship_slides/presentation_main", binaryMessenger: messenger)
 

@@ -1552,6 +1552,8 @@ _TARGET_STAFF_SPACING = 22
 _TARGET_LINE_HEIGHT = 48
 # 줄마다 Tesseract 를 여럿 동시에 띄우므로 하나가 코어를 다 잡지 않게 한다.
 _TESSERACT_ENV = {**os.environ, "OMP_THREAD_LIMIT": "1"}
+# OS 내장 OCR 결과에서 버리는 글 덩어리 확신도(0~100). Windows 는 확신도를 안 줘서 늘 100 이다.
+_NATIVE_MIN_CONFIDENCE = 30
 
 _LYRIC_HYPHEN_RE = re.compile(
     "[ \t\u00a0]*[-\u2010\u2011\u2012\u2013\u2014\u2015\uff0d][ \t\u00a0]*"
@@ -1892,14 +1894,15 @@ def ends_with_word_break(raw_line):
     return match is not None
 
 
-def _lyric_line_image(gray, threshold, top, bottom, spacing):
+def _lyric_line_image(gray, threshold, top, bottom, spacing, binarize=True):
     """가사 한 줄을 OCR 에 넘길 이미지로 자른다.
 
     - 줄 위아래에서 들어온 획(음표 기둥이 가사 사이로 내려온 것 등)은 지운다.
       Tesseract 가 기둥을 l·1·| 로 읽거나, 한 줄을 통째로 숫자로 읽는 원인이었다
     - 오선 폭 전체가 아니라 글자가 있는 곳만 남기고 흰 여백을 두른다
-    - 글 줄 높이를 _TARGET_LINE_HEIGHT 로 맞춘 뒤 흑백으로 굳힌다"""
-    from PIL import Image, ImageFilter
+    - 글 줄 높이를 _TARGET_LINE_HEIGHT 로 맞춘 뒤 흑백으로 굳힌다 (binarize=False 면 회색 그대로.
+      OS 내장 OCR 은 사진 같은 그림에 맞춰져 있어 굳히고 굵힌 글자가 오히려 낯설다)"""
+    from PIL import Image
 
     reach = max(int(spacing * 2), 6)
     window_top = max(top - reach, 0)
@@ -1972,14 +1975,22 @@ def _lyric_line_image(gray, threshold, top, bottom, spacing):
             (max(int(cleaned.width * factor), 1), max(int(cleaned.height * factor), 1)),
             Image.LANCZOS,
         )
-    binary = cleaned.point(lambda value: 0 if value < threshold else 255)
+    if binarize:
+        cleaned = _binarize_line(cleaned, threshold)
+    border = 12
+    framed = Image.new("L", (cleaned.width + border * 2, cleaned.height + border * 2), 255)
+    framed.paste(cleaned, (border, border))
+    return framed
+
+
+def _binarize_line(image, threshold):
+    """Tesseract 용으로 흑백으로 굳히고 획을 굵힌다."""
+    from PIL import ImageFilter
+
+    binary = image.point(lambda value: 0 if value < threshold else 255)
     # 획을 1px 씩 굵힌다. 손글씨풍 가사 글꼴은 획이 가늘어 '라'·'나' 를 통째로 빠뜨렸다
     # (실제 악보 사진에서 줄 평균 72% → 75%, 인쇄체 시험 악보는 그대로).
-    binary = binary.filter(ImageFilter.MinFilter(3))
-    border = 12
-    framed = Image.new("L", (binary.width + border * 2, binary.height + border * 2), 255)
-    framed.paste(binary, (border, border))
-    return framed
+    return binary.filter(ImageFilter.MinFilter(3))
 
 
 def _squeeze_gaps(image, threshold, max_gap):
@@ -2095,15 +2106,6 @@ def _ocr_lyric_line(executable, image_path, languages):
         elif _keep_word(text, conf, index):
             kept.append(text)
     return " ".join(kept)
-
-
-def _ocr_lines(executable, image, language, work_dir, name, psm="7"):
-    """쪽 전체(오선을 못 찾은 경우)를 여러 줄 모드로 읽는다."""
-    image_path = work_dir / f"{name}.png"
-    image.save(image_path)
-    text = _run_tesseract(executable, image_path, language, psm)
-    lines = [clean_lyric_line(line) for line in text.splitlines()]
-    return [line for line in lines if is_lyric_line(line) and not is_chord_line(line)]
 
 
 def _pdf_page_words(page, scale):
@@ -2284,116 +2286,291 @@ def restore_lyric_band(original, cleaned, mask, top, bottom, margin):
     return result
 
 
-def _ocr_page_lines(executable, languages, image, work_dir, page_index, pool):
-    """그림 한 쪽 → 단마다의 [(가사 줄, 이어짐)] 목록, 찾은 오선 단 수."""
+# 단 목록의 줄 항목. 셋 중 하나다.
+#   {"text": ..., "continues": ...}  PDF 에 박힌 글자로 이미 다 읽은 줄
+#   {"image": 경로}                    OCR 로 읽을 가사 한 줄 이미지
+#   {"page_image": 경로}               오선을 못 찾은 쪽 전체 (여러 줄)
+# 그림을 다듬고 줄을 자르는 일(레이아웃)과 글자를 읽는 일(OCR)을 나눠 둔 이유 —
+# 글자 읽기는 Tesseract 로도, 앱이 OS 내장 OCR(macOS Vision, Windows.Media.Ocr)로도 한다.
+
+# OS OCR 에 넘기는 이미지의 긴 변 상한. Windows.Media.Ocr 는 OcrEngine.MaxImageDimension
+# (보통 수천 px)보다 큰 그림을 못 읽는다.
+_NATIVE_OCR_MAX_SIDE = 2500
+
+
+def _fit_within(image, max_side):
+    """긴 변이 max_side 를 넘으면 비율을 지켜 줄인다."""
+    from PIL import Image
+
+    if not max_side or max(image.size) <= max_side:
+        return image
+    factor = max_side / max(image.size)
+    return image.resize(
+        (max(int(image.width * factor), 1), max(int(image.height * factor), 1)),
+        Image.LANCZOS,
+    )
+
+
+def _layout_image_page(image, work_dir, page_index, native=False):
+    """그림 한 쪽 → (단마다의 줄 항목 목록, 찾은 오선 단 수). 줄 이미지는 work_dir 에 저장한다.
+
+    native=True 면 OS 내장 OCR 용으로 만든다 — 회색 그대로, 긴 변은 _NATIVE_OCR_MAX_SIDE 이하."""
+    max_side = _NATIVE_OCR_MAX_SIDE if native else None
     original, staff_threshold, threshold = prepare_sheet_image(image)
     systems = find_staff_systems(row_dark_ratios(original, staff_threshold))
-    gray, mask = original, None
-    if systems:
-        gray, mask = erase_staff_symbols(original, staff_threshold, systems)
-    ratios = row_dark_ratios(gray, threshold)
     if not systems:
         # 오선을 못 찾으면 쪽 전체를 한 번에 읽는다 (가사만 있는 스캔 등).
-        lines = _ocr_lines(
-            executable, gray, "+".join(languages), work_dir, f"p{page_index:03d}", psm="6"
-        )
-        return [[(line, False) for line in lines]], 0
+        path = work_dir / f"p{page_index:03d}_page.png"
+        _fit_within(original, max_side).save(path)
+        return [[{"page_image": str(path)}]], 0
 
-    jobs = []
+    gray, mask = erase_staff_symbols(original, staff_threshold, systems)
+    ratios = row_dark_ratios(gray, threshold)
+    layout = []
     for system_index, boxes in enumerate(lyric_line_boxes_by_system(systems, ratios)):
         spacing = systems[system_index][2]
-        system_jobs = []
+        items = []
         for box_index, (top, bottom) in enumerate(boxes):
-            source = gray
-            if mask is not None:
-                source = restore_lyric_band(
-                    original, gray, mask, top, bottom, max(int(spacing * 0.3), 2)
-                )
-            line_image = _lyric_line_image(source, threshold, top, bottom, spacing)
+            source = restore_lyric_band(
+                original, gray, mask, top, bottom, max(int(spacing * 0.3), 2)
+            )
+            line_image = _lyric_line_image(
+                source, threshold, top, bottom, spacing, binarize=not native
+            )
             if line_image is None:
                 continue
             path = work_dir / f"p{page_index:03d}_s{system_index:02d}_l{box_index:02d}.png"
-            line_image.save(path)
-            system_jobs.append(pool.submit(_ocr_lyric_line, executable, path, languages))
-        jobs.append(system_jobs)
-
-    system_lines = []
-    for system_jobs in jobs:
-        lines = [_finish_line(job.result()) for job in system_jobs]
-        system_lines.append([line for line in lines if line])
-    return system_lines, len(systems)
+            _fit_within(line_image, max_side).save(path)
+            items.append({"image": str(path)})
+        layout.append(items)
+    return layout, len(systems)
 
 
-def extract_sheet_music_lyrics(file_path):
-    """악보 이미지(PDF 포함)에서 오선 아래 가사만 뽑아 낸다."""
-    source_path = Path(file_path)
-    if not source_path.exists():
-        raise RuntimeError(f"파일을 찾을 수 없습니다: {file_path}")
+def _layout_text_page(image, words):
+    """글자가 박힌 PDF 한 쪽 → (단마다의 줄 항목 목록, 찾은 오선 단 수). OCR 이 필요 없다."""
+    ratios = row_dark_ratios(image)
+    systems = find_staff_systems(ratios)
+    by_system = lyric_line_boxes_by_system(systems, ratios)
+    if not any(by_system):
+        # 오선을 못 찾으면 쪽 전체의 글 줄을 그대로 쓴다.
+        by_system = [text_row_groups(ratios, 0, len(ratios))]
+    layout = [
+        [{"text": text, "continues": continues}
+         for text, continues in _words_to_system_lines(words, boxes)]
+        for boxes in by_system
+    ]
+    return layout, len(systems)
 
-    work_dir = Path(tempfile.mkdtemp(prefix="praise_sheet_ocr_"))
-    pages = []
+
+def layout_sheet(source_path, work_dir, native=False):
+    """악보 파일 → 단 목록과 요약 정보. 줄 이미지는 work_dir 에 남는다 (지우는 건 부른 쪽)."""
+    pages = _load_sheet_pages(source_path, work_dir)
+    layout = []
+    staff_count = 0
     try:
-        pages = _load_sheet_pages(source_path, work_dir)
-        # 글자가 박힌 PDF는 OCR 없이 읽는다. 그림·스캔본만 Tesseract가 필요하다.
-        needs_ocr = any(not words for _image, words in pages)
-        executable = get_tesseract_executable() if needs_ocr else None
-        if needs_ocr and executable is None:
-            return {"error": "tesseract_missing"}
-        language = get_tesseract_language(executable) if executable else ""
-        # 줄마다 언어별로 따로 읽어 비교한다 (kor+eng → kor, eng).
-        languages = language.split("+") if language else []
-
-        system_lines = []
-        staff_count = 0
-        workers = max(1, min(8, os.cpu_count() or 1))
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-            for page_index, (image, words) in enumerate(pages):
-                if words:
-                    ratios = row_dark_ratios(image)
-                    systems = find_staff_systems(ratios)
-                    staff_count += len(systems)
-                    by_system = lyric_line_boxes_by_system(systems, ratios)
-                    if not any(by_system):
-                        # 오선을 못 찾으면 쪽 전체의 글 줄을 그대로 쓴다.
-                        by_system = [text_row_groups(ratios, 0, len(ratios))]
-                    system_lines.extend(
-                        _words_to_system_lines(words, boxes) for boxes in by_system
-                    )
-                    continue
-                page_lines, page_staffs = _ocr_page_lines(
-                    executable, languages, image, work_dir, page_index, pool
+        for page_index, (image, words) in enumerate(pages):
+            if words:
+                page_layout, page_staffs = _layout_text_page(image, words)
+            else:
+                page_layout, page_staffs = _layout_image_page(
+                    image, work_dir, page_index, native
                 )
-                system_lines.extend(page_lines)
-                staff_count += page_staffs
+            layout.extend(page_layout)
+            staff_count += page_staffs
     finally:
         for image, _words in pages:
             image.close()
-        shutil.rmtree(work_dir, ignore_errors=True)
-
-    ordered = order_lyric_lines(system_lines)
     return {
         "source_name": unicodedata.normalize("NFC", source_path.name),
-        # 빈 줄 = 절이 바뀌는 곳 (앱에서는 페이지 나눔이 된다).
-        "lyrics": "\n".join(ordered),
-        "lines": [line for line in ordered if line],
+        "systems": layout,
         "page_count": len(pages),
         "staff_count": staff_count,
-        "language": language,
         # True 면 PDF에 박힌 글자를 그대로 읽은 것 (OCR 오인식이 없다).
         "text_layer": any(bool(words) for _image, words in pages),
     }
 
 
-def extract_sheet_music(file_path):
-    if file_path != "--clipboard":
-        print(json.dumps(extract_sheet_music_lyrics(file_path), ensure_ascii=True))
-        return
-    print(json.dumps(extract_clipboard_sheet_music(), ensure_ascii=True))
+def ocr_image_paths(job):
+    """OCR 로 읽어야 하는 이미지 경로 목록 (단 순서대로)."""
+    return [
+        item.get("image") or item["page_image"]
+        for items in job["systems"]
+        for item in items
+        if "image" in item or "page_image" in item
+    ]
 
 
-def extract_clipboard_sheet_music():
+def resolve_sheet_lines(job, read_line, read_page):
+    """줄 항목을 실제 가사 줄로 바꾼다 → 단마다의 [(가사 줄, 이어짐)].
+
+    read_line(경로) → (가사 줄, 이어짐) 또는 None, read_page(경로) → 그런 줄 목록.
+    쪽 전체에서 읽은 줄은 한 줄씩 따로 단으로 둔다 — 한 단에 넣으면 절 정리가
+    줄마다 다른 절로 보고 사이사이 빈 줄을 넣는다."""
+    systems = []
+    for items in job["systems"]:
+        if items and "page_image" in items[0]:
+            systems.extend([line] for line in read_page(items[0]["page_image"]))
+            continue
+        lines = []
+        for item in items:
+            line = (
+                (item["text"], item["continues"]) if "text" in item
+                else read_line(item["image"])
+            )
+            if line:
+                lines.append(line)
+        systems.append(lines)
+    return systems
+
+
+def _sheet_result(job, systems, language):
+    ordered = order_lyric_lines(systems)
+    return {
+        "source_name": job["source_name"],
+        # 빈 줄 = 절이 바뀌는 곳 (앱에서는 페이지 나눔이 된다).
+        "lyrics": "\n".join(ordered),
+        "lines": [line for line in ordered if line],
+        "page_count": job["page_count"],
+        "staff_count": job["staff_count"],
+        "language": language,
+        "text_layer": job["text_layer"],
+    }
+
+
+def _read_with_tesseract(job, executable, languages):
+    """줄 이미지를 Tesseract 로 읽는다. 줄마다 따로 띄우므로 스레드 풀로 동시에 돌린다."""
+    workers = max(1, min(8, os.cpu_count() or 1))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            path: pool.submit(_ocr_lyric_line, executable, Path(path), languages)
+            for items in job["systems"]
+            for item in items
+            if "image" in item
+            for path in [item["image"]]
+        }
+
+        def read_line(path):
+            return _finish_line(futures[path].result())
+
+        def read_page(path):
+            text = _run_tesseract(executable, path, "+".join(languages), "6")
+            return [
+                line for line in (_finish_line(raw) for raw in text.splitlines()) if line
+            ]
+
+        return resolve_sheet_lines(job, read_line, read_page)
+
+
+def extract_sheet_music_lyrics(file_path):
+    """악보 이미지(PDF 포함)에서 오선 아래 가사만 뽑아 낸다 (Tesseract 로 읽는다)."""
+    source_path = Path(file_path)
+    if not source_path.exists():
+        raise RuntimeError(f"파일을 찾을 수 없습니다: {file_path}")
+
+    work_dir = Path(tempfile.mkdtemp(prefix="praise_sheet_ocr_"))
+    try:
+        job = layout_sheet(source_path, work_dir)
+        # 글자가 박힌 PDF는 OCR 없이 읽는다. 그림·스캔본만 Tesseract가 필요하다.
+        if not ocr_image_paths(job):
+            return _sheet_result(job, resolve_sheet_lines(job, None, None), "")
+        executable = get_tesseract_executable()
+        if executable is None:
+            return {"error": "tesseract_missing"}
+        language = get_tesseract_language(executable)
+        # 줄마다 언어별로 따로 읽어 비교한다 (kor+eng → kor, eng).
+        systems = _read_with_tesseract(job, executable, language.split("+"))
+        return _sheet_result(job, systems, language)
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def export_sheet_lines(file_path, out_dir):
+    """앱이 OS 내장 OCR 로 읽을 수 있게 줄 이미지만 만들어 둔다 (1단계).
+
+    OCR 이 필요 없으면(글자가 박힌 PDF) 바로 최종 결과를 돌려준다. 아니면
+    {"needs_ocr": true, "job": job.json 경로, "images": [...]} — 앱이 이미지를 읽어
+    `sheet-finish <job.json> <결과.json>` 으로 넘긴다."""
+    source_path = Path(file_path)
+    if not source_path.exists():
+        raise RuntimeError(f"파일을 찾을 수 없습니다: {file_path}")
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    job = layout_sheet(source_path, out_dir, native=True)
+    images = ocr_image_paths(job)
+    if not images:
+        return _sheet_result(job, resolve_sheet_lines(job, None, None), "")
+    job_path = out_dir / "job.json"
+    job_path.write_text(json.dumps(job, ensure_ascii=False), encoding="utf-8")
+    return {"needs_ocr": True, "job": str(job_path), "images": images}
+
+
+def _native_line_text(observations):
+    """OS OCR 이 한 줄 이미지에서 찾은 글 덩어리들 → 원문 한 줄.
+
+    음표 자리 때문에 벌어진 가사는 한 줄이 여러 덩어리로 나뉘어 오므로 x 순서로 잇는다.
+    확신도가 낮은 덩어리, 음표·기둥을 읽은 토막은 버린다."""
+    tokens = []
+    for observation in sorted(observations, key=lambda item: item.get("x", 0.0)):
+        confidence = float(observation.get("confidence", 1.0)) * 100
+        if confidence < _NATIVE_MIN_CONFIDENCE:
+            continue
+        for word in unicodedata.normalize("NFC", observation.get("text", "")).split():
+            if _keep_word(word, confidence, len(tokens)):
+                tokens.append(word)
+    return " ".join(tokens)
+
+
+def _native_page_lines(observations):
+    """쪽 전체 OCR 결과 → 위에서 아래 순서의 원문 줄 목록. 세로로 겹치는 덩어리는 한 줄이다."""
+    rows = []
+    for observation in sorted(observations, key=lambda item: item.get("y", 0.0)):
+        top = observation.get("y", 0.0)
+        bottom = top + observation.get("h", 0.0)
+        if rows:
+            row_top, row_bottom, members = rows[-1]
+            overlap = min(bottom, row_bottom) - max(top, row_top)
+            if overlap > min(bottom - top, row_bottom - row_top) * 0.5:
+                rows[-1] = (min(top, row_top), max(bottom, row_bottom), members + [observation])
+                continue
+        rows.append((top, bottom, [observation]))
+    return [_native_line_text(members) for _top, _bottom, members in rows]
+
+
+def finish_sheet_lines(job_path, ocr_path):
+    """앱이 OS 내장 OCR 로 읽은 결과로 가사를 마무리한다 (2단계).
+
+    ocr_path JSON = {이미지 경로: [{text, confidence(0~1), x, y, w, h(0~1, 위가 0)}]}."""
+    job = json.loads(Path(job_path).read_text(encoding="utf-8"))
+    results = json.loads(Path(ocr_path).read_text(encoding="utf-8"))
+
+    def read_line(path):
+        return _finish_line(_native_line_text(results.get(path) or []))
+
+    def read_page(path):
+        lines = (_finish_line(raw) for raw in _native_page_lines(results.get(path) or []))
+        return [line for line in lines if line]
+
+    return _sheet_result(job, resolve_sheet_lines(job, read_line, read_page), "native")
+
+
+def extract_sheet_music(file_path, out_dir=None):
+    """`sheet <파일|--clipboard> [--ocr-lines <폴더>]`. 폴더를 주면 1단계(줄 이미지)만 한다."""
+    if file_path == "--clipboard":
+        result = extract_clipboard_sheet_music(out_dir)
+    elif out_dir:
+        result = export_sheet_lines(file_path, out_dir)
+    else:
+        result = extract_sheet_music_lyrics(file_path)
+    print(json.dumps(result, ensure_ascii=True))
+
+
+def extract_clipboard_sheet_music(out_dir=None):
     """클립보드의 그림(캡처·복사한 이미지)이나 복사한 파일을 악보로 읽는다."""
     from PIL import Image, ImageGrab
+
+    def extract(path):
+        return export_sheet_lines(path, out_dir) if out_dir else extract_sheet_music_lyrics(path)
 
     try:
         clip = ImageGrab.grabclipboard()
@@ -2404,7 +2581,7 @@ def extract_clipboard_sheet_music():
         paths = [path for path in clip if Path(path).suffix.lower() in _SHEET_SUFFIXES]
         if not paths:
             return {"error": "clipboard_empty"}
-        return extract_sheet_music_lyrics(paths[0])
+        return extract(paths[0])
     if not isinstance(clip, Image.Image):
         return {"error": "clipboard_empty"}
 
@@ -2412,14 +2589,14 @@ def extract_clipboard_sheet_music():
     try:
         image_path = work_dir / "클립보드.png"
         clip.save(image_path)
-        return extract_sheet_music_lyrics(str(image_path))
+        return extract(str(image_path))
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def main():
     if len(sys.argv) < 3:
-        raise SystemExit("usage: ppt_tool.py [import|export|render|sheet] [payload]")
+        raise SystemExit("usage: ppt_tool.py [import|export|render|sheet|sheet-finish] [payload]")
 
     command = sys.argv[1]
     payload = sys.argv[2]
@@ -2438,7 +2615,18 @@ def main():
         return
 
     if command == "sheet":
-        extract_sheet_music(payload)
+        # --ocr-lines <폴더>: 줄 이미지만 만들고 앱의 OS 내장 OCR 결과를 기다린다.
+        options = sys.argv[3:]
+        out_dir = None
+        if "--ocr-lines" in options and options.index("--ocr-lines") + 1 < len(options):
+            out_dir = options[options.index("--ocr-lines") + 1]
+        extract_sheet_music(payload, out_dir)
+        return
+
+    if command == "sheet-finish":
+        if len(sys.argv) < 4:
+            raise SystemExit("usage: ppt_tool.py sheet-finish <job.json> <ocr.json>")
+        print(json.dumps(finish_sheet_lines(payload, sys.argv[3]), ensure_ascii=True))
         return
 
     raise SystemExit(f"unknown command: {command}")
