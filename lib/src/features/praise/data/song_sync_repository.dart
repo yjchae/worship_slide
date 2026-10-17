@@ -8,200 +8,181 @@ import 'sync_snapshot.dart';
 /// - 지운 곡은 `song_tombstones` 에 남는다. 지운 뒤에 다른 PC 에서 고쳤으면 고친 쪽이 이긴다
 /// - 두 PC 가 따로 가져온 같은 곡(제목·가사가 똑같음)은 작은 uid 로 합친다(`song_uid_aliases`)
 /// - 제목은 같아도 가사가 다르면 합치지 않는다 — 어느 쪽이 맞는지 모르니 둘 다 남긴다
+/// - 보조 언어 가사는 (제목, 언어)마다 따로 맞춘다. 곡을 받는다고 그 제목의 가사를 덮지 않는다
+///   (같은 제목의 다른 곡이 같이 쓰고, 받는 쪽에만 있는 언어가 지워지면 안 된다)
 class SongSyncRepository {
   SongSyncRepository({PraiseDatabase? database})
     : _databaseProvider = database ?? PraiseDatabase.instance;
 
   final PraiseDatabase _databaseProvider;
 
-  /// 이 PC 의 곡 전부를 공유 폴더에 쓸 모양으로.
+  /// 이 PC 의 곡·보조 가사 전부를 공유 폴더에 쓸 모양으로.
   Future<SyncSnapshot> exportSnapshot({
     required String deviceId,
     required String deviceName,
   }) async {
     final db = await _databaseProvider.database;
-    await _fillMissingUids(db);
-    final translations = await _translationsByTitle(db);
+    await fillMissingSyncUids(db);
     final rows = await db.query('praise_songs', orderBy: 'uid');
     return SyncSnapshot(
       deviceId: deviceId,
       deviceName: deviceName,
-      songs: [for (final row in rows) _songFromRow(row, translations)],
-      deleted: {
-        for (final r in await db.query('song_tombstones', orderBy: 'uid'))
-          r['uid'] as String: r['deleted_at'] as int,
-      },
+      songs: [for (final row in rows) _songFromRow(row)],
+      deleted: await _tombstones(db),
       aliases: {
         for (final r in await db.query('song_uid_aliases', orderBy: 'alias'))
           r['alias'] as String: r['uid'] as String,
       },
+      translations: [
+        for (final r in await db.query(
+          'song_translations',
+          orderBy: 'song_title, language',
+        ))
+          _translationFromRow(r),
+      ],
+      translationDeleted: await _translationTombstones(db),
     );
   }
 
   /// 다른 PC 들의 파일을 이 PC 의 DB 에 합친다.
   Future<SyncMergeResult> merge(List<SyncSnapshot> remotes) async {
     final db = await _databaseProvider.database;
-    await _fillMissingUids(db);
+    await fillMissingSyncUids(db);
     return db.transaction((txn) async {
-      final aliases = await _mergeAliases(txn, remotes);
-      String canonical(String uid) {
-        var current = uid;
-        for (var i = 0; i < 32; i++) {
-          final next = aliases[current];
-          if (next == null || next == current) break;
-          current = next;
-        }
-        return current;
+      final songs = await _mergeSongs(txn, remotes);
+      final translations = await _mergeTranslations(txn, remotes);
+      return SyncMergeResult(
+        addedCount: songs.addedCount,
+        updatedCount: songs.updatedCount + translations,
+        deletedCount: songs.deletedCount,
+      );
+    });
+  }
+
+  // ── 곡 ──────────────────────────────────────────────────────────────
+
+  Future<SyncMergeResult> _mergeSongs(
+    DatabaseExecutor txn,
+    List<SyncSnapshot> remotes,
+  ) async {
+    final aliases = await _mergeAliases(txn, remotes);
+    String canonical(String uid) {
+      var current = uid;
+      for (var i = 0; i < 32; i++) {
+        final next = aliases[current];
+        if (next == null || next == current) break;
+        current = next;
       }
+      return current;
+    }
 
-      final translations = await _translationsByTitle(txn);
-      final local = await _canonicalLocalRows(txn, canonical, translations);
-      final byContent = {
-        for (final entry in local.entries)
-          entry.value.song.contentKey: entry.key,
-      };
+    final local = await _canonicalLocalRows(txn, canonical);
+    final byContent = {
+      for (final entry in local.entries) entry.value.song.contentKey: entry.key,
+    };
 
-      // 지운 곡: 이 PC 기록 + 다른 PC 기록 중 가장 늦은 시각.
-      final tombstones = <String, int>{};
-      void addTombstone(String uid, int at) {
-        final key = canonical(uid);
-        final before = tombstones[key];
-        if (before == null || at > before) tombstones[key] = at;
+    // 지운 곡: 이 PC 기록 + 다른 PC 기록 중 가장 늦은 시각.
+    final storedTombstones = await _tombstones(txn);
+    final tombstones = <String, int>{};
+    void addTombstone(String uid, int at) {
+      final key = canonical(uid);
+      final before = tombstones[key];
+      if (before == null || at > before) tombstones[key] = at;
+    }
+
+    storedTombstones.forEach(addTombstone);
+    for (final remote in remotes) {
+      remote.deleted.forEach(addTombstone);
+    }
+
+    // 다른 PC 들에서 곡마다 가장 최신 판 하나.
+    final newest = <String, SyncSong>{};
+    for (final remote in remotes) {
+      for (final raw in remote.songs) {
+        final song = raw.withUid(canonical(raw.uid));
+        final before = newest[song.uid];
+        if (before == null || song.winsOver(before)) newest[song.uid] = song;
       }
+    }
 
-      for (final r in await txn.query('song_tombstones')) {
-        addTombstone(r['uid'] as String, r['deleted_at'] as int);
-      }
-      for (final remote in remotes) {
-        remote.deleted.forEach(addTombstone);
-      }
+    var added = 0;
+    var updated = 0;
+    final uids = newest.keys.toList()..sort();
+    for (final uid in uids) {
+      final song = newest[uid]!;
+      final deletedAt = tombstones[uid];
+      if (deletedAt != null && deletedAt >= song.updatedAt) continue;
 
-      // 다른 PC 들에서 곡마다 가장 최신 판 하나.
-      final newest = <String, SyncSong>{};
-      for (final remote in remotes) {
-        for (final raw in remote.songs) {
-          final song = raw.withUid(canonical(raw.uid));
-          final before = newest[song.uid];
-          if (before == null || song.winsOver(before)) newest[song.uid] = song;
-        }
-      }
-
-      var added = 0;
-      var updated = 0;
-      final uids = newest.keys.toList()..sort();
-      for (final uid in uids) {
-        final song = newest[uid]!;
-        final deletedAt = tombstones[uid];
-        if (deletedAt != null && deletedAt >= song.updatedAt) continue;
-
-        var mine = local[uid];
-        if (mine == null) {
-          final twinUid = byContent[song.contentKey];
-          if (twinUid != null && twinUid != uid) {
-            // 따로 가져온 같은 곡. 어느 PC 에서든 같은 답이 나오도록 작은 uid 로 모은다.
-            if (uid.compareTo(twinUid) < 0) {
-              await _renameUid(txn, local, byContent, aliases, twinUid, uid);
-              mine = local[uid];
-            } else {
-              await _addAlias(txn, aliases, uid, twinUid);
-              final twin = local[twinUid]!;
-              if (song.withUid(twinUid).winsOver(twin.song)) {
-                await _applySong(txn, twin, song.withUid(twinUid));
-                updated += 1;
-              }
-              continue;
+      var mine = local[uid];
+      if (mine == null) {
+        final twinUid = byContent[song.contentKey];
+        if (twinUid != null && twinUid != uid) {
+          // 따로 가져온 같은 곡. 어느 PC 에서든 같은 답이 나오도록 작은 uid 로 모은다.
+          if (uid.compareTo(twinUid) < 0) {
+            await _renameUid(txn, local, byContent, aliases, twinUid, uid);
+            mine = local[uid];
+          } else {
+            await _addAlias(txn, aliases, uid, twinUid);
+            final twin = local[twinUid]!;
+            if (song.withUid(twinUid).winsOver(twin.song)) {
+              await _applySong(txn, twin, song.withUid(twinUid));
+              updated += 1;
             }
+            continue;
           }
         }
-
-        if (mine == null) {
-          final id = await txn.insert('praise_songs', _rowOf(song));
-          await _replaceTranslations(txn, null, song);
-          final row = _LocalSong(id, song);
-          local[uid] = row;
-          byContent[song.contentKey] = uid;
-          added += 1;
-        } else if (song.winsOver(mine.song)) {
-          byContent.remove(mine.song.contentKey);
-          await _applySong(txn, mine, song);
-          byContent[song.contentKey] = uid;
-          updated += 1;
-        }
       }
 
-      var deleted = 0;
-      for (final entry in tombstones.entries) {
-        final mine = local[entry.key];
-        if (mine != null && mine.song.updatedAt <= entry.value) {
-          await txn.delete(
-            'praise_songs',
-            where: 'id = ?',
-            whereArgs: [mine.id],
-          );
-          local.remove(entry.key);
-          deleted += 1;
-        }
+      if (mine == null) {
+        final id = await txn.insert('praise_songs', _rowOf(song));
+        local[uid] = _LocalSong(id, song);
+        byContent[song.contentKey] = uid;
+        added += 1;
+      } else if (song.winsOver(mine.song)) {
+        byContent.remove(mine.song.contentKey);
+        await _applySong(txn, mine, song);
+        byContent[song.contentKey] = uid;
+        updated += 1;
+      }
+    }
+
+    var deleted = 0;
+    for (final entry in tombstones.entries) {
+      final mine = local[entry.key];
+      if (mine != null && mine.song.updatedAt <= entry.value) {
+        await txn.delete('praise_songs', where: 'id = ?', whereArgs: [mine.id]);
+        local.remove(entry.key);
+        deleted += 1;
+      }
+      // 이미 같은 기록이 있으면 다시 쓰지 않는다(지운 기록은 계속 쌓인다).
+      if (storedTombstones[entry.key] != entry.value) {
         await txn.insert('song_tombstones', {
           'uid': entry.key,
           'deleted_at': entry.value,
         }, conflictAlgorithm: ConflictAlgorithm.replace);
       }
-
-      return SyncMergeResult(
-        addedCount: added,
-        updatedCount: updated,
-        deletedCount: deleted,
-      );
-    });
-  }
-
-  // ── 내부 ────────────────────────────────────────────────────────────
-
-  /// 예전 코드·다른 경로로 들어와 uid 가 없는 곡에 uid 를 준다.
-  Future<void> _fillMissingUids(DatabaseExecutor db) async {
-    final rows = await db.query(
-      'praise_songs',
-      columns: ['id'],
-      where: 'uid IS NULL',
-    );
-    for (final row in rows) {
-      await db.update(
-        'praise_songs',
-        {'uid': newSongUid()},
-        where: 'id = ?',
-        whereArgs: [row['id']],
-      );
     }
-  }
 
-  Future<Map<String, Map<String, String>>> _translationsByTitle(
-    DatabaseExecutor db,
-  ) async {
-    final result = <String, Map<String, String>>{};
-    for (final r in await db.query('song_translations')) {
-      result.putIfAbsent(
-        r['song_title'] as String,
-        () => {},
-      )[r['language'] as String] = r['lyrics'] as String;
-    }
-    return result;
-  }
-
-  SyncSong _songFromRow(
-    Map<String, Object?> row,
-    Map<String, Map<String, String>> translations,
-  ) {
-    final title = row['title'] as String;
-    return SyncSong(
-      uid: row['uid'] as String,
-      updatedAt: (row['updated_at'] as int?) ?? 0,
-      title: title,
-      fileName: row['file_name'] as String? ?? '',
-      lyrics: row['lyrics'] as String,
-      englishLyrics: (row['english_lyrics'] as String?) ?? '',
-      translations: translations[title] ?? const {},
+    return SyncMergeResult(
+      addedCount: added,
+      updatedCount: updated,
+      deletedCount: deleted,
     );
   }
+
+  Future<Map<String, int>> _tombstones(DatabaseExecutor db) async => {
+    for (final r in await db.query('song_tombstones', orderBy: 'uid'))
+      r['uid'] as String: r['deleted_at'] as int,
+  };
+
+  SyncSong _songFromRow(Map<String, Object?> row) => SyncSong(
+    uid: row['uid'] as String,
+    updatedAt: (row['updated_at'] as int?) ?? 0,
+    title: row['title'] as String,
+    fileName: row['file_name'] as String? ?? '',
+    lyrics: row['lyrics'] as String,
+    englishLyrics: (row['english_lyrics'] as String?) ?? '',
+  );
 
   Map<String, Object?> _rowOf(SyncSong song) => {
     'uid': song.uid,
@@ -249,11 +230,10 @@ class SongSyncRepository {
   Future<Map<String, _LocalSong>> _canonicalLocalRows(
     DatabaseExecutor txn,
     String Function(String) canonical,
-    Map<String, Map<String, String>> translations,
   ) async {
     final result = <String, _LocalSong>{};
     for (final row in await txn.query('praise_songs')) {
-      final song = _songFromRow(row, translations);
+      final song = _songFromRow(row);
       final uid = canonical(song.uid);
       var current = _LocalSong(row['id'] as int, song);
       if (uid != song.uid) {
@@ -311,50 +291,99 @@ class SongSyncRepository {
       where: 'id = ?',
       whereArgs: [mine.id],
     );
-    await _replaceTranslations(txn, mine.song.title, song);
     mine.song = song;
   }
 
-  /// 보조 가사는 제목에 묶여 있다. 제목이 바뀌었으면 옛 제목의 가사는,
-  /// 그 제목을 쓰는 다른 곡이 없을 때만 지운다.
-  Future<void> _replaceTranslations(
+  // ── 보조 언어 가사 ──────────────────────────────────────────────────
+
+  /// 바뀐 보조 가사 수를 돌려준다.
+  Future<int> _mergeTranslations(
     DatabaseExecutor txn,
-    String? oldTitle,
-    SyncSong song,
+    List<SyncSnapshot> remotes,
   ) async {
-    if (oldTitle != null && oldTitle != song.title) {
-      final others = await txn.query(
-        'praise_songs',
-        columns: ['id'],
-        where: 'title = ?',
-        whereArgs: [oldTitle],
-        limit: 1,
-      );
-      if (others.isEmpty) {
+    final local = {
+      for (final r in await txn.query('song_translations'))
+        SyncTranslation.keyOf(
+          r['song_title'] as String,
+          r['language'] as String,
+        ): _translationFromRow(
+          r,
+        ),
+    };
+    final storedTombstones = await _translationTombstones(txn);
+    final tombstones = Map<String, int>.of(storedTombstones);
+    final newest = <String, SyncTranslation>{};
+    for (final remote in remotes) {
+      remote.translationDeleted.forEach((key, at) {
+        final before = tombstones[key];
+        if (before == null || at > before) tombstones[key] = at;
+      });
+      for (final t in remote.translations) {
+        if (t.language == PraiseRepository.defaultSubLanguage ||
+            t.lyrics.trim().isEmpty) {
+          continue;
+        }
+        final before = newest[t.key];
+        if (before == null || t.winsOver(before)) newest[t.key] = t;
+      }
+    }
+
+    var changed = 0;
+    for (final t in newest.values) {
+      final deletedAt = tombstones[t.key];
+      if (deletedAt != null && deletedAt >= t.updatedAt) continue;
+      final mine = local[t.key];
+      if (mine != null && !t.winsOver(mine)) continue;
+      await txn.insert('song_translations', {
+        'song_title': t.title,
+        'language': t.language,
+        'lyrics': t.lyrics,
+        'updated_at': t.updatedAt,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+      local[t.key] = t;
+      changed += 1;
+    }
+
+    for (final entry in tombstones.entries) {
+      final mine = local[entry.key];
+      if (mine != null && mine.updatedAt <= entry.value) {
         await txn.delete(
           'song_translations',
-          where: 'song_title = ?',
-          whereArgs: [oldTitle],
+          where: 'song_title = ? AND language = ?',
+          whereArgs: [mine.title, mine.language],
         );
+        changed += 1;
+      }
+      if (storedTombstones[entry.key] != entry.value) {
+        final parts = entry.key.split('\u0000');
+        await txn.insert('translation_tombstones', {
+          'song_title': parts.first,
+          'language': parts.last,
+          'deleted_at': entry.value,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
       }
     }
-    await txn.delete(
-      'song_translations',
-      where: 'song_title = ?',
-      whereArgs: [song.title],
-    );
-    for (final entry in song.translations.entries) {
-      if (entry.key == PraiseRepository.defaultSubLanguage ||
-          entry.value.trim().isEmpty) {
-        continue;
-      }
-      await txn.insert('song_translations', {
-        'song_title': song.title,
-        'language': entry.key,
-        'lyrics': entry.value,
-      }, conflictAlgorithm: ConflictAlgorithm.replace);
-    }
+    return changed;
   }
+
+  SyncTranslation _translationFromRow(Map<String, Object?> row) =>
+      SyncTranslation(
+        title: row['song_title'] as String,
+        language: row['language'] as String,
+        lyrics: row['lyrics'] as String,
+        updatedAt: (row['updated_at'] as int?) ?? 0,
+      );
+
+  Future<Map<String, int>> _translationTombstones(
+    DatabaseExecutor db,
+  ) async => {
+    for (final r in await db.query(
+      'translation_tombstones',
+      orderBy: 'song_title, language',
+    ))
+      SyncTranslation.keyOf(r['song_title'] as String, r['language'] as String):
+          r['deleted_at'] as int,
+  };
 }
 
 class _LocalSong {

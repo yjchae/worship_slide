@@ -110,6 +110,7 @@ Future<void> createPraiseSchema(DatabaseExecutor db) async {
   )
 ''');
   await db.execute(_createSongTranslations);
+  await db.execute(_createTranslationTombstones);
 }
 
 /// 곡의 보조 언어 가사. 곡 id 가 아니라 **제목**을 키로 쓴다 —
@@ -120,6 +121,17 @@ const _createSongTranslations = '''
     song_title TEXT NOT NULL,
     language   TEXT NOT NULL,
     lyrics     TEXT NOT NULL,
+    updated_at INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (song_title, language)
+  )
+''';
+
+/// 지운 보조 가사. 보조 가사는 곡이 아니라 (제목, 언어)에 묶여 있으므로 따로 동기화한다.
+const _createTranslationTombstones = '''
+  CREATE TABLE IF NOT EXISTS translation_tombstones (
+    song_title TEXT NOT NULL,
+    language   TEXT NOT NULL,
+    deleted_at INTEGER NOT NULL,
     PRIMARY KEY (song_title, language)
   )
 ''';
@@ -164,6 +176,35 @@ String newSongUid() => List.generate(
   16,
   (_) => _uidRandom.nextInt(256).toRadixString(16).padLeft(2, '0'),
 ).join();
+
+/// uid 가 없는 곡·콘티에 uid 를 준다(마이그레이션 + 예전 경로로 들어온 행).
+/// 콘티의 고친 시각은 저장한 시각으로 시작한다.
+Future<void> fillMissingSyncUids(DatabaseExecutor db) async {
+  for (final row in await db.query(
+    'praise_songs',
+    columns: ['id'],
+    where: 'uid IS NULL',
+  )) {
+    await db.update(
+      'praise_songs',
+      {'uid': newSongUid()},
+      where: 'id = ?',
+      whereArgs: [row['id']],
+    );
+  }
+  for (final row in await db.query(
+    'worship_contis',
+    columns: ['id', 'created_at'],
+    where: 'uid IS NULL',
+  )) {
+    await db.update(
+      'worship_contis',
+      {'uid': newSongUid(), 'updated_at': row['created_at']},
+      where: 'id = ?',
+      whereArgs: [row['id']],
+    );
+  }
+}
 
 /// 이미 그 컬럼이 있으면 조용히 건너뛴다. `user_version`이 실제 스키마보다
 /// 뒤처진 DB(예: 예전 업그레이드가 중간에 실패해 롤백된 경우)를 다시 열어도
@@ -390,19 +431,6 @@ Future<void> upgradePraiseSchema(DatabaseExecutor db, int oldVersion) async {
     await db.execute(_createSongUidIndex);
     await db.execute(_createSongTombstones);
     await db.execute(_createSongUidAliases);
-    final rows = await db.query(
-      'praise_songs',
-      columns: ['id'],
-      where: 'uid IS NULL',
-    );
-    for (final row in rows) {
-      await db.update(
-        'praise_songs',
-        {'uid': newSongUid()},
-        where: 'id = ?',
-        whereArgs: [row['id']],
-      );
-    }
     await _addColumnIfMissing(
       db,
       'worship_contis',
@@ -416,19 +444,14 @@ Future<void> upgradePraiseSchema(DatabaseExecutor db, int oldVersion) async {
       'ALTER TABLE worship_contis ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0',
     );
     await db.execute(_createContiTombstones);
-    final contis = await db.query(
-      'worship_contis',
-      columns: ['id', 'created_at'],
-      where: 'uid IS NULL',
+    await _addColumnIfMissing(
+      db,
+      'song_translations',
+      'updated_at',
+      'ALTER TABLE song_translations ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0',
     );
-    for (final row in contis) {
-      await db.update(
-        'worship_contis',
-        {'uid': newSongUid(), 'updated_at': row['created_at']},
-        where: 'id = ?',
-        whereArgs: [row['id']],
-      );
-    }
+    await db.execute(_createTranslationTombstones);
+    await fillMissingSyncUids(db);
   }
 }
 

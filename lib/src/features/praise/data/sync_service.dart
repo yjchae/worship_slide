@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
@@ -80,10 +81,12 @@ class SyncService {
     ContiSyncRepository? contis,
     Future<Directory> Function()? settingsDirectory,
     String? deviceName,
+    DateTime Function()? clock,
   }) : _songs = songs ?? SongSyncRepository(),
        _contis = contis ?? ContiSyncRepository(),
        _settingsDirectory = settingsDirectory ?? getApplicationSupportDirectory,
-       _deviceName = deviceName ?? Platform.localHostname;
+       _deviceName = deviceName ?? Platform.localHostname,
+       _clock = clock ?? DateTime.now;
 
   static const syncDirName = 'worship_slides_sync';
   static const filesDirName = 'files';
@@ -91,11 +94,13 @@ class SyncService {
   static const _localFilesDirName = 'synced_files';
   static const _interval = Duration(minutes: 1);
   static const _debounce = Duration(seconds: 3);
+  static const _maxPendingRetry = Duration(minutes: 30);
 
   final SongSyncRepository _songs;
   final ContiSyncRepository _contis;
   final Future<Directory> Function() _settingsDirectory;
   final String _deviceName;
+  final DateTime Function() _clock;
 
   final status = ValueNotifier(const SyncStatus());
 
@@ -106,13 +111,21 @@ class SyncService {
   Timer? _timer;
   Timer? _debounceTimer;
   Future<void> _queue = Future.value();
+  bool _disposed = false;
 
   /// 이 PC 에서 곡·콘티가 바뀌어 아직 공유 폴더에 안 쓴 상태.
-  /// (받지 못한 콘티가 남아 있을 때도 켜 둔다 — 다른 PC 파일이 그대로여도 다시 받아 보게.)
   bool _localDirty = true;
 
   /// 지난번에 읽은 다른 PC 파일들(경로·수정 시각·크기). 그대로면 합치기를 건너뛴다.
   String? _lastRemoteSignature;
+
+  /// 마지막으로 쓴(또는 확인한) 내 파일 내용. 같으면 다시 쓰지 않는다.
+  String? _lastWrittenText;
+
+  /// 받지 못한 콘티가 있을 때 다시 볼 시각. 1분부터 두 배씩 30분까지 늘린다 —
+  /// 파일이 영영 안 올라오는 콘티 때문에 매분 전체를 다시 읽지 않게.
+  DateTime? _nextPendingRetry;
+  Duration _pendingRetryDelay = _interval;
 
   String get deviceId => _deviceId ?? '';
 
@@ -138,37 +151,42 @@ class SyncService {
       _deviceId = newSongUid();
       await _saveSettings(folder);
     }
-    status.value = SyncStatus(folder: folder);
+    if (_disposed) return;
+    _setStatus(SyncStatus(folder: folder));
     _restartTimer();
     if (folder != null) unawaited(syncNow());
   }
 
   /// 공유 폴더를 바꾼다. null 이면 동기화를 끈다(공유 폴더의 파일은 지우지 않는다).
+  /// 도는 중인 동기화가 끝난 뒤에 바꾼다 — 옛 폴더의 결과가 새 폴더 상태를 덮지 않게.
   Future<void> setFolder(String? folder) async {
-    await _saveSettings(folder);
-    _lastRemoteSignature = null;
-    _localDirty = true;
-    status.value = SyncStatus(folder: folder);
-    _restartTimer();
+    await _enqueue(() async {
+      await _saveSettings(folder);
+      _lastRemoteSignature = null;
+      _lastWrittenText = null;
+      _localDirty = true;
+      _nextPendingRetry = null;
+      _pendingRetryDelay = _interval;
+      _setStatus(SyncStatus(folder: folder));
+      _restartTimer();
+    });
     if (folder != null) await syncNow();
   }
 
   /// 이 PC 에서 곡·콘티를 고쳤을 때. 잇따른 수정은 3초 모아서 한 번에 쓴다.
   void markLocalChanged() {
     _localDirty = true;
-    if (!status.value.enabled) return;
+    if (_disposed || !status.value.enabled) return;
     _debounceTimer?.cancel();
     _debounceTimer = Timer(_debounce, () => unawaited(syncNow()));
   }
 
   /// 지금 맞춘다. 이미 도는 중이면 그 뒤에 이어서 돈다.
-  Future<SyncResult?> syncNow() {
-    final run = _queue.then((_) => _sync());
-    _queue = run.then((_) {}, onError: (_) {});
-    return run;
-  }
+  Future<SyncResult?> syncNow() => _enqueue(_sync);
 
   void dispose() {
+    if (_disposed) return;
+    _disposed = true;
     _timer?.cancel();
     _debounceTimer?.cancel();
     status.dispose();
@@ -176,9 +194,20 @@ class SyncService {
 
   // ── 내부 ────────────────────────────────────────────────────────────
 
+  Future<T> _enqueue<T>(Future<T> Function() job) {
+    final run = _queue.then((_) => job());
+    _queue = run.then((_) {}, onError: (_) {});
+    return run;
+  }
+
+  /// 앱이 닫힌 뒤(dispose) 끝난 동기화가 상태를 건드리지 않게.
+  void _setStatus(SyncStatus value) {
+    if (!_disposed) status.value = value;
+  }
+
   void _restartTimer() {
     _timer?.cancel();
-    _timer = status.value.enabled
+    _timer = status.value.enabled && !_disposed
         ? Timer.periodic(_interval, (_) => unawaited(syncNow()))
         : null;
   }
@@ -197,8 +226,9 @@ class SyncService {
 
   Future<SyncResult?> _sync() async {
     final folder = status.value.folder;
-    if (folder == null) return null;
-    status.value = status.value.copyWith(syncing: true);
+    if (_disposed || folder == null) return null;
+    _setStatus(status.value.copyWith(syncing: true));
+    var hadLocalChanges = false;
     try {
       if (!await Directory(folder).exists()) {
         throw const FileSystemException(
@@ -221,45 +251,54 @@ class SyncService {
           '${remoteFiles[i].path}|${stats[i].modified}|${stats[i].size}',
       ].join('\n');
 
-      var result = const SyncResult();
-      var pending = status.value.pendingContis;
-      final peers = <String>[];
-      if (signature != _lastRemoteSignature ||
-          _localDirty ||
-          !await File(ownPath).exists()) {
-        final snapshots = <SyncSnapshot>[];
-        for (final file in remoteFiles) {
-          final snapshot = await _readSnapshot(file);
-          if (snapshot == null || snapshot.deviceId == deviceId) continue;
-          snapshots.add(snapshot);
-          peers.add(
-            snapshot.deviceName.isEmpty
-                ? snapshot.deviceId
-                : snapshot.deviceName,
-          );
-        }
-        // 곡을 먼저 합쳐야 콘티의 곡 항목이 이 PC 의 곡에 이어진다.
-        final songs = await _songs.merge(snapshots);
-        final contis = await _contis.merge(
-          snapshots,
-          sharedFiles: sharedFiles,
-          localFiles: localFiles,
+      final remoteChanged = signature != _lastRemoteSignature;
+      hadLocalChanges = _localDirty || !await File(ownPath).exists();
+      final retryPending =
+          _nextPendingRetry != null && !_clock().isBefore(_nextPendingRetry!);
+      if (!remoteChanged && !hadLocalChanges && !retryPending) {
+        _setStatus(
+          status.value.copyWith(
+            syncing: false,
+            lastSyncAt: _clock(),
+            lastError: () => null,
+          ),
         );
-        result = SyncResult(songs: songs, contis: contis);
-        pending = contis.pendingCount;
-        await _writeOwn(ownPath, sharedFiles, localFiles);
-        _lastRemoteSignature = signature;
-        _localDirty = pending > 0;
-      } else {
-        peers.addAll(status.value.peers);
+        return const SyncResult();
       }
+      // 이 뒤에 생긴 수정은 markLocalChanged 가 다시 켠다 — 끝에서 끄면 그 수정을 놓친다.
+      _localDirty = false;
 
-      status.value = status.value.copyWith(
-        syncing: false,
-        lastSyncAt: DateTime.now(),
-        lastError: () => null,
-        peers: peers,
-        pendingContis: pending,
+      final read = await _readSnapshots(remoteFiles);
+      final snapshots = [
+        for (final snapshot in read)
+          if (snapshot.deviceId != deviceId) snapshot,
+      ];
+      // 곡을 먼저 합쳐야 콘티의 곡 항목이 이 PC 의 곡에 이어진다.
+      final songs = await _songs.merge(snapshots);
+      final contis = await _contis.merge(
+        snapshots,
+        sharedFiles: sharedFiles,
+        localFiles: localFiles,
+      );
+      final result = SyncResult(songs: songs, contis: contis);
+      // 받지 못한 콘티만 다시 본 차례에 바뀐 게 없으면 내 파일은 그대로다.
+      if (remoteChanged || hadLocalChanges || result.changed) {
+        await _writeOwn(ownPath, sharedFiles, localFiles);
+      }
+      _lastRemoteSignature = signature;
+      _schedulePendingRetry(contis.pendingCount);
+
+      _setStatus(
+        status.value.copyWith(
+          syncing: false,
+          lastSyncAt: _clock(),
+          lastError: () => null,
+          peers: [
+            for (final s in snapshots)
+              s.deviceName.isEmpty ? s.deviceId : s.deviceName,
+          ],
+          pendingContis: contis.pendingCount,
+        ),
       );
       if (result.changed) {
         String counts(SyncMergeResult r) =>
@@ -267,18 +306,35 @@ class SyncService {
         await AppLogger.instance.info(
           '[sync] 곡 ${counts(result.songs)} / 콘티 ${counts(result.contis)}',
         );
-        onMerged?.call(result);
+        if (!_disposed) onMerged?.call(result);
       }
       return result;
     } catch (error, stack) {
+      // 쓰지 못한 이 PC 의 수정은 다음 차례에 다시 쓴다.
+      if (hadLocalChanges) _localDirty = true;
       await AppLogger.instance.error('동기화 실패', error, stack);
-      status.value = status.value.copyWith(
-        syncing: false,
-        lastError: () =>
-            error is FileSystemException ? error.message : error.toString(),
+      _setStatus(
+        status.value.copyWith(
+          syncing: false,
+          lastError: () =>
+              error is FileSystemException ? error.message : error.toString(),
+        ),
       );
       return null;
     }
+  }
+
+  void _schedulePendingRetry(int pending) {
+    if (pending == 0) {
+      _nextPendingRetry = null;
+      _pendingRetryDelay = _interval;
+      return;
+    }
+    _nextPendingRetry = _clock().add(_pendingRetryDelay);
+    final doubled = _pendingRetryDelay * 2;
+    _pendingRetryDelay = doubled > _maxPendingRetry
+        ? _maxPendingRetry
+        : doubled;
   }
 
   Future<List<File>> _remoteFiles(Directory dir, String ownPath) async {
@@ -296,14 +352,35 @@ class SyncService {
     return files;
   }
 
-  Future<SyncSnapshot?> _readSnapshot(File file) async {
-    try {
-      return SyncSnapshot.fromJson(jsonDecode(await file.readAsString()));
-    } catch (error) {
-      // 드라이브가 아직 내려받는 중이거나 다른 PC 가 쓰는 중이면 다음 차례에 다시 읽는다.
-      await AppLogger.instance.info('[sync] 읽기 건너뜀 ${file.path}: $error');
-      return null;
+  /// 다른 PC 파일을 읽어 푼다. 곡이 수천 곡이면 파일마다 몇 MB 라서 화면 스레드가
+  /// 멈추지 않게 별도 isolate 에서 읽고 푼다.
+  Future<List<SyncSnapshot>> _readSnapshots(List<File> files) async {
+    final paths = [for (final f in files) f.path];
+    final read = await Isolate.run(
+      () => [
+        for (final path in paths)
+          () {
+            try {
+              final snapshot = SyncSnapshot.fromJson(
+                jsonDecode(File(path).readAsStringSync()),
+              );
+              return (snapshot: snapshot, error: null);
+            } catch (error) {
+              return (snapshot: null, error: '$path: $error');
+            }
+          }(),
+      ],
+    );
+    final result = <SyncSnapshot>[];
+    for (final r in read) {
+      if (r.snapshot != null) {
+        result.add(r.snapshot!);
+      } else if (r.error != null) {
+        // 드라이브가 아직 내려받는 중이거나 다른 PC 가 쓰는 중이면 다음 차례에 다시 읽는다.
+        await AppLogger.instance.info('[sync] 읽기 건너뜀 ${r.error}');
+      }
     }
+    return result;
   }
 
   /// 내 파일은 내용이 바뀌었을 때만 쓴다(드라이브가 쓸데없이 올리지 않게).
@@ -324,9 +401,15 @@ class SyncService {
       localFiles: localFiles,
     );
     final snapshot = songs.withContis(contis.contis, contis.deleted);
-    final text = jsonEncode(snapshot.toJson());
+    final text = await Isolate.run(() => jsonEncode(snapshot.toJson()));
+    if (text == _lastWrittenText) return;
     final file = File(path);
-    if (await file.exists() && await file.readAsString() == text) return;
+    if (_lastWrittenText == null &&
+        await file.exists() &&
+        await file.readAsString() == text) {
+      _lastWrittenText = text;
+      return;
+    }
     final temp = File('$path.tmp');
     await temp.writeAsString(text, flush: true);
     try {
@@ -335,5 +418,6 @@ class SyncService {
       await file.writeAsString(text, flush: true);
       await temp.delete().catchError((_) => temp);
     }
+    _lastWrittenText = text;
   }
 }

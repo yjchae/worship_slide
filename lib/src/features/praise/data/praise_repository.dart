@@ -263,22 +263,17 @@ class PraiseRepository {
     onSongsChanged?.call();
   }
 
-  /// 보조 가사는 제목에 묶여 있으므로, 그 제목의 곡을 "고쳐졌다"고 표시해
-  /// 동기화 때 같이 넘어가게 한다.
-  static Future<void> _touchTitles(
+  /// 지운 보조 가사를 다른 PC 에 알리려고 (제목, 언어)를 남긴다.
+  static Future<void> _addTranslationTombstone(
     DatabaseExecutor txn,
-    Iterable<String> titles,
+    String title,
+    String language,
     int now,
-  ) async {
-    for (final title in titles) {
-      await txn.update(
-        'praise_songs',
-        {'updated_at': now},
-        where: 'title = ?',
-        whereArgs: [title],
-      );
-    }
-  }
+  ) => txn.insert('translation_tombstones', {
+    'song_title': title,
+    'language': language,
+    'deleted_at': now,
+  }, conflictAlgorithm: ConflictAlgorithm.replace);
 
   // ── 보조 언어 가사 ──────────────────────────────────────────────────
   //
@@ -339,6 +334,7 @@ class PraiseRepository {
     final db = await _databaseProvider.database;
     final now = _now();
     await db.transaction((txn) async {
+      // 바뀐 것만 고친 시각을 올린다 — 그대로 둔 가사가 다른 PC 의 수정을 덮지 않게.
       final before = {
         for (final r in await txn.query(
           'song_translations',
@@ -347,30 +343,24 @@ class PraiseRepository {
         ))
           r['song_title'] as String: r['lyrics'] as String,
       };
-      await _touchTitles(
-        txn,
-        lyricsByTitle.entries
-            .where(
-              (e) =>
-                  (before[e.key] ?? '') !=
-                  (e.value.trim().isEmpty ? '' : e.value),
-            )
-            .map((e) => e.key),
-        now,
-      );
       for (final entry in lyricsByTitle.entries) {
+        final old = before[entry.key];
         if (entry.value.trim().isEmpty) {
+          if (old == null) continue;
           await txn.delete(
             'song_translations',
             where: 'song_title = ? AND language = ?',
             whereArgs: [entry.key, language],
           );
+          await _addTranslationTombstone(txn, entry.key, language, now);
           continue;
         }
+        if (old == entry.value) continue;
         await txn.insert('song_translations', {
           'song_title': entry.key,
           'language': language,
           'lyrics': entry.value,
+          'updated_at': now,
         }, conflictAlgorithm: ConflictAlgorithm.replace);
       }
     });
@@ -396,11 +386,15 @@ class PraiseRepository {
         where: 'language = ?',
         whereArgs: [language],
       );
-      await _touchTitles(
-        txn,
-        rows.map((r) => r['song_title'] as String),
-        _now(),
-      );
+      final now = _now();
+      for (final row in rows) {
+        await _addTranslationTombstone(
+          txn,
+          row['song_title'] as String,
+          language,
+          now,
+        );
+      }
       await txn.delete(
         'song_translations',
         where: 'language = ?',
@@ -536,11 +530,9 @@ class PraiseRepository {
             'song_title': dbTitle,
             'language': language,
             'lyrics': text,
+            'updated_at': now,
           }, conflictAlgorithm: ConflictAlgorithm.ignore);
-          if (id != 0) {
-            subLyricsAdded += 1;
-            await _touchTitles(txn, [dbTitle], now);
-          }
+          if (id != 0) subLyricsAdded += 1;
         }
       }
       return SongBundleImportResult(

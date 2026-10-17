@@ -10,6 +10,7 @@ import 'package:worship_slides/src/features/praise/data/praise_database.dart';
 import 'package:worship_slides/src/features/praise/data/praise_repository.dart';
 import 'package:worship_slides/src/features/praise/data/song_sync_repository.dart';
 import 'package:worship_slides/src/features/praise/data/sync_service.dart';
+import 'package:worship_slides/src/features/praise/data/sync_snapshot.dart';
 import 'package:worship_slides/src/features/praise/data/worship_conti_repository.dart';
 import 'package:worship_slides/src/features/praise/domain/praise_song.dart';
 import 'package:worship_slides/src/features/praise/domain/slide_background.dart';
@@ -35,6 +36,8 @@ void main() {
 
   late Directory root;
   late String shared;
+  // 받지 못한 콘티를 다시 보는 간격을 시험하려고 시계를 손으로 돌린다.
+  var now = DateTime(2026, 1, 1);
 
   setUp(() async {
     root = await Directory.systemTemp.createTemp('song_sync_');
@@ -54,6 +57,7 @@ void main() {
       contis: ContiSyncRepository(database: database),
       settingsDirectory: () async => dir,
       deviceName: name,
+      clock: () => now,
     );
     addTearDown(sync.dispose);
     await sync.load();
@@ -265,6 +269,14 @@ void main() {
       )
     ''');
     await db.insert('worship_contis', {'name': '예전 콘티', 'created_at': 123});
+    await db.execute('''
+      CREATE TABLE song_translations (
+        song_title TEXT NOT NULL,
+        language TEXT NOT NULL,
+        lyrics TEXT NOT NULL,
+        PRIMARY KEY (song_title, language)
+      )
+    ''');
     await db.insert('praise_songs', {
       'file_name': 'a.pptx',
       'title': '은혜',
@@ -387,9 +399,123 @@ void main() {
       expect(b.sync.status.value.pendingContis, 1);
 
       await hidden.rename(files.path);
+      // 바로는 다시 보지 않는다(매분 전체를 다시 읽지 않게) — 1분 뒤에 본다.
+      await b.sync.syncNow();
+      expect(await b.contis.listContis(), isEmpty);
+      now = now.add(const Duration(minutes: 1));
       await b.sync.syncNow();
       expect((await b.contis.listContis()).map((c) => c.name), ['주일 예배']);
       expect(b.sync.status.value.pendingContis, 0);
     });
+
+    test('다른 PC 파일이 공유 폴더 밖을 가리키면 받지 않는다', () async {
+      final b = await newPc('B');
+      final secret = File(p.join(root.path, 'secret.png'))
+        ..writeAsBytesSync([9]);
+      final dir = p.join(shared, SyncService.syncDirName);
+      File(p.join(dir, 'evil.json')).writeAsStringSync(
+        jsonEncode(
+          SyncSnapshot(
+            deviceId: 'evil',
+            deviceName: 'evil',
+            songs: const [],
+            deleted: const {},
+            aliases: const {},
+            contis: [
+              SyncConti(
+                uid: 'c1',
+                updatedAt: 1,
+                name: '나쁜 콘티',
+                createdAt: 1,
+                items: [
+                  {
+                    'item_type': 'image',
+                    'image_paths': SyncConti.fileRef(
+                      '../../${p.basename(secret.path)}',
+                    ),
+                  },
+                ],
+              ),
+            ],
+          ).toJson(),
+        ),
+      );
+      await b.sync.syncNow();
+      expect(await b.contis.listContis(), isEmpty);
+    });
+  });
+
+  group('보조 언어 가사', () {
+    test('같은 곡을 합칠 때 한쪽에만 있는 번역이 지워지지 않는다', () async {
+      final a = await newPc('A', join: false);
+      final b = await newPc('B', join: false);
+      await a.repo.addNewSongs([song('은혜', '가사')]);
+      await a.repo.saveTranslations('일본어', {'은혜': '恵み'});
+      await b.repo.addNewSongs([song('은혜', '가사')]);
+      await b.repo.saveTranslations('중국어', {'은혜': '恩典'});
+      await a.sync.setFolder(shared);
+      await b.sync.setFolder(shared);
+      await syncAll([a, b]);
+      for (final pc in [a, b]) {
+        expect(await pc.repo.translationsForTitle('은혜'), {
+          '일본어': '恵み',
+          '중국어': '恩典',
+        });
+      }
+    });
+
+    test('제목이 같은 다른 곡을 받아도 이 PC 의 번역이 남는다', () async {
+      final a = await newPc('A');
+      final b = await newPc('B');
+      await a.repo.insertSong(song('주 은혜임을', '편곡 1'));
+      await a.repo.saveTranslations('일본어', {'주 은혜임을': '恵み'});
+      await b.repo.insertSong(song('주 은혜임을', '편곡 2'));
+      await syncAll([a, b]);
+      expect((await a.songs()).map((s) => s.lyrics).toSet(), {'편곡 1', '편곡 2'});
+      expect(await a.repo.translationsForTitle('주 은혜임을'), {'일본어': '恵み'});
+      expect(await b.repo.translationsForTitle('주 은혜임을'), {'일본어': '恵み'});
+    });
+
+    test('번역을 지우면 다른 PC 에서도 지워진다', () async {
+      final a = await newPc('A');
+      final b = await newPc('B');
+      await a.repo.insertSong(song('은혜', '가사'));
+      await a.repo.saveTranslations('일본어', {'은혜': '恵み'});
+      await syncAll([a, b]);
+      expect(await b.repo.translationsForTitle('은혜'), {'일본어': '恵み'});
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      await b.repo.deleteLanguage('일본어');
+      await syncAll([a, b]);
+      expect(await a.repo.translationsForTitle('은혜'), isEmpty);
+    });
+  });
+
+  test('동기화 도중에 고친 곡도 놓치지 않고 올라간다', () async {
+    final a = await newPc('A');
+    final b = await newPc('B');
+    await a.repo.insertSong(song('은혜', '처음'));
+    await syncAll([a, b]);
+    final grace = (await a.songs()).single;
+    final running = a.sync.syncNow();
+    await a.repo.updateSong(
+      PraiseSong(
+        id: grace.id,
+        fileName: grace.fileName,
+        title: grace.title,
+        lyrics: '동기화 중에 고침',
+        englishLyrics: '',
+      ),
+    );
+    await running;
+    await syncAll([a, b]);
+    expect(await b.titles(), ['은혜:동기화 중에 고침']);
+  });
+
+  test('동기화 도중에 닫아도 오류가 나지 않는다', () async {
+    final a = await newPc('A');
+    await a.repo.insertSong(song('은혜', '가사'));
+    final running = a.sync.syncNow();
+    a.sync.dispose();
+    await running;
   });
 }

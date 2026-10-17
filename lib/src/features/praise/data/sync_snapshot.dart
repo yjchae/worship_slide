@@ -1,6 +1,7 @@
 import 'dart:convert';
 
-/// 공유 폴더에 올리는 곡 한 곡. 보조 언어 가사(제목에 묶여 있다)도 같이 싣는다.
+/// 공유 폴더에 올리는 곡 한 곡. 보조 언어 가사는 곡이 아니라 제목에 묶여 있어서
+/// 따로([SyncTranslation]) 싣는다 — 같은 제목의 다른 곡과 같이 쓰기 때문이다.
 class SyncSong {
   const SyncSong({
     required this.uid,
@@ -9,7 +10,6 @@ class SyncSong {
     required this.fileName,
     required this.lyrics,
     required this.englishLyrics,
-    required this.translations,
   });
 
   final String uid;
@@ -19,15 +19,11 @@ class SyncSong {
   final String lyrics;
   final String englishLyrics;
 
-  /// 언어 → 가사. '영어'는 [englishLyrics] 가 맡으므로 여기 없다.
-  final Map<String, String> translations;
-
   /// 따로 가져온 같은 곡을 알아보는 키(제목·원본·영어 가사가 똑같음).
   String get contentKey => '$title\u0000$lyrics\u0000$englishLyrics';
 
   /// 고친 시각이 같을 때 어느 쪽을 쓸지 정하는 키. PC 마다 같은 답이 나와야 한다.
-  String get tieKey =>
-      '$contentKey\u0000$fileName\u0000${jsonEncode(_sorted(translations))}';
+  String get tieKey => '$contentKey\u0000$fileName';
 
   /// [other] 보다 이 곡이 더 최신이면 true.
   bool winsOver(SyncSong other) => updatedAt != other.updatedAt
@@ -41,7 +37,6 @@ class SyncSong {
     fileName: fileName,
     lyrics: lyrics,
     englishLyrics: englishLyrics,
-    translations: translations,
   );
 
   Map<String, Object?> toJson() => {
@@ -51,7 +46,6 @@ class SyncSong {
     'file_name': fileName,
     'lyrics': lyrics,
     'english_lyrics': englishLyrics,
-    if (translations.isNotEmpty) 'translations': _sorted(translations),
   };
 
   static SyncSong? fromJson(Object? raw) {
@@ -65,7 +59,6 @@ class SyncSong {
         lyrics is! String) {
       return null;
     }
-    final translations = raw['translations'];
     return SyncSong(
       uid: uid,
       updatedAt: (raw['updated_at'] as num?)?.toInt() ?? 0,
@@ -73,19 +66,54 @@ class SyncSong {
       fileName: raw['file_name'] as String? ?? '',
       lyrics: lyrics,
       englishLyrics: raw['english_lyrics'] as String? ?? '',
-      translations: translations is Map
-          ? {
-              for (final e in translations.entries)
-                if (e.key is String && e.value is String)
-                  e.key as String: e.value as String,
-            }
-          : const {},
     );
   }
+}
 
-  static Map<String, String> _sorted(Map<String, String> map) => {
-    for (final key in map.keys.toList()..sort()) key: map[key]!,
+/// 보조 언어 가사 하나 (제목, 언어). 곡과 같이 나중에 고친 쪽이 이긴다.
+class SyncTranslation {
+  const SyncTranslation({
+    required this.title,
+    required this.language,
+    required this.lyrics,
+    required this.updatedAt,
+  });
+
+  final String title;
+  final String language;
+  final String lyrics;
+  final int updatedAt;
+
+  String get key => keyOf(title, language);
+
+  static String keyOf(String title, String language) => '$title\u0000$language';
+
+  bool winsOver(SyncTranslation other) => updatedAt != other.updatedAt
+      ? updatedAt > other.updatedAt
+      : lyrics.compareTo(other.lyrics) > 0;
+
+  Map<String, Object?> toJson() => {
+    'title': title,
+    'language': language,
+    'lyrics': lyrics,
+    'updated_at': updatedAt,
   };
+
+  static SyncTranslation? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final title = raw['title'];
+    final language = raw['language'];
+    final lyrics = raw['lyrics'];
+    if (title is! String || language is! String || lyrics is! String) {
+      return null;
+    }
+    return SyncTranslation(
+      title: title,
+      language: language,
+      lyrics: lyrics,
+      updatedAt: (raw['updated_at'] as num?)?.toInt() ?? 0,
+    );
+  }
 }
 
 /// PC 한 대가 공유 폴더에 쓰는 내용 전부. PC 마다 자기 파일 하나만 쓰므로
@@ -97,6 +125,8 @@ class SyncSnapshot {
     required this.songs,
     required this.deleted,
     required this.aliases,
+    this.translations = const [],
+    this.translationDeleted = const {},
     this.contis = const [],
     this.contiDeleted = const {},
   });
@@ -113,6 +143,11 @@ class SyncSnapshot {
   /// 합쳐진 옛 uid → 지금 uid.
   final Map<String, String> aliases;
 
+  final List<SyncTranslation> translations;
+
+  /// 지운 보조 가사 [SyncTranslation.keyOf] → 지운 시각.
+  final Map<String, int> translationDeleted;
+
   final List<SyncConti> contis;
 
   /// 지운 콘티 uid → 지운 시각.
@@ -125,6 +160,8 @@ class SyncSnapshot {
         songs: songs,
         deleted: this.deleted,
         aliases: aliases,
+        translations: translations,
+        translationDeleted: translationDeleted,
         contis: contis,
         contiDeleted: deleted,
       );
@@ -137,6 +174,15 @@ class SyncSnapshot {
     'songs': [for (final song in songs) song.toJson()],
     'deleted': deleted,
     'aliases': aliases,
+    'translations': [for (final t in translations) t.toJson()],
+    'translation_deleted': [
+      for (final e in translationDeleted.entries)
+        {
+          'title': e.key.split('\u0000').first,
+          'language': e.key.split('\u0000').last,
+          'deleted_at': e.value,
+        },
+    ],
     'contis': [for (final conti in contis) conti.toJson()],
     'conti_deleted': contiDeleted,
   };
@@ -147,6 +193,8 @@ class SyncSnapshot {
     final deleted = raw['deleted'];
     final aliases = raw['aliases'];
     final contis = raw['contis'];
+    final translations = raw['translations'];
+    final translationDeleted = raw['translation_deleted'];
     return SyncSnapshot(
       deviceId: raw['device_id'] as String? ?? '',
       deviceName: raw['device_name'] as String? ?? '',
@@ -161,6 +209,25 @@ class SyncSnapshot {
                   e.key as String: e.value as String,
             }
           : const {},
+      translations: translations is List
+          ? translations
+                .map(SyncTranslation.fromJson)
+                .whereType<SyncTranslation>()
+                .toList()
+          : const [],
+      translationDeleted: {
+        if (translationDeleted is List)
+          for (final e in translationDeleted)
+            if (e is Map &&
+                e['title'] is String &&
+                e['language'] is String &&
+                e['deleted_at'] is num)
+              SyncTranslation.keyOf(
+                e['title'] as String,
+                e['language'] as String,
+              ): (e['deleted_at'] as num)
+                  .toInt(),
+      },
       contis: contis is List
           ? contis.map(SyncConti.fromJson).whereType<SyncConti>().toList()
           : const [],
@@ -186,7 +253,6 @@ class SyncConti {
     required this.name,
     required this.createdAt,
     required this.items,
-    required this.files,
   });
 
   final String uid;
@@ -197,9 +263,6 @@ class SyncConti {
   /// `worship_conti_items` 행(id·conti_id·song_id·원본 PPT 경로 뺌). 곡 항목은 `song_uid` 를 싣는다.
   /// 이미지 경로 자리는 [fileRef] 로 바뀌어 있다.
   final List<Map<String, Object?>> items;
-
-  /// 이 콘티가 쓰는 공유 폴더 `files/` 안 파일 이름. 다 내려와 있어야 받는다.
-  final List<String> files;
 
   /// 경로 자리에 넣는 공유 파일 표시. 표시가 없는 경로는 그 PC 에 없던 파일(유실)이다.
   static const _filePrefix = 'sync-file:';
@@ -222,7 +285,6 @@ class SyncConti {
     'name': name,
     'created_at': createdAt,
     'items': items,
-    'files': files,
   };
 
   static SyncConti? fromJson(Object? raw) {
@@ -230,7 +292,6 @@ class SyncConti {
     final uid = raw['uid'];
     final name = raw['name'];
     final items = raw['items'];
-    final files = raw['files'];
     if (uid is! String || uid.isEmpty || name is! String || items is! List) {
       return null;
     }
@@ -247,7 +308,6 @@ class SyncConti {
                 if (e.key is String) e.key as String: e.value,
             },
       ],
-      files: files is List ? files.whereType<String>().toList() : const [],
     );
   }
 }

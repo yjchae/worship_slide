@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../domain/offering_design.dart';
 import '../presentation/offering_overlay_painter.dart';
+import 'fnv_hash.dart';
 
 /// 헌금송 디자인을 1920x1080 PNG 한 장으로 굽는다.
 ///
@@ -107,17 +108,6 @@ class OfferingBackgroundComposer {
       }
     }
     final bytes = utf8.encode(buffer.toString());
-    // 32비트 FNV-1a 두 개(정방향·역방향)를 이어 16자리. 파일 이름용이라 이 정도면 충분하다.
-    return _fnv1a(bytes).toRadixString(16).padLeft(8, '0') +
-        _fnv1a(bytes.reversed).toRadixString(16).padLeft(8, '0');
-  }
-
-  static int _fnv1a(Iterable<int> bytes) {
-    var hash = 0x811c9dc5;
-    for (final b in bytes) {
-      hash ^= b;
-      hash = (hash * 0x01000193) & 0xFFFFFFFF;
-    }
-    return hash;
+    return fnvHex(bytes);
   }
 }
