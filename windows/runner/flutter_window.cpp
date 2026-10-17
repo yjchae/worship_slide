@@ -30,6 +30,9 @@ bool FlutterWindow::OnCreate() {
       std::make_unique<PresentationChannel>(GetHandle());
   presentation_channel_->Setup(flutter_controller_->engine());
 
+  ocr_channel_ = std::make_unique<OcrChannel>();
+  ocr_channel_->Setup(flutter_controller_->engine());
+
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -46,6 +49,7 @@ bool FlutterWindow::OnCreate() {
 
 void FlutterWindow::OnDestroy() {
   presentation_channel_.reset();
+  ocr_channel_.reset();
 
   if (flutter_controller_) {
     flutter_controller_ = nullptr;

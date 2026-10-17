@@ -1,6 +1,7 @@
 import Cocoa
 import FlutterMacOS
 import UniformTypeIdentifiers
+import Vision
 import WebKit
 
 // ── 발표 창 ──────────────────────────────────────────────────────────────────
@@ -717,6 +718,76 @@ private func htmlEscape(_ text: String) -> String {
 
 // ── MainFlutterWindow ─────────────────────────────────────────────────────
 
+// ── 악보 가사 OCR (Vision) ───────────────────────────────────────────────────
+//
+// 오선·가사 줄 찾기는 Python(ppt_tool sheet --ocr-lines)이 하고, 잘라 낸 가사 줄
+// 이미지 읽기만 여기서 한다. Tesseract 보다 손글씨풍 가사 글꼴을 훨씬 잘 읽는다.
+// 한국어는 Vision 의 정확 모드 3번째 판(macOS 13 이상)부터 된다.
+
+enum SheetTextRecognizer {
+  static let languages = ["ko-KR", "en-US"]
+
+  /// 이 Mac 의 Vision 이 한국어 가사를 읽을 수 있는지.
+  static var isAvailable: Bool {
+    guard #available(macOS 13.0, *) else { return false }
+    let request = makeRequest()
+    let supported = (try? request.supportedRecognitionLanguages()) ?? []
+    return supported.contains("ko-KR")
+  }
+
+  @available(macOS 13.0, *)
+  private static func makeRequest() -> VNRecognizeTextRequest {
+    let request = VNRecognizeTextRequest()
+    request.revision = VNRecognizeTextRequestRevision3
+    request.recognitionLevel = .accurate
+    request.recognitionLanguages = languages
+    // 사전 교정: 실제 악보 사진에서 켠 쪽이 나았다(97% → 98%, '믿응'→'믿음' 등).
+    // 줄 이미지는 Python 이 잘라 주므로 음절이 떨어져 있어도 낱말로 잘못 바꾸는 일은 못 봤다.
+    request.usesLanguageCorrection = true
+    return request
+  }
+
+  /// 이미지 경로마다 찾은 글 덩어리 목록. 좌표는 0~1, 위가 0 (Python 쪽 약속).
+  static func recognize(paths: [String]) -> [String: [[String: Any]]] {
+    guard #available(macOS 13.0, *) else { return [:] }
+    var out: [String: [[String: Any]]] = [:]
+    let lock = NSLock()
+    DispatchQueue.concurrentPerform(iterations: paths.count) { index in
+      let path = paths[index]
+      let found = observations(at: path)
+      lock.lock()
+      out[path] = found
+      lock.unlock()
+    }
+    return out
+  }
+
+  @available(macOS 13.0, *)
+  private static func observations(at path: String) -> [[String: Any]] {
+    let request = makeRequest()
+    let handler = VNImageRequestHandler(url: URL(fileURLWithPath: path), options: [:])
+    do {
+      try handler.perform([request])
+    } catch {
+      NSLog("[sheet-ocr] %@: %@", path, error.localizedDescription)
+      return []
+    }
+    return (request.results ?? []).compactMap { observation in
+      guard let best = observation.topCandidates(1).first else { return nil }
+      // Vision 좌표는 아래가 0 이라 뒤집는다.
+      let box = observation.boundingBox
+      return [
+        "text": best.string,
+        "confidence": Double(best.confidence),
+        "x": Double(box.minX),
+        "y": Double(1 - box.maxY),
+        "w": Double(box.width),
+        "h": Double(box.height),
+      ]
+    }
+  }
+}
+
 class MainFlutterWindow: NSWindow {
   private var presentationController: PresentationWindowController?
   private var singerController: SingerWindowController?
@@ -763,6 +834,45 @@ class MainFlutterWindow: NSWindow {
 
     // ── 발표 채널 ─────────────────────────────────────────────────────────
     let messenger = flutterViewController.engine.binaryMessenger
+
+    // ── 악보 OCR 채널 ─────────────────────────────────────────────────────
+    let ocrChannel = FlutterMethodChannel(name: "worship_slides/ocr", binaryMessenger: messenger)
+    ocrChannel.setMethodCallHandler { call, result in
+      switch call.method {
+      case "isAvailable":
+        result(SheetTextRecognizer.isAvailable)
+      case "recognize":
+        let paths = (call.arguments as? [String: Any])?["paths"] as? [String] ?? []
+        // 줄 수십 장을 읽는 데 몇 초 걸린다. 메인 스레드를 막지 않게 뒤에서 읽는다.
+        DispatchQueue.global(qos: .userInitiated).async {
+          let found = SheetTextRecognizer.recognize(paths: paths)
+          DispatchQueue.main.async { result(found) }
+        }
+      case "clipboardImage":
+        // 클립보드는 앱이 직접 읽는다. ppt_tool(Pillow → osascript)이 읽으면 macOS 의 붙여넣기 허용 창이
+        // 화면에 안 뜬 채 멈춘다. 복사한 파일이면 그 경로, 그림이면 임시 PNG 경로, 없으면 nil.
+        let board = NSPasteboard.general
+        let suffixes: Set<String> = ["png", "jpg", "jpeg", "bmp", "tif", "tiff", "pdf"]
+        if let urls = board.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
+           let url = urls.first(where: { suffixes.contains($0.pathExtension.lowercased()) }) {
+          result(url.path)
+        } else if let image = NSImage(pasteboard: board),
+                  let tiff = image.tiffRepresentation,
+                  let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+          let url = FileManager.default.temporaryDirectory.appendingPathComponent("worship_sheet_clipboard.png")
+          do {
+            try png.write(to: url)
+            result(url.path)
+          } catch {
+            result(nil)
+          }
+        } else {
+          result(nil)
+        }
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
     mainPresentationChannel = FlutterMethodChannel(
       name: "worship_slides/presentation_main", binaryMessenger: messenger)
 

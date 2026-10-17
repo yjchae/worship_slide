@@ -87,6 +87,8 @@ lib/
 - `worship_slides/presentation_main` — 네이티브 → Dart: `presentationClosed`, `singerClosed`,
   `singerKey`(`"next"`/`"prev"` — 싱어 화면에 포커스가 있을 때 누른 넘기기 키)
 - `worship_slides/save_panel` — 저장 위치 선택 (macOS NSSavePanel)
+- `worship_slides/ocr` — 악보 가사 줄 이미지 OCR: `isAvailable` / `recognize({paths})`
+  (macOS `SheetTextRecognizer` = Vision, Windows `ocr_channel.cpp` = Windows.Media.Ocr)
 
 | 플랫폼 | 구현 | 렌더링 |
 |--------|------|--------|
@@ -149,6 +151,9 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
 - `sheet <파일 | --clipboard>` — 악보(이미지·PDF·클립보드 그림)에서 오선 아래 가사만 →
   `{source_name, lyrics, lines, page_count, staff_count, text_layer}`
   (OCR 이 필요한데 Tesseract 가 없으면 `{"error": "tesseract_missing"}`)
+- `sheet <파일 | --clipboard> --ocr-lines <폴더>` — OS 내장 OCR 1단계: 가사 줄 이미지만 잘라 두고
+  `{needs_ocr: true, job, images}` (OCR 이 필요 없으면 위와 같은 최종 결과)
+- `sheet-finish <job.json> <ocr.json>` — 2단계: 앱이 읽은 결과(`{경로: [{text, confidence, x, y, w, h}]}`)로 마무리
 
 ## 중요 설계 결정
 
@@ -289,13 +294,63 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
     필요 없다. 오선 찾기는 그대로 구운 이미지로 하므로 **PDF 좌표(72dpi)를 이미지 배율로 맞춰야
     한다**(`OCR_DPI / 72`). 낱말이 하나도 없는 쪽(그림·스캔본)만 OCR 로 넘어간다 →
     그래서 `tesseract_missing` 판정은 파일을 연 **뒤에** 한다
-  - **업스케일은 아주 작은 글씨(줄 높이 < 24px)만.** 글자 17px 쯤을 2배로 키우면 오히려 엉뚱하게 읽는다.
-    `kor+eng` 은 한글 음절 몇 개를 영어로 읽어서(`예배` → `of mh`) 한글이 나온 줄은 `kor` 로만 다시 읽는다
+  - **그림 악보는 먼저 다듬는다** (`prepare_sheet_image`): 바탕 펴기(`flatten_background`, 그림자·회색 종이 → 흰색) →
+    기울기 바로잡기(`find_skew_angle`, ±4° 중 행 비율 제곱합이 가장 큰 각) → 오선 줄 간격을 22px(`_TARGET_STAFF_SPACING`)로
+    맞추는 크기 조정. 작은 캡처(줄 간격 7~8px)는 1·2절 줄 사이 틈이 1~2px 라 두 줄이 한 덩어리로 잡혀 아무것도 못 읽었다.
+    문턱값은 둘 — 오선은 Otsu 값(흐린 가는 선도 잡게. 흐린 JPEG 라 Otsu 와 255 의 중간값이 단을 더 찾으면 그 값), 글 줄은 `min(Otsu, 160)`(JPEG 얼룩이 글자로 안 잡히게)
+  - **오선에 이어진 악보 기호를 먼저 지운다** (`erase_staff_symbols`): 오선 다섯 줄에서 번져 나가면(마디선·기둥으로 다 이어져 있다)
+    음표·기둥·붙임줄이 한 덩어리로 지워지고 가사·코드 글자만 남는다. 그 뒤에 글 줄을 찾는다. 낮은 음표가 오선 아래로
+    길게 내려온 실제 악보는 음표+가사 첫 줄이 한 덩어리로 잡혀 '덧줄 음표'로 통째로 버려졌다(가사 절반이 사라짐).
+    음표가 글자에 닿은 곳은 글자까지 지워지므로, 가사 줄 높이 안은 원본으로 되살린다 — 줄을 80% 넘게 꿰뚫는 기둥 열만 빼고
+    (`restore_lyric_band`). 기둥이 지워지면 다음 단의 코드 줄이 혼자 남으므로 `is_chord_line` 은 띄어쓰기 없는
+    `CG’DmCFCG’C` 도 코드로 본다(영문자 대부분이 A~G 대문자·m). 글 줄 높이 중앙값의 40% 미만(붙임줄·저작권 문구)은 버리고,
+    60% 미만은 띠 맨 위에서 아래 줄이 더 있을 때만 버린다(소문자뿐인 `for ever` 줄은 60% 쯤이라)
+  - **가사 한 줄 이미지** (`_lyric_line_image`): 줄에서 한 줄 간격쯤 떨어진 행에 걸친 덩어리(음표 기둥)를 지운다 —
+    단, 글 줄 안에서 가늘 때만(넓으면 흐려서 음표가 글자에 붙은 것이라 글자를 살린다). 음표 자리 때문에 벌어진
+    글자 사이를 줄 높이의 0.6 배로 줄이고(`_squeeze_gaps`, 큰 틈 뒤 낱말을 확신도 0·숫자 잡음으로 읽었다),
+    글 줄 높이를 48px 로 맞춘 뒤 흑백으로 굳히고 획을 1px 굵힌다(손글씨풍 글꼴의 가는 `라`·`나` 를 빠뜨려서)
+  - **언어는 줄마다 따로 읽어 확신도로 고른다** (`_ocr_lyric_line`, TSV 출력): `kor+eng` 를 한 번에 쓰면 한 줄 안에서
+    음절마다 언어를 오가며 읽어 한글 줄을 통째로 영문 잡음으로(`뽑의노래로` → `ol Layae`), 영어 줄을 한글로 읽었다.
+    점수는 글자 수로 가중한 평균 확신도, 글자 없는 토막(음표를 읽은 숫자)은 0 점. 기둥을 읽은 `l`·`i`·`j` 는 버리고,
+    영어 줄의 외따로 선 `|` 는 `I` 로 본다. Tesseract 는 줄마다 스레드 풀로 동시에 돌린다(`OMP_THREAD_LIMIT=1`)
+  - **1·2절 순서** (`order_lyric_lines`): 한 단 아래 겹친 절을 위에서 아래로 읽으면 엇갈려 나오므로, 줄 수가 같은 단이
+    이어진 구간마다 1절 끝까지 → 빈 줄 → 2절 끝까지로 편다. 빈 줄은 앱에서 페이지 나눔이 된다(`lyrics`; `lines` 엔 빈 줄 없음).
+    단 끝에서 하이픈으로 끊긴 영어 낱말(`Lift -` ↵ `ing`)은 앞 줄에 붙인다 — 한글 줄 끝 하이픈은 '음 끌기'라 안 붙인다.
+    뒷줄 첫 토막이 흔한 낱말(`for`, `the`…, `_COMMON_ENGLISH_WORDS`)이면 안 붙인다(흐려서 하이픈만 남은 경우)
+  - **못 읽은 줄은 자리를 남긴다** (`_finish_line` → None, 코드 줄은 `_CHORD_LINE` 으로 아예 뺀다). 빼 버리면 그 단의 줄 수가
+    줄어 2절 줄이 1절로 밀린다. 띠 맨 끝에 섞인 다음 단 코드 줄이 뭉개져 None 이 되는 일이 많아서, 맨 끝 None 은 이웃 단의
+    (맨 끝 None 뺀) 줄 수에 맞출 때만 덜어 낸다(`_trim_unread_lines`)
+  - '다음 단에 붙은 줄' 규칙은 한 줄 간격 안 + **글자가 성길 때**(쪽의 글 줄 밀도 상위 25% 의 65% 미만, `_sparse_row_limit`)
+    + 띠에 다른 줄이 있을 때만이다. 코드 없이 빽빽한 찬송가의 마지막 절을 지키려고. 글자가 박힌 PDF 도 음표를 지운 뒤 줄을 찾는다
+  - 다음 단 윗선에 한 줄 간격 안으로 붙은 글 줄 덩어리는 거리 비교 없이 그 단의 음표로 보고 버린다(흐린 그림에선 기둥이
+    글 줄로 잡혀 코드 줄과 오선 사이를 메운다). 줄 간격 절반보다 얇은 덩어리는 그 전에 먼저 거른다
+  - 측정(LilyPond 로 만든 코드+2절 악보, 300dpi·100dpi 캡처·JPEG·기울어진 사진·그림자+흐림): 예전 평균 약 64%
+    (흐린 사진은 33%) → 약 99%. 실제 찬양 악보 사진(손글씨풍 가사 글꼴, 2절+후렴, JPEG): 약 42% → 약 69%.
+    줄 구조·절 순서는 맞고 남은 오류는 손글씨풍 글자 오인식(`을`→`옹`, `믿`→`민`) — Tesseract 자체의 한계다
   - 오선 사이 띠에서 **끝에서부터** 아래 단에 더 붙은 덩어리(코드·위로 삐진 음표)를 걷어 내고,
     띠 첫 행부터 검은 첫 덩어리(오선에 붙은 덧줄 음표)도 버린다
+  - **오선 없는 가사·코드 악보**(쪽 전체를 한 번에 읽는 경로): 맨 윗줄이 다른 줄보다 1.5배 넘게 크면 제목으로 보고 뺀다.
+    `<verse1>`·`[Chorus]`·`후렴` 같은 구조 표시는 `_SECTION_LINE` → 절 나눔(빈 줄)이 된다(`_SECTION_BREAK`).
+    괄호 안 연주 메모(`(verse로 갈땐 D/A)`, `(F# if keyup)`)는 코드나 key 가 들어 있을 때만 지운다(`(x2)` 는 남김).
+    코드 줄 판별은 앞의 구조 표시(`Inter Bb F Eb`)를 떼고 보고, OCR 이 뭉갠 코드(`Bo`=B♭, `DIC`=D/C)도 줄의 60% 이상이면 코드다
+  - 여러 쪽 PDF(콘티 전체)는 모든 쪽을 읽어 **한 곡으로 합친다**(사용자가 고른 방식 — 곡별로 나누지 않는다)
   - **클립보드 붙여넣기** (`sheet --clipboard`, '악보 가져오기' 옆 붙여넣기 버튼): Pillow `ImageGrab.grabclipboard()`
-    라 Dart 쪽 클립보드 패키지가 필요 없다. 복사한 파일 경로 목록도 받는다. 없으면 `{"error": "clipboard_empty"}`.
+    라 Dart 쪽 클립보드 패키지가 필요 없다. **macOS 는 예외** — Pillow 가 부르는 osascript 가 붙여넣기 허용 창(화면에 안 뜸)에서 멈춰서, 앱(`worship_slides/ocr` `clipboardImage`)이 직접 읽어 파일 경로로 넘긴다. 진행 창엔 '취소'가 있다. 복사한 파일 경로 목록도 받는다. 없으면 `{"error": "clipboard_empty"}`.
     투명 배경 그림은 흰 바탕에 얹어서 읽는다
+  - **글자 읽기는 OS 내장 OCR 이 먼저다** (`PythonBridge.extractSheetLyrics`): 오선·줄 찾기와 정리는 Python 이 하고
+    (`layout_sheet` → `resolve_sheet_lines`), 잘라 낸 줄 이미지만 앱이 `worship_slides/ocr` 로 읽는다. 실제 악보 사진(손글씨풍
+    가사 글꼴)에서 Tesseract 가 약 69% 에 머물러서 넣었다. 두 단계라 ppt_tool 을 두 번 부른다(`--ocr-lines` → `sheet-finish`)
+    - macOS: Vision `VNRecognizeTextRequest`(정확 모드, 3번째 판 = 한국어, **macOS 13 이상**). 사전 교정은 끈다(띄엄띄엄 음절을
+      엉뚱한 낱말로 바꿀 수 있어서). 좌표는 아래가 0 이라 뒤집어서 넘긴다
+    - Windows: Windows.Media.Ocr 한국어 엔진(**한국어 언어 팩/OCR 기능이 깔려 있어야** 함, 영문도 같이 읽는다). C++/WinRT
+      `.get()` 은 UI(STA) 스레드에서 못 기다려서 작업 스레드에서 읽고 메시지 전용 창으로 UI 스레드에 넘겨 응답한다.
+      확신도를 안 줘서 1.0. `OcrEngine.MaxImageDimension` 을 넘는 그림은 못 읽으므로 Python 이 긴 변을 2500px 로 줄여 보낸다
+    - OS OCR 용 줄 이미지는 흑백으로 굳히지 않는다(`binarize=False`). 굳히고 굵힌 글자는 Tesseract 용이다.
+      대신 **절반으로 줄이고 흰 여백을 두른다**(`_native_line_image`) — Vision 이 글자 높이 48px·여백 없는 띄엄띄엄한 줄을
+      빈 결과로 돌려줬다(콘티 PDF 한 쪽에서 12줄 중 8줄). Windows OCR 에서는 확인 못 했다
+    - `isAvailable` 이 false(옛 macOS, 한국어 OCR 없는 Windows)거나 `recognize` 가 PlatformException 이면 Tesseract 로 읽는다.
+      답은 앱이 켜져 있는 동안 기억한다
+    - **이 경로는 이 레포의 리눅스 환경에서 실행해 보지 못했다**(Swift·C++ 는 CI 에서만 컴파일). 정확도 수치는 Tesseract 기준이다
   - Tesseract 는 LibreOffice 와 같은 **선택 시스템 의존성**이다. 없으면 그 기능만 막고 설치 안내를 띄운다
     (`TesseractMissingException` → `_showTesseractDialog`). `kor` 언어 데이터가 없으면 `eng` 로만 읽는다
   - 읽어 온 가사는 `_SheetLyricsDialog` 에서 고친 뒤 **곡 편집 다이얼로그로 넘어간다**. 그래서

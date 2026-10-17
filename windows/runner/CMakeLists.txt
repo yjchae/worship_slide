@@ -9,6 +9,7 @@ project(runner LANGUAGES CXX)
 add_executable(${BINARY_NAME} WIN32
   "flutter_window.cpp"
   "main.cpp"
+  "ocr_channel.cpp"
   "presentation_channel.cpp"
   "singer_window.cpp"
   "utils.cpp"
@@ -40,6 +41,10 @@ target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
 target_link_libraries(${BINARY_NAME} PRIVATE "gdiplus.lib")
 # 원본 PPT 열기(ShellExecuteW)
 target_link_libraries(${BINARY_NAME} PRIVATE "shell32.lib")
+# 악보 가사 OCR(Windows.Media.Ocr, C++/WinRT)
+target_link_libraries(${BINARY_NAME} PRIVATE "windowsapp.lib")
+# C++/WinRT 는 C++17 이면 <experimental/coroutine> 을 끌어오는데, 최신 MSVC 는 이를 에러(STL1011)로 막는다.
+target_compile_features(${BINARY_NAME} PRIVATE cxx_std_20)
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.
