@@ -545,24 +545,31 @@ const singerPageHtml =
   html,body{width:100%;height:100%;overflow:hidden;background:#0d0f12;color:#fff;
     font-family:-apple-system,'Apple SD Gothic Neo','Malgun Gothic','Noto Sans KR',sans-serif;}
   body{display:flex;flex-direction:column;height:100vh;height:100dvh;
-    padding:max(2vh,env(safe-area-inset-top)) 3vw max(2vh,env(safe-area-inset-bottom));gap:1.4vh;}
+    padding:max(2vh,env(safe-area-inset-top)) max(3vw,env(safe-area-inset-right))
+      max(2vh,env(safe-area-inset-bottom)) max(3vw,env(safe-area-inset-left));gap:1.4vh;}
   header{display:flex;align-items:center;gap:2vw;font-size:2.4vh;color:#9aa4b1;flex:none;}
   #title{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;}
   #page{font-variant-numeric:tabular-nums;font-weight:700;color:#e6e9ee;}
   .badge{background:#e5484d;color:#fff;border-radius:999px;padding:.2em .8em;font-size:2vh;font-weight:700;}
   .off{background:#59626e;}
   #label{font-size:2.1vh;color:#8b95a2;font-weight:600;flex:none;white-space:nowrap;overflow:hidden;
-    text-overflow:ellipsis;border-top:1px solid #3a424d;padding-top:1.2vh;margin-top:.4vh;}
+    text-overflow:ellipsis;}
   .box{position:relative;border-radius:1.4vh;overflow:hidden;min-height:0;}
   .stage{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
     padding:1.6vh 3vw;transform-origin:0 0;}
-  #panes{flex:1;min-height:0;display:flex;flex-direction:column;gap:1.4vh;}
-  #side{flex:37;min-height:0;display:flex;flex-direction:column;gap:1.4vh;}
-  #current{flex:63;background:#1b2028;border:2px solid #5a6472;}
+  /* 현재·다음 비율은 사이 막대(#split)를 끌어 바꾼다 — flex-grow 를 JS 가 넣는다. */
+  #panes{flex:1;min-height:0;min-width:0;display:flex;flex-direction:column;}
+  #current{flex:65 1 0;min-width:0;background:#1b2028;border:2px solid #5a6472;}
+  #side{flex:35 1 0;min-height:0;min-width:0;display:flex;flex-direction:column;gap:1vh;}
   #next{flex:1;background:#0f1215;border:1px solid #232930;}
+  #split{flex:none;height:3.2vh;display:flex;align-items:center;justify-content:center;
+    touch-action:none;cursor:row-resize;}
+  #split::before{content:'';width:12vw;height:.6vh;min-height:4px;border-radius:999px;background:#4a5360;}
+  #split.drag::before{background:#ffd54f;}
   /* 좌우 배치(휴대폰마다 따로 기억) */
-  body.row #panes{flex-direction:row;gap:2vw;}
-  body.row #label{border-top:none;padding-top:0;margin-top:0;}
+  body.row #panes{flex-direction:row;}
+  body.row #split{height:auto;width:3.2vh;cursor:col-resize;}
+  body.row #split::before{width:.6vh;min-width:4px;height:12vh;}
   #layout{flex:none;background:#1b2028;color:#e6e9ee;border:1px solid #3a424d;border-radius:.8vh;
     font:inherit;font-size:2vh;font-weight:700;padding:.3em .7em;}
   .fit{width:100%;max-height:100%;text-align:center;line-height:1.3;font-weight:700;}
@@ -576,16 +583,8 @@ const singerPageHtml =
   #note,#bar,#flash{display:none;}
   body.remote{touch-action:none;overscroll-behavior:none;-webkit-user-select:none;user-select:none;
     -webkit-touch-callout:none;}
-  .remote #current{flex:none;aspect-ratio:16/9;width:min(100%,calc(46vh*16/9));
-    width:min(100%,calc(46dvh*16/9));align-self:center;}
-  .remote.row #current{width:min(62%,calc(60vh*16/9));width:min(62%,calc(60dvh*16/9));}
   .remote #current .stage{padding:0;}
-  .remote #current .fit{padding:0 4%;}
-  .remote #side{flex:1;}
-  .remote #next{flex:none;aspect-ratio:16/9;width:calc(min(100%,calc(46vh*16/9))*.62);
-    width:calc(min(100%,calc(46dvh*16/9))*.62);align-self:center;}
-  .remote.row #side{justify-content:center;}
-  .remote.row #next{width:100%;}
+  .remote #current .fit{padding:2% 4%;}
   .remote #note{display:block;flex:none;max-height:16vh;overflow:auto;touch-action:pan-y;white-space:pre-wrap;
     font-size:2.3vh;line-height:1.4;color:#e6e9ee;background:#1a1f26;border-left:3px solid #ffd54f;
     border-radius:.8vh;padding:1vh 3vw;}
@@ -606,6 +605,7 @@ const singerPageHtml =
     <button id="layout"></button></header>
   <div id="panes">
     <div class="box" id="current"></div>
+    <div id="split"></div>
     <div id="side"><div id="label">다음</div><div class="box" id="next"></div></div>
   </div>
   <div id="note"></div>
@@ -657,6 +657,37 @@ function setLayout(row){
 document.getElementById('layout').addEventListener('click',function(){
   setLayout(!document.body.classList.contains('row'));
 });
+// 현재 페이지 몫(0.3~0.85). 발표 보기의 썸네일 줄 막대처럼 끌어서 바꾸고, 휴대폰마다 기억한다.
+var splitRatio=0.65;
+function setSplit(r){
+  splitRatio=Math.max(0.3,Math.min(0.85,r));
+  document.getElementById('current').style.flexGrow=splitRatio;
+  document.getElementById('side').style.flexGrow=1-splitRatio;
+}
+(function(){
+  var bar=document.getElementById('split'), panes=document.getElementById('panes'), raf=0;
+  function ratioAt(e){
+    var b=panes.getBoundingClientRect(), row=document.body.classList.contains('row');
+    var len=(row?b.width:b.height)-(row?bar.offsetWidth:bar.offsetHeight);
+    return ((row?e.clientX-b.left:e.clientY-b.top)-(row?bar.offsetWidth:bar.offsetHeight)/2)/(len||1);
+  }
+  bar.addEventListener('pointerdown',function(e){
+    e.preventDefault(); bar.setPointerCapture(e.pointerId); bar.classList.add('drag');
+  });
+  bar.addEventListener('pointermove',function(e){
+    if(!bar.classList.contains('drag')) return;
+    setSplit(ratioAt(e));
+    if(!raf) raf=requestAnimationFrame(function(){ raf=0; fitAll(); if(REMOTE) showZoom(); });
+  });
+  function done(){
+    if(!bar.classList.contains('drag')) return;
+    bar.classList.remove('drag');
+    try{ localStorage.setItem('singer_split',String(splitRatio)); }catch(_){}
+    fitAll(); if(REMOTE) showZoom();
+  }
+  bar.addEventListener('pointerup',done);
+  bar.addEventListener('pointercancel',done);
+})();
 function render(d){
   var cur=d.current||{}, next=d.next;
   document.getElementById('title').textContent=cur.title||'';
@@ -742,11 +773,18 @@ function renderRemote(d){
   }
   showZoom();
 }
+// 현재 페이지 상자 안에 가운데로 맞춘 16:9 틀(상자 안쪽 좌표). 확대 좌표(= 슬라이드 좌표)의 기준이다.
+// 그림은 이 틀에 꼭 맞게 그려지고, 가사는 휴대폰이 디자인 없이 그리므로 원래 대략이다.
+function slideFrame(box){
+  var w=box.clientWidth||1, h=box.clientHeight||1, fw=Math.min(w,h*16/9), fh=fw*9/16;
+  return {x:(w-fw)/2, y:(h-fh)/2, w:fw, h:fh};
+}
 function showZoom(){
   var box=document.getElementById('current'), st=box.querySelector('.stage'); if(!st) return;
   if(!zoom.on){ st.style.transform=''; return; }
-  st.style.transform='scale('+(1/zoom.size)+') translate('+(-zoom.x*box.clientWidth)+'px,'
-    +(-zoom.y*box.clientHeight)+'px)';
+  var f=slideFrame(box);
+  st.style.transform='translate('+f.x+'px,'+f.y+'px) scale('+(1/zoom.size)+') translate('
+    +(-f.x-zoom.x*f.w)+'px,'+(-f.y-zoom.y*f.h)+'px)';
 }
 function control(q){
   return fetch('/control'+location.search+'&action='+q,{method:'POST',cache:'no-store'})
@@ -787,7 +825,7 @@ var g=null, lastTap=0;
 function begin(e, keep){
   // 테두리를 뺀 안쪽(showZoom 이 쓰는 clientWidth 와 같은 기준).
   var p=points(e), m=middle(p), box=document.getElementById('current'), b=box.getBoundingClientRect();
-  var r={left:b.left+box.clientLeft, top:b.top+box.clientTop, width:box.clientWidth||1, height:box.clientHeight||1};
+  var f=slideFrame(box), r={left:b.left+box.clientLeft+f.x, top:b.top+box.clientTop+f.y, width:f.w, height:f.h};
   g={n:p.length, t0:keep?keep.t0:Date.now(), sx:keep?keep.sx:m.x, sy:keep?keep.sy:m.y,
     moved:keep?keep.moved:false, multi:(keep&&keep.multi)||p.length>1, zoomed:keep?keep.zoomed:false,
     onNote:keep?keep.onNote:!!e.target.closest('#note'),
@@ -797,7 +835,7 @@ if(REMOTE){
   // 메모칸 위는 위아래 밀기를 브라우저에 맡긴다(긴 메모 스크롤). 좌우 밀기는 그대로 넘기기.
   function own(e){ if(!e.target.closest('#note')) e.preventDefault(); }
   document.addEventListener('touchstart',function(e){
-    if(e.target.closest('#bar,#layout')) return;
+    if(e.target.closest('#bar,#layout,#split')) return;
     own(e);
     begin(e,g);
   },{passive:false});
@@ -864,6 +902,8 @@ keepAwake();
 document.addEventListener('visibilitychange', keepAwake);
 // 저장해 둔 배치(맨 끝에서 — showZoom 이 쓰는 zoom 이 정해진 뒤에).
 var savedLayout=null; try{ savedLayout=localStorage.getItem('singer_layout'); }catch(_){}
+var savedSplit=NaN; try{ savedSplit=parseFloat(localStorage.getItem('singer_split')); }catch(_){}
+setSplit(isNaN(savedSplit)?0.65:savedSplit);
 setLayout(savedLayout==='row');
 </script></body></html>
 ''';
