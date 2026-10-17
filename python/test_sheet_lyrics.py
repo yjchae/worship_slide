@@ -233,6 +233,24 @@ def test_prepare_sheet_image():
     assert abs(find_skew_angle(gray, staff_threshold)) < 0.5
 
 
+def test_prepare_sheet_image_finds_faint_staff():
+    """흐린 JPEG 처럼 옅게 번진 오선 단도 진한 단과 같이 찾는다 (실제 악보: 4단 중 2단을 놓쳤다)."""
+    from PIL import Image, ImageDraw, ImageFilter
+
+    image = Image.new("L", (600, 400), 255)
+    draw = ImageDraw.Draw(image)
+    for line in range(5):
+        draw.line((30, 60 + line * 22, 570, 60 + line * 22), fill=0, width=2)
+        draw.line((30, 260 + line * 22, 570, 260 + line * 22), fill=170, width=3)
+    # 진한 글자 덩어리 — Otsu 값을 진한 쪽으로 끌어내린다.
+    draw.rectangle((100, 180, 250, 200), fill=0)
+    image = image.filter(ImageFilter.GaussianBlur(1))
+
+    gray, staff_threshold, _ = prepare_sheet_image(image)
+    systems = find_staff_systems(ppt_tool.row_dark_ratios(gray, staff_threshold))
+    assert len(systems) == 2, systems
+
+
 def test_erase_staff_symbols_keeps_lyrics_under_low_notes():
     """오선 아래로 길게 내려온 음표가 가사 첫 줄에 붙어도 가사 줄을 잃지 않는다.
 
@@ -475,6 +493,7 @@ if __name__ == "__main__":
     test_ends_with_word_break()
     test_otsu_threshold()
     test_prepare_sheet_image()
+    test_prepare_sheet_image_finds_faint_staff()
     test_erase_staff_symbols_keeps_lyrics_under_low_notes()
     test_erase_staff_symbols_with_four_detected_lines()
     test_native_ocr_two_stage()

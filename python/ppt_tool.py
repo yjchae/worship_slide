@@ -1695,6 +1695,13 @@ def prepare_sheet_image(image):
     # 글자로 잡혀 1·2절 가사 줄 사이 틈이 사라진다. 오선은 행의 45% 를 넘어야 하므로 얼룩에 안 속는다.
     staff_threshold = otsu_threshold(gray)
     text_threshold = min(staff_threshold, 160)
+    # 흐린 JPEG 는 오선 한 줄이 2~3행으로 번져 Otsu 값보다 옅어진다(실제 악보: 단 4개 중
+    # 2개를 놓쳐 마지막 단 가사가 통째로 빠졌다). 더 너그러운 값이 단을 더 찾을 때만 그 값을 쓴다.
+    loose_threshold = (staff_threshold + 255) // 2
+    if len(find_staff_systems(row_dark_ratios(gray, loose_threshold))) > len(
+        find_staff_systems(row_dark_ratios(gray, staff_threshold))
+    ):
+        staff_threshold = loose_threshold
     angle = find_skew_angle(gray, staff_threshold)
     if angle:
         gray = gray.rotate(angle, resample=Image.BICUBIC, expand=True, fillcolor=255)

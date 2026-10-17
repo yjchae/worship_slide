@@ -297,7 +297,7 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   - **그림 악보는 먼저 다듬는다** (`prepare_sheet_image`): 바탕 펴기(`flatten_background`, 그림자·회색 종이 → 흰색) →
     기울기 바로잡기(`find_skew_angle`, ±4° 중 행 비율 제곱합이 가장 큰 각) → 오선 줄 간격을 22px(`_TARGET_STAFF_SPACING`)로
     맞추는 크기 조정. 작은 캡처(줄 간격 7~8px)는 1·2절 줄 사이 틈이 1~2px 라 두 줄이 한 덩어리로 잡혀 아무것도 못 읽었다.
-    문턱값은 둘 — 오선은 Otsu 값(흐린 가는 선도 잡게), 글 줄은 `min(Otsu, 160)`(JPEG 얼룩이 글자로 안 잡히게)
+    문턱값은 둘 — 오선은 Otsu 값(흐린 가는 선도 잡게. 흐린 JPEG 라 Otsu 와 255 의 중간값이 단을 더 찾으면 그 값), 글 줄은 `min(Otsu, 160)`(JPEG 얼룩이 글자로 안 잡히게)
   - **오선에 이어진 악보 기호를 먼저 지운다** (`erase_staff_symbols`): 오선 다섯 줄에서 번져 나가면(마디선·기둥으로 다 이어져 있다)
     음표·기둥·붙임줄이 한 덩어리로 지워지고 가사·코드 글자만 남는다. 그 뒤에 글 줄을 찾는다. 낮은 음표가 오선 아래로
     길게 내려온 실제 악보는 음표+가사 첫 줄이 한 덩어리로 잡혀 '덧줄 음표'로 통째로 버려졌다(가사 절반이 사라짐).
@@ -330,7 +330,7 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   - 오선 사이 띠에서 **끝에서부터** 아래 단에 더 붙은 덩어리(코드·위로 삐진 음표)를 걷어 내고,
     띠 첫 행부터 검은 첫 덩어리(오선에 붙은 덧줄 음표)도 버린다
   - **클립보드 붙여넣기** (`sheet --clipboard`, '악보 가져오기' 옆 붙여넣기 버튼): Pillow `ImageGrab.grabclipboard()`
-    라 Dart 쪽 클립보드 패키지가 필요 없다. 복사한 파일 경로 목록도 받는다. 없으면 `{"error": "clipboard_empty"}`.
+    라 Dart 쪽 클립보드 패키지가 필요 없다. **macOS 는 예외** — Pillow 가 부르는 osascript 가 붙여넣기 허용 창(화면에 안 뜸)에서 멈춰서, 앱(`worship_slides/ocr` `clipboardImage`)이 직접 읽어 파일 경로로 넘긴다. 진행 창엔 '취소'가 있다. 복사한 파일 경로 목록도 받는다. 없으면 `{"error": "clipboard_empty"}`.
     투명 배경 그림은 흰 바탕에 얹어서 읽는다
   - **글자 읽기는 OS 내장 OCR 이 먼저다** (`PythonBridge.extractSheetLyrics`): 오선·줄 찾기와 정리는 Python 이 하고
     (`layout_sheet` → `resolve_sheet_lines`), 잘라 낸 줄 이미지만 앱이 `worship_slides/ocr` 로 읽는다. 실제 악보 사진(손글씨풍

@@ -2269,7 +2269,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   }
 
   /// 닫기는 호출한 쪽에서 `Navigator.of(context, rootNavigator: true).pop()`.
-  void _showProgressDialog(ValueNotifier<String> progress) {
+  void _showProgressDialog(
+    ValueNotifier<String> progress, {
+    VoidCallback? onCancel,
+  }) {
     unawaited(
       showDialog<void>(
         context: context,
@@ -2293,6 +2296,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                 ),
               ],
             ),
+            actions: [
+              if (onCancel != null)
+                TextButton(onPressed: onCancel, child: const Text('취소')),
+            ],
           ),
         ),
       ),
@@ -2321,13 +2328,21 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     if (paths.isEmpty || !mounted) return;
 
     final progress = ValueNotifier<String>('가사 읽는 중…');
-    _showProgressDialog(progress);
+    // 취소하면 창만 닫고 결과를 버린다(돌고 있는 ppt_tool 은 끝까지 돌다 끝난다).
+    var cancelled = false;
+    _showProgressDialog(
+      progress,
+      onCancel: () {
+        cancelled = true;
+        Navigator.of(context, rootNavigator: true).pop();
+      },
+    );
 
     final texts = <String>[];
     String? errorMessage;
     var tesseractMissing = false;
     try {
-      for (var i = 0; i < paths.length; i++) {
+      for (var i = 0; i < paths.length && !cancelled; i++) {
         progress.value = paths.length == 1
             ? '${p.basename(paths[i] ?? '클립보드')} 읽는 중…'
             : '${paths.length}개 중 ${i + 1}번째 읽는 중…';
@@ -2346,7 +2361,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     }
 
     progress.dispose();
-    if (!mounted) return;
+    if (cancelled || !mounted) return;
     Navigator.of(context, rootNavigator: true).pop();
 
     if (tesseractMissing) {

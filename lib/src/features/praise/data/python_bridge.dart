@@ -137,6 +137,12 @@ class PythonBridge {
   /// 그림은 OS 내장 OCR 이 있으면 그것으로, 없으면(macOS 12 이하, Windows 한국어 OCR 미설치)
   /// Tesseract 로 읽는다. 오선·가사 줄 찾기와 절 정리는 어느 쪽이든 Python 이 한다.
   Future<SheetLyricsResult> extractSheetLyrics(String? filePath) async {
+    // macOS 는 클립보드를 앱이 읽어 파일로 넘긴다 — ppt_tool(osascript)이 읽으면
+    // 붙여넣기 허용 창이 안 보인 채 멈춘다.
+    if (filePath == null && Platform.isMacOS) {
+      filePath = await _ocrChannel.invokeMethod<String>('clipboardImage');
+      if (filePath == null) throw const ClipboardEmptyException();
+    }
     SheetLyricsResult? nativeEmpty;
     if (await _hasNativeOcr()) {
       try {

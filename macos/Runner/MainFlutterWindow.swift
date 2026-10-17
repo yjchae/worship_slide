@@ -848,6 +848,27 @@ class MainFlutterWindow: NSWindow {
           let found = SheetTextRecognizer.recognize(paths: paths)
           DispatchQueue.main.async { result(found) }
         }
+      case "clipboardImage":
+        // 클립보드는 앱이 직접 읽는다. ppt_tool(Pillow → osascript)이 읽으면 macOS 의 붙여넣기 허용 창이
+        // 화면에 안 뜬 채 멈춘다. 복사한 파일이면 그 경로, 그림이면 임시 PNG 경로, 없으면 nil.
+        let board = NSPasteboard.general
+        let suffixes: Set<String> = ["png", "jpg", "jpeg", "bmp", "tif", "tiff", "pdf"]
+        if let urls = board.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
+           let url = urls.first(where: { suffixes.contains($0.pathExtension.lowercased()) }) {
+          result(url.path)
+        } else if let image = NSImage(pasteboard: board),
+                  let tiff = image.tiffRepresentation,
+                  let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+          let url = FileManager.default.temporaryDirectory.appendingPathComponent("worship_sheet_clipboard.png")
+          do {
+            try png.write(to: url)
+            result(url.path)
+          } catch {
+            result(nil)
+          }
+        } else {
+          result(nil)
+        }
       default:
         result(FlutterMethodNotImplemented)
       }
