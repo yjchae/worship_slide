@@ -255,6 +255,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       },
     );
     unawaited(SingerWebServer.killLeftoverTunnel());
+    _singerWeb.onControl = _handleRemoteControl;
     // 탭 전환에 애니메이션을 쓰지 않는다. TabBarView(PageView) 의 전환 애니메이션이
     // 중간에 멈추면(발표 창이 뜨면서 메인 창이 가려지는 등으로 프레임이 끊길 때)
     // 내부 카운터가 0으로 안 돌아와 탭이 영영 안 넘어간다.
@@ -306,6 +307,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   @override
   void dispose() {
     _exitListener.dispose();
+    _remoteSyncTimer?.cancel();
     _singerWeb.stop();
     _sourceWatcher.dispose();
     HardwareKeyboard.instance.removeHandler(_handleStartKey);
@@ -752,12 +754,20 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   Future<void> _toggleBlackout() async {
     if (!_isPresentationOpen) return;
+    // 네이티브 'blackout' 은 토글이다. 값을 먼저 바꿔 둬야 응답을 기다리는 사이 온 리모컨 요청
+    // (on=1 두 번 등)이 옛 값을 보고 한 번 더 토글하지 않는다.
+    setState(() => _isBlackout = !_isBlackout);
     try {
       await _presentationChannel.invokeMethod('blackout');
-      if (mounted) setState(() => _isBlackout = !_isBlackout);
-      // 싱어 화면은 가사를 계속 보여 주고 "관객 화면 꺼짐" 표시만 바꾼다.
-      await _sendSingerView();
-    } catch (_) {}
+    } catch (_) {
+      // 그 사이 발표가 끝났으면 _resetPresentationState 가 이미 false 로 돌려 두었다.
+      if (mounted && _isPresentationOpen) {
+        setState(() => _isBlackout = !_isBlackout);
+      }
+      return;
+    }
+    // 싱어 화면은 가사를 계속 보여 주고 "관객 화면 꺼짐" 표시만 바꾼다.
+    await _sendSingerView();
   }
 
   // ── 싱어 화면 ───────────────────────────────────────────────────────────
@@ -841,7 +851,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     await _sendSingerView();
     final addresses = await SingerWebServer.lanAddresses();
     if (!mounted) return;
-    final urls = [for (final a in addresses) _singerWeb.urlFor(a)];
+    // 싱어 화면(보기만) / 발표자 리모컨(넘기기·확대·블랙아웃). 키가 달라 QR 도 다르다.
+    var remote = false;
     // 주소 줄과 QR 을 왼쪽에 맞춘다(주소 길이가 달라도 QR 이 같은 자리에).
     Widget qr(String url) => Column(
       mainAxisSize: MainAxisSize.min,
@@ -880,99 +891,134 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     );
     final stop = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        // QR 이 두 줄(바깥 망 + 같은 망)이라 작은 화면에서 넘치지 않게.
-        scrollable: true,
-        title: const Text('휴대폰 싱어 화면'),
-        // 발표가 끝나 서버가 꺼지면 QR 대신 꺼졌다고 보여 준다(찍어도 접속이 안 되므로).
-        content: ValueListenableBuilder<bool>(
-          valueListenable: _singerWeb.running,
-          builder: (context, running, _) => Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (!running)
-                const Text('휴대폰 싱어 화면이 꺼졌습니다. 발표를 다시 시작한 뒤 켜 주세요.')
-              else ...[
-                // 다른 망(LTE·다른 와이파이)용 공개 주소. 터널은 몇 초 걸려서 따로 듣는다.
-                ValueListenableBuilder<TunnelState>(
-                  valueListenable: _singerWeb.tunnel,
-                  builder: (context, state, _) => switch (state) {
-                    TunnelState.ready => Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('어느 망에서든(LTE 포함) 이 QR 이나 주소로 열 수 있습니다.'),
-                        const SizedBox(height: 8),
-                        qr(_singerWeb.publicUrl!),
-                        const SizedBox(height: 16),
-                      ],
-                    ),
-                    TunnelState.connecting => const Padding(
-                      padding: EdgeInsets.only(bottom: 16),
-                      child: Text('바깥 망 주소를 만드는 중...'),
-                    ),
-                    TunnelState.failed => const Padding(
-                      padding: EdgeInsets.only(bottom: 16),
-                      child: Text(
-                        '바깥 망 연결이 안 됩니다. 자동으로 다시 시도하는 중입니다.\n'
-                        '인터넷 연결을 확인해 주세요. 같은 와이파이 주소는 그대로 쓸 수 있습니다.',
-                      ),
-                    ),
-                    TunnelState.missing => Padding(
-                      padding: const EdgeInsets.only(bottom: 16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            '다른 망(LTE 등)에서도 보려면 cloudflared 가 필요합니다.',
-                          ),
-                          const SizedBox(height: 8),
-                          _CloudflaredInstallButton(
-                            onInstalled: _singerWeb.retryTunnel,
-                            onOpenDownloadPage: () => _openUrl(
-                              'https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/',
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    TunnelState.off => const SizedBox.shrink(),
-                  },
-                ),
-                const Text('같은 와이파이에 연결된 휴대폰 카메라로 QR 을 찍거나 브라우저에서 주소를 여세요.'),
-                const SizedBox(height: 12),
-                if (urls.isEmpty)
-                  const Text('네트워크 주소를 찾지 못했습니다. 와이파이 연결을 확인해 주세요.')
-                else
-                  // 다이얼로그를 열 때마다 지금 주소로 새로 만든다(IP 가 바뀌어도 맞게).
-                  // 와이파이·유선처럼 주소가 여럿이면 주소마다 QR 을 붙인다(와이파이·유선이 앞).
-                  Wrap(
-                    spacing: 20,
-                    runSpacing: 16,
-                    children: [for (final url in urls) qr(url)],
-                  ),
-                const SizedBox(height: 12),
-                Text(
-                  '처음 켤 때 방화벽이 "들어오는 연결 허용"을 물으면 허용해 주세요.\n'
-                  '주소는 켤 때마다 바뀌므로(보안 키 포함) 매번 이 QR 로 여세요.\n'
-                  '같은 와이파이 주소로 열면 휴대폰 화면 꺼짐 방지가 안 되니 휴대폰 자동 잠금을 꺼 두세요.\n'
-                  '발표를 끝내면 자동으로 꺼집니다.',
-                  style: Theme.of(context).textTheme.bodySmall,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final urls = [
+            for (final a in addresses) _singerWeb.urlFor(a, remote: remote),
+          ];
+          return AlertDialog(
+            // QR 이 두 줄(바깥 망 + 같은 망)이라 작은 화면에서 넘치지 않게.
+            scrollable: true,
+            title: Row(
+              children: [
+                const Expanded(child: Text('휴대폰 화면')),
+                SegmentedButton<bool>(
+                  segments: const [
+                    ButtonSegment(value: false, label: Text('싱어 화면')),
+                    ButtonSegment(value: true, label: Text('발표자 리모컨')),
+                  ],
+                  selected: {remote},
+                  showSelectedIcon: false,
+                  onSelectionChanged: (v) =>
+                      setDialogState(() => remote = v.first),
                 ),
               ],
+            ),
+            // 발표가 끝나 서버가 꺼지면 QR 대신 꺼졌다고 보여 준다(찍어도 접속이 안 되므로).
+            content: ValueListenableBuilder<bool>(
+              valueListenable: _singerWeb.running,
+              builder: (context, running, _) => Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (!running)
+                    const Text('휴대폰 싱어 화면이 꺼졌습니다. 발표를 다시 시작한 뒤 켜 주세요.')
+                  else ...[
+                    // 다른 망(LTE·다른 와이파이)용 공개 주소. 터널은 몇 초 걸려서 따로 듣는다.
+                    ValueListenableBuilder<TunnelState>(
+                      valueListenable: _singerWeb.tunnel,
+                      builder: (context, state, _) => switch (state) {
+                        TunnelState.ready => Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('어느 망에서든(LTE 포함) 이 QR 이나 주소로 열 수 있습니다.'),
+                            const SizedBox(height: 8),
+                            qr(_singerWeb.publicUrl(remote: remote)!),
+                            const SizedBox(height: 16),
+                          ],
+                        ),
+                        TunnelState.connecting => const Padding(
+                          padding: EdgeInsets.only(bottom: 16),
+                          child: Text('바깥 망 주소를 만드는 중...'),
+                        ),
+                        TunnelState.failed => const Padding(
+                          padding: EdgeInsets.only(bottom: 16),
+                          child: Text(
+                            '바깥 망 연결이 안 됩니다. 자동으로 다시 시도하는 중입니다.\n'
+                            '인터넷 연결을 확인해 주세요. 같은 와이파이 주소는 그대로 쓸 수 있습니다.',
+                          ),
+                        ),
+                        TunnelState.missing => Padding(
+                          padding: const EdgeInsets.only(bottom: 16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                '다른 망(LTE 등)에서도 보려면 cloudflared 가 필요합니다.',
+                              ),
+                              const SizedBox(height: 8),
+                              _CloudflaredInstallButton(
+                                onInstalled: _singerWeb.retryTunnel,
+                                onOpenDownloadPage: () => _openUrl(
+                                  'https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/',
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        TunnelState.off => const SizedBox.shrink(),
+                      },
+                    ),
+                    if (remote) ...[
+                      Text(
+                        '좌우로 밀기·화면 양쪽 끝 누르기 = 페이지 넘기기, 두 손가락 벌리기 = 확대(관객 화면도 같이),\n'
+                        '두 번 누르기 = 확대 풀기, \'화면 끄기\' 길게 누르기 = 블랙아웃. 발표자 메모도 보입니다.\n'
+                        '이 QR 은 발표를 조작할 수 있으니 발표자만 찍으세요.',
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.error,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    const Text(
+                      '같은 와이파이에 연결된 휴대폰 카메라로 QR 을 찍거나 브라우저에서 주소를 여세요.',
+                    ),
+                    const SizedBox(height: 12),
+                    if (urls.isEmpty)
+                      const Text('네트워크 주소를 찾지 못했습니다. 와이파이 연결을 확인해 주세요.')
+                    else
+                      // 다이얼로그를 열 때마다 지금 주소로 새로 만든다(IP 가 바뀌어도 맞게).
+                      // 와이파이·유선처럼 주소가 여럿이면 주소마다 QR 을 붙인다(와이파이·유선이 앞).
+                      Wrap(
+                        spacing: 20,
+                        runSpacing: 16,
+                        children: [for (final url in urls) qr(url)],
+                      ),
+                    const SizedBox(height: 12),
+                    Text(
+                      '처음 켤 때 방화벽이 "들어오는 연결 허용"을 물으면 허용해 주세요.\n'
+                      '주소는 켤 때마다 바뀌므로(보안 키 포함) 매번 이 QR 로 여세요.\n'
+                      '같은 와이파이 주소로 열면 휴대폰 화면 꺼짐 방지가 안 되니 휴대폰 자동 잠금을 꺼 두세요.\n'
+                      '발표를 끝내면 자동으로 꺼집니다.',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('끄기'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('닫기'),
+              ),
             ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('끄기'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('닫기'),
-          ),
-        ],
+          );
+        },
       ),
     );
     if (stop == true) {
@@ -1014,8 +1060,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     final screens = await _getScreens();
     if (!mounted || !anchor.mounted) return;
     final box = anchor.findRenderObject() as RenderBox;
-    final overlay =
-        Overlay.of(anchor).context.findRenderObject() as RenderBox;
+    final overlay = Overlay.of(anchor).context.findRenderObject() as RenderBox;
     final position = RelativeRect.fromRect(
       Rect.fromPoints(
         box.localToGlobal(box.size.bottomLeft(Offset.zero), ancestor: overlay),
@@ -1067,7 +1112,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     );
     if (picked == null || !mounted) return;
     final (singer, screen) = picked;
-    final choice = screen == null ? null : ScreenChoice(screen.index, screen.name);
+    final choice = screen == null
+        ? null
+        : ScreenChoice(screen.index, screen.name);
     setState(() {
       if (singer) {
         _singerScreen = choice;
@@ -1109,8 +1156,14 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   Future<void> _sendSingerView([List<_SlideInfo>? slides]) async {
     if (!_isSingerOpen && !_singerWeb.isRunning) return;
+    slides ??= _allSlides; // getter 가 매번 목록을 새로 만들므로 한 번만
     final json = _buildSingerViewData(slides).toJson();
-    _singerWeb.update(json);
+    _singerWeb.update({
+      ...json,
+      // 리모컨에만 간다(SingerWebServer.remoteOnlyKeys).
+      'note': _slideNotes[_currentNoteKey(slides)] ?? '',
+      'zoom': _zoomJson,
+    });
     if (!_isSingerOpen) return;
     final encoded = jsonEncode(json);
     if (encoded == _lastSingerJson) return;
@@ -1121,6 +1174,78 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     } catch (_) {}
   }
 
+  // 확대 영역 판을 PC 를 끄는 동안(마우스 움직임마다)·메모를 칠 때(글자마다) 리모컨 갱신을 묶어서 보낸다.
+  // 그때마다 _allSlides 를 새로 만들고 이미지 파일을 stat 하면 끌기·입력이 버벅인다.
+  Timer? _remoteSyncTimer;
+
+  void _scheduleRemoteSync() {
+    if (!_singerWeb.isRunning || _remoteSyncTimer != null) return;
+    _remoteSyncTimer = Timer(const Duration(milliseconds: 100), () {
+      _remoteSyncTimer = null;
+      if (mounted) _sendSingerView();
+    });
+  }
+
+  // 관객 화면 확대 명령과 휴대폰 리모컨이 같은 값을 쓴다(x·y = 왼쪽 위).
+  Map<String, Object> get _zoomJson => {
+    'on': _isZoomOn,
+    'x': _zoomCenter.dx - _zoomScale / 2,
+    'y': _zoomCenter.dy - _zoomScale / 2,
+    'size': _zoomScale,
+  };
+
+  // 발표 보기 메모칸과 같은 키(_PresenterConsoleState._keyAt). 자동 여백·맨 앞 빈 페이지는 메모가 없다.
+  String _currentNoteKey(List<_SlideInfo> slides) {
+    if (slides.isEmpty) return '';
+    // _buildSingerViewData 와 같게 자른다(페이지를 지워 번호가 끝을 넘었을 때).
+    final info = slides[_currentSlideIndex.clamp(0, slides.length - 1)];
+    if (info.isAutoSpacer || info.stagingUid == _leadingBlankUid) return '';
+    return _slideKey(info.stagingUid, info.pageIndexInItem);
+  }
+
+  /// 휴대폰 발표자 리모컨 요청([SingerWebServer.onControl]).
+  Future<void> _handleRemoteControl(
+    String action,
+    Map<String, String> params,
+  ) async {
+    // 발표를 끝낸 뒤 늦게 온 요청은 버린다(다음 발표가 확대된 채 시작하는 등).
+    if (!mounted || !_isPresentationOpen) return;
+    double num(String key, double fallback) {
+      final v = double.tryParse(params[key] ?? '');
+      return v == null || !v.isFinite ? fallback : v; // NaN 은 clamp 를 그냥 지나간다
+    }
+
+    switch (action) {
+      case 'next' || 'prev':
+        // 휴대폰이 보던 쪽에서만 넘긴다. 늦게 온 요청·리모컨 두 대·PC 에서 먼저 넘긴 경우
+        // 두 장씩 넘어가지 않게.
+        if (int.tryParse(params['from'] ?? '') != _currentSlideIndex + 1) {
+          return;
+        }
+        await (action == 'next' ? _nextSlide() : _prevSlide());
+      case 'blackout':
+        if ((params['on'] == '1') != _isBlackout) await _toggleBlackout();
+      case 'zoom':
+        final on = params['on'] == '1';
+        final size = num(
+          'size',
+          _zoomScale,
+        ).clamp(_ZoomRegionOverlay._minScale, _ZoomRegionOverlay._maxScale);
+        final x = num('x', 0).clamp(0.0, 1 - size);
+        final y = num('y', 0).clamp(0.0, 1 - size);
+        setState(() {
+          _isZoomOn = on;
+          if (on) {
+            _zoomScale = size;
+            _zoomCenter = Offset(x + size / 2, y + size / 2);
+          }
+        });
+        await _sendZoom();
+        // _sendZoom 의 리모컨 갱신은 묶어서 늦게 가므로, 응답에 새 확대가 실리게 바로 보낸다.
+        await _sendSingerView();
+    }
+  }
+
   Future<void> _sendCurrentSlide() async {
     // 페이지가 바뀌는 모든 곳(넘기기·점프·편집·디자인 변경)이 이 함수를 거치므로
     // 싱어 화면도 여기서 함께 갱신한다. 관객 화면을 먼저 보내 싱어 갱신을 기다리지 않게 한다.
@@ -1128,7 +1253,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     if (_isPresentationOpen) {
       try {
         final pageData = _buildSlidePageData(_currentSlideIndex, slides);
-        await _presentationChannel.invokeMethod('updatePage', pageData.toJson());
+        await _presentationChannel.invokeMethod(
+          'updatePage',
+          pageData.toJson(),
+        );
       } catch (_) {
         await _closeSingerWindow();
         await _singerWeb.stop();
@@ -1158,13 +1286,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   Future<void> _sendZoom() async {
     if (!_isPresentationOpen) return;
     try {
-      await _presentationChannel.invokeMethod('zoom', {
-        'on': _isZoomOn,
-        'x': _zoomCenter.dx - _zoomScale / 2,
-        'y': _zoomCenter.dy - _zoomScale / 2,
-        'size': _zoomScale,
-      });
+      await _presentationChannel.invokeMethod('zoom', _zoomJson);
     } catch (_) {}
+    // 휴대폰 리모컨도 지금 확대 영역을 따라 그린다.
+    _scheduleRemoteSync();
   }
 
   Future<void> _prevSlide() async {
@@ -3365,6 +3490,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                                     _slideNotes[key] = note;
                                   }
                                 });
+                                // 휴대폰 리모컨 메모도 바뀌게.
+                                _scheduleRemoteSync();
                               },
                               onSlideSelected: _goToSlide,
                               onSlideEdit: _editSlide,
