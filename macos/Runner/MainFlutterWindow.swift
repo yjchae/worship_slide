@@ -741,8 +741,9 @@ enum SheetTextRecognizer {
     request.revision = VNRecognizeTextRequestRevision3
     request.recognitionLevel = .accurate
     request.recognitionLanguages = languages
-    // 사전 교정은 음표마다 떨어뜨린 음절('주 의 인 자')을 엉뚱한 낱말로 바꿀 수 있어 끈다.
-    request.usesLanguageCorrection = false
+    // 사전 교정: 실제 악보 사진에서 켠 쪽이 나았다(97% → 98%, '믿응'→'믿음' 등).
+    // 줄 이미지는 Python 이 잘라 주므로 음절이 떨어져 있어도 낱말로 잘못 바꾸는 일은 못 봤다.
+    request.usesLanguageCorrection = true
     return request
   }
 
