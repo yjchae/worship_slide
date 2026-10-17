@@ -76,6 +76,39 @@ def test_is_lyric_line():
     assert not is_lyric_line("J")
 
 
+def test_finish_line_keeps_unread_slot():
+    # 흐린 가사 줄이 'E' 하나로 읽히면 코드 줄이 아니라 못 읽은 줄(자리 지킴)이다.
+    assert ppt_tool._finish_line("E") is None
+    assert ppt_tool._finish_line("G D Em C") == ppt_tool._CHORD_LINE
+    assert ppt_tool._finish_line("주님의 사랑") == ("주님의 사랑", False)
+
+
+def test_kept_words():
+    words = lambda items: [word for _, word in ppt_tool._kept_words(items)]  # noqa: E731
+    # 영어 줄의 외따로 선 l·| 는 대명사 I, 한글 줄의 l 은 기둥이라 버린다.
+    assert words(["l", "love", "You"]) == ["I", "love", "You"]
+    assert words(["주님", "l", "사랑"]) == ["주님", "사랑"]
+    # 절 번호는 앞의 잡음이 빠진 뒤 맨 앞이면 남는다.
+    assert words(["i", "1.", "주님"]) == ["1.", "주님"]
+
+
+def test_lyric_line_boxes_keeps_tight_last_verse():
+    """다음 오선에 한 줄 간격 안으로 붙은 마지막 줄: 촘촘하면 가사(빽빽한 찬송가), 성기면 코드 줄."""
+
+    def boxes_with(last_ratio):
+        ratios = [0.0] * 400
+        for row in (100, 110, 120, 130, 140, 300, 310, 320, 330, 340):
+            ratios[row] = 1.0
+        # 1절·2절 가사, 마지막 줄은 앞 줄과 6px, 다음 오선과 10px(= 줄 간격) 떨어져 있다.
+        for start, end, value in ((210, 232, 0.12), (240, 262, 0.12), (268, 290, last_ratio)):
+            for row in range(start, end + 1):
+                ratios[row] = value
+        return lyric_line_boxes(find_staff_systems(ratios), ratios)
+
+    assert boxes_with(0.12)[:3] == [(210, 232), (240, 262), (268, 290)]
+    assert boxes_with(0.04)[:3] == [(210, 232), (240, 262)]
+
+
 def test_is_chord_line():
     assert is_chord_line("G D Em C")
     assert is_chord_line("Am/E F#m7")
@@ -124,10 +157,14 @@ def test_order_lyric_lines():
     # 단 끝에서 하이픈으로 끊긴 영어 낱말은 앞 줄에 붙인다.
     broken = [[("for me Lift", True)], [("ing up my hands", False)]]
     assert order_lyric_lines(broken) == ["for me Lifting", "up my hands"]
-    # 흐려서 낱말은 못 읽고 하이픈만 남은 경우(`for me -`)는 붙이지 않는다.
-    assert order_lyric_lines([[("love for me", True)], [("ing up", False)]]) == [
-        "love for me", "ing up",
+    # 첫 음절이 흔한 낱말이어도 잇는다 (for-ever, to-gether).
+    assert order_lyric_lines([[("sing for", True)], [("ever and ever", False)]]) == [
+        "sing forever", "and ever",
     ]
+    assert order_lyric_lines([[("all to", True)], [("gether now", False)]]) == [
+        "all together", "now",
+    ]
+    # 흐려서 하이픈만 남고 뒷줄이 흔한 낱말로 시작하면 잇지 않는다.
     assert order_lyric_lines([[("and a gain", True)], [("for ever", False)]]) == [
         "and a gain", "for ever",
     ]
@@ -136,10 +173,14 @@ def test_order_lyric_lines():
     assert order_lyric_lines([
         [v("1a"), v("2a")], [None, v("2b")], [v("1c"), v("2c")],
     ]) == ["1a", "1c", "", "2a", "2b", "2c"]
-    # 다른 단보다 줄이 많은 단의 못 읽은 자리(뭉개진 코드 줄)는 덜어 낸다.
+    # 이웃 단보다 줄이 하나 많은 단의 맨 끝 못 읽은 자리(뭉개진 코드 줄)는 덜어 낸다.
     assert order_lyric_lines([
         [v("1a"), v("2a"), None], [v("1b"), v("2b")],
     ]) == ["1a", "1b", "", "2a", "2b"]
+    # 한 줄짜리 후렴 단이 더 많아도 1·2절 단의 빈 자리는 지킨다.
+    assert order_lyric_lines([
+        [v("1a"), v("2a")], [None, v("2b")], [v("C1")], [v("C2")], [v("C3")],
+    ]) == ["1a", "", "2a", "2b", "", "C1", "C2", "C3"]
     # 한 절을 통째로 못 읽어도 빈 줄이 겹치지 않는다.
     assert order_lyric_lines([[v("1a"), None], [v("1b"), None]]) == ["1a", "1b"]
 
@@ -413,6 +454,9 @@ if __name__ == "__main__":
     test_join_single_syllables()
     test_is_lyric_line()
     test_is_chord_line()
+    test_finish_line_keeps_unread_slot()
+    test_kept_words()
+    test_lyric_line_boxes_keeps_tight_last_verse()
     test_find_staff_systems()
     test_lyric_line_boxes_skips_notes_and_chords()
     test_order_lyric_lines()

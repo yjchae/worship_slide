@@ -1704,7 +1704,9 @@ def prepare_sheet_image(image):
         spacings = sorted(spacing for _top, _bottom, spacing in systems)
         factor = _TARGET_STAFF_SPACING / spacings[len(spacings) // 2]
         # 큰 사진을 키우면 뒤의 오선 지우기(파이썬 반복)와 메모리가 픽셀 수만큼 는다.
-        factor = min(factor, 4.0, (_MAX_SHEET_PIXELS / (gray.width * gray.height)) ** 0.5)
+        # 이미 큰 사진은 키우지만 않는다 (줄이면 줄 간격이 더 좁아져 오히려 못 읽는다).
+        cap = max(1.0, (_MAX_SHEET_PIXELS / (gray.width * gray.height)) ** 0.5)
+        factor = min(factor, 4.0, cap)
         if not 0.85 <= factor <= 1.15:
             gray = gray.resize(
                 (max(int(gray.width * factor), 1), max(int(gray.height * factor), 1)),
@@ -1777,6 +1779,7 @@ def lyric_line_boxes_by_system(systems, ratios):
 
     단 하나 아래의 줄들은 위에서부터 1절, 2절 ... 이다."""
     height = len(ratios)
+    sparse_limit = _sparse_row_limit(systems, ratios)
     result = []
     for index, (_, bottom, spacing) in enumerate(systems):
         top = int(bottom + spacing * 0.3)
@@ -1798,10 +1801,14 @@ def lyric_line_boxes_by_system(systems, ratios):
         while next_top is not None and groups:
             last_start, last_end = groups[-1]
             above = last_start - (groups[-2][1] if len(groups) > 1 else bottom)
-            # 다음 단 윗선에 한 줄 간격 안으로 붙은 덩어리는 거리와 상관없이 그 단의 코드 줄이다
-            # (가사와 코드 사이가 코드와 오선 사이보다 좁은 악보가 있다). 단, 위에 다른 줄이 남을
-            # 때만 — 띠에 한 줄뿐이면 빽빽하게 찍은 악보의 가사일 수 있다.
-            attached = len(groups) > 1 and next_top - last_end <= spacing
+            # 다음 단 윗선에 한 줄 간격 안으로 붙고 글자가 성긴 덩어리는 거리와 상관없이 그 단의
+            # 코드 줄이다 (가사와 코드 사이가 코드와 오선 사이보다 좁은 악보가 있다).
+            # 성긴지도 보는 이유 — 코드 없이 3~4절을 빽빽하게 찍은 찬송가는 마지막 절이 다음
+            # 오선에 바짝 붙는다. 가사 줄은 글자가 촘촘해 코드 줄보다 검은 비율이 두 배쯤 높다.
+            attached = (
+                next_top - last_end <= spacing
+                and _mean_ratio(ratios, last_start, last_end) < sparse_limit
+            )
             if not attached and next_top - last_end >= above:
                 break
             groups.pop()
@@ -1837,6 +1844,28 @@ def lyric_line_boxes_by_system(systems, ratios):
             for system_index, groups in enumerate(result)
         ]
     return result
+
+
+def _mean_ratio(ratios, start, end):
+    return sum(ratios[start:end + 1]) / max(end - start + 1, 1)
+
+
+def _sparse_row_limit(systems, ratios):
+    """이보다 검은 비율이 낮은 글 줄은 성기다(코드 줄). 쪽의 글 줄 밀도 상위 25% 값의 65%.
+
+    가운데값이 아니라 상위 25% 를 기준으로 삼는 이유 — 한 줄짜리 단이 많은 악보는
+    글 줄의 절반이 코드 줄이라 가운데값이 코드 줄 밀도로 내려앉는다."""
+    densities = []
+    for index, (_, bottom, spacing) in enumerate(systems[:-1]):
+        for start, end in text_row_groups(
+            ratios, int(bottom + spacing * 0.3), int(systems[index + 1][0] - spacing * 0.2)
+        ):
+            if end - start + 1 >= spacing * 0.5:
+                densities.append(_mean_ratio(ratios, start, end))
+    if not densities:
+        return 0.0
+    densities.sort()
+    return densities[(len(densities) * 3) // 4] * 0.65
 
 
 def lyric_line_boxes(systems, ratios):
@@ -2083,16 +2112,19 @@ def _run_tesseract_words(executable, image_path, language, psm):
 
 
 def _words_score(words):
-    """글자 수로 가중한 평균 확신도. 글자 없는 토막(음표를 읽은 숫자·기호)은 확신도 0 으로 친다."""
+    """글자 수로 가중한 평균 확신도. 버려질 토막(음표를 읽은 숫자·기호)은 확신도 0 으로 친다.
+
+    무엇을 버릴지는 실제 출력(_kept_words)과 같은 기준으로 가른다."""
+    kept = {index for index, _ in _kept_words([text for text, _ in words])}
     weighted = 0.0
     total = 0
     for index, (text, conf) in enumerate(words):
         letters = len(_LYRIC_LETTER_RE.findall(text))
-        if letters:
+        if index not in kept:
+            total += max(letters, len(text))
+        elif letters:
             weighted += letters * conf
             total += letters
-        elif not _keep_word(text, index):
-            total += len(text)
     return weighted / total if total else 0.0
 
 
@@ -2108,15 +2140,17 @@ def _keep_word(text, index):
 
 
 def _kept_words(words):
-    """[낱말] → 가사로 남길 낱말. 영어 줄의 외따로 선 세로 막대는 대명사 I 다."""
+    """[낱말] → [(원래 순번, 가사로 남길 낱말)].
+
+    영어 줄의 외따로 선 세로 막대·소문자 l 은 대명사 I 다 (산세리프 글꼴의 I 를 그렇게 읽는다)."""
     joined = " ".join(words)
     latin_line = len(re.findall("[A-Za-z]", joined)) > len(_HANGUL_RE.findall(joined))
     kept = []
-    for word in words:
-        if word == "|" and latin_line:
-            kept.append("I")
+    for index, word in enumerate(words):
+        if word in ("|", "l") and latin_line:
+            kept.append((index, "I"))
         elif _keep_word(word, len(kept)):
-            kept.append(word)
+            kept.append((index, word))
     return kept
 
 
@@ -2131,7 +2165,7 @@ def _ocr_lyric_line(executable, image_path, languages):
         for language in languages
     ]
     words = max(candidates, key=_words_score)
-    return " ".join(_kept_words([text for text, _ in words]))
+    return " ".join(word for _, word in _kept_words([text for text, _ in words]))
 
 
 def _pdf_page_words(page, scale):
@@ -2146,6 +2180,11 @@ def _pdf_page_words(page, scale):
 _CHORD_LINE = "chord"
 
 
+def _is_lyric(line):
+    """_finish_line 결과가 실제 가사 줄((가사, 이어짐))인지."""
+    return isinstance(line, tuple)
+
+
 def _finish_line(raw):
     """OCR/PDF 원문 한 줄 → (가사 한 줄, 다음 단에 낱말이 이어지는지).
 
@@ -2153,10 +2192,11 @@ def _finish_line(raw):
     둘을 가르는 이유 — 코드 줄은 띠에 잘못 섞여 들어온 줄이라 빼면 되지만, 못 읽은 줄은
     진짜 가사 줄 자리라 자리를 비워 둬야 1·2절 순서가 밀리지 않는다 (order_lyric_lines)."""
     text = clean_lyric_line(raw)
-    if is_chord_line(text):
-        return _CHORD_LINE
+    # 글자가 두 자도 안 되면 못 읽은 줄이다. 흐린 가사 줄이 'E' 하나로 읽혀도 자리를 지킨다.
     if not is_lyric_line(text):
         return None
+    if is_chord_line(text):
+        return _CHORD_LINE
     return text, ends_with_word_break(raw)
 
 
@@ -2169,7 +2209,7 @@ def _words_to_system_lines(words, boxes):
         )
         if inside:
             line = _finish_line(" ".join(word[2] for word in inside))
-            if line and line != _CHORD_LINE:
+            if _is_lyric(line):
                 lines.append(line)
     return lines
 
@@ -2215,30 +2255,36 @@ def order_lyric_lines(system_lines):
 
 
 # 단 끝 하이픈 뒤에 와도 끊긴 낱말의 뒷부분으로 보지 않는 흔한 낱말 (_join_broken_words).
+# 둘째 음절로도 흔한 것(on: up-on, to: un-to, a: hal-le-lu-ia, in, er)은 넣지 않는다.
 _COMMON_ENGLISH_WORDS = frozenset(
-    "a an and as at be by for from he her him his i in is it me my no not of oh on "
-    "or our she so that the thee their them they this thy to up us we who will with "
-    "you your".split()
+    "and for from he her him his me my our she that the thee their them they this "
+    "thy we who will with you your".split()
 )
 
 
 def _trim_unread_lines(system_lines):
-    """다른 단들보다 줄이 많은 단에서 못 읽은 자리(None)를 뒤에서부터 덜어 낸다.
+    """맨 끝 줄을 못 읽은 단이 그것만 빼면 이웃 단과 줄 수가 같아질 때, 그 자리를 덜어 낸다.
 
-    못 읽은 줄의 상당수는 가사가 아니라 띠에 섞여 든 다음 단 코드 줄을 뭉개 읽은 것이다
-    (`4DmMCFCG`). 가장 흔한 줄 수까지만 덜어서, 진짜 가사 줄을 놓친 단의 빈 자리는 남긴다."""
-    counts = [len(lines) for lines in system_lines if any(lines)]
-    if not counts:
-        return system_lines
-    common = max(set(counts), key=counts.count)
+    띠 맨 끝에 섞여 든 다음 단 코드 줄은 뭉개져(`4DmMCFCG`) 코드로도 가사로도 안 읽혀
+    빈 자리가 된다. 그 단만 줄이 하나 많아 1·2절 구간이 끊긴다.
+    맨 끝 자리만, 이웃 단(앞·뒤) 줄 수에 맞출 때만 덜어 낸다 — 진짜 가사 줄을 놓친 자리나
+    한 줄짜리 후렴 단이 많은 곡의 1·2절 단은 그대로 둔다."""
+    counts = [len(lines) for lines in system_lines]
     trimmed = []
-    for lines in system_lines:
+    for index, lines in enumerate(system_lines):
+        neighbors = {
+            counts[other]
+            for other in (index - 1, index + 1)
+            if 0 <= other < len(counts) and any(system_lines[other])
+        }
         lines = list(lines)
-        index = len(lines) - 1
-        while len(lines) > common and index >= 0:
-            if lines[index] is None:
-                del lines[index]
-            index -= 1
+        if (
+            len(lines) > 1
+            and lines[-1] is None
+            and len(lines) not in neighbors
+            and len(lines) - 1 in neighbors
+        ):
+            lines.pop()
         trimmed.append(lines)
     return trimmed
 
@@ -2251,15 +2297,14 @@ def _join_broken_words(lines):
     texts = [text for text, _ in lines]
     for index, (_, broken) in enumerate(lines[:-1]):
         following = texts[index + 1].split(" ", 1)
-        # 흐린 그림은 낱말은 못 읽고 하이픈만 남기기도 한다(`for me -` ↵ `ing`, `for` ↵ `ever`).
-        # 하이픈 앞이나 뒷줄 첫 토막이 그 자체로 흔한 낱말이면 끊긴 낱말이 아니다.
-        preceding = texts[index].rsplit(" ", 1)[-1].lower()
+        # 흐린 그림은 낱말은 못 읽고 하이픈만 남기기도 한다(`and a-gain -` ↵ `for ever`).
+        # 뒷줄 첫 토막이 그 자체로 흔한 낱말이면 끊긴 낱말의 뒷부분이 아니다.
+        # (하이픈 앞 토막은 보지 않는다 — for-ever, to-geth-er, a-men 처럼 흔한 낱말이 첫 음절이다.)
         if (
             broken
             and following[0]
             and re.match("[a-z]", following[0])
             and following[0].lower() not in _COMMON_ENGLISH_WORDS
-            and preceding not in _COMMON_ENGLISH_WORDS
         ):
             texts[index] += following[0]
             texts[index + 1] = following[1] if len(following) > 1 else ""
@@ -2547,8 +2592,7 @@ def _read_with_tesseract(job, executable, languages):
 
         def read_page(path):
             text = _run_tesseract(executable, path, "+".join(languages), "6")
-            lines = (_finish_line(raw) for raw in text.splitlines())
-            return [line for line in lines if line and line != _CHORD_LINE]
+            return [line for line in map(_finish_line, text.splitlines()) if _is_lyric(line)]
 
         return resolve_sheet_lines(job, read_line, read_page)
 
@@ -2607,7 +2651,7 @@ def _native_line_text(observations):
         if float(observation.get("confidence", 1.0)) * 100 < _NATIVE_MIN_CONFIDENCE:
             continue
         words.extend(unicodedata.normalize("NFC", observation.get("text", "")).split())
-    return " ".join(_kept_words(words))
+    return " ".join(word for _, word in _kept_words(words))
 
 
 def _native_page_lines(observations):
@@ -2637,8 +2681,8 @@ def finish_sheet_lines(job_path, ocr_path):
         return _finish_line(_native_line_text(results.get(path) or []))
 
     def read_page(path):
-        lines = (_finish_line(raw) for raw in _native_page_lines(results.get(path) or []))
-        return [line for line in lines if line and line != _CHORD_LINE]
+        lines = map(_finish_line, _native_page_lines(results.get(path) or []))
+        return [line for line in lines if _is_lyric(line)]
 
     return _sheet_result(job, resolve_sheet_lines(job, read_line, read_page), "native")
 

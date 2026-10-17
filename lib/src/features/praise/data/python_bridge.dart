@@ -137,16 +137,28 @@ class PythonBridge {
   /// 그림은 OS 내장 OCR 이 있으면 그것으로, 없으면(macOS 12 이하, Windows 한국어 OCR 미설치)
   /// Tesseract 로 읽는다. 오선·가사 줄 찾기와 절 정리는 어느 쪽이든 Python 이 한다.
   Future<SheetLyricsResult> extractSheetLyrics(String? filePath) async {
+    SheetLyricsResult? nativeEmpty;
     if (await _hasNativeOcr()) {
       try {
-        return await _extractWithNativeOcr(filePath);
+        final result = await _extractWithNativeOcr(filePath);
+        if (!result.unreadImages) return result.lyrics;
+        // 줄 이미지에서 글자를 하나도 못 읽었다. 이미지마다 조용히 실패했을 수도(경로를 못 여는 등),
+        // 가사 없는 악보일 수도 있어서 Tesseract 로 한 번 더 해 본다.
+        nativeEmpty = result.lyrics;
+        await AppLogger.instance.info('[sheet-ocr] OS OCR 이 글자를 못 읽어 Tesseract 로 다시 읽습니다');
       } on PlatformException catch (error, stack) {
         // OS OCR 이 갑자기 실패하면(언어 팩 제거 등) Tesseract 로 한 번 더 해 본다.
         await AppLogger.instance.error('OS OCR 실패, Tesseract 로 읽습니다', error, stack);
       }
     }
-    final result = await _runTool(['sheet', filePath ?? '--clipboard']);
-    return _sheetResult(result.stdout as String);
+    try {
+      final result = await _runTool(['sheet', filePath ?? '--clipboard']);
+      return _sheetResult(result.stdout as String);
+    } on TesseractMissingException {
+      // OS OCR 로는 읽었는데(빈 결과) Tesseract 가 없으면 설치하라고 하지 말고 그 결과를 보여 준다.
+      if (nativeEmpty != null) return nativeEmpty;
+      rethrow;
+    }
   }
 
   Future<bool> _hasNativeOcr() {
@@ -166,7 +178,10 @@ class PythonBridge {
 
   /// Python 이 가사 줄 이미지를 잘라 두면(1단계) OS OCR 로 읽고,
   /// 그 결과를 다시 Python 에 넘겨 정리한다(2단계).
-  Future<SheetLyricsResult> _extractWithNativeOcr(String? filePath) async {
+  /// `unreadImages` = 읽을 이미지가 있었는데 한 장에서도 글자를 못 찾았다.
+  Future<({SheetLyricsResult lyrics, bool unreadImages})> _extractWithNativeOcr(
+    String? filePath,
+  ) async {
     final workDir = await Directory.systemTemp.createTemp('worship_sheet_ocr_');
     try {
       final stage1 = await _runTool([
@@ -177,30 +192,26 @@ class PythonBridge {
       ]);
       final json = jsonDecode(stage1.stdout as String) as Map<String, dynamic>;
       // 글자가 박힌 PDF 처럼 OCR 이 필요 없으면 1단계에서 바로 끝난다.
-      if (json['needs_ocr'] != true) return _sheetResult(stage1.stdout as String);
+      if (json['needs_ocr'] != true) {
+        return (lyrics: _sheetResult(stage1.stdout as String), unreadImages: false);
+      }
 
       final images = (json['images'] as List<dynamic>).cast<String>();
       final found = await _ocrChannel.invokeMethod<Map<Object?, Object?>>(
         'recognize',
         {'paths': images},
       );
-      // 한 장도 못 읽었으면(파일 경로를 못 여는 등 이미지마다 조용히 실패) 빈 가사를 돌려주지 말고
-      // Tesseract 로 넘긴다.
-      final anyText = found?.values.any((lines) => lines is List && lines.isNotEmpty);
-      if (anyText != true) {
-        throw PlatformException(
-          code: 'ocr_empty',
-          message: 'OS OCR 이 줄 이미지 ${images.length}장에서 글자를 하나도 못 읽었습니다',
-        );
-      }
+      final anyText =
+          found?.values.any((lines) => lines is List && lines.isNotEmpty) ??
+          false;
       final ocrFile = File(p.join(workDir.path, 'ocr.json'));
-      await ocrFile.writeAsString(jsonEncode(found));
+      await ocrFile.writeAsString(jsonEncode(found ?? const {}));
       final stage2 = await _runTool([
         'sheet-finish',
         json['job'] as String,
         ocrFile.path,
       ]);
-      return _sheetResult(stage2.stdout as String);
+      return (lyrics: _sheetResult(stage2.stdout as String), unreadImages: !anyText);
     } finally {
       try {
         await workDir.delete(recursive: true);
