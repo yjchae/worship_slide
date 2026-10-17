@@ -573,7 +573,9 @@ const singerPageHtml =
     width:min(100%,calc(46dvh*16/9));align-self:center;}
   .remote #current .stage{padding:0;}
   .remote #current .fit{padding:0 4%;}
-  .remote #next{flex:1;}
+  .remote #next{flex:none;aspect-ratio:16/9;width:calc(min(100%,calc(46vh*16/9))*.62);
+    width:calc(min(100%,calc(46dvh*16/9))*.62);align-self:center;}
+  .remote #bar{margin-top:auto;}
   .remote #note{display:block;flex:none;max-height:16vh;overflow:auto;touch-action:pan-y;white-space:pre-wrap;
     font-size:2.3vh;line-height:1.4;color:#e6e9ee;background:#1a1f26;border-left:3px solid #ffd54f;
     border-radius:.8vh;padding:1vh 3vw;}
