@@ -154,8 +154,10 @@ class PythonBridge {
     try {
       final result = await _runTool(['sheet', filePath ?? '--clipboard']);
       return _sheetResult(result.stdout as String);
-    } on TesseractMissingException {
-      // OS OCR 로는 읽었는데(빈 결과) Tesseract 가 없으면 설치하라고 하지 말고 그 결과를 보여 준다.
+    } catch (error) {
+      // OS OCR 로 이미 읽은(빈) 결과가 있으면, 다시 읽기가 어떤 이유로 실패하든(Tesseract 없음,
+      // 그 사이 클립보드가 바뀜 등) 오류 대신 그 결과를 보여 준다. OS OCR 이 주 엔진이라
+      // 가사 없는 악보에 'Tesseract 를 설치하라'고 하면 더 헷갈린다.
       if (nativeEmpty != null) return nativeEmpty;
       rethrow;
     }

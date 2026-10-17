@@ -1805,8 +1805,10 @@ def lyric_line_boxes_by_system(systems, ratios):
             # 코드 줄이다 (가사와 코드 사이가 코드와 오선 사이보다 좁은 악보가 있다).
             # 성긴지도 보는 이유 — 코드 없이 3~4절을 빽빽하게 찍은 찬송가는 마지막 절이 다음
             # 오선에 바짝 붙는다. 가사 줄은 글자가 촘촘해 코드 줄보다 검은 비율이 두 배쯤 높다.
+            # 띠에 한 줄뿐이면 건드리지 않는다 ('A - - men' 처럼 성긴 가사 한 줄일 수 있다).
             attached = (
-                next_top - last_end <= spacing
+                len(groups) > 1
+                and next_top - last_end <= spacing
                 and _mean_ratio(ratios, last_start, last_end) < sparse_limit
             )
             if not attached and next_top - last_end >= above:
@@ -2115,7 +2117,10 @@ def _words_score(words):
     """글자 수로 가중한 평균 확신도. 버려질 토막(음표를 읽은 숫자·기호)은 확신도 0 으로 친다.
 
     무엇을 버릴지는 실제 출력(_kept_words)과 같은 기준으로 가른다."""
-    kept = {index for index, _ in _kept_words([text for text, _ in words])}
+    kept = {
+        index
+        for index, _ in _kept_words([text for text, _ in words], [conf for _, conf in words])
+    }
     weighted = 0.0
     total = 0
     for index, (text, conf) in enumerate(words):
@@ -2139,15 +2144,19 @@ def _keep_word(text, index):
     return index == 0 and re.fullmatch(r"\d{1,2}[.)]", text) is not None
 
 
-def _kept_words(words):
+def _kept_words(words, confidences=None):
     """[낱말] → [(원래 순번, 가사로 남길 낱말)].
 
-    영어 줄의 외따로 선 세로 막대·소문자 l 은 대명사 I 다 (산세리프 글꼴의 I 를 그렇게 읽는다)."""
-    joined = " ".join(words)
+    영어 줄의 외따로 선 세로 막대는 대명사 I 다. 소문자 l 은 보통 음표 기둥이라 버리되,
+    Tesseract 가 확신하고(80 이상) 읽은 l 은 산세리프 글꼴의 I 로 본다.
+    confidences 는 낱말마다의 확신도(0~100). OS OCR 은 낱말별 확신도가 없어 None 이다."""
+    stems = {"|", "l", "i", "j", "J"}
+    joined = " ".join(word for word in words if word not in stems)
     latin_line = len(re.findall("[A-Za-z]", joined)) > len(_HANGUL_RE.findall(joined))
     kept = []
     for index, word in enumerate(words):
-        if word in ("|", "l") and latin_line:
+        confident = confidences is not None and confidences[index] >= 80
+        if latin_line and (word == "|" or (word == "l" and confident)):
             kept.append((index, "I"))
         elif _keep_word(word, len(kept)):
             kept.append((index, word))
@@ -2165,7 +2174,8 @@ def _ocr_lyric_line(executable, image_path, languages):
         for language in languages
     ]
     words = max(candidates, key=_words_score)
-    return " ".join(word for _, word in _kept_words([text for text, _ in words]))
+    kept = _kept_words([text for text, _ in words], [conf for _, conf in words])
+    return " ".join(word for _, word in kept)
 
 
 def _pdf_page_words(page, scale):
@@ -2192,11 +2202,11 @@ def _finish_line(raw):
     둘을 가르는 이유 — 코드 줄은 띠에 잘못 섞여 들어온 줄이라 빼면 되지만, 못 읽은 줄은
     진짜 가사 줄 자리라 자리를 비워 둬야 1·2절 순서가 밀리지 않는다 (order_lyric_lines)."""
     text = clean_lyric_line(raw)
-    # 글자가 두 자도 안 되면 못 읽은 줄이다. 흐린 가사 줄이 'E' 하나로 읽혀도 자리를 지킨다.
-    if not is_lyric_line(text):
-        return None
+    # 코드 판별이 먼저다 — 코드 하나짜리 줄('G')도 글자가 두 자 미만이라 못 읽은 줄이 될 뻔한다.
     if is_chord_line(text):
         return _CHORD_LINE
+    if not is_lyric_line(text):
+        return None
     return text, ends_with_word_break(raw)
 
 
@@ -2268,14 +2278,19 @@ def _trim_unread_lines(system_lines):
     띠 맨 끝에 섞여 든 다음 단 코드 줄은 뭉개져(`4DmMCFCG`) 코드로도 가사로도 안 읽혀
     빈 자리가 된다. 그 단만 줄이 하나 많아 1·2절 구간이 끊긴다.
     맨 끝 자리만, 이웃 단(앞·뒤) 줄 수에 맞출 때만 덜어 낸다 — 진짜 가사 줄을 놓친 자리나
-    한 줄짜리 후렴 단이 많은 곡의 1·2절 단은 그대로 둔다."""
-    counts = [len(lines) for lines in system_lines]
+    한 줄짜리 후렴 단이 많은 곡의 1·2절 단은 그대로 둔다.
+    이웃 줄 수는 이웃의 맨 끝 빈 자리를 뺀 값이다 — 코드 줄은 마지막 단만 빼고 모든 띠
+    끝에 섞여 들기 쉬워서, 이웃도 똑같이 하나씩 많다."""
+
+    def core(lines):
+        return len(lines) - 1 if len(lines) > 1 and lines[-1] is None else len(lines)
+
     trimmed = []
     for index, lines in enumerate(system_lines):
         neighbors = {
-            counts[other]
+            core(system_lines[other])
             for other in (index - 1, index + 1)
-            if 0 <= other < len(counts) and any(system_lines[other])
+            if 0 <= other < len(system_lines) and any(system_lines[other])
         }
         lines = list(lines)
         if (
@@ -2484,9 +2499,14 @@ def _layout_image_page(image, work_dir, page_index, native=False):
 
 
 def _layout_text_page(image, words):
-    """글자가 박힌 PDF 한 쪽 → (단마다의 줄 항목 목록, 찾은 오선 단 수). OCR 이 필요 없다."""
-    ratios = row_dark_ratios(image)
+    """글자가 박힌 PDF 한 쪽 → (단마다의 줄 항목 목록, 찾은 오선 단 수). OCR 이 필요 없다.
+
+    줄 위치는 그림과 똑같이 오선에 이어진 음표를 지운 뒤 찾는다 (음표가 가사에 붙는 문제는 같다)."""
+    gray = image.convert("L")
+    ratios = row_dark_ratios(gray)
     systems = find_staff_systems(ratios)
+    if systems:
+        ratios = row_dark_ratios(erase_staff_symbols(gray, 160, systems)[0])
     by_system = lyric_line_boxes_by_system(systems, ratios)
     if not any(by_system):
         # 오선을 못 찾으면 쪽 전체의 글 줄을 그대로 쓴다.

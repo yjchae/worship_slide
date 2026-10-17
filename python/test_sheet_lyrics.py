@@ -77,17 +77,25 @@ def test_is_lyric_line():
 
 
 def test_finish_line_keeps_unread_slot():
-    # 흐린 가사 줄이 'E' 하나로 읽히면 코드 줄이 아니라 못 읽은 줄(자리 지킴)이다.
-    assert ppt_tool._finish_line("E") is None
+    # 코드 하나짜리 줄도 코드 줄이다 (빈 자리로 남기면 단 줄 수가 하나 는다).
+    assert ppt_tool._finish_line("G") == ppt_tool._CHORD_LINE
     assert ppt_tool._finish_line("G D Em C") == ppt_tool._CHORD_LINE
+    # 글자가 두 자도 안 되는 잡음은 못 읽은 줄(자리 지킴)이다.
+    assert ppt_tool._finish_line("~ 1") is None
     assert ppt_tool._finish_line("주님의 사랑") == ("주님의 사랑", False)
 
 
 def test_kept_words():
-    words = lambda items: [word for _, word in ppt_tool._kept_words(items)]  # noqa: E731
-    # 영어 줄의 외따로 선 l·| 는 대명사 I, 한글 줄의 l 은 기둥이라 버린다.
-    assert words(["l", "love", "You"]) == ["I", "love", "You"]
+    def words(items, confidences=None):
+        return [word for _, word in ppt_tool._kept_words(items, confidences)]
+
+    # 영어 줄의 외따로 선 | 는 대명사 I. l 은 확신도 80 이상일 때만 I, 아니면 기둥이라 버린다.
+    assert words(["|", "love", "You"]) == ["I", "love", "You"]
+    assert words(["l", "love", "You"], [95, 96, 97]) == ["I", "love", "You"]
+    assert words(["Your", "love", "l", "is"]) == ["Your", "love", "is"]
+    # 한글 줄의 l 은 기둥이다. 기둥이 여럿이어도 영어 줄로 치지 않는다.
     assert words(["주님", "l", "사랑"]) == ["주님", "사랑"]
+    assert words(["l", "l", "l", "주님"]) == ["주님"]
     # 절 번호는 앞의 잡음이 빠진 뒤 맨 앞이면 남는다.
     assert words(["i", "1.", "주님"]) == ["1.", "주님"]
 
@@ -177,6 +185,10 @@ def test_order_lyric_lines():
     assert order_lyric_lines([
         [v("1a"), v("2a"), None], [v("1b"), v("2b")],
     ]) == ["1a", "1b", "", "2a", "2b"]
+    # 마지막 단만 빼고 모든 단 끝에 코드 줄 빈 자리가 있어도 덜어 낸다.
+    assert order_lyric_lines([
+        [v("1a"), v("2a"), None], [v("1b"), v("2b"), None], [v("1c"), v("2c")],
+    ]) == ["1a", "1b", "1c", "", "2a", "2b", "2c"]
     # 한 줄짜리 후렴 단이 더 많아도 1·2절 단의 빈 자리는 지킨다.
     assert order_lyric_lines([
         [v("1a"), v("2a")], [None, v("2b")], [v("C1")], [v("C2")], [v("C3")],
