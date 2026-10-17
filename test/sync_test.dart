@@ -1,21 +1,28 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' show Color;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:worship_slides/src/features/praise/data/conti_sync_repository.dart';
 import 'package:worship_slides/src/features/praise/data/praise_database.dart';
 import 'package:worship_slides/src/features/praise/data/praise_repository.dart';
 import 'package:worship_slides/src/features/praise/data/song_sync_repository.dart';
-import 'package:worship_slides/src/features/praise/data/song_sync_service.dart';
+import 'package:worship_slides/src/features/praise/data/sync_service.dart';
+import 'package:worship_slides/src/features/praise/data/worship_conti_repository.dart';
 import 'package:worship_slides/src/features/praise/domain/praise_song.dart';
+import 'package:worship_slides/src/features/praise/domain/slide_background.dart';
+import 'package:worship_slides/src/features/praise/domain/staging_item.dart';
 
 /// PC 한 대: 자기 DB + 자기 설정 폴더. 공유 폴더 하나를 여러 대가 같이 쓴다.
 class _Pc {
-  _Pc(this.repo, this.sync);
+  _Pc(this.repo, this.contis, this.sync, this.dir);
 
   final PraiseRepository repo;
-  final SongSyncService sync;
+  final WorshipContiRepository contis;
+  final SyncService sync;
+  final Directory dir;
 
   Future<List<PraiseSong>> songs() => repo.searchSongs('');
 
@@ -42,8 +49,9 @@ void main() {
     addTearDown(db.close);
     await createPraiseSchema(db);
     final database = PraiseDatabase.forTesting(db);
-    final sync = SongSyncService(
-      repository: SongSyncRepository(database: database),
+    final sync = SyncService(
+      songs: SongSyncRepository(database: database),
+      contis: ContiSyncRepository(database: database),
       settingsDirectory: () async => dir,
       deviceName: name,
     );
@@ -53,7 +61,9 @@ void main() {
     // 앱과 같이: 곡을 고치면 동기화에 알린다.
     final repo = PraiseRepository(database: database)
       ..onSongsChanged = sync.markLocalChanged;
-    return _Pc(repo, sync);
+    final contis = WorshipContiRepository(database: database)
+      ..onContisChanged = sync.markLocalChanged;
+    return _Pc(repo, contis, sync, dir);
   }
 
   PraiseSong song(String title, String lyrics, [String english = '']) =>
@@ -207,7 +217,7 @@ void main() {
     await a.repo.insertSong(song('은혜', '가사'));
     await syncAll([a, b]);
 
-    final dir = Directory(p.join(shared, SongSyncService.syncDirName));
+    final dir = Directory(p.join(shared, SyncService.syncDirName));
     final files = dir.listSync().whereType<File>().toList();
     expect(files.map((f) => p.basename(f.path)).toSet(), {
       '${a.sync.deviceId}.json',
@@ -232,7 +242,7 @@ void main() {
     expect(await a.titles(), ['은혜:가사']);
   });
 
-  test('version 16 DB 를 올리면 기존 곡에 uid 가 생긴다', () async {
+  test('version 16 DB 를 올리면 기존 곡·콘티에 uid 가 생긴다', () async {
     final db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
     addTearDown(db.close);
     await db.execute('''
@@ -247,6 +257,14 @@ void main() {
     await db.execute('''
       CREATE TABLE worship_conti_items (id INTEGER PRIMARY KEY, media TEXT)
     ''');
+    await db.execute('''
+      CREATE TABLE worship_contis (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )
+    ''');
+    await db.insert('worship_contis', {'name': '예전 콘티', 'created_at': 123});
     await db.insert('praise_songs', {
       'file_name': 'a.pptx',
       'title': '은혜',
@@ -257,5 +275,121 @@ void main() {
     expect(row['uid'], isA<String>());
     expect((row['uid'] as String).length, 32);
     expect(row['updated_at'], 0);
+    final conti = (await db.query('worship_contis')).single;
+    expect((conti['uid'] as String).length, 32);
+    // 예전 콘티는 저장한 시각을 고친 시각으로 쓴다.
+    expect(conti['updated_at'], 123);
+  });
+
+  group('저장 콘티', () {
+    /// A 에 곡 하나 + PPT 페이지 이미지 + 배경 이미지를 쓰는 콘티를 저장한다.
+    Future<String> saveSampleConti(_Pc pc) async {
+      await pc.repo.insertSong(song('은혜', '은혜 가사'));
+      final grace = (await pc.songs()).single;
+      final pages = await Directory(p.join(pc.dir.path, 'ppt')).create();
+      final page1 = File(p.join(pages.path, '0001.png'))
+        ..writeAsBytesSync([1, 2, 3]);
+      final page2 = File(p.join(pages.path, '0002.png'))
+        ..writeAsBytesSync([4, 5, 6]);
+      final bg = File(p.join(pc.dir.path, 'bg.jpg'))..writeAsBytesSync([7, 8]);
+      await pc.contis.saveConti(
+        '주일 예배',
+        [
+          (uid: 1, item: SongStagingItem(grace)),
+          (
+            uid: 2,
+            item: ImageStagingItem(
+              sourceName: '광고.pptx',
+              imagePaths: [page1.path, page2.path],
+              sourcePath: p.join(pc.dir.path, '광고.pptx'),
+            ),
+          ),
+        ],
+        notes: {'1:0': '천천히'},
+        backgrounds: {
+          1: SlideBackground(
+            color: const Color(0xFF000000),
+            imagePath: bg.path,
+          ),
+        },
+      );
+      return bg.path;
+    }
+
+    test('이미지까지 다른 PC 로 넘어가고, 곡 항목은 그 PC 의 곡에 이어진다', () async {
+      final a = await newPc('A');
+      final b = await newPc('B');
+      await saveSampleConti(a);
+      await syncAll([a, b]);
+
+      final list = await b.contis.listContis();
+      expect(list.map((c) => c.name), ['주일 예배']);
+      final loaded = await b.contis.loadConti(list.single.id, 100);
+      expect(loaded.missingCount, 0);
+      expect(loaded.items, hasLength(2));
+
+      final songItem = loaded.items[0].item as SongStagingItem;
+      final bGrace = (await b.songs()).single;
+      expect(songItem.song.id, bGrace.id);
+      expect(songItem.song.lyrics, '은혜 가사');
+      expect(loaded.notes, {'100:0': '천천히'});
+
+      final image = loaded.items[1].item as ImageStagingItem;
+      final synced = p.join(b.dir.path, 'synced_files');
+      expect(
+        image.imagePaths.every((path) => p.isWithin(synced, path)),
+        isTrue,
+      );
+      expect(File(image.imagePaths[1]).readAsBytesSync(), [4, 5, 6]);
+      // 원본 PPT 경로는 그 PC 에서만 뜻이 있어 넘기지 않는다.
+      expect(image.sourcePath, isNull);
+      final background = loaded.backgrounds[100]!;
+      expect(p.isWithin(synced, background.imagePath!), isTrue);
+      expect(File(background.imagePath!).readAsBytesSync(), [7, 8]);
+
+      // B 가 받은 파일을 다시 올려도 공유 폴더에 파일이 늘지 않는다.
+      final files = Directory(
+        p.join(shared, SyncService.syncDirName, SyncService.filesDirName),
+      );
+      expect(files.listSync(), hasLength(3));
+    });
+
+    test('지운 콘티는 다른 PC 에서도 지워지고, 다른 PC 에서 저장한 콘티는 돌아온다', () async {
+      final a = await newPc('A');
+      final b = await newPc('B');
+      await saveSampleConti(a);
+      await syncAll([a, b]);
+
+      final onB = (await b.contis.listContis()).single;
+      await b.contis.deleteConti(onB.id);
+      await b.contis.saveConti('B 의 콘티', [
+        (uid: 1, item: const BlankStagingItem(mainText: '환영합니다')),
+      ]);
+      await syncAll([a, b]);
+      expect((await a.contis.listContis()).map((c) => c.name), ['B 의 콘티']);
+      expect((await b.contis.listContis()).map((c) => c.name), ['B 의 콘티']);
+    });
+
+    test('파일이 아직 안 올라왔으면 기다렸다가 올라오면 받는다', () async {
+      final a = await newPc('A');
+      final b = await newPc('B');
+      await saveSampleConti(a);
+      await a.sync.syncNow();
+
+      // 드라이브가 이미지를 아직 못 올린 상태를 흉내 낸다.
+      final files = Directory(
+        p.join(shared, SyncService.syncDirName, SyncService.filesDirName),
+      );
+      final hidden = Directory(p.join(root.path, 'hidden'));
+      await files.rename(hidden.path);
+      await b.sync.syncNow();
+      expect(await b.contis.listContis(), isEmpty);
+      expect(b.sync.status.value.pendingContis, 1);
+
+      await hidden.rename(files.path);
+      await b.sync.syncNow();
+      expect((await b.contis.listContis()).map((c) => c.name), ['주일 예배']);
+      expect(b.sync.status.value.pendingContis, 0);
+    });
   });
 }

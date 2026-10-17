@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../domain/praise_song.dart';
 import '../domain/slide_background.dart';
@@ -59,6 +60,9 @@ class WorshipContiRepository {
 
   final PraiseDatabase _db;
 
+  /// 콘티를 저장·가져오기·삭제할 때마다 부른다. 동기화가 공유 폴더에 다시 쓰는 신호.
+  void Function()? onContisChanged;
+
   Future<int> saveConti(
     String name,
     List<({int uid, StagingItem item})> stagingItems, {
@@ -68,10 +72,12 @@ class WorshipContiRepository {
   }) async {
     final db = await _db.database;
     final now = DateTime.now().millisecondsSinceEpoch;
-    return db.transaction((txn) async {
+    final savedId = await db.transaction((txn) async {
       final contiId = await txn.insert('worship_contis', {
         'name': name,
         'created_at': now,
+        'uid': newSongUid(),
+        'updated_at': now,
       });
       for (var i = 0; i < stagingItems.length; i++) {
         final item = stagingItems[i].item;
@@ -134,6 +140,8 @@ class WorshipContiRepository {
       }
       return contiId;
     });
+    onContisChanged?.call();
+    return savedId;
   }
 
   Future<List<WorshipConti>> listContis() async {
@@ -338,7 +346,7 @@ class WorshipContiRepository {
       if (imagePaths != null) {
         item['image_paths'] = imagePaths.split('\n').map(pack).join('\n');
       }
-      item['background'] = _mapBackgroundPaths(row['background'], pack);
+      item['background'] = mapBackgroundPaths(row['background'], pack);
       items.add(item);
     }
 
@@ -404,10 +412,13 @@ class WorshipContiRepository {
         c['name'] as String,
     }..removeAll(['id', 'conti_id', 'song_id']);
 
-    return db.transaction((txn) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final importedId = await db.transaction((txn) async {
       final contiId = await txn.insert('worship_contis', {
         'name': name,
-        'created_at': DateTime.now().millisecondsSinceEpoch,
+        'created_at': now,
+        'uid': newSongUid(),
+        'updated_at': now,
       });
       var position = 0;
       for (final item in items) {
@@ -419,20 +430,22 @@ class WorshipContiRepository {
         if (imagePaths != null) {
           row['image_paths'] = imagePaths.split('\n').map(unpack).join('\n');
         }
-        row['background'] = _mapBackgroundPaths(row['background'], unpack);
+        row['background'] = mapBackgroundPaths(row['background'], unpack);
         row['conti_id'] = contiId;
         row['position'] = position++;
         await txn.insert('worship_conti_items', row);
       }
       return contiId;
     });
+    onContisChanged?.call();
+    return importedId;
   }
 
   static const contiFileFormat = 'worship_slides_conti';
   static const contiFileExtension = 'wsconti';
 
   // 배경 JSON 안의 두 경로(배경 이미지, 헌금송 디자인의 원본 배경)를 바꿔 쓴다.
-  static Object? _mapBackgroundPaths(
+  static Object? mapBackgroundPaths(
     Object? stored,
     String? Function(String?) map,
   ) {
@@ -458,6 +471,20 @@ class WorshipContiRepository {
   Future<void> deleteConti(int contiId) async {
     final db = await _db.database;
     await db.transaction((txn) async {
+      final rows = await txn.query(
+        'worship_contis',
+        columns: ['uid'],
+        where: 'id = ?',
+        whereArgs: [contiId],
+      );
+      final uid = rows.firstOrNull?['uid'] as String?;
+      if (uid != null) {
+        // 다른 PC 에도 "지웠다"를 알린다.
+        await txn.insert('conti_tombstones', {
+          'uid': uid,
+          'deleted_at': DateTime.now().millisecondsSinceEpoch,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
       await txn.delete(
         'worship_conti_items',
         where: 'conti_id = ?',
@@ -465,5 +492,6 @@ class WorshipContiRepository {
       );
       await txn.delete('worship_contis', where: 'id = ?', whereArgs: [contiId]);
     });
+    onContisChanged?.call();
   }
 }

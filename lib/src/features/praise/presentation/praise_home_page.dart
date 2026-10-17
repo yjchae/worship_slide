@@ -29,7 +29,7 @@ import '../data/praise_repository.dart';
 import '../data/python_bridge.dart';
 import '../data/screen_choice_store.dart';
 import '../data/singer_web_server.dart';
-import '../data/song_sync_service.dart';
+import '../data/sync_service.dart';
 import '../data/source_file_watcher.dart';
 import '../data/worship_conti_repository.dart';
 import '../domain/worship_conti.dart';
@@ -46,7 +46,7 @@ import 'offering_overlay_painter.dart';
 import 'singer_view_data.dart';
 import 'slide_page_data.dart';
 import 'slide_render_view.dart';
-import 'song_sync_dialog.dart';
+import 'sync_dialog.dart';
 
 class PraiseHomePage extends StatefulWidget {
   const PraiseHomePage({super.key});
@@ -124,8 +124,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   );
 
   final PraiseRepository _repository = PraiseRepository();
-  // 공유 폴더(Google Drive 공유 드라이브)로 여러 PC 의 곡을 맞춘다.
-  final SongSyncService _songSync = SongSyncService();
+  // 공유 폴더(Google Drive 공유 드라이브)로 여러 PC 의 곡·저장 콘티를 맞춘다.
+  final SyncService _sync = SyncService();
   final PythonBridge _pythonBridge = PythonBridge();
   final ExportStyleStore _styleStore = ExportStyleStore();
   final OfferingDesignStore _offeringStore = OfferingDesignStore();
@@ -278,13 +278,14 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       animationDuration: Duration.zero,
     )..addListener(_onMainTabChanged);
     _loadSongs();
-    _repository.onSongsChanged = _songSync.markLocalChanged;
-    _songSync.onMerged = (_) {
+    _repository.onSongsChanged = _sync.markLocalChanged;
+    _contiRepository.onContisChanged = _sync.markLocalChanged;
+    _sync.onMerged = (_) {
       if (!mounted) return;
       _loadSongs();
       _loadSubLanguages();
     };
-    _songSync.load();
+    _sync.load();
     _loadSavedStyle();
     _loadOfferingDesign();
     _sermonStore.load().then((v) {
@@ -337,7 +338,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _singerWeb.stop();
     _sourceWatcher.dispose();
     _repository.onSongsChanged = null;
-    _songSync.dispose();
+    _contiRepository.onContisChanged = null;
+    _sync.dispose();
     HardwareKeyboard.instance.removeHandler(_handleStartKey);
     _mainTabController
       ..removeListener(_onMainTabChanged)
@@ -3506,7 +3508,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       builder: (context) => AlertDialog(
         title: const Text('전체 초기화'),
         content: Text(
-          _songSync.status.value.enabled
+          _sync.status.value.enabled
               ? '저장된 찬양 DB를 모두 삭제합니다.\n곡 동기화가 켜져 있어 같은 폴더를 쓰는 다른 PC 의 곡도 지워집니다. 계속할까요?'
               : '저장된 찬양 DB를 모두 삭제합니다. 계속할까요?',
         ),
@@ -3776,8 +3778,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               _importSheetMusic(fromClipboard: true),
                           onExportSongsPressed: _exportSongBundle,
                           onImportSongsPressed: _importSongBundle,
-                          onSongSyncPressed: () =>
-                              SongSyncDialog.show(context, _songSync),
+                          onSyncPressed: () =>
+                              SyncDialog.show(context, _sync),
                           onExtractLogsPressed: _showExtractLogsDialog,
                           isCheckingUpdate: _isCheckingUpdate,
                           hasUpdate: _pendingUpdate != null,
@@ -4069,9 +4071,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                           importTotalCount: _importTotalCount,
                           importSavedCount: _importSavedCount,
                           packageInfo: _packageInfo,
-                          syncStatus: _songSync.status,
+                          syncStatus: _sync.status,
                           onSyncPressed: () =>
-                              SongSyncDialog.show(context, _songSync),
+                              SyncDialog.show(context, _sync),
                         ),
                       ],
                     );
@@ -4376,7 +4378,7 @@ class _TopBar extends StatelessWidget {
     required this.onPasteSheetPressed,
     required this.onExportSongsPressed,
     required this.onImportSongsPressed,
-    required this.onSongSyncPressed,
+    required this.onSyncPressed,
     required this.onExtractLogsPressed,
     required this.isCheckingUpdate,
     required this.hasUpdate,
@@ -4394,7 +4396,7 @@ class _TopBar extends StatelessWidget {
   final VoidCallback onPasteSheetPressed;
   final VoidCallback onExportSongsPressed;
   final VoidCallback onImportSongsPressed;
-  final VoidCallback onSongSyncPressed;
+  final VoidCallback onSyncPressed;
   final VoidCallback onExtractLogsPressed;
   final bool isCheckingUpdate;
   final bool hasUpdate;
@@ -4485,9 +4487,9 @@ class _TopBar extends StatelessWidget {
                 subtitle: '같은 제목은 건너뜁니다',
               ),
               _item(
-                onSongSyncPressed,
+                onSyncPressed,
                 Icons.sync_rounded,
-                '곡 동기화',
+                '곡·콘티 동기화',
                 subtitle: 'Google Drive 공유 폴더로 여러 PC',
               ),
               const PopupMenuDivider(),
@@ -4607,7 +4609,7 @@ class _StatusBar extends StatelessWidget {
   final int importTotalCount;
   final int importSavedCount;
   final Future<PackageInfo> packageInfo;
-  final ValueListenable<SongSyncStatus> syncStatus;
+  final ValueListenable<SyncStatus> syncStatus;
   final VoidCallback onSyncPressed;
 
   @override
@@ -4640,7 +4642,7 @@ class _StatusBar extends StatelessWidget {
                     ),
             ),
           ),
-          ValueListenableBuilder<SongSyncStatus>(
+          ValueListenableBuilder<SyncStatus>(
             valueListenable: syncStatus,
             builder: (context, sync, _) {
               if (!sync.enabled) return const SizedBox.shrink();
@@ -4651,7 +4653,7 @@ class _StatusBar extends StatelessWidget {
                   ? '동기화 실패'
                   : sync.lastSyncAt == null
                   ? '동기화 대기'
-                  : '동기화 ${songSyncAgo(sync.lastSyncAt!)}';
+                  : '동기화 ${syncAgo(sync.lastSyncAt!)}';
               final color = failed ? cs.error : cs.onSurfaceVariant;
               return Padding(
                 padding: const EdgeInsets.only(right: 12),

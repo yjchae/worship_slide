@@ -1,173 +1,8 @@
-import 'dart:convert';
-
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'praise_database.dart';
 import 'praise_repository.dart';
-
-/// 공유 폴더에 올리는 곡 한 곡. 보조 언어 가사(제목에 묶여 있다)도 같이 싣는다.
-class SyncSong {
-  const SyncSong({
-    required this.uid,
-    required this.updatedAt,
-    required this.title,
-    required this.fileName,
-    required this.lyrics,
-    required this.englishLyrics,
-    required this.translations,
-  });
-
-  final String uid;
-  final int updatedAt;
-  final String title;
-  final String fileName;
-  final String lyrics;
-  final String englishLyrics;
-
-  /// 언어 → 가사. '영어'는 [englishLyrics] 가 맡으므로 여기 없다.
-  final Map<String, String> translations;
-
-  /// 따로 가져온 같은 곡을 알아보는 키(제목·원본·영어 가사가 똑같음).
-  String get contentKey => '$title\u0000$lyrics\u0000$englishLyrics';
-
-  /// 고친 시각이 같을 때 어느 쪽을 쓸지 정하는 키. PC 마다 같은 답이 나와야 한다.
-  String get tieKey =>
-      '$contentKey\u0000$fileName\u0000${jsonEncode(_sorted(translations))}';
-
-  /// [other] 보다 이 곡이 더 최신이면 true.
-  bool winsOver(SyncSong other) => updatedAt != other.updatedAt
-      ? updatedAt > other.updatedAt
-      : tieKey.compareTo(other.tieKey) > 0;
-
-  SyncSong withUid(String newUid) => SyncSong(
-    uid: newUid,
-    updatedAt: updatedAt,
-    title: title,
-    fileName: fileName,
-    lyrics: lyrics,
-    englishLyrics: englishLyrics,
-    translations: translations,
-  );
-
-  Map<String, Object?> toJson() => {
-    'uid': uid,
-    'updated_at': updatedAt,
-    'title': title,
-    'file_name': fileName,
-    'lyrics': lyrics,
-    'english_lyrics': englishLyrics,
-    if (translations.isNotEmpty) 'translations': _sorted(translations),
-  };
-
-  static SyncSong? fromJson(Object? raw) {
-    if (raw is! Map) return null;
-    final uid = raw['uid'];
-    final title = raw['title'];
-    final lyrics = raw['lyrics'];
-    if (uid is! String ||
-        uid.isEmpty ||
-        title is! String ||
-        lyrics is! String) {
-      return null;
-    }
-    final translations = raw['translations'];
-    return SyncSong(
-      uid: uid,
-      updatedAt: (raw['updated_at'] as num?)?.toInt() ?? 0,
-      title: title,
-      fileName: raw['file_name'] as String? ?? '',
-      lyrics: lyrics,
-      englishLyrics: raw['english_lyrics'] as String? ?? '',
-      translations: translations is Map
-          ? {
-              for (final e in translations.entries)
-                if (e.key is String && e.value is String)
-                  e.key as String: e.value as String,
-            }
-          : const {},
-    );
-  }
-
-  static Map<String, String> _sorted(Map<String, String> map) => {
-    for (final key in map.keys.toList()..sort()) key: map[key]!,
-  };
-}
-
-/// PC 한 대가 공유 폴더에 쓰는 내용 전부. PC 마다 자기 파일 하나만 쓰므로
-/// 두 PC 가 같은 파일을 동시에 고쳐 생기는 충돌(드라이브의 "사본" 파일)이 없다.
-class SongSyncSnapshot {
-  const SongSyncSnapshot({
-    required this.deviceId,
-    required this.deviceName,
-    required this.songs,
-    required this.deleted,
-    required this.aliases,
-  });
-
-  static const format = 'worship_slides_song_sync';
-
-  final String deviceId;
-  final String deviceName;
-  final List<SyncSong> songs;
-
-  /// 지운 곡 uid → 지운 시각.
-  final Map<String, int> deleted;
-
-  /// 합쳐진 옛 uid → 지금 uid.
-  final Map<String, String> aliases;
-
-  Map<String, Object?> toJson() => {
-    'format': format,
-    'version': 1,
-    'device_id': deviceId,
-    'device_name': deviceName,
-    'songs': [for (final song in songs) song.toJson()],
-    'deleted': deleted,
-    'aliases': aliases,
-  };
-
-  static SongSyncSnapshot? fromJson(Object? raw) {
-    if (raw is! Map || raw['format'] != format) return null;
-    final songs = raw['songs'];
-    final deleted = raw['deleted'];
-    final aliases = raw['aliases'];
-    return SongSyncSnapshot(
-      deviceId: raw['device_id'] as String? ?? '',
-      deviceName: raw['device_name'] as String? ?? '',
-      songs: songs is List
-          ? songs.map(SyncSong.fromJson).whereType<SyncSong>().toList()
-          : const [],
-      deleted: deleted is Map
-          ? {
-              for (final e in deleted.entries)
-                if (e.key is String && e.value is num)
-                  e.key as String: (e.value as num).toInt(),
-            }
-          : const {},
-      aliases: aliases is Map
-          ? {
-              for (final e in aliases.entries)
-                if (e.key is String && e.value is String)
-                  e.key as String: e.value as String,
-            }
-          : const {},
-    );
-  }
-}
-
-class SongSyncMergeResult {
-  const SongSyncMergeResult({
-    this.addedCount = 0,
-    this.updatedCount = 0,
-    this.deletedCount = 0,
-  });
-
-  final int addedCount;
-  final int updatedCount;
-  final int deletedCount;
-
-  bool get changed => addedCount + updatedCount + deletedCount > 0;
-}
+import 'sync_snapshot.dart';
 
 /// 곡 동기화의 DB 쪽. 규칙은 곡(uid)마다 **고친 시각이 늦은 쪽이 이긴다**.
 /// - 지운 곡은 `song_tombstones` 에 남는다. 지운 뒤에 다른 PC 에서 고쳤으면 고친 쪽이 이긴다
@@ -180,7 +15,7 @@ class SongSyncRepository {
   final PraiseDatabase _databaseProvider;
 
   /// 이 PC 의 곡 전부를 공유 폴더에 쓸 모양으로.
-  Future<SongSyncSnapshot> exportSnapshot({
+  Future<SyncSnapshot> exportSnapshot({
     required String deviceId,
     required String deviceName,
   }) async {
@@ -188,7 +23,7 @@ class SongSyncRepository {
     await _fillMissingUids(db);
     final translations = await _translationsByTitle(db);
     final rows = await db.query('praise_songs', orderBy: 'uid');
-    return SongSyncSnapshot(
+    return SyncSnapshot(
       deviceId: deviceId,
       deviceName: deviceName,
       songs: [for (final row in rows) _songFromRow(row, translations)],
@@ -204,7 +39,7 @@ class SongSyncRepository {
   }
 
   /// 다른 PC 들의 파일을 이 PC 의 DB 에 합친다.
-  Future<SongSyncMergeResult> merge(List<SongSyncSnapshot> remotes) async {
+  Future<SyncMergeResult> merge(List<SyncSnapshot> remotes) async {
     final db = await _databaseProvider.database;
     await _fillMissingUids(db);
     return db.transaction((txn) async {
@@ -312,7 +147,7 @@ class SongSyncRepository {
         }, conflictAlgorithm: ConflictAlgorithm.replace);
       }
 
-      return SongSyncMergeResult(
+      return SyncMergeResult(
         addedCount: added,
         updatedCount: updated,
         deletedCount: deleted,
@@ -380,7 +215,7 @@ class SongSyncRepository {
   /// 다른 PC 가 알려 준 uid 합치기를 이 PC 기록에 더한다.
   Future<Map<String, String>> _mergeAliases(
     DatabaseExecutor txn,
-    List<SongSyncSnapshot> remotes,
+    List<SyncSnapshot> remotes,
   ) async {
     final aliases = {
       for (final r in await txn.query('song_uid_aliases'))

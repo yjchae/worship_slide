@@ -2,18 +2,18 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../../app_colors.dart';
-import '../data/song_sync_service.dart';
+import '../data/sync_service.dart';
 
-/// "곡 동기화" 설정: 공유 폴더 고르기 · 지금 맞추기 · 끄기.
-class SongSyncDialog extends StatelessWidget {
-  const SongSyncDialog({super.key, required this.service});
+/// "곡·콘티 동기화" 설정: 공유 폴더 고르기 · 지금 맞추기 · 끄기.
+class SyncDialog extends StatelessWidget {
+  const SyncDialog({super.key, required this.service});
 
-  final SongSyncService service;
+  final SyncService service;
 
-  static Future<void> show(BuildContext context, SongSyncService service) =>
+  static Future<void> show(BuildContext context, SyncService service) =>
       showDialog<void>(
         context: context,
-        builder: (_) => SongSyncDialog(service: service),
+        builder: (_) => SyncDialog(service: service),
       );
 
   Future<void> _pickFolder() async {
@@ -33,17 +33,17 @@ class SongSyncDialog extends StatelessWidget {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(AppRadius.dialog),
       ),
-      title: const Text('곡 동기화'),
+      title: const Text('곡·콘티 동기화'),
       content: SizedBox(
         width: 460,
-        child: ValueListenableBuilder<SongSyncStatus>(
+        child: ValueListenableBuilder<SyncStatus>(
           valueListenable: service.status,
           builder: (context, status, _) => Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                '여러 PC 가 같은 폴더를 고르면 곡 추가·수정·삭제가 서로 맞춰집니다. '
+                '여러 PC 가 같은 폴더를 고르면 곡과 저장한 콘티의 추가·수정·삭제가 서로 맞춰집니다. '
                 'Google Drive 데스크톱 앱이 PC 에 보여 주는 공유 드라이브 폴더를 고르세요.',
                 style: muted,
               ),
@@ -55,7 +55,7 @@ class SongSyncDialog extends StatelessWidget {
               Text(
                 '· 같은 곡을 두 PC 에서 고치면 나중에 고친 쪽이 남습니다.\n'
                 '· 곡을 지우면 다른 PC 에서도 지워집니다(전체 초기화 포함).\n'
-                '· 콘티는 동기화하지 않습니다. 콘티 파일 내보내기를 쓰세요.\n'
+                '· 저장한 콘티는 PPT 페이지·배경 이미지까지 같이 넘어갑니다. 동영상·음악 파일은 넘어가지 않습니다.\n'
                 '· 앱이 켜져 있는 동안 1분마다, 곡을 고치면 3초 뒤에 맞춥니다.',
                 style: muted.copyWith(height: 1.6),
               ),
@@ -64,7 +64,7 @@ class SongSyncDialog extends StatelessWidget {
         ),
       ),
       actions: [
-        ValueListenableBuilder<SongSyncStatus>(
+        ValueListenableBuilder<SyncStatus>(
           valueListenable: service.status,
           builder: (context, status, _) => Row(
             mainAxisSize: MainAxisSize.min,
@@ -102,7 +102,7 @@ class SongSyncDialog extends StatelessWidget {
 class _FolderBox extends StatelessWidget {
   const _FolderBox({required this.status});
 
-  final SongSyncStatus status;
+  final SyncStatus status;
 
   @override
   Widget build(BuildContext context) {
@@ -139,7 +139,7 @@ class _FolderBox extends StatelessWidget {
 class _StatusLine extends StatelessWidget {
   const _StatusLine({required this.status});
 
-  final SongSyncStatus status;
+  final SyncStatus status;
 
   @override
   Widget build(BuildContext context) {
@@ -157,7 +157,10 @@ class _StatusLine extends StatelessWidget {
       final peers = status.peers.isEmpty
           ? '같은 폴더를 쓰는 다른 PC 없음'
           : '다른 PC ${status.peers.length}대: ${status.peers.join(', ')}';
-      text = '${songSyncAgo(status.lastSyncAt!)} 맞춤 · $peers';
+      final pending = status.pendingContis == 0
+          ? ''
+          : ' · 콘티 ${status.pendingContis}개는 파일이 올라오길 기다리는 중';
+      text = '${syncAgo(status.lastSyncAt!)} 맞춤 · $peers$pending';
     }
     return Row(
       children: [
@@ -191,7 +194,7 @@ class _StatusLine extends StatelessWidget {
 }
 
 /// "방금 / 3분 전 / 14:05" 같은 짧은 표시. 상태 줄과 다이얼로그가 같이 쓴다.
-String songSyncAgo(DateTime at) {
+String syncAgo(DateTime at) {
   final diff = DateTime.now().difference(at);
   if (diff.inMinutes < 1) return '방금';
   if (diff.inHours < 1) return '${diff.inMinutes}분 전';

@@ -79,9 +79,12 @@ Future<void> createPraiseSchema(DatabaseExecutor db) async {
   CREATE TABLE worship_contis (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     name       TEXT    NOT NULL,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    uid        TEXT,
+    updated_at INTEGER NOT NULL DEFAULT 0
   )
 ''');
+  await db.execute(_createContiTombstones);
   await db.execute('''
   CREATE TABLE worship_conti_items (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -146,9 +149,17 @@ const _createSongUidAliases = '''
   )
 ''';
 
+/// 지운 콘티. 곡의 [_createSongTombstones] 와 같은 역할.
+const _createContiTombstones = '''
+  CREATE TABLE IF NOT EXISTS conti_tombstones (
+    uid        TEXT PRIMARY KEY,
+    deleted_at INTEGER NOT NULL
+  )
+''';
+
 final _uidRandom = Random.secure();
 
-/// 곡 동기화용 uid. 무작위 128비트 hex.
+/// 곡·콘티 동기화용 uid. 무작위 128비트 hex.
 String newSongUid() => List.generate(
   16,
   (_) => _uidRandom.nextInt(256).toRadixString(16).padLeft(2, '0'),
@@ -363,7 +374,7 @@ Future<void> upgradePraiseSchema(DatabaseExecutor db, int oldVersion) async {
     );
   }
   if (oldVersion < 17) {
-    // 곡 동기화: PC 사이 곡 식별자 + 고친 시각 + 지운 곡 기록.
+    // 곡·콘티 동기화: PC 사이 식별자 + 고친 시각 + 지운 기록.
     await _addColumnIfMissing(
       db,
       'praise_songs',
@@ -388,6 +399,32 @@ Future<void> upgradePraiseSchema(DatabaseExecutor db, int oldVersion) async {
       await db.update(
         'praise_songs',
         {'uid': newSongUid()},
+        where: 'id = ?',
+        whereArgs: [row['id']],
+      );
+    }
+    await _addColumnIfMissing(
+      db,
+      'worship_contis',
+      'uid',
+      'ALTER TABLE worship_contis ADD COLUMN uid TEXT',
+    );
+    await _addColumnIfMissing(
+      db,
+      'worship_contis',
+      'updated_at',
+      'ALTER TABLE worship_contis ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0',
+    );
+    await db.execute(_createContiTombstones);
+    final contis = await db.query(
+      'worship_contis',
+      columns: ['id', 'created_at'],
+      where: 'uid IS NULL',
+    );
+    for (final row in contis) {
+      await db.update(
+        'worship_contis',
+        {'uid': newSongUid(), 'updated_at': row['created_at']},
         where: 'id = ?',
         whereArgs: [row['id']],
       );
