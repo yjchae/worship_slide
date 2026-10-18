@@ -2207,7 +2207,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   /// 발표 보기 썸네일 끌어 놓기. [slideIndexes] 페이지를 [afterIndex] 페이지 바로 뒤로 옮긴다.
   /// 외부 PPT 중간에 찬양·말씀을 끼워 넣거나 PPT 안 페이지 순서를 바꾸는 데 쓴다.
-  /// 복사 → 원래 자리 지우기 → 붙여 넣기와 같다. 메모는 따라가고, 관객 화면은 보던 페이지 그대로다.
+  /// 옮긴 페이지만 원래 항목에서 실제로 빼고(숨기지 않는다) 놓은 자리에 새 항목으로 넣는다.
+  /// 나머지 페이지는 그대로 남는다. 메모는 따라가고, 관객 화면은 보던 페이지 그대로다.
   void _moveSlides(List<int> slideIndexes, int afterIndex) {
     final slides = _allSlides;
     if (afterIndex < 0 || afterIndex >= slides.length) return;
@@ -2237,33 +2238,27 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     ];
 
     setState(() {
-      // 1) 원래 자리에서 지운다. 모든 페이지가 빠진 항목은 항목째 뺀다(여백만 남지 않게).
-      for (final s in picked) {
-        _deletedSlideKeys.add(_slideKey(s.stagingUid, s.pageIndexInItem));
+      // 1) 옮긴 페이지만 원래 항목에서 뺀다. 남은 페이지는 번호가 당겨지므로 바뀐 키를 적어 둔다.
+      //    남은 페이지가 없는 항목은 항목째 뺀다(여백만 남지 않게).
+      final renamed = <String, String>{};
+      final emptied = <int>{};
+      for (final g in groups) {
+        final uid = g.pages.first.stagingUid;
+        final moved = {for (final s in g.pages) s.pageIndexInItem};
+        if (!_takePagesOut(uid, moved, renamed)) emptied.add(uid);
       }
-      final emptied = <int>{
-        for (final g in groups)
-          if (List.generate(
-            _pageCount(
-              _stagingItems
-                  .firstWhere((e) => e.uid == g.pages.first.stagingUid)
-                  .item,
-            ),
-            (j) => _slideKey(g.pages.first.stagingUid, j),
-          ).every(_deletedSlideKeys.contains))
-            g.pages.first.stagingUid,
-      };
       _removeStagingWhere((e) => emptied.contains(e.uid), prune: false);
       for (final uid in emptied) {
         _itemBackgrounds.remove(uid);
         _deletedSlideKeys.removeWhere((k) => k.startsWith('$uid:'));
       }
+      String newKey(String key) => renamed[key] ?? key;
 
       // 2) 놓을 자리 뒤에 넣는다.
       final remaining = _allSlides;
       var target = 0;
       for (final key in anchors) {
-        final i = remaining.indexWhere((s) => keyOf(s) == key);
+        final i = remaining.indexWhere((s) => keyOf(s) == newKey(key));
         if (i >= 0) {
           target = i;
           break;
@@ -2294,7 +2289,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
             ? movedSlides[currentMovedAt]
             : -1;
       } else {
-        found = result.indexWhere((s) => keyOf(s) == keyOf(current));
+        found = result.indexWhere((s) => keyOf(s) == newKey(keyOf(current)));
       }
       if (found >= 0) _currentSlideIndex = found;
       _clampCurrentSlideIndex();
@@ -2303,6 +2298,87 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       }
     });
     _sendCurrentSlide();
+  }
+
+  /// 곡·PPT 항목 [uid] 에서 [moved] 페이지를 빼고 남은 페이지로 항목을 다시 만든다.
+  /// 메모·지운 페이지 표시는 당겨진 번호로 옮기고, 바뀐 키를 [renamed] 에 적는다
+  /// (`uid:페이지:자동여백여부` 형식). 남은 페이지가 없으면(지운 페이지뿐이어도) false.
+  bool _takePagesOut(int uid, Set<int> moved, Map<String, String> renamed) {
+    final index = _stagingItems.indexWhere((e) => e.uid == uid);
+    if (index < 0) return false;
+    final item = _stagingItems[index].item;
+    final total = _pageCount(item);
+    final kept = [
+      for (var j = 0; j < total; j++)
+        if (!moved.contains(j)) j,
+    ];
+    if (kept.every((j) => _deletedSlideKeys.contains(_slideKey(uid, j)))) {
+      return false;
+    }
+    final List<StagingItem> rebuilt;
+    switch (item) {
+      case SongStagingItem(:final song):
+        final pages = song.pairedPages;
+        final keptPages = [for (final j in kept) pages[j]];
+        // 곡 끝의 빈 페이지는 가사로 담으면 사라지므로 빈 페이지 항목으로 남긴다.
+        var end = keptPages.length;
+        while (end > 0 &&
+            keptPages[end - 1].korean.isEmpty &&
+            keptPages[end - 1].english.isEmpty) {
+          end--;
+        }
+        rebuilt = [
+          SongStagingItem(_songWithPages(song, keptPages.sublist(0, end))),
+          for (var j = end; j < keptPages.length; j++) const BlankStagingItem(),
+        ];
+      case ImageStagingItem(:final sourceName, :final imagePaths):
+        // 원본의 일부 페이지만 남으므로 원본 경로(다시 불러오기)는 뺀다 — 나누기와 같은 규칙.
+        rebuilt = [
+          ImageStagingItem(
+            sourceName: sourceName,
+            imagePaths: [for (final j in kept) imagePaths[j]],
+          ),
+        ];
+      default:
+        return false; // 성경·빈 페이지는 한 장짜리라 옮기면 남는 게 없다
+    }
+
+    // 새 위치: 처음 것은 원래 uid 의 앞쪽 페이지, 끝 빈 페이지들은 새 빈 페이지 항목.
+    final targets = <(int, int)>[];
+    _stagingItems[index] = (uid: uid, item: rebuilt.first);
+    final firstCount = _pageCount(rebuilt.first);
+    for (var k = 0; k < firstCount; k++) {
+      targets.add((uid, k));
+    }
+    var lastUid = uid;
+    for (var r = 1; r < rebuilt.length; r++) {
+      lastUid = _nextUid++;
+      _stagingItems.insert(index + r, (uid: lastUid, item: rebuilt[r]));
+      targets.add((lastUid, 0));
+      final background = _itemBackgrounds[uid];
+      if (background != null) _itemBackgrounds[lastUid] = background;
+    }
+
+    final oldNotes = <int, String>{};
+    final oldDeleted = <int>{};
+    for (var j = 0; j < total; j++) {
+      final note = _slideNotes.remove(_slideKey(uid, j));
+      if (note != null) oldNotes[j] = note;
+      if (_deletedSlideKeys.remove(_slideKey(uid, j))) oldDeleted.add(j);
+    }
+    for (var k = 0; k < kept.length; k++) {
+      final (toUid, toPage) = targets[k];
+      final j = kept[k];
+      final to = _slideKey(toUid, toPage);
+      if (oldNotes[j] != null) _slideNotes[to] = oldNotes[j]!;
+      if (oldDeleted.contains(j)) _deletedSlideKeys.add(to);
+      renamed['${_slideKey(uid, j)}:false'] = '$to:false';
+    }
+    // 뒤 자동 여백: 끝에 빈 페이지 항목이 생겼으면 그쪽이 여백 없음 표시를 이어받는다.
+    if (lastUid != uid && _noSpacerUids.remove(uid)) _noSpacerUids.add(lastUid);
+    renamed['${_slideKey(uid, total)}:true'] =
+        '${_slideKey(uid, firstCount)}:true';
+    return true;
   }
 
   /// 같은 곡(제목)·같은 PPT 파일에서 나온 항목인지. 붙여 넣을 때 여백을 뺄지 정한다.
