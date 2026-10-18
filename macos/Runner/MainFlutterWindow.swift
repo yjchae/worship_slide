@@ -110,6 +110,12 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
   func setZoom(on: Bool, x: Double, y: Double, size: Double) {
     _zoomOn = on; _zoomX = x; _zoomY = y; _zoomSize = max(size, 0.01)
     webView.evaluateJavaScript(zoomCall(), completionHandler: nil)
+    // 배경 영상 페이지는 가사가 미디어 레이어에 있어서 레이어도 확대한다(다른 미디어 페이지엔 함수가 없다).
+    mediaView?.evaluateJavaScript(zoomCall(), completionHandler: nil)
+  }
+
+  private func pointerCall() -> String {
+    return "window.setPtr&&setPtr('\(_ptrMode)',\(_ptrX),\(_ptrY),\(_ptrSize))"
   }
 
   private func zoomCall() -> String {
@@ -119,8 +125,9 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
   func setPointer(mode: String, x: Double, y: Double, size: Double) {
     _ptrMode = mode; _ptrX = x; _ptrY = y; _ptrSize = size
     // 마우스가 움직일 때마다 페이지를 다시 로드하면 깜빡이므로 JS 로만 옮긴다.
-    let js = "window.setPtr&&setPtr('\(mode)',\(x),\(y),\(size))"
+    let js = pointerCall()
     webView.evaluateJavaScript(js, completionHandler: nil)
+    mediaView?.evaluateJavaScript(js, completionHandler: nil)
   }
 
   // data: Dart의 SlidePageData.toJson() 결과 ([String:Any])
@@ -154,7 +161,7 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
       layoutMedia()
       if let js = media?["overlay_js"] as? String, js != mediaOverlayJs {
         mediaOverlayJs = js
-        mediaView?.evaluateJavaScript(js, completionHandler: nil)
+        applyOverlay(js, attempt: 0)
       }
       return
     }
@@ -170,6 +177,10 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
             let json = message.body as? String else { return }
       self.onMediaState?(json)
     }, name: "media")
+    // 지금 확대·포인터 상태로 시작한다(배경 영상 레이어만 쓴다). 이후 바뀌면 setZoom·setPointer 가 넘긴다.
+    config.userContentController.addUserScript(WKUserScript(
+      source: "\(zoomCall());\(pointerCall());",
+      injectionTime: .atDocumentEnd, forMainFrameOnly: true))
     let view = WKWebView(frame: .zero, configuration: config)
     // 투명 — 동영상이 페이드 아웃하면 아래 슬라이드가 비친다(그대로 겹쳐 넘어간다).
     view.setValue(false, forKey: "drawsBackground")
@@ -199,6 +210,20 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
         view.loadFileURL(url, allowingReadAccessTo: URL(fileURLWithPath: "/"))
       } catch {
         NSLog("[media] 임시 HTML 을 쓰지 못했습니다: \(error)")
+      }
+    }
+  }
+
+  /// 가사 PNG 바꾸기. 레이어 페이지가 아직 읽히는 중이면(setOverlay 가 없어 false) 잠시 뒤 다시 부른다 —
+  /// 그냥 버리면 다음 페이지로 넘길 때까지 첫 페이지 가사가 남는다. 그 사이 레이어·페이지가 바뀌면 그만둔다.
+  private func applyOverlay(_ js: String, attempt: Int) {
+    guard let view = mediaView else { return }
+    view.evaluateJavaScript(js) { [weak self, weak view] result, _ in
+      guard (result as? Bool) != true, attempt < 25, let self = self, let view = view,
+            view === self.mediaView, self.mediaOverlayJs == js else { return }
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+        guard view === self.mediaView, self.mediaOverlayJs == js else { return }
+        self.applyOverlay(js, attempt: attempt + 1)
       }
     }
   }

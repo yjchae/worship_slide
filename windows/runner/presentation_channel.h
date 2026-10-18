@@ -57,6 +57,7 @@ class PresentationChannel {
   void Apply(const flutter::EncodableMap& data);
   // 지금 페이지의 미디어(last_media_)를 레이어에 넘긴다. 화면이 꺼져 있으면 미룬다.
   void SyncMedia();
+  std::wstring ZoomPointerJs() const;
   void Paint(HDC hdc, RECT cli) const;
   // 단색 + (있으면) 배경 이미지. 이미지는 화면을 꽉 채운다(CSS background-size: cover).
   void PaintBackgroundImage(HDC hdc, int w, int h) const;

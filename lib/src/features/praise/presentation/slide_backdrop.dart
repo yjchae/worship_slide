@@ -61,7 +61,8 @@ class SlideBackdrop {
       'key': key,
       'backdrop': true,
       'overlay_dir': File(overlayPath!).parent.path,
-      'overlay_js': 'window.setOverlay&&setOverlay(${_js(url)})',
+      // 레이어 페이지가 아직 안 떴으면 false — macOS 는 그걸 보고 잠시 뒤 다시 부른다.
+      'overlay_js': 'window.setOverlay?(setOverlay(${_js(url)}),true):false',
       'html': backdropPlayerHtml(
         videoPath: videoPath,
         overlayUrl: url,
@@ -74,10 +75,12 @@ class SlideBackdrop {
 }
 
 // </script> 가 경로에 있어도 스크립트가 안 끊기게.
-String _js(String value) => jsonEncode(value).replaceAll('<', r'<');
+String _js(String value) => jsonEncode(value).replaceAll('<', r'\u003c');
 
 /// 배경 영상 레이어 페이지. 네이티브가 부르는 것은 [mediaPlayerHtml] 과 같다 —
 /// `fadeOut()`(다른 미디어로 바뀜)·`setBlack(on)`·`toggle()`, 그리고 `setOverlay(url)`.
+/// 가사가 이 레이어 안에 있으므로 발표 보기 '영역 확대'·포인터도 여기서 그린다
+/// (`setZoom(on,x,y,size)`·`setPtr(mode,x,y,size)` — 슬라이드 페이지와 같은 계산, macOS `pointerCSS`).
 /// 소리는 늘 끄고 반복한다. 재생 위치는 보내지 않는다(발표 보기 재생바가 안 뜬다).
 String backdropPlayerHtml({
   required String videoPath,
@@ -107,12 +110,18 @@ const _backdropTemplate = r'''<!DOCTYPE html><html><head><meta charset="utf-8">
 <style>
 html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;}
 #root,#v,#dim,#t{position:absolute;left:0;top:0;width:100%;height:100%;}
+#root{transform-origin:0 0;overflow:hidden;}
+#ptr{position:absolute;display:none;pointer-events:none;z-index:99;
+     transform:translate(-50%,-50%);line-height:1;text-align:center;}
+#ptr.dot{border-radius:50%;
+  background:radial-gradient(circle,rgba(255,64,64,.95) 0%,rgba(255,0,0,.55) 45%,rgba(255,0,0,0) 72%);}
 #v{object-fit:cover;opacity:0;}
 #dim{background:#000;}
 /* 가사 PNG 는 16:9 로 굽는다. 화면 비율이 달라도 글자가 찌그러지지 않게 contain. */
 #t{object-fit:contain;}
 </style></head><body>
 <div id="root"><video id="v" muted loop playsinline preload="auto"></video><div id="dim"></div><img id="t" alt=""></div>
+<div id="ptr"></div>
 <script>
 var C=/*CONFIG*/null;
 var root=document.getElementById('root'), v=document.getElementById('v'), t=document.getElementById('t');
@@ -122,7 +131,8 @@ var timers={};
 // el 의 투명도를 지금 값에서 to 까지 secs 초 동안. 같은 el 에 하던 페이드는 이어받는다.
 function ramp(el,to,secs,done){
   var id=el.id; clearInterval(timers[id]);
-  var from=parseFloat(el.style.opacity||'1'), t0=Date.now();
+  // #v 는 CSS 로 0 에서 시작한다(인라인 값이 없으면 계산된 값).
+  var from=parseFloat(el.style.opacity||getComputedStyle(el).opacity), t0=Date.now();
   if(!(secs>0)){ el.style.opacity=to; if(done) done(); return; }
   timers[id]=setInterval(function(){
     var k=Math.min(1,(Date.now()-t0)/(secs*1000));
@@ -155,6 +165,30 @@ window.toggle=function(){
   if(paused) v.pause(); else v.play().catch(function(){});
 };
 window.seek=function(){};
+// 확대: 영역(0~1)을 창 가운데에 채운다. 포인터는 위치만 확대를 따라가고 크기는 그대로.
+var Z={on:false,x:0,y:0,s:1}, P=null;
+function zoomFit(){ return Z.on ? {k:1/Z.s, cx:Z.x+Z.s/2, cy:Z.y+Z.s/2} : {k:1,cx:0.5,cy:0.5}; }
+window.setZoom=function(on,x,y,size){
+  Z={on:on,x:x,y:y,s:Math.max(size,0.01)};
+  var f=zoomFit();
+  root.style.transform = on
+    ? 'translate('+((0.5-f.k*f.cx)*100)+'vw,'+((0.5-f.k*f.cy)*100)+'vh) scale('+f.k+')'
+    : 'none';
+  if(P) setPtr(P[0],P[1],P[2],P[3]);
+};
+window.setPtr=function(mode,x,y,size){
+  P=[mode,x,y,size];
+  var e=document.getElementById('ptr');
+  if(mode==='off'){ e.style.display='none'; return; }
+  var f=zoomFit(), px=0.5+f.k*(x-f.cx), py=0.5+f.k*(y-f.cy);
+  e.className=mode; e.style.display='block';
+  e.style.left=(px*100)+'%'; e.style.top=(py*100)+'%';
+  if(mode==='hand'){
+    e.style.width='auto'; e.style.height='auto'; e.style.fontSize=size+'px'; e.textContent='\u{1F446}';
+  } else {
+    e.textContent=''; e.style.fontSize='0'; e.style.width=size+'px'; e.style.height=size+'px';
+  }
+};
 t.src=C.overlay; want=C.overlay;
 v.src=C.src;
 v.play().catch(function(){});

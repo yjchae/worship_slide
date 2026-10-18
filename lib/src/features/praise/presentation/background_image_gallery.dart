@@ -143,7 +143,7 @@ class _BackgroundImageGalleryState extends State<BackgroundImageGallery> {
             onRemove: _paths.contains(path) ? () => _remove(path) : null,
             tooltip: widget.library.isVideo ? _displayName(path) : null,
             child: widget.library.isVideo
-                ? _videoTile(path)
+                ? _videoTile(cs, path)
                 : Image.file(
                     File(path),
                     fit: BoxFit.cover,
@@ -175,20 +175,20 @@ class _BackgroundImageGalleryState extends State<BackgroundImageGallery> {
       p.basename(path).replaceFirst(RegExp(r'^\d{10,}_'), '');
 
   // 영상은 썸네일을 못 뽑으므로(플러그인 없이) 아이콘 + 파일 이름.
-  Widget _videoTile(String path) => ColoredBox(
-    color: const Color(0xFF1B2028),
+  Widget _videoTile(ColorScheme cs, String path) => ColoredBox(
+    color: cs.surfaceContainerHighest,
     child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Icon(Icons.movie_outlined, size: 18, color: Colors.white70),
+          Icon(Icons.movie_outlined, size: 18, color: cs.onSurfaceVariant),
           const SizedBox(height: 2),
           Text(
             _displayName(path),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 10, color: Colors.white70),
+            style: TextStyle(fontSize: 10, color: cs.onSurfaceVariant),
           ),
         ],
       ),

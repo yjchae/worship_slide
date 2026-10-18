@@ -743,13 +743,21 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   /// 발표 창에 보낼 페이지. 배경 영상이 걸린 페이지면 가사 PNG 를 구워 싣는다
   /// (못 구우면 평소 슬라이드). 다음 페이지 것도 미리 굽기 시작한다 — 넘길 때 기다리지 않게.
-  Future<SlidePageData> _presentablePage(
+  ///
+  /// [isStale] 이 있으면 아직 안 구운 페이지는 잠깐 기다렸다가, 그 사이 더 새 요청이 왔으면
+  /// 굽지 않고 null — 디자인 슬라이더를 끄는 동안 값마다 1920x1080 PNG 를 굽지 않게.
+  Future<SlidePageData?> _presentablePage(
     int index,
-    List<_SlideInfo> slides,
-  ) async {
+    List<_SlideInfo> slides, {
+    bool Function()? isStale,
+  }) async {
     final page = _buildSlidePageData(index, slides);
     final backdrop = page.backdrop;
     if (backdrop == null) return page;
+    if (isStale != null && !_lyricsOverlays.isCached(page)) {
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      if (isStale()) return null;
+    }
     final overlay = await _lyricsOverlays.render(page);
     if (index + 1 < slides.length) {
       final next = _buildSlidePageData(index + 1, slides);
@@ -799,7 +807,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       return;
     }
     try {
-      final pageData = await _presentablePage(_currentSlideIndex, _allSlides);
+      final pageData = (await _presentablePage(_currentSlideIndex, _allSlides))!;
       _noteSentMedia(pageData);
       await _presentationChannel.invokeMethod('openWindow', {
         ...pageData.toJson(),
@@ -1232,7 +1240,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         });
         _lastSingerJson = _singerDedupeKey(json);
       } else if (!singer && _isPresentationOpen) {
-        final pageData = await _presentablePage(_currentSlideIndex, _allSlides);
+        final pageData = (await _presentablePage(
+          _currentSlideIndex,
+          _allSlides,
+        ))!;
         await _presentationChannel.invokeMethod('openWindow', {
           ...pageData.toJson(),
           'screen': screen.index,
@@ -1378,9 +1389,15 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     final seq = ++_pageSendSeq;
     if (_isPresentationOpen) {
       try {
-        final pageData = await _presentablePage(_currentSlideIndex, slides);
+        final pageData = await _presentablePage(
+          _currentSlideIndex,
+          slides,
+          isStale: () => seq != _pageSendSeq,
+        );
         // 가사 PNG 를 굽는 사이 다음 페이지로 넘어갔으면 그쪽이 보낸다(옛 페이지가 늦게 덮지 않게).
-        if (seq != _pageSendSeq || !_isPresentationOpen) return;
+        if (pageData == null || seq != _pageSendSeq || !_isPresentationOpen) {
+          return;
+        }
         _noteSentMedia(pageData);
         await _presentationChannel.invokeMethod(
           'updatePage',
@@ -9607,8 +9624,14 @@ class _ItemBackgroundDialogState extends State<_ItemBackgroundDialog> {
             background: !_useCustom
                 ? null
                 // 손대지 않았으면 헌금송 정보를 그대로 두고, 색·이미지를 바꿨으면
-                // 더는 헌금송 배경이 아니므로 떼어 낸다.
-                : _background == widget.initial
+                // 더는 헌금송 배경이 아니므로 떼어 낸다. 배경 영상만 고친 것은 손댄 게 아니다.
+                : _background.copyWith(
+                        videoPath: widget.initial?.videoPath,
+                        videoDim:
+                            widget.initial?.videoDim ??
+                            SlideBackground.defaultVideoDim,
+                      ) ==
+                      widget.initial
                 ? _background
                 : _background.copyWith(
                     offering: null,

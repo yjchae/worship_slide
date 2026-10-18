@@ -327,7 +327,11 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
     `overlay_js`(`setOverlay(url)`)가 바뀌었을 때만 실행한다. 레이어는 다 읽은 PNG 로만 바꾼다(깜빡임 없음)
   - PNG 이름 = 페이지 글자·스타일의 FNV 해시(`lyrics_overlays/ov_<해시>.png`), 하루 지난 것은 처음 쓸 때 지운다. 보낼 때 굽고 다음 페이지는
     미리 굽는다(`_presentablePage`). 굽는 사이 다음 페이지로 넘어갔으면 옛 페이지는 보내지 않는다(`_pageSendSeq`). 못 구우면 평소 슬라이드
-  - Windows 는 PNG 폴더를 `https://overlay.worship/` 로 매핑한다(`overlay_dir`). macOS 는 file://
+  - Windows 는 PNG 폴더를 `https://overlay.worship/` 로 매핑한다(`overlay_dir`). macOS 는 file://. 레이어가 아직 읽히는 중이면
+    `overlay_js` 가 false 를 돌려주고 macOS 는 0.2초 뒤 다시 부른다(`applyOverlay`, Windows 는 `Run` 이 미뤄 둔다)
+  - 슬라이더를 끄는 동안처럼 요청이 몰리면 아직 안 구운 페이지는 60ms 기다렸다가 더 새 요청이 왔으면 굽지 않는다(`isStale`)
+  - 가사가 레이어 안에 있으므로 **영역 확대·포인터도 레이어가 그린다**(`setZoom`·`setPtr`, 슬라이드와 같은 계산).
+    네이티브는 확대·포인터가 바뀔 때·새 레이어를 띄울 때 레이어에도 넘긴다(macOS `WKUserScript`·Windows `ZoomPointerJs`)
   - 화면 비율이 16:9 가 아니면 가사 PNG 가 contain 으로 들어가 평소 슬라이드(가로로 늘어남)와 위치가 조금 다르다. 소리는 늘 끈다.
     재생바는 안 뜬다. 블랙아웃은 레이어 전체를 0.4초에 걸쳐 감춘다
 - **헌금송**: 찬양을 "배경 이미지 + 노란 '헌금' · '은행 계좌' 두 줄 + 위아래 라인" 위에 띄우는 기능.
@@ -375,7 +379,7 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
     Windows 는 임시 HTML 을 가상 호스트 `https://app.worship/` 로 띄운다. 로컬 파일은 macOS `loadFileURL`, Windows `https://media.worship/`(파일 폴더 매핑)
   - Windows 는 NuGet `Microsoft.Web.WebView2`(정적 로더, `windows/runner/CMakeLists.txt` FetchContent)를 쓴다. 런타임이 없으면 레이어만 안 뜬다.
     배경이 불투명 검정이라 페이드 아웃이 슬라이드가 아니라 검정으로 빠진다(macOS 는 투명). 발표 창은 `WS_CLIPCHILDREN`
-  - 확대·포인터는 미디어 레이어를 따라가지 않는다(레이어 아래에 그려진다). PPTX 내보내기는 미디어 페이지를 빈/문구 페이지로 낸다
+  - 확대·포인터는 미디어 레이어를 따라가지 않는다(레이어 아래에 그려진다 — 배경 영상 레이어만 예외). PPTX 내보내기는 미디어 페이지를 빈/문구 페이지로 낸다
   - MuPDF 는 경고를 stdout 에 찍어 결과 JSON 을 깨뜨린다(동영상 PPT 의 PDF 'Screen annotations') — render 에서 끈다
 - **설교 제목 페이지**: '새 페이지 추가'(편집 탭 콘티 머리줄·발표 보기 툴바) 메뉴에서 빈 페이지 / 설교 제목 페이지를 고른다.
   설교 제목 페이지 = 문구가 든 `BlankStagingItem` + 항목별 배경 오버라이드. `SlideBackground` 에 `fontFamily`·`fontSize`·`textColor`·`isSermon`

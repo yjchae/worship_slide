@@ -53,13 +53,23 @@ class LyricsOverlayRenderer {
     return _dir = dir;
   }
 
+  // 이번 실행에서 구운(또는 이미 있던) 페이지 키 → 경로. 넘길 때마다 파일을 stat 하지 않게.
+  final _done = <String, String>{};
+
+  /// 이번 실행에서 이미 구운 페이지인지(기다리지 않고 바로 보낼 수 있는지).
+  bool isCached(SlidePageData page) => _done.containsKey(_keyOf(page));
+
   /// [page] 의 가사 PNG 경로. 굽지 못하면 null(발표 창은 평소 슬라이드를 낸다).
   /// 같은 페이지를 동시에 여러 번 불러도 한 번만 굽는다.
   Future<String?> render(SlidePageData page) {
     final key = _keyOf(page);
+    final done = _done[key];
+    if (done != null) return Future.value(done);
     return _pending.putIfAbsent(key, () async {
       try {
-        return await _render(page, key);
+        final path = await _render(page, key);
+        if (path != null) _done[key] = path;
+        return path;
       } catch (e, st) {
         await AppLogger.instance.error('[overlay] 가사 PNG 굽기 실패', e, st);
         return null;
