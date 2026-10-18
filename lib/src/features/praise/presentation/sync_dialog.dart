@@ -173,7 +173,7 @@ class _StatusLine extends StatelessWidget {
   Widget build(BuildContext context) {
     if (!status.enabled) return const SizedBox.shrink();
     final cs = Theme.of(context).colorScheme;
-    final error = status.lastError;
+    final error = status.lastError ?? status.warning;
     final String text;
     final local = status.hasLocalChanges ? ' · 이 PC 에서 고친 찬양을 아직 안 올렸습니다' : '';
     if (status.syncing) {

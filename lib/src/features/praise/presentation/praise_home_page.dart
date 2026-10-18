@@ -3514,13 +3514,16 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   Future<void> _syncSongs() async {
     final result = await _sync.syncSongs();
     if (!mounted) return;
-    final error = _sync.status.value.lastError;
+    final status = _sync.status.value;
     if (result == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('찬양 동기화 실패: ${error ?? '알 수 없는 오류'}')),
+        SnackBar(
+          content: Text('찬양 동기화 실패: ${status.lastError ?? '알 수 없는 오류'}'),
+        ),
       );
       return;
     }
+    final warning = status.warning == null ? '' : '\n${status.warning}';
     if (result.changed) {
       await _loadSongs();
       await _loadSubLanguages();
@@ -3535,9 +3538,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       SnackBar(
         content: Text(
           parts.isEmpty
-              ? '받을 새 찬양이 없습니다. 이 PC 의 찬양은 올렸습니다.'
-              : '찬양 동기화 완료: ${parts.join(' · ')}'
-                    '${error == null ? '' : '\n$error'}',
+              ? '받을 새 찬양이 없습니다. 이 PC 의 찬양은 올렸습니다.$warning'
+              : '찬양 동기화 완료: ${parts.join(' · ')}$warning',
         ),
       ),
     );
@@ -3570,6 +3572,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     if (check == null || !check.hasAnything || !mounted) return;
     final songs = check.songs;
     final lines = [
+      if (check.localChanges) '이 PC 에서 고친 찬양을 아직 안 올렸습니다',
       if (songs.addedCount > 0) '새 찬양 ${songs.addedCount}곡',
       if (songs.updatedCount > 0) '바뀐 찬양 ${songs.updatedCount}곡',
       if (songs.deletedCount > 0) '다른 PC 에서 지운 찬양 ${songs.deletedCount}곡',
@@ -3592,7 +3595,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
               onPressed: () => Navigator.of(ctx).pop('contis'),
               child: const Text('콘티 보기'),
             ),
-          if (songs.changed)
+          if (songs.changed || check.localChanges)
             FilledButton(
               onPressed: () => Navigator.of(ctx).pop('songs'),
               child: const Text('찬양 동기화'),
@@ -3600,6 +3603,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         ],
       ),
     );
+    // 한 번 알린 콘티는 다음에 켤 때 다시 알리지 않는다(클라우드 콘티 창에는 그대로 있다).
+    await _sync.markContisSeen(check.newContis.map((c) => c.uid));
     if (!mounted) return;
     if (choice == 'songs') await _syncSongs();
     if (choice == 'contis' && mounted) _openCloudContis();
@@ -4754,6 +4759,8 @@ class _StatusBar extends StatelessWidget {
                   ? '동기화 중'
                   : failed
                   ? '동기화 실패'
+                  : sync.warning != null
+                  ? '동기화 확인 필요'
                   : sync.hasLocalChanges
                   ? '동기화 안 한 찬양 있음'
                   : sync.lastSyncAt == null
@@ -4763,7 +4770,7 @@ class _StatusBar extends StatelessWidget {
               return Padding(
                 padding: const EdgeInsets.only(right: 12),
                 child: Tooltip(
-                  message: sync.lastError ?? sync.folder!,
+                  message: sync.lastError ?? sync.warning ?? sync.folder!,
                   child: InkWell(
                     onTap: onSyncPressed,
                     borderRadius: BorderRadius.circular(AppRadius.control),
@@ -8443,12 +8450,6 @@ class _ContiListDialogState extends State<_ContiListDialog> {
     _contis = List.of(widget.contis);
   }
 
-  String _formatDate(DateTime dt) {
-    return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-'
-        '${dt.day.toString().padLeft(2, '0')} '
-        '${dt.hour.toString().padLeft(2, '0')}:'
-        '${dt.minute.toString().padLeft(2, '0')}';
-  }
 
   Future<void> _delete(WorshipConti conti) async {
     final confirmed = await showDialog<bool>(
@@ -8514,7 +8515,7 @@ class _ContiListDialogState extends State<_ContiListDialog> {
                       style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
                     subtitle: Text(
-                      '${_formatDate(conti.createdAt)}  ·  ${conti.itemCount}개',
+                      '${formatContiDate(conti.createdAt)}  ·  ${conti.itemCount}개',
                       style: const TextStyle(fontSize: 12),
                     ),
                     trailing: Row(

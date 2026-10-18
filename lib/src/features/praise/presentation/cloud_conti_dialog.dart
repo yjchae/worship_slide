@@ -123,12 +123,6 @@ class _CloudContiDialogState extends State<CloudContiDialog> {
   static String _message(Object error) =>
       error is FileSystemException ? error.message : '$error';
 
-  static String _date(DateTime dt) =>
-      '${dt.year}-${dt.month.toString().padLeft(2, '0')}-'
-      '${dt.day.toString().padLeft(2, '0')} '
-      '${dt.hour.toString().padLeft(2, '0')}:'
-      '${dt.minute.toString().padLeft(2, '0')}';
-
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -173,9 +167,9 @@ class _CloudContiDialogState extends State<CloudContiDialog> {
                       style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
                     subtitle: Text(
-                      '${_date(conti.createdAt)} · ${conti.itemCount}개 · '
+                      '${formatContiDate(conti.createdAt)} · ${conti.itemCount}개 · '
                       '${conti.uploadedBy.isEmpty ? '' : '${conti.uploadedBy} 가 '}'
-                      '${_date(conti.uploadedAt)} 올림'
+                      '${formatContiDate(conti.uploadedAt)} 올림'
                       '${have ? ' · 이 PC 에 있음' : ''}',
                       style: const TextStyle(fontSize: 12),
                     ),
@@ -224,3 +218,10 @@ class _CloudContiDialogState extends State<CloudContiDialog> {
     );
   }
 }
+
+/// 콘티 목록의 날짜 표시('2026-01-05 10:30'). 콘티 불러오기·클라우드 콘티 창이 같이 쓴다.
+String formatContiDate(DateTime dt) =>
+    '${dt.year}-${dt.month.toString().padLeft(2, '0')}-'
+    '${dt.day.toString().padLeft(2, '0')} '
+    '${dt.hour.toString().padLeft(2, '0')}:'
+    '${dt.minute.toString().padLeft(2, '0')}';

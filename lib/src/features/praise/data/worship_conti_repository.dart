@@ -312,7 +312,6 @@ class WorshipContiRepository {
   /// song_id 는 받는 쪽 DB 와 안 맞으므로 빼고, 제목·가사 스냅샷만 보낸다.
   Future<void> exportContiFile(int contiId, String outPath) async {
     final db = await _db.database;
-    await fillMissingSyncUids(db);
     final contiRows = await db.query(
       'worship_contis',
       where: 'id = ?',
@@ -360,8 +359,6 @@ class WorshipContiRepository {
       jsonEncode({
         'format': contiFileFormat,
         'version': 1,
-        // 클라우드에 올린 콘티를 다시 받을 때 같은 콘티로 알아보려고(새로 넣지 않고 바꾼다).
-        'uid': contiRows.first['uid'],
         'name': contiRows.first['name'],
         'created_at': contiRows.first['created_at'],
         'items': items,
@@ -373,13 +370,17 @@ class WorshipContiRepository {
   /// [exportContiFile] 로 만든 파일을 이 PC 의 콘티 목록에 새 콘티로 넣는다.
   /// 담겨 온 이미지는 `Application Support/imported_contis/<시각>/` 에 푼다
   /// (PPT 렌더 캐시처럼 저장한 콘티가 참조하므로 Caches 가 아니다).
-  /// [keepUid] 면(클라우드에서 받기) 파일의 콘티 uid 를 그대로 쓰고, 같은 uid 의 콘티가 이미
-  /// 있으면 그것을 바꾼다 — 같은 콘티를 두 번 받아도 목록에 둘이 되지 않게. 아니면(파일 가져오기)
-  /// 늘 새 콘티다. 곡 항목은 곡 uid 로 이 PC 의 곡에 다시 잇는다. 반환값은 콘티 id.
+  /// [cloudUid] 를 주면(클라우드에서 받기) 그 uid 로 넣고, 같은 uid 의 콘티가 이미 있으면 그것을
+  /// 바꾼다 — 같은 콘티를 두 번 받아도 목록에 둘이 되지 않게. 안 주면(파일 가져오기) 늘 새 콘티다.
+  /// 곡 항목은 곡 uid 로 이 PC 의 곡에 다시 잇는다. 반환값은 콘티 id.
+  ///
+  /// 남이 만든 파일이라 **파일 안에 담겨 온 이미지만** 쓴다. 담겨 오지 않은 경로(보낸 PC 의 로컬 경로)는
+  /// 버린다 — 그대로 두면 이 PC 의 같은 경로에 있는 아무 파일이나 이 콘티를 다시 내보내거나 올릴 때
+  /// 함께 실려 나간다. 원본 PPT 경로도 받지 않고, 미디어는 유튜브만 받는다(동영상·음악 경로도 로컬 경로다).
   Future<int> importContiFile(
     String path, {
     Directory? filesDir,
-    bool keepUid = false,
+    String? cloudUid,
   }) async {
     final Object? data;
     try {
@@ -393,10 +394,10 @@ class WorshipContiRepository {
     final items = (data['items'] as List? ?? const []).whereType<Map>();
     final files = data['files'] as Map? ?? const {};
     final name = data['name'] as String? ?? '가져온 콘티';
-    final fileUid = data['uid'];
-    final uid = keepUid && fileUid is String && isValidContiUid(fileUid)
-        ? fileUid
-        : newSongUid();
+    if (cloudUid != null && !isValidContiUid(cloudUid)) {
+      throw const FormatException('콘티 파일이 아닙니다.');
+    }
+    final uid = cloudUid ?? newSongUid();
 
     final dir =
         filesDir ??
@@ -408,9 +409,10 @@ class WorshipContiRepository {
           ),
         );
     final pathByKey = <String, String>{};
+    // 담겨 온 이미지면 푼 경로, 아니면(보낸 PC 에 없던 파일·로컬 경로) null.
     String? unpack(String? key) {
       final encoded = files[key];
-      if (key == null || encoded is! String) return key;
+      if (key == null || encoded is! String) return null;
       return pathByKey.putIfAbsent(key, () {
         // 키를 파일 이름으로 그대로 쓰지 않는다 — 남이 만든 파일이라 '../' 가 들어 있을 수 있다.
         final file = File(
@@ -424,14 +426,15 @@ class WorshipContiRepository {
 
     final db = await _db.database;
     // 더 새 버전 앱이 만든 파일의 모르는 칸은 버린다.
-    final columns = await receivableItemColumns(db);
+    final columns = await receivableItemColumns(db)
+      ..remove('image_source_path');
 
     final now = DateTime.now().millisecondsSinceEpoch;
-    final createdAt = keepUid && data['created_at'] is int
+    final createdAt = cloudUid != null && data['created_at'] is int
         ? data['created_at'] as int
         : now;
     return db.transaction((txn) async {
-      if (keepUid) {
+      if (cloudUid != null) {
         for (final old in await txn.query(
           'worship_contis',
           columns: ['id'],
@@ -449,15 +452,23 @@ class WorshipContiRepository {
       final songIdByUid = await _songIdsByUid(txn);
       var position = 0;
       for (final item in items) {
+        // 글자·숫자·null 이 아닌 값(다른 버전·깨진 파일)은 버린다 — 넣다가 트랜잭션째 실패하지 않게.
         final row = <String, Object?>{
           for (final e in item.entries)
-            if (columns.contains(e.key)) e.key as String: e.value,
+            if (columns.contains(e.key) &&
+                (e.value == null || e.value is String || e.value is num))
+              e.key as String: e.value,
         };
-        final imagePaths = row['image_paths'] as String?;
-        if (imagePaths != null) {
-          row['image_paths'] = imagePaths.split('\n').map(unpack).join('\n');
+        final imagePaths = row['image_paths'];
+        if (imagePaths is String) {
+          // 이미지 자리는 지킨다(없는 파일 → 불러오기가 '유실'로 센다).
+          row['image_paths'] = imagePaths
+              .split('\n')
+              .map((key) => unpack(key) ?? p.join(dir.path, '.missing'))
+              .join('\n');
         }
         row['background'] = mapBackgroundPaths(row['background'], unpack);
+        row['media'] = _youtubeOnly(row['media']);
         final songUid = row['song_uid'];
         if (songUid is String) row['song_id'] = songIdByUid(songUid);
         row['conti_id'] = contiId;
@@ -468,6 +479,11 @@ class WorshipContiRepository {
     });
   }
 
+  static Object? _youtubeOnly(Object? stored) {
+    final media = SlideMedia.decode(stored);
+    return media?.kind == MediaKind.youtube ? stored : null;
+  }
+
   /// 콘티 uid 모양(32자리 hex). 클라우드 파일 이름으로 쓰므로 남이 쓴 값은 이 모양만 받는다.
   static bool isValidContiUid(String uid) =>
       RegExp(r'^[0-9a-f]{32}$').hasMatch(uid);
@@ -475,7 +491,6 @@ class WorshipContiRepository {
   /// 콘티의 uid(클라우드 파일 이름). 예전 콘티라 없으면 지금 만든다.
   Future<String> contiUid(int contiId) async {
     final db = await _db.database;
-    await fillMissingSyncUids(db);
     final rows = await db.query(
       'worship_contis',
       columns: ['uid'],
@@ -483,14 +498,23 @@ class WorshipContiRepository {
       whereArgs: [contiId],
     );
     if (rows.isEmpty) throw StateError('콘티를 찾을 수 없습니다.');
-    return rows.first['uid'] as String;
+    final uid = rows.first['uid'] as String?;
+    if (uid != null) return uid;
+    // 마이그레이션·저장이 늘 uid 를 주므로 여기 올 일은 거의 없다.
+    final fresh = newSongUid();
+    await db.update(
+      'worship_contis',
+      {'uid': fresh},
+      where: 'id = ?',
+      whereArgs: [contiId],
+    );
+    return fresh;
   }
 
   /// 이 PC 의 콘티 uid → 콘티. 클라우드 목록에서 "이미 받은 콘티"를 가리는 데 쓴다.
   Future<Map<String, WorshipConti>> contisByUid() async {
     final contis = await listContis();
     final db = await _db.database;
-    await fillMissingSyncUids(db);
     final uids = {
       for (final r in await db.query('worship_contis', columns: ['id', 'uid']))
         r['id'] as int: r['uid'] as String?,

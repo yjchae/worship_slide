@@ -853,4 +853,110 @@ void main() {
       expect(await a.contis.listContis(), hasLength(2));
     });
   });
+
+  group('수동 동기화 리뷰', () {
+    test('다른 PC 콘티 파일에 담기지 않은 로컬 경로는 버린다(이 PC 파일이 새어 나가지 않게)', () async {
+      final b = await newPc('B');
+      final secret = File(p.join(root.path, 'secret.png'))
+        ..writeAsBytesSync([9]);
+      final file = File(p.join(root.path, 'evil.wsconti'))
+        ..writeAsStringSync(
+          jsonEncode({
+            'format': WorshipContiRepository.contiFileFormat,
+            'version': 1,
+            'name': '나쁜 콘티',
+            'items': [
+              {
+                'item_type': 'image',
+                'image_paths': secret.path,
+                'image_source_path': secret.path,
+                'background': jsonEncode({
+                  'color': '#000000',
+                  'image_path': secret.path,
+                }),
+              },
+              {
+                'item_type': 'blank',
+                'media': jsonEncode({'kind': 'video', 'source': secret.path}),
+              },
+            ],
+            'files': const {},
+          }),
+        );
+      final id = await b.contis.importContiFile(file.path);
+      final loaded = await b.contis.loadConti(id, 1);
+      // 이미지 항목은 유실로 빠지고, 빈 페이지의 동영상 경로도 버려진다.
+      expect(loaded.missingCount, 1);
+      final blank = loaded.items.single.item as BlankStagingItem;
+      expect(blank.media, isNull);
+      // 다시 내보내도 이 PC 의 파일이 실려 나가지 않는다.
+      final out = p.join(root.path, 'out.wsconti');
+      await b.contis.exportContiFile(id, out);
+      final files = (jsonDecode(File(out).readAsStringSync()) as Map)['files'];
+      expect(files, isEmpty);
+    });
+
+    test('켤 때 확인은 지난번에 안 올린 이 PC 의 수정도 알린다', () async {
+      final a = await newPc('A');
+      await a.repo.insertSong(song('은혜', '가사'));
+      await a.sync.syncSongs();
+      expect((await a.sync.checkForUpdates())!.localChanges, isFalse);
+      await a.repo.insertSong(song('축복', '가사'));
+      // 프로그램을 다시 켠 것처럼 상태를 모르는 새 서비스로 본다.
+      final again = SyncService(
+        songs: SongSyncRepository(
+          database: PraiseDatabase.forTesting(
+            await databaseFactoryFfi.openDatabase(p.join(a.dir.path, 'a.db')),
+          ),
+        ),
+        contis: a.contis,
+        settingsDirectory: () async => a.dir,
+        deviceName: 'A',
+        clock: () => now,
+      );
+      addTearDown(again.dispose);
+      await again.load();
+      final check = await again.checkForUpdates();
+      expect(check!.localChanges, isTrue);
+      expect(check.hasAnything, isTrue);
+    });
+
+    test('켤 때 한 번 알린 콘티는 다음에 다시 알리지 않는다', () async {
+      final a = await newPc('A');
+      final b = await newPc('B');
+      await a.contis.saveConti('콘티', [
+        (uid: 1, item: const BlankStagingItem(mainText: '환영')),
+      ]);
+      await a.sync.uploadConti((await a.contis.listContis()).single);
+      final first = await b.sync.checkForUpdates();
+      expect(first!.newContis, hasLength(1));
+      await b.sync.markContisSeen(first.newContis.map((c) => c.uid));
+      expect((await b.sync.checkForUpdates())!.newContis, isEmpty);
+      // 클라우드 콘티 창에는 그대로 보인다.
+      expect((await b.sync.listCloudContis()).cloud, hasLength(1));
+    });
+
+    test('공유 폴더가 없으면 콘티를 올렸다고 하지 않는다', () async {
+      final a = await newPc('A', join: false);
+      await a.sync.setFolder(p.join(root.path, '없는 드라이브'));
+      await a.contis.saveConti('콘티', [
+        (uid: 1, item: const BlankStagingItem(mainText: '환영')),
+      ]);
+      await expectLater(
+        a.sync.uploadConti((await a.contis.listContis()).single),
+        throwsA(isA<FileSystemException>()),
+      );
+      expect(Directory(p.join(root.path, '없는 드라이브')).existsSync(), isFalse);
+    });
+
+    test('다른 PC 파일을 못 읽어도 동기화는 성공이고 경고만 남긴다', () async {
+      final a = await newPc('A');
+      File(p.join(shared, syncDirName, 'broken.json'))
+        ..parent.createSync(recursive: true)
+        ..writeAsStringSync('{깨짐');
+      expect(await a.sync.syncSongs(), isNotNull);
+      expect(a.sync.status.value.lastError, isNull);
+      expect(a.sync.status.value.warning, contains('1개'));
+    });
+  });
 }

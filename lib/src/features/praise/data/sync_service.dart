@@ -24,6 +24,7 @@ class SyncStatus {
     this.syncing = false,
     this.lastSyncAt,
     this.lastError,
+    this.warning,
     this.peers = const [],
     this.hasLocalChanges = false,
   });
@@ -33,6 +34,9 @@ class SyncStatus {
   final bool syncing;
   final DateTime? lastSyncAt;
   final String? lastError;
+
+  /// 맞추긴 했지만 알릴 것(다른 PC 파일 몇 개를 못 읽음 등). 실패가 아니다.
+  final String? warning;
 
   /// 같은 폴더를 쓰는 다른 PC 이름(마지막으로 맞췄을 때).
   final List<String> peers;
@@ -46,6 +50,7 @@ class SyncStatus {
     bool? syncing,
     DateTime? lastSyncAt,
     String? Function()? lastError,
+    String? Function()? warning,
     List<String>? peers,
     bool? hasLocalChanges,
   }) => SyncStatus(
@@ -53,6 +58,7 @@ class SyncStatus {
     syncing: syncing ?? this.syncing,
     lastSyncAt: lastSyncAt ?? this.lastSyncAt,
     lastError: lastError != null ? lastError() : this.lastError,
+    warning: warning != null ? warning() : this.warning,
     peers: peers ?? this.peers,
     hasLocalChanges: hasLocalChanges ?? this.hasLocalChanges,
   );
@@ -63,15 +69,19 @@ class SyncCheck {
   const SyncCheck({
     this.songs = const SyncMergeResult(),
     this.newContis = const [],
+    this.localChanges = false,
   });
 
   /// '찬양 동기화'를 누르면 이 PC 에 생길 변화(새 찬양·바뀐 찬양·지운 찬양).
   final SyncMergeResult songs;
 
-  /// 클라우드에 있는데 이 PC 에 없는 콘티.
+  /// 클라우드에 있는데 이 PC 에 없고, 전에 알린 적도 없는 콘티.
   final List<CloudConti> newContis;
 
-  bool get hasAnything => songs.changed || newContis.isNotEmpty;
+  /// 이 PC 에서 고친 찬양을 아직 올리지 않았다(지난번에 동기화 없이 껐다 등).
+  final bool localChanges;
+
+  bool get hasAnything => songs.changed || newContis.isNotEmpty || localChanges;
 }
 
 /// 공유 폴더(Google Drive 공유 드라이브 등)로 여러 PC 의 찬양을 맞추고 콘티를 주고받는다.
@@ -126,6 +136,9 @@ class SyncService {
   /// 마지막으로 쓴 내 파일 내용(쓴 시각 뺌). 같으면 다시 쓰지 않는다.
   String? _lastWrittenText;
 
+  /// 켤 때 이미 알린(또는 받은) 클라우드 콘티 uid — 받지 않기로 한 콘티를 켤 때마다 다시 알리지 않게.
+  final _seenContis = <String>{};
+
   Future<void> _queue = Future.value();
   bool _disposed = false;
 
@@ -152,6 +165,8 @@ class SyncService {
         _lastWrittenAt = json['written_at'] is int
             ? json['written_at'] as int
             : null;
+        final seen = json['seen_contis'];
+        if (seen is List) _seenContis.addAll(seen.whereType<String>());
       }
     } catch (error, stack) {
       // 깨진 설정을 "꺼짐"으로 덮어쓰지 않는다 — 사용자가 폴더를 다시 고를 때까지 그대로 두고 알린다.
@@ -199,7 +214,8 @@ class SyncService {
           lastSyncAt: _clock(),
           hasLocalChanges: false,
           peers: _peerNames(read.snapshots),
-          lastError: () => read.unreadable == 0
+          lastError: () => null,
+          warning: () => read.unreadable == 0
               ? null
               : '다른 PC 파일 ${read.unreadable}개를 읽지 못했습니다'
                     '(드라이브가 아직 내려받는 중일 수 있습니다). 잠시 뒤에 다시 눌러 주세요.',
@@ -230,14 +246,21 @@ class SyncService {
     try {
       final read = await _readSnapshots(dirs.remoteFiles);
       final songs = await _songs.preview(read.snapshots);
+      final localChanges = !await _ownFileUpToDate(dirs.ownPath);
       final local = await _contis.contisByUid();
       final cloud = await _cloud.list(status.value.folder!);
-      _setStatus(status.value.copyWith(peers: _peerNames(read.snapshots)));
+      _setStatus(
+        status.value.copyWith(
+          peers: _peerNames(read.snapshots),
+          hasLocalChanges: localChanges || status.value.hasLocalChanges,
+        ),
+      );
       return SyncCheck(
         songs: songs,
+        localChanges: localChanges,
         newContis: [
           for (final c in cloud)
-            if (!local.containsKey(c.uid)) c,
+            if (!local.containsKey(c.uid) && !_seenContis.contains(c.uid)) c,
         ],
       );
     } catch (error, stack) {
@@ -246,26 +269,37 @@ class SyncService {
     }
   });
 
+  /// 켤 때 알린 클라우드 콘티를 기억한다 — 다음에 켤 때 다시 "새 콘티"로 알리지 않는다
+  /// (클라우드 콘티 창에는 그대로 보인다).
+  Future<void> markContisSeen(Iterable<String> uids) => _enqueue(() async {
+    final before = _seenContis.length;
+    _seenContis.addAll(uids);
+    if (_seenContis.length != before) await _saveSettings(status.value.folder);
+  });
+
   // ── 콘티 클라우드 (손으로 올리기·내려받기) ────────────────────────────
 
   /// 클라우드 콘티 목록과, 그중 이 PC 에 이미 있는 것(uid → 이 PC 콘티).
   Future<({List<CloudConti> cloud, Map<String, WorshipConti> local})>
   listCloudContis() async {
-    final folder = _requireFolder();
+    final folder = await _requireFolder();
     return (
       cloud: await _cloud.list(folder),
       local: await _contis.contisByUid(),
     );
   }
 
-  Future<void> uploadConti(WorshipConti conti) =>
-      _cloud.upload(_requireFolder(), conti, deviceName: _deviceName);
+  Future<void> uploadConti(WorshipConti conti) async =>
+      _cloud.upload(await _requireFolder(), conti, deviceName: _deviceName);
 
-  Future<int> downloadConti(CloudConti conti) =>
-      _cloud.download(_requireFolder(), conti);
+  Future<int> downloadConti(CloudConti conti) async {
+    final id = await _cloud.download(await _requireFolder(), conti);
+    await markContisSeen([conti.uid]);
+    return id;
+  }
 
-  Future<void> deleteCloudConti(CloudConti conti) =>
-      _cloud.delete(_requireFolder(), conti);
+  Future<void> deleteCloudConti(CloudConti conti) async =>
+      _cloud.delete(await _requireFolder(), conti);
 
   void dispose() {
     if (_disposed) return;
@@ -295,10 +329,17 @@ class SyncService {
     ),
   );
 
-  String _requireFolder() {
+  /// 고른 공유 폴더. 없으면(드라이브가 꺼져 있음) 던진다 — 그대로 쓰면 이 PC 디스크에 폴더를 만들어
+  /// 올린 줄 알게 된다.
+  Future<String> _requireFolder() async {
     final folder = status.value.folder;
     if (folder == null) {
       throw const FileSystemException('동기화 폴더를 먼저 골라 주세요.');
+    }
+    if (!await Directory(folder).exists()) {
+      throw const FileSystemException(
+        '공유 폴더를 찾을 수 없습니다. Google Drive 가 켜져 있는지 확인해 주세요.',
+      );
     }
     return folder;
   }
@@ -349,6 +390,7 @@ class SyncService {
           'folder': folder,
           'device_id': _deviceId,
           'written_at': _lastWrittenAt,
+          'seen_contis': _seenContis.toList()..sort(),
         }),
       );
       return true;
@@ -415,16 +457,46 @@ class SyncService {
     return (snapshots: result, unreadable: unreadable);
   }
 
-  /// 내 파일은 내용이 바뀌었거나 사라졌을 때만 쓴다(드라이브가 쓸데없이 올리지 않게).
-  /// 임시 파일에 쓰고 이름을 바꿔, 다른 PC 가 반쯤 쓴 파일을 읽지 않게 한다.
-  Future<void> _writeOwn(String path) async {
+  Future<String> _ownBody() async {
     final snapshot = await _songs.exportSnapshot(
       deviceId: deviceId,
       deviceName: _deviceName,
       writer: _writer,
     );
+    return Isolate.run(() => jsonEncode(snapshot.toJson()));
+  }
+
+  /// 공유 폴더의 내 파일이 지금 이 PC 의 찬양과 같은지(쓴 시각·표시는 빼고 본다).
+  /// 다르면 이 PC 에서 고친 찬양을 아직 안 올린 것이다.
+  Future<bool> _ownFileUpToDate(String path) async {
+    final mine = jsonDecode(await _ownBody()) as Map;
+    if (!await File(path).exists()) {
+      // 아직 올린 적이 없다 — 찬양도 지운 기록도 없으면 올릴 것도 없다.
+      return (mine['songs'] as List).isEmpty &&
+          (mine['translations'] as List).isEmpty &&
+          (mine['deleted'] as Map).isEmpty;
+    }
+    final stored = await Isolate.run(() {
+      try {
+        final json = jsonDecode(File(path).readAsStringSync());
+        return json is Map ? json : null;
+      } catch (_) {
+        return null;
+      }
+    });
+    if (stored == null) return false;
+    for (final key in const ['written_at', 'writer', 'device_name']) {
+      stored.remove(key);
+      mine.remove(key);
+    }
+    return jsonEncode(stored) == jsonEncode(mine);
+  }
+
+  /// 내 파일은 내용이 바뀌었거나 사라졌을 때만 쓴다(드라이브가 쓸데없이 올리지 않게).
+  /// 임시 파일에 쓰고 이름을 바꿔, 다른 PC 가 반쯤 쓴 파일을 읽지 않게 한다.
+  Future<void> _writeOwn(String path) async {
     // 쓴 시각은 내용 비교에서 뺀다 — 넣으면 바뀐 게 없어도 매번 다시 쓴다.
-    final body = await Isolate.run(() => jsonEncode(snapshot.toJson()));
+    final body = await _ownBody();
     final file = File(path);
     if (body == _lastWrittenText && await file.exists()) return;
     // 시각은 늘 앞으로만 간다(시계가 같은 ms 를 돌려줘도).

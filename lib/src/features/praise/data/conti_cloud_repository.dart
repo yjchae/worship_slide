@@ -147,7 +147,8 @@ class ContiCloudRepository {
       );
     }
     try {
-      return await _contis.importContiFile(file.path, keepUid: true);
+      // 정보 파일(= 파일 이름)의 uid 로 넣는다 — 목록에서 고른 그 콘티를 바꾸게.
+      return await _contis.importContiFile(file.path, cloudUid: conti.uid);
     } on FormatException {
       throw const FileSystemException(
         '콘티 파일을 다 읽지 못했습니다(아직 내려받는 중일 수 있습니다). 잠시 뒤에 다시 받아 주세요.',
