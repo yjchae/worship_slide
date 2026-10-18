@@ -86,6 +86,13 @@ class _SlideInfo {
   final SlideMedia? media;
 }
 
+/// 발표 보기에서 복사·옮기는 페이지 묶음: 새 콘티 항목 + 배경 + 원래 페이지들.
+typedef _SlideGroup = ({
+  StagingItem item,
+  SlideBackground? background,
+  List<_SlideInfo> pages,
+});
+
 class _PraiseHomePageState extends State<PraiseHomePage>
     with SingleTickerProviderStateMixin {
   static const MethodChannel _savePanelChannel = MethodChannel(
@@ -2067,46 +2074,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   }
 
   /// 발표 보기 ⌘/Ctrl+C. 고른 페이지를 콘티 항목으로 떠 둔다.
-  /// 같은 항목의 페이지는 한 항목으로 묶는다 — 곡 페이지를 한 장씩 따로 만들면
-  /// 사이사이에 자동 여백이 끼기 때문이다. 자동 여백은 붙여 넣으면 알아서 생기므로 뺀다.
   void _copySlides(List<int> slideIndexes) {
     final slides = _allSlides;
-    final picked = [
-      for (final i in slideIndexes.toSet().toList()..sort())
-        if (i >= 0 &&
-            i < slides.length &&
-            !slides[i].isAutoSpacer &&
-            slides[i].stagingUid != _leadingBlankUid)
-          slides[i],
+    final picked = _pickMovableSlides(slides, slideIndexes);
+    final copied = [
+      for (final g in _slidesToItems(picked))
+        (item: g.item, background: g.background),
     ];
-    final groups = <List<_SlideInfo>>[];
-    for (final info in picked) {
-      if (groups.isNotEmpty &&
-          groups.last.first.stagingUid == info.stagingUid) {
-        groups.last.add(info);
-      } else {
-        groups.add([info]);
-      }
-    }
-    final copied = <({StagingItem item, SlideBackground? background})>[];
-    for (final group in groups) {
-      final uid = group.first.stagingUid;
-      final entry = _stagingItems.where((e) => e.uid == uid).firstOrNull;
-      if (entry == null) continue;
-      final item = switch (entry.item) {
-        SongStagingItem(:final song) => SongStagingItem(
-          _songWithPages(song, [
-            for (final s in group) (korean: s.mainText, english: s.englishText),
-          ]),
-        ),
-        ImageStagingItem(:final sourceName) => ImageStagingItem(
-          sourceName: sourceName,
-          imagePaths: [for (final s in group) s.imagePath!],
-        ),
-        final other => other, // 성경·빈 페이지는 한 장짜리라 그대로
-      };
-      copied.add((item: item, background: _itemBackgrounds[uid]));
-    }
     if (copied.isEmpty) return;
     _slideClipboard = copied;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -2117,49 +2091,217 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     );
   }
 
-  /// 발표 보기 ⌘/Ctrl+V. 현재 슬라이드 바로 뒤에 넣는다. 곡·PPT 중간 페이지면
-  /// 그 항목을 현재 페이지에서 둘로 나눠 사이에 넣는다. 현재 위치·관객 화면은 그대로다.
+  /// 복사·옮기기 대상이 될 수 있는 페이지만 순서대로 고른다(맨 앞 빈 페이지·자동 여백 제외).
+  List<_SlideInfo> _pickMovableSlides(
+    List<_SlideInfo> slides,
+    List<int> slideIndexes,
+  ) => [
+    for (final i in slideIndexes.toSet().toList()..sort())
+      if (i >= 0 &&
+          i < slides.length &&
+          !slides[i].isAutoSpacer &&
+          slides[i].stagingUid != _leadingBlankUid)
+        slides[i],
+  ];
+
+  /// 고른 페이지를 콘티 항목으로 묶는다. 같은 항목에서 이어진 페이지는 한 항목으로 묶는다 —
+  /// 곡 페이지를 한 장씩 따로 만들면 사이사이에 자동 여백이 끼기 때문이다.
+  /// 항목의 모든 페이지를 고른 경우엔 원래 항목을 그대로 쓴다(PPT 원본 경로 등이 남게).
+  List<_SlideGroup> _slidesToItems(List<_SlideInfo> picked) {
+    final groups = <List<_SlideInfo>>[];
+    for (final info in picked) {
+      if (groups.isNotEmpty &&
+          groups.last.first.stagingUid == info.stagingUid) {
+        groups.last.add(info);
+      } else {
+        groups.add([info]);
+      }
+    }
+    final result = <_SlideGroup>[];
+    for (final group in groups) {
+      final uid = group.first.stagingUid;
+      final entry = _stagingItems.where((e) => e.uid == uid).firstOrNull;
+      if (entry == null) continue;
+      final whole = group.length == _pageCount(entry.item);
+      final item = whole
+          ? entry.item
+          : switch (entry.item) {
+              SongStagingItem(:final song) => SongStagingItem(
+                _songWithPages(song, [
+                  for (final s in group)
+                    (korean: s.mainText, english: s.englishText),
+                ]),
+              ),
+              ImageStagingItem(:final sourceName) => ImageStagingItem(
+                sourceName: sourceName,
+                imagePaths: [for (final s in group) s.imagePath!],
+              ),
+              final other => other, // 성경·빈 페이지는 한 장짜리라 그대로
+            };
+      result.add((item: item, background: _itemBackgrounds[uid], pages: group));
+    }
+    return result;
+  }
+
+  /// 발표 보기 ⌘/Ctrl+V. 현재 슬라이드 바로 뒤에 넣는다. 현재 위치·관객 화면은 그대로다.
   void _pasteSlides() {
     if (_slideClipboard.isEmpty) return;
     final slides = _allSlides;
-    final current = slides.isEmpty
-        ? null
-        : slides[_currentSlideIndex.clamp(0, slides.length - 1)];
-    final at = _stagingItems.indexWhere((e) => e.uid == current?.stagingUid);
     setState(() {
-      // 같은 곡(같은 PPT)끼리 맞닿는 자리만 자동 여백을 빼 이어 붙인다. 다른 곡이면 여백을 둔다.
-      final onPage = at >= 0 && !current!.isAutoSpacer;
-      // 원래 다음 항목과 이어져 있던 자리(앞서 곡 중간에 붙여 넣은 자리 등)
-      final wasJoined = onPage && _noSpacerUids.contains(current.stagingUid);
-      final tailAt = onPage
-          ? _splitStagingItem(at, current.pageIndexInItem + 1)
-          : null;
-      var insertAt = tailAt ?? at + 1;
-      final next = insertAt < _stagingItems.length
-          ? _stagingItems[insertAt].item
-          : null;
-      final first = _slideClipboard.first.item;
-      final last = _slideClipboard.last.item;
-      if (onPage) {
-        final head = _stagingItems[at];
-        if (_sameSource(head.item, first)) {
-          _noSpacerUids.add(head.uid);
-        } else {
-          _noSpacerUids.remove(head.uid);
-        }
-      }
-      for (final c in _slideClipboard) {
-        final uid = _nextUid++;
-        _stagingItems.insert(insertAt++, (uid: uid, item: c.item));
-        if (c.background != null) _itemBackgrounds[uid] = c.background!;
-      }
-      if ((tailAt != null || wasJoined) &&
-          next != null &&
-          _sameSource(last, next)) {
-        _noSpacerUids.add(_stagingItems[insertAt - 1].uid);
-      }
+      _insertItemsAfterSlide(
+        slides,
+        _currentSlideIndex.clamp(0, slides.isEmpty ? 0 : slides.length - 1),
+        _slideClipboard,
+      );
     });
     // 다음 페이지가 바뀌었을 수 있다(싱어 화면의 '다음').
+    _sendCurrentSlide();
+  }
+
+  /// [slides] 의 [slideIndex] 페이지 바로 뒤에 [items] 를 새 콘티 항목으로 넣고 그 uid 들을 돌려준다.
+  /// 곡·PPT 중간 페이지면 그 항목을 그 페이지에서 둘로 나눠 사이에 넣는다(외부 PPT 중간에 찬양·말씀 넣기).
+  /// setState 안에서 부른다.
+  List<int> _insertItemsAfterSlide(
+    List<_SlideInfo> slides,
+    int slideIndex,
+    List<({StagingItem item, SlideBackground? background})> items,
+  ) {
+    // 빈 콘티면 맨 앞에 넣는다.
+    final current = slideIndex < slides.length ? slides[slideIndex] : null;
+    final at = _stagingItems.indexWhere((e) => e.uid == current?.stagingUid);
+    // 같은 곡(같은 PPT)끼리 맞닿는 자리만 자동 여백을 빼 이어 붙인다. 다른 곡이면 여백을 둔다.
+    final onPage = at >= 0 && !current!.isAutoSpacer;
+    // 원래 다음 항목과 이어져 있던 자리(앞서 곡 중간에 붙여 넣은 자리 등)
+    final wasJoined = onPage && _noSpacerUids.contains(current.stagingUid);
+    final tailAt = onPage
+        ? _splitStagingItem(at, current.pageIndexInItem + 1)
+        : null;
+    var insertAt = tailAt ?? at + 1;
+    final next = insertAt < _stagingItems.length
+        ? _stagingItems[insertAt].item
+        : null;
+    final first = items.first.item;
+    final last = items.last.item;
+    if (onPage) {
+      final head = _stagingItems[at];
+      if (_sameSource(head.item, first)) {
+        _noSpacerUids.add(head.uid);
+      } else {
+        _noSpacerUids.remove(head.uid);
+      }
+    }
+    final uids = <int>[];
+    for (final c in items) {
+      final uid = _nextUid++;
+      uids.add(uid);
+      _stagingItems.insert(insertAt++, (uid: uid, item: c.item));
+      if (c.background != null) _itemBackgrounds[uid] = c.background!;
+    }
+    if ((tailAt != null || wasJoined) &&
+        next != null &&
+        _sameSource(last, next)) {
+      _noSpacerUids.add(_stagingItems[insertAt - 1].uid);
+    }
+    return uids;
+  }
+
+  /// 발표 보기 썸네일 끌어 놓기. [slideIndexes] 페이지를 [afterIndex] 페이지 바로 뒤로 옮긴다.
+  /// 외부 PPT 중간에 찬양·말씀을 끼워 넣거나 PPT 안 페이지 순서를 바꾸는 데 쓴다.
+  /// 복사 → 원래 자리 지우기 → 붙여 넣기와 같다. 메모는 따라가고, 관객 화면은 보던 페이지 그대로다.
+  void _moveSlides(List<int> slideIndexes, int afterIndex) {
+    final slides = _allSlides;
+    if (afterIndex < 0 || afterIndex >= slides.length) return;
+    final picked = _pickMovableSlides(slides, slideIndexes);
+    if (picked.isEmpty) return;
+    final pickedIndexes = [for (final s in picked) slides.indexOf(s)];
+    if (pickedIndexes.contains(afterIndex)) return;
+    // 이어진 페이지를 바로 앞 페이지 뒤로 옮기는 건 제자리다.
+    final contiguous =
+        pickedIndexes.last - pickedIndexes.first == pickedIndexes.length - 1;
+    if (contiguous && afterIndex == pickedIndexes.first - 1) return;
+
+    String keyOf(_SlideInfo s) =>
+        '${_slideKey(s.stagingUid, s.pageIndexInItem)}:${s.isAutoSpacer}';
+    final groups = _slidesToItems(picked);
+    final movedKeys = {for (final s in picked) keyOf(s)};
+    final current = slides[_currentSlideIndex.clamp(0, slides.length - 1)];
+    final currentMovedAt = picked.indexOf(current);
+    // 놓을 자리가 옮기느라 사라지면(통째로 옮긴 곡의 자동 여백 등) 그 앞 페이지 뒤에 넣는다.
+    final anchors = [
+      for (var i = afterIndex; i >= 0; i--)
+        if (!movedKeys.contains(keyOf(slides[i]))) keyOf(slides[i]),
+    ];
+    final notes = [
+      for (final s in picked)
+        _slideNotes.remove(_slideKey(s.stagingUid, s.pageIndexInItem)),
+    ];
+
+    setState(() {
+      // 1) 원래 자리에서 지운다. 모든 페이지가 빠진 항목은 항목째 뺀다(여백만 남지 않게).
+      for (final s in picked) {
+        _deletedSlideKeys.add(_slideKey(s.stagingUid, s.pageIndexInItem));
+      }
+      final emptied = <int>{
+        for (final g in groups)
+          if (List.generate(
+            _pageCount(
+              _stagingItems
+                  .firstWhere((e) => e.uid == g.pages.first.stagingUid)
+                  .item,
+            ),
+            (j) => _slideKey(g.pages.first.stagingUid, j),
+          ).every(_deletedSlideKeys.contains))
+            g.pages.first.stagingUid,
+      };
+      _removeStagingWhere((e) => emptied.contains(e.uid), prune: false);
+      for (final uid in emptied) {
+        _itemBackgrounds.remove(uid);
+        _deletedSlideKeys.removeWhere((k) => k.startsWith('$uid:'));
+      }
+
+      // 2) 놓을 자리 뒤에 넣는다.
+      final remaining = _allSlides;
+      var target = 0;
+      for (final key in anchors) {
+        final i = remaining.indexWhere((s) => keyOf(s) == key);
+        if (i >= 0) {
+          target = i;
+          break;
+        }
+      }
+      final uids = _insertItemsAfterSlide(remaining, target, [
+        for (final g in groups) (item: g.item, background: g.background),
+      ]);
+      _pruneSourceWatches();
+
+      // 3) 메모를 새 자리로 옮기고, 보던 페이지를 다시 찾는다.
+      var n = 0;
+      for (var g = 0; g < groups.length; g++) {
+        for (var j = 0; j < groups[g].pages.length; j++) {
+          final note = notes[n++];
+          if (note != null) _slideNotes[_slideKey(uids[g], j)] = note;
+        }
+      }
+      final result = _allSlides;
+      final int found;
+      if (currentMovedAt >= 0) {
+        final movedSlides = [
+          for (var i = 0; i < result.length; i++)
+            if (uids.contains(result[i].stagingUid) && !result[i].isAutoSpacer)
+              i,
+        ];
+        found = currentMovedAt < movedSlides.length
+            ? movedSlides[currentMovedAt]
+            : -1;
+      } else {
+        found = result.indexWhere((s) => keyOf(s) == keyOf(current));
+      }
+      if (found >= 0) _currentSlideIndex = found;
+      _clampCurrentSlideIndex();
+      if (_currentSlideIndex < result.length) {
+        _previewStagingUid = result[_currentSlideIndex].stagingUid;
+      }
+    });
     _sendCurrentSlide();
   }
 
@@ -2177,7 +2319,11 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   /// 항목을 콘티에서 뺀다. 앞 항목의 '여백 없음'은 빠진 항목도 뒤와 이어져 있었을 때만
   /// 남긴다 — 아니면 앞 항목이 엉뚱한 다음 곡과 여백 없이 붙는다.
-  void _removeStagingWhere(bool Function(({int uid, StagingItem item})) test) {
+  /// [prune] 이 false 면 PPT 원본 감시를 그대로 둔다(같은 항목을 곧바로 다시 넣을 때).
+  void _removeStagingWhere(
+    bool Function(({int uid, StagingItem item})) test, {
+    bool prune = true,
+  }) {
     for (var i = _stagingItems.length - 1; i >= 0; i--) {
       final e = _stagingItems[i];
       if (!test(e)) continue;
@@ -2185,7 +2331,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       if (!joined && i > 0) _noSpacerUids.remove(_stagingItems[i - 1].uid);
       _stagingItems.removeAt(i);
     }
-    _pruneSourceWatches();
+    if (prune) _pruneSourceWatches();
   }
 
   /// 곡·PPT 항목 [index] 를 [cut] 페이지 앞에서 둘로 나누고 뒷부분이 들어간 자리를 돌려준다.
@@ -3843,6 +3989,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               onSlidesDelete: _deleteSlides,
                               onSlidesCopy: _copySlides,
                               onPaste: _pasteSlides,
+                              onSlidesMove: _moveSlides,
                               onAddPage: (kind) => _addPage(
                                 kind,
                                 _indexAfterCurrentSlide,
@@ -9290,6 +9437,7 @@ class _PresenterConsole extends StatefulWidget {
     required this.onSlidesDelete,
     required this.onSlidesCopy,
     required this.onPaste,
+    required this.onSlidesMove,
     required this.onAddPage,
     required this.onToggleMedia,
     required this.mediaPlayback,
@@ -9330,6 +9478,8 @@ class _PresenterConsole extends StatefulWidget {
   final ValueChanged<List<int>> onSlidesDelete;
   final ValueChanged<List<int>> onSlidesCopy;
   final VoidCallback onPaste;
+  // 썸네일 끌어 놓기: (옮길 페이지들, 이 페이지 바로 뒤로)
+  final void Function(List<int> slideIndexes, int afterIndex) onSlidesMove;
   final ValueChanged<_AddPageKind> onAddPage;
   final VoidCallback onToggleMedia;
   final ValueListenable<MediaPlayback?> mediaPlayback;
@@ -9373,6 +9523,8 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
   // 인덱스라서 슬라이드 목록이 바뀌면 비운다.
   final Set<int> _marked = {};
   int? _markAnchor;
+  // 썸네일을 끄는 중인지. 줄·격자 가장자리에 가면 저절로 스크롤한다.
+  bool _isDragging = false;
   String _noteKey = '';
   // 마지막으로 현재 페이지를 가운데 맞춘 배치(크기·열 수). 배치가 바뀌면
   // (줄 높이를 끌거나, +/- 확대, 창 크기 변경, 화면 전환) 다시 맞춘다.
@@ -9568,6 +9720,81 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
     });
     widget.onSlidesDelete(indexes);
     return true;
+  }
+
+  /// 썸네일 [i] 를 끌면 옮길 페이지들. 골라 담은 페이지를 끌면 고른 것 전부, 아니면 그 한 장.
+  List<int> _dragSourcesFor(int i) =>
+      _marked.contains(i) ? (_marked.toList()..sort()) : [i];
+
+  /// 썸네일 끌어 놓기. 맨 앞 빈 페이지·자동 여백은 끌 수 없고 놓을 자리로만 쓴다.
+  Widget _dragDrop(int i, ColorScheme cs, double thumbW, Widget child) {
+    final slide = widget.slides[i];
+    final canDrag = !slide.isAutoSpacer && slide.stagingUid >= 0;
+    return _ThumbDragDrop(
+      sources: canDrag ? () => _dragSourcesFor(i) : null,
+      feedback: _dragFeedback(i, cs, thumbW),
+      // 맨 앞 빈 페이지 앞에는 넣을 수 없다.
+      allowBefore: i > 0,
+      onDragStateChanged: (dragging) {
+        if (_isDragging != dragging) setState(() => _isDragging = dragging);
+      },
+      onDrop: (sources, after) {
+        final afterIndex = after ? i : i - 1;
+        setState(() {
+          _isDragging = false;
+          _marked.clear();
+          _markAnchor = null;
+        });
+        widget.onSlidesMove(sources, afterIndex);
+      },
+      child: child,
+    );
+  }
+
+  Widget _dragFeedback(int i, ColorScheme cs, double thumbW) {
+    final count = _dragSourcesFor(i).length;
+    final w = thumbW.clamp(80.0, 160.0);
+    return Opacity(
+      opacity: 0.85,
+      child: Material(
+        elevation: 6,
+        borderRadius: BorderRadius.circular(AppRadius.control),
+        clipBehavior: Clip.antiAlias,
+        child: SizedBox(
+          width: w,
+          height: w / _thumbAspect,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              SlideRenderView(data: _pageDataFor(i)),
+              if (count > 1)
+                Positioned(
+                  top: 4,
+                  right: 4,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 7,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: cs.primary,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      '$count장',
+                      style: TextStyle(
+                        color: cs.onPrimary,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   /// 골라 담은 썸네일에 체크 표시와 테두리를 두른다.
@@ -10309,31 +10536,41 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
                   );
                 }
 
-                return GridView.builder(
+                return _EdgeAutoScroll(
                   controller: _gridScrollController,
-                  padding: const EdgeInsets.all(pad),
-                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: cols,
-                    crossAxisSpacing: spacing,
-                    mainAxisSpacing: spacing,
-                    childAspectRatio: (tw / cellH).clamp(0.1, 100.0),
-                  ),
-                  itemCount: widget.slides.length,
-                  itemBuilder: (context, i) => _foundMark(
-                    i,
-                    cs,
-                    _markedMark(
+                  axis: Axis.vertical,
+                  isActive: _isDragging,
+                  child: GridView.builder(
+                    controller: _gridScrollController,
+                    padding: const EdgeInsets.all(pad),
+                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: cols,
+                      crossAxisSpacing: spacing,
+                      mainAxisSpacing: spacing,
+                      childAspectRatio: (tw / cellH).clamp(0.1, 100.0),
+                    ),
+                    itemCount: widget.slides.length,
+                    itemBuilder: (context, i) => _dragDrop(
                       i,
                       cs,
-                      _SlideThumbnail(
-                        data: _pageDataFor(i),
-                        isSelected: i == widget.currentIndex,
-                        index: i,
-                        isEditable: !widget.slides[i].isAutoSpacer,
-                        // 누른 페이지로 넘기기만 한다. 보기 전환은 버튼으로만.
-                        onTap: () => _onThumbTap(i),
-                        onEdit: () => widget.onSlideEdit(i),
-                        onDelete: () => widget.onSlideDelete(i),
+                      tw,
+                      _foundMark(
+                        i,
+                        cs,
+                        _markedMark(
+                          i,
+                          cs,
+                          _SlideThumbnail(
+                            data: _pageDataFor(i),
+                            isSelected: i == widget.currentIndex,
+                            index: i,
+                            isEditable: !widget.slides[i].isAutoSpacer,
+                            // 누른 페이지로 넘기기만 한다. 보기 전환은 버튼으로만.
+                            onTap: () => _onThumbTap(i),
+                            onEdit: () => widget.onSlideEdit(i),
+                            onDelete: () => widget.onSlideDelete(i),
+                          ),
+                        ),
                       ),
                     ),
                   ),
@@ -10373,58 +10610,245 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
   }
 
   Widget _thumbList(ColorScheme cs, double thumbW) {
-    return ListView.builder(
+    return _EdgeAutoScroll(
       controller: _stripScrollController,
-      scrollDirection: Axis.horizontal,
-      // 오른쪽 여백은 마지막 썸네일의 간격(_stripSpacing)이 대신한다.
-      padding: const EdgeInsets.fromLTRB(_stripPadding, 6, 0, 6),
-      // 폭을 고정해야 멀리 있는 페이지까지의 스크롤 길이가 정확하다. 안 그러면
-      // 아직 안 그린 썸네일 길이를 어림해서 가운데 맞추기가 중간에 멈춘다.
-      itemExtent: thumbW + _stripSpacing,
-      itemCount: widget.slides.length,
-      itemBuilder: (context, i) {
-        final hasNote = (widget.notes[_keyAt(i)] ?? '').isNotEmpty;
-        return Padding(
-          padding: const EdgeInsets.only(right: _stripSpacing),
-          child: _foundMark(
-            i,
-            cs,
-            SizedBox(
-              width: thumbW,
-              child: Stack(
-                children: [
-                  // 편집 탭의 슬라이드 순서와 같은 썸네일. 마우스를 올리면
-                  // 수정·삭제 버튼이 그대로 나온다.
-                  _markedMark(
-                    i,
-                    cs,
-                    _SlideThumbnail(
-                      data: _pageDataFor(i),
-                      isSelected: i == widget.currentIndex,
-                      index: i,
-                      isEditable: !widget.slides[i].isAutoSpacer,
-                      onTap: () => _onThumbTap(i),
-                      onEdit: () => widget.onSlideEdit(i),
-                      onDelete: () => widget.onSlideDelete(i),
-                    ),
-                  ),
-                  // 수정/삭제 버튼이 오른쪽 위에 뜨므로 메모 표시는 왼쪽에.
-                  if (hasNote)
-                    Positioned(
-                      top: 3,
-                      left: 3,
-                      child: Icon(
-                        Icons.sticky_note_2_rounded,
-                        size: 12,
-                        color: cs.primary,
+      axis: Axis.horizontal,
+      isActive: _isDragging,
+      child: ListView.builder(
+        controller: _stripScrollController,
+        scrollDirection: Axis.horizontal,
+        // 오른쪽 여백은 마지막 썸네일의 간격(_stripSpacing)이 대신한다.
+        padding: const EdgeInsets.fromLTRB(_stripPadding, 6, 0, 6),
+        // 폭을 고정해야 멀리 있는 페이지까지의 스크롤 길이가 정확하다. 안 그러면
+        // 아직 안 그린 썸네일 길이를 어림해서 가운데 맞추기가 중간에 멈춘다.
+        itemExtent: thumbW + _stripSpacing,
+        itemCount: widget.slides.length,
+        itemBuilder: (context, i) {
+          final hasNote = (widget.notes[_keyAt(i)] ?? '').isNotEmpty;
+          return Padding(
+            padding: const EdgeInsets.only(right: _stripSpacing),
+            child: _dragDrop(
+              i,
+              cs,
+              thumbW,
+              _foundMark(
+                i,
+                cs,
+                SizedBox(
+                  width: thumbW,
+                  child: Stack(
+                    children: [
+                      // 편집 탭의 슬라이드 순서와 같은 썸네일. 마우스를 올리면
+                      // 수정·삭제 버튼이 그대로 나온다.
+                      _markedMark(
+                        i,
+                        cs,
+                        _SlideThumbnail(
+                          data: _pageDataFor(i),
+                          isSelected: i == widget.currentIndex,
+                          index: i,
+                          isEditable: !widget.slides[i].isAutoSpacer,
+                          onTap: () => _onThumbTap(i),
+                          onEdit: () => widget.onSlideEdit(i),
+                          onDelete: () => widget.onSlideDelete(i),
+                        ),
                       ),
-                    ),
-                ],
+                      // 수정/삭제 버튼이 오른쪽 위에 뜨므로 메모 표시는 왼쪽에.
+                      if (hasNote)
+                        Positioned(
+                          top: 3,
+                          left: 3,
+                          child: Icon(
+                            Icons.sticky_note_2_rounded,
+                            size: 12,
+                            color: cs.primary,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
               ),
             ),
-          ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// 발표 보기 썸네일 하나를 끌 수 있고, 다른 썸네일을 그 앞·뒤에 놓을 수 있게 한다.
+/// 놓을 자리는 마우스가 썸네일의 왼쪽 절반이면 앞, 오른쪽 절반이면 뒤다(세로 막대로 보여 준다).
+class _ThumbDragDrop extends StatefulWidget {
+  const _ThumbDragDrop({
+    required this.sources,
+    required this.feedback,
+    required this.allowBefore,
+    required this.onDragStateChanged,
+    required this.onDrop,
+    required this.child,
+  });
+
+  // null 이면 끌 수 없다(놓을 자리로만 쓴다). 끄는 순간의 고른 페이지를 읽도록 함수로 받는다.
+  final List<int> Function()? sources;
+  final Widget feedback;
+  final bool allowBefore;
+  final ValueChanged<bool> onDragStateChanged;
+  final void Function(List<int> sources, bool after) onDrop;
+  final Widget child;
+
+  @override
+  State<_ThumbDragDrop> createState() => _ThumbDragDropState();
+}
+
+class _ThumbDragDropState extends State<_ThumbDragDrop> {
+  // 끌고 있는 것이 이 썸네일 위에 있을 때 놓을 자리. null = 위에 없음.
+  bool? _after;
+
+  bool _afterFor(Offset global) {
+    if (!widget.allowBefore) return true;
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) return true;
+    return box.globalToLocal(global).dx > box.size.width / 2;
+  }
+
+  void _setAfter(bool? after) {
+    if (_after != after) setState(() => _after = after);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final target = DragTarget<List<int>>(
+      onMove: (d) => _setAfter(_afterFor(d.offset)),
+      onLeave: (_) => _setAfter(null),
+      onAcceptWithDetails: (d) {
+        final after = _afterFor(d.offset);
+        _setAfter(null);
+        widget.onDrop(d.data, after);
+      },
+      builder: (context, candidates, rejected) {
+        final after = _after;
+        if (after == null || candidates.isEmpty) return widget.child;
+        return Stack(
+          clipBehavior: Clip.none,
+          children: [
+            widget.child,
+            Positioned(
+              top: 0,
+              bottom: 0,
+              left: after ? null : -5,
+              right: after ? -5 : null,
+              child: IgnorePointer(
+                child: Container(
+                  width: 4,
+                  decoration: BoxDecoration(
+                    color: cs.primary,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+            ),
+          ],
         );
       },
+    );
+    final sources = widget.sources;
+    if (sources == null) return target;
+    return Draggable<List<int>>(
+      // 데이터는 끌기 시작할 때 정해진다. 그 사이 고른 페이지가 바뀌어도 위젯이 다시 그려지며 갱신된다.
+      data: sources(),
+      dragAnchorStrategy: pointerDragAnchorStrategy,
+      feedback: Transform.translate(
+        offset: const Offset(-24, -24),
+        child: widget.feedback,
+      ),
+      childWhenDragging: Opacity(opacity: 0.4, child: target),
+      onDragStarted: () => widget.onDragStateChanged(true),
+      // 놓은 뒤 목록이 다시 그려지며 이 위젯이 사라지면 불리지 않으므로 onDrop 쪽에서도 끈다.
+      onDragEnd: (_) => widget.onDragStateChanged(false),
+      child: target,
+    );
+  }
+}
+
+/// 썸네일을 끄는 동안([isActive]) 마우스가 목록 가장자리에 가면 그쪽으로 저절로 스크롤한다.
+/// Draggable 은 스스로 스크롤하지 않아서, 멀리 있는 PPT 중간으로 옮기려면 필요하다.
+class _EdgeAutoScroll extends StatefulWidget {
+  const _EdgeAutoScroll({
+    required this.controller,
+    required this.axis,
+    required this.isActive,
+    required this.child,
+  });
+
+  final ScrollController controller;
+  final Axis axis;
+  final bool isActive;
+  final Widget child;
+
+  @override
+  State<_EdgeAutoScroll> createState() => _EdgeAutoScrollState();
+}
+
+class _EdgeAutoScrollState extends State<_EdgeAutoScroll> {
+  static const double _edge = 48;
+  static const double _maxStep = 18;
+  Timer? _timer;
+  double _step = 0;
+
+  @override
+  void didUpdateWidget(_EdgeAutoScroll oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!widget.isActive) _stop();
+  }
+
+  @override
+  void dispose() {
+    _stop();
+    super.dispose();
+  }
+
+  void _stop() {
+    _timer?.cancel();
+    _timer = null;
+    _step = 0;
+  }
+
+  void _onMove(PointerMoveEvent event) {
+    if (!widget.isActive) return;
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) return;
+    final local = box.globalToLocal(event.position);
+    final pos = widget.axis == Axis.horizontal ? local.dx : local.dy;
+    final size = widget.axis == Axis.horizontal
+        ? box.size.width
+        : box.size.height;
+    // 가장자리에 가까울수록 빠르게.
+    if (pos < _edge) {
+      _step = -_maxStep * ((_edge - pos) / _edge).clamp(0.2, 1.0);
+    } else if (pos > size - _edge) {
+      _step = _maxStep * ((pos - (size - _edge)) / _edge).clamp(0.2, 1.0);
+    } else {
+      _stop();
+      return;
+    }
+    _timer ??= Timer.periodic(const Duration(milliseconds: 16), (_) {
+      final c = widget.controller;
+      if (!c.hasClients || _step == 0) return;
+      final pos = c.position;
+      c.jumpTo(
+        (pos.pixels + _step).clamp(pos.minScrollExtent, pos.maxScrollExtent),
+      );
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      onPointerMove: _onMove,
+      onPointerUp: (_) => _stop(),
+      onPointerCancel: (_) => _stop(),
+      child: widget.child,
     );
   }
 }
