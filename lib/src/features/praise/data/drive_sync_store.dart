@@ -78,8 +78,8 @@ class DriveSyncStore implements SyncStore {
   static const _uploadApi = 'https://www.googleapis.com/upload/drive/v3/files';
   static const _fields = 'id,name,modifiedTime,size';
 
-  /// 응답 머리가 올 때까지 기다리는 시간 — 끊긴 연결에 동기화 큐가 영영 묶이지 않게.
-  /// 올리기(PUT)는 본문을 다 보낸 뒤에야 머리가 오므로 걸지 않는다.
+  /// 응답 머리가 올 때까지, 그리고 받는 본문 조각 사이에 기다리는 시간 — 끊긴 연결에 동기화 큐가
+  /// 영영 묶이지 않게. 올리기(PUT)는 본문을 다 보낸 뒤에야 머리가 오므로 머리에는 걸지 않는다.
   static const _timeout = Duration(seconds: 30);
 
   String? _token;
@@ -157,7 +157,7 @@ class DriveSyncStore implements SyncStore {
     }
     if (res.statusCode >= 200 && res.statusCode < 300) return res;
     if (res.statusCode == 401 && !retried && req is http.Request) {
-      await res.stream.drain<void>().catchError((_) {});
+      await _bytes(res).catchError((_) => <int>[]);
       _token = null;
       return _send(
         http.Request(req.method, req.url)
@@ -166,7 +166,7 @@ class DriveSyncStore implements SyncStore {
         retried: true,
       );
     }
-    final body = await res.stream.bytesToString().catchError((_) => '');
+    final body = await _text(res).catchError((_) => '');
     final error = _json(body)['error'];
     final message = error is Map ? error['message'] : null;
     throw FileSystemException(
@@ -179,7 +179,9 @@ class DriveSyncStore implements SyncStore {
   /// 본문을 다 받는다. 받다가 끊기면 [FileSystemException] — 부르는 쪽은 그것만 잡는다.
   static Future<List<int>> _bytes(http.StreamedResponse res) async {
     try {
-      return await res.stream.toBytes();
+      return await http.ByteStream(res.stream.timeout(_timeout)).toBytes();
+    } on TimeoutException {
+      throw _offline();
     } on SocketException {
       throw _offline();
     } on http.ClientException {
@@ -266,7 +268,10 @@ class DriveSyncStore implements SyncStore {
     final res = await _send(http.Request('GET', _media(entry)));
     final sink = to.openWrite();
     try {
-      await sink.addStream(res.stream);
+      // 받는 도중 멎으면(조각 사이 [_timeout]) 끊는다 — 큐가 영영 묶이지 않게.
+      await sink.addStream(res.stream.timeout(_timeout));
+    } on TimeoutException {
+      throw _offline();
     } on SocketException {
       throw _offline();
     } on http.ClientException {
@@ -309,7 +314,7 @@ class DriveSyncStore implements SyncStore {
           : const {},
     );
     final started = await _send(start);
-    await started.stream.drain<void>();
+    await _bytes(started);
     final location = started.headers['location'];
     if (location == null) {
       throw const FileSystemException('구글 드라이브가 올리기 주소를 주지 않았습니다.');
@@ -318,7 +323,14 @@ class DriveSyncStore implements SyncStore {
       ..contentLength = length;
     final sent = _send(upload);
     // addStream 은 보내는 쪽이 밀리면 파일 읽기를 멈춘다(listen + add 는 수백 MB 를 메모리에 쌓는다).
-    unawaited(upload.sink.addStream(body()).then((_) => upload.sink.close()));
+    // 읽기가 실패하면 그 오류를 요청에 실어 닫는다 — 안 닫으면 요청이 영영 끝나지 않고, 삼키면
+    // 길이 부족이 "인터넷 연결 확인"으로 둔갑한다.
+    unawaited(
+      upload.sink
+          .addStream(body())
+          .catchError(upload.sink.addError)
+          .whenComplete(upload.sink.close),
+    );
     final res = await sent;
     return _entry(_json(await _text(res)));
   }

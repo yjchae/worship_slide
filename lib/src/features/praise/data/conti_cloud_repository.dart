@@ -82,23 +82,30 @@ class ContiCloudRepository {
 
   /// 클라우드의 콘티 목록(올린 시각 늦은 순).
   Future<List<CloudConti>> list(SyncStore store) async {
+    FileSystemException? readError;
+    var read = 0;
     final infos = await Future.wait([
       for (final entry in await store.list())
         if (entry.name.startsWith(prefix) && entry.name.endsWith('.json'))
           () async {
             try {
-              final info = CloudConti.fromJson(
-                jsonDecode(await store.read(entry)),
-              );
+              final text = await store.read(entry);
+              read += 1;
+              final info = CloudConti.fromJson(jsonDecode(text));
               // 정보 파일 이름과 안의 uid 가 다르면 믿지 않는다.
               return info != null && entry.name == infoName(info.uid)
                   ? info
                   : null;
             } on FormatException {
               return null; // 깨진 정보 파일은 건너뛴다.
+            } on FileSystemException catch (error) {
+              readError ??= error;
+              return null; // 목록과 읽기 사이에 지워졌거나 잠깐 끊겼다 — 하나 때문에 목록 전체를 버리지 않는다.
             }
           }(),
     ]);
+    // 하나도 못 읽었으면 인터넷이 끊긴 것이다 — 빈 목록("콘티 없음")으로 보이지 않게 오류로 낸다.
+    if (readError != null && read == 0) throw readError!;
     final byUid = <String, CloudConti>{};
     for (final info in infos.nonNulls) {
       final seen = byUid[info.uid];
@@ -149,9 +156,7 @@ class ContiCloudRepository {
         // 정보 파일(= 파일 이름)의 uid 로 넣는다 — 목록에서 고른 그 콘티를 바꾸게.
         return await _contis.importContiFile(temp.path, cloudUid: conti.uid);
       } on FormatException {
-        throw const FileSystemException(
-          '콘티 파일을 다 읽지 못했습니다. 잠시 뒤에 다시 받아 주세요.',
-        );
+        throw const FileSystemException('콘티 파일을 다 읽지 못했습니다. 잠시 뒤에 다시 받아 주세요.');
       }
     });
   }
@@ -167,7 +172,9 @@ class ContiCloudRepository {
     final dir = await Directory.systemTemp.createTemp('ws_cloud_');
     try {
       return await job(
-        File(p.join(dir.path, 'x.${WorshipContiRepository.contiFileExtension}')),
+        File(
+          p.join(dir.path, 'x.${WorshipContiRepository.contiFileExtension}'),
+        ),
       );
     } finally {
       await dir.delete(recursive: true).catchError((_) => dir);

@@ -470,7 +470,26 @@ class SyncService {
           }
         }(),
     ]);
-    final read = await Isolate.run(
+    final read = await _parseSnapshots(texts);
+    final result = <SyncSnapshot>[];
+    var unreadable = 0;
+    for (final r in read) {
+      if (r.snapshot != null) {
+        if (r.snapshot!.deviceId != deviceId) result.add(r.snapshot!);
+      } else if (r.error != null) {
+        // 받다가 끊겼거나 파일이 깨졌다.
+        unreadable += 1;
+        await AppLogger.instance.info('[sync] 읽기 건너뜀 ${r.error}');
+      }
+    }
+    return (snapshots: result, unreadable: unreadable);
+  }
+
+  /// [_readSnapshots] 의 isolate 부분. 따로 뺀 이유 — 같은 함수 안에 두면 클로저가 그 함수의
+  /// 변수 묶음을 통째로 붙잡아 `store`(드라이브면 http 클라이언트)까지 isolate 로 보내려다 실패한다.
+  static Future<List<({SyncSnapshot? snapshot, String? error})>>
+  _parseSnapshots(List<({String name, String? text, String? error})> texts) {
+    return Isolate.run(
       () => [
         for (final t in texts)
           () {
@@ -493,18 +512,6 @@ class SyncService {
           }(),
       ],
     );
-    final result = <SyncSnapshot>[];
-    var unreadable = 0;
-    for (final r in read) {
-      if (r.snapshot != null) {
-        if (r.snapshot!.deviceId != deviceId) result.add(r.snapshot!);
-      } else if (r.error != null) {
-        // 받다가 끊겼거나 파일이 깨졌다.
-        unreadable += 1;
-        await AppLogger.instance.info('[sync] 읽기 건너뜀 ${r.error}');
-      }
-    }
-    return (snapshots: result, unreadable: unreadable);
   }
 
   Future<String> _ownBody() async {

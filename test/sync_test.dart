@@ -1,9 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:worship_slides/src/features/praise/data/conti_cloud_repository.dart';
 import 'package:worship_slides/src/features/praise/data/praise_database.dart';
 import 'package:worship_slides/src/features/praise/data/praise_repository.dart';
 import 'package:worship_slides/src/features/praise/data/song_sync_repository.dart';
@@ -127,6 +129,33 @@ void main() {
     await a.repo.deleteSongsByIds([bless.id!]);
     await syncAll([a, b]);
     expect(await b.titles(), ['은혜:고친 은혜 가사']);
+  });
+
+  test('isolate 로 못 보내는 것을 든 저장소(드라이브 http 클라이언트)여도 합친다', () async {
+    final a = await newPc('A');
+    final b = await newPc('B', join: false);
+    final unsendable = _UnsendableStore(p.join(shared, syncDirName));
+    addTearDown(unsendable.port.close);
+    await b.sync.useStore(unsendable);
+
+    await a.repo.insertSong(song('은혜', '은혜 가사'));
+    await syncAll([a, b]);
+    expect(await b.titles(), ['은혜:은혜 가사']);
+    // 켤 때 확인(_ownFileUpToDate)·다시 연결한 뒤 내 파일 확인(_ownFileTakenByOther)도 isolate 를 쓴다.
+    expect(await b.sync.checkForUpdates(), isNotNull);
+    await b.sync.useStore(unsendable);
+    expect(await b.sync.syncSongs(), isNotNull);
+    expect(b.sync.status.value.lastError, isNull);
+  });
+
+  test('클라우드 콘티 정보를 하나도 못 읽으면 빈 목록이 아니라 오류다', () async {
+    final offline = _OfflineReadStore(p.join(shared, syncDirName));
+    await Directory(offline.dir).create();
+    await offline.write(ContiCloudRepository.infoName('a' * 32), '{}');
+    expect(
+      () => ContiCloudRepository().list(offline),
+      throwsA(isA<FileSystemException>()),
+    );
   });
 
   test('같은 곡을 고치면 나중에 고친 쪽이 이긴다', () async {
@@ -1028,4 +1057,20 @@ void main() {
       expect(await a.contis.listContis(), isEmpty);
     });
   });
+}
+
+/// 드라이브 저장소처럼 isolate 로 보낼 수 없는 것(http 클라이언트 대신 포트)을 든다.
+class _UnsendableStore extends FolderSyncStore {
+  _UnsendableStore(super.dir);
+
+  final port = RawReceivePort();
+}
+
+/// 목록은 되는데 읽기는 다 끊기는 저장소(목록을 받은 뒤 인터넷이 끊긴 경우).
+class _OfflineReadStore extends FolderSyncStore {
+  _OfflineReadStore(super.dir);
+
+  @override
+  Future<String> read(SyncEntry entry) async =>
+      throw const FileSystemException('끊김');
 }
