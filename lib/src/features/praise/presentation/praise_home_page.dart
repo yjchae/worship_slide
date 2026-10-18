@@ -86,10 +86,12 @@ class _SlideInfo {
   final SlideMedia? media;
 }
 
-/// 발표 보기에서 복사·옮기는 페이지 묶음: 새 콘티 항목 + 배경 + 원래 페이지들.
-typedef _SlideGroup = ({
+/// 발표 보기에서 복사·옮기는 콘티 항목 하나: 새 항목 + 배경 + 다음 조각과 여백 없이 이을지
+/// (곡 + 떼어 낸 끝 빈 페이지) + 이 항목에 담긴 원래 페이지들.
+typedef _SlidePiece = ({
   StagingItem item,
   SlideBackground? background,
+  bool joinNext,
   List<_SlideInfo> pages,
 });
 
@@ -223,8 +225,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   final Set<String> _reloadAgainSources = {};
   final Set<String> _deletedSlideKeys = {};
   // 발표 보기에서 복사한 페이지. 복사하는 순간의 내용을 콘티 항목으로 떠 둔다.
-  List<({StagingItem item, SlideBackground? background})> _slideClipboard =
-      const [];
+  List<_SlidePiece> _slideClipboard = const [];
+  // 옮기거나 나누느라 항목(uid)이 바뀐, 지금 재생 중인 미디어 페이지. 원래 미디어 묶음으로 보내
+  // 발표 창이 처음부터 다시 틀지 않게 한다. 다른 항목으로 넘어가면 지운다.
+  ({int uid, int group})? _movedMediaGroup;
 
   final List<Color> _swatches = const [
     Color(0xFF1B1B1B),
@@ -708,6 +712,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     return _currentSlideIndex;
   }
 
+  int _mediaGroupOf(int stagingUid) => _movedMediaGroup?.uid == stagingUid
+      ? _movedMediaGroup!.group
+      : stagingUid;
+
   SlidePageData _buildSlidePageData(int index, [List<_SlideInfo>? allSlides]) {
     final slides = allSlides ?? _allSlides;
     final slide = index < slides.length ? slides[index] : null;
@@ -721,7 +729,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       style: _style.withBackground(slide?.background),
       imagePath: slide?.imagePath,
       media: slide?.media,
-      mediaGroup: slide?.stagingUid,
+      mediaGroup: slide == null ? null : _mediaGroupOf(slide.stagingUid),
     );
   }
 
@@ -1325,6 +1333,11 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     // 페이지가 바뀌는 모든 곳(넘기기·점프·편집·디자인 변경)이 이 함수를 거치므로
     // 싱어 화면도 여기서 함께 갱신한다. 관객 화면을 먼저 보내 싱어 갱신을 기다리지 않게 한다.
     final slides = _allSlides;
+    if (_movedMediaGroup != null &&
+        (_currentSlideIndex >= slides.length ||
+            slides[_currentSlideIndex].stagingUid != _movedMediaGroup!.uid)) {
+      _movedMediaGroup = null;
+    }
     if (_isPresentationOpen) {
       try {
         final pageData = _buildSlidePageData(_currentSlideIndex, slides);
@@ -2077,10 +2090,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   void _copySlides(List<int> slideIndexes) {
     final slides = _allSlides;
     final picked = _pickMovableSlides(slides, slideIndexes);
-    final copied = [
-      for (final g in _slidesToItems(picked))
-        (item: g.item, background: g.background),
-    ];
+    final copied = _slidesToPieces(picked);
     if (copied.isEmpty) return;
     _slideClipboard = copied;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -2104,10 +2114,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         slides[i],
   ];
 
-  /// 고른 페이지를 콘티 항목으로 묶는다. 같은 항목에서 이어진 페이지는 한 항목으로 묶는다 —
+  /// 고른 페이지를 콘티 항목 조각으로 만든다. 같은 항목의 페이지는 한 항목으로 묶는다 —
   /// 곡 페이지를 한 장씩 따로 만들면 사이사이에 자동 여백이 끼기 때문이다.
-  /// 항목의 모든 페이지를 고른 경우엔 원래 항목을 그대로 쓴다(PPT 원본 경로 등이 남게).
-  List<_SlideGroup> _slidesToItems(List<_SlideInfo> picked) {
+  List<_SlidePiece> _slidesToPieces(List<_SlideInfo> picked) {
     final groups = <List<_SlideInfo>>[];
     for (final info in picked) {
       if (groups.isNotEmpty &&
@@ -2117,30 +2126,93 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         groups.add([info]);
       }
     }
-    final result = <_SlideGroup>[];
+    final result = <_SlidePiece>[];
     for (final group in groups) {
       final uid = group.first.stagingUid;
       final entry = _stagingItems.where((e) => e.uid == uid).firstOrNull;
       if (entry == null) continue;
-      final whole = group.length == _pageCount(entry.item);
-      final item = whole
-          ? entry.item
-          : switch (entry.item) {
-              SongStagingItem(:final song) => SongStagingItem(
-                _songWithPages(song, [
-                  for (final s in group)
-                    (korean: s.mainText, english: s.englishText),
-                ]),
-              ),
-              ImageStagingItem(:final sourceName) => ImageStagingItem(
-                sourceName: sourceName,
-                imagePaths: [for (final s in group) s.imagePath!],
-              ),
-              final other => other, // 성경·빈 페이지는 한 장짜리라 그대로
-            };
-      result.add((item: item, background: _itemBackgrounds[uid], pages: group));
+      final byPage = {for (final s in group) s.pageIndexInItem: s};
+      final pieces = itemsFromPages(entry.item, byPage.keys.toList());
+      for (var k = 0; k < pieces.length; k++) {
+        result.add((
+          item: pieces[k].item,
+          background: _itemBackgrounds[uid],
+          // 한 항목에서 나온 조각(곡 + 끝 빈 페이지)은 여백 없이 잇는다.
+          joinNext: k < pieces.length - 1,
+          pages: [for (final j in pieces[k].from) byPage[j]!],
+        ));
+      }
     }
     return result;
+  }
+
+  /// 콘티 [index] 항목을 [parts](각각 원래 페이지 번호 목록)로 다시 만든다. 나누기·옮기기에서 쓴다.
+  /// 첫 조각이 원래 uid 를 이어받고 나머지는 새 uid 다. 한 part 안의 조각끼리는 여백 없이 잇고,
+  /// 원래 항목의 '여백 없음'은 마지막 조각이 이어받는다. part 사이 여백은 부른 쪽이 정한다.
+  /// 배경·메모·지운 표시는 새 자리로 옮기고, 바뀐 슬라이드 키(`uid:페이지:자동여백`)를
+  /// [renamed] 에 적는다. part 에 없는 페이지의 메모·지운 표시는 버린다.
+  /// part 마다 그 조각들의 uid 를 돌려준다.
+  List<List<int>> _rebuildItem(
+    int index,
+    List<List<int>> parts,
+    Map<String, String> renamed,
+  ) {
+    final (:uid, :item) = _stagingItems[index];
+    final total = _pageCount(item);
+    final background = _itemBackgrounds[uid];
+    final wasJoined = _noSpacerUids.remove(uid);
+    final oldNotes = <int, String>{};
+    final oldDeleted = <int>{};
+    for (var j = 0; j <= total; j++) {
+      final note = _slideNotes.remove(_slideKey(uid, j));
+      if (note != null) oldNotes[j] = note;
+      if (_deletedSlideKeys.remove(_slideKey(uid, j))) oldDeleted.add(j);
+    }
+
+    final partUids = <List<int>>[];
+    final placed = <({int uid, StagingItem item})>[];
+    for (final part in parts) {
+      final uids = <int>[];
+      final pieces = itemsFromPages(item, part);
+      for (var k = 0; k < pieces.length; k++) {
+        final pieceUid = placed.isEmpty ? uid : _nextUid++;
+        placed.add((uid: pieceUid, item: pieces[k].item));
+        uids.add(pieceUid);
+        if (k < pieces.length - 1) _noSpacerUids.add(pieceUid);
+        if (pieceUid != uid && background != null) {
+          _itemBackgrounds[pieceUid] = background;
+        }
+        final from = pieces[k].from;
+        for (var p = 0; p < from.length; p++) {
+          final to = _slideKey(pieceUid, p);
+          final note = oldNotes[from[p]];
+          if (note != null) _slideNotes[to] = note;
+          if (oldDeleted.contains(from[p])) _deletedSlideKeys.add(to);
+          renamed['${_slideKey(uid, from[p])}:false'] = '$to:false';
+        }
+      }
+      partUids.add(uids);
+    }
+    if (placed.isEmpty) return partUids;
+    _stagingItems[index] = placed.first;
+    _stagingItems.insertAll(index + 1, placed.skip(1));
+
+    // 뒤 자동 여백은 마지막 조각 뒤로 간다. 빈 페이지 항목은 여백이 없으니 그 페이지로 잇는다.
+    final last = placed.last;
+    if (wasJoined) _noSpacerUids.add(last.uid);
+    final spacerNote = oldNotes[total];
+    final count = _pageCount(last.item);
+    final String spacerKey;
+    if (last.item is BlankStagingItem) {
+      spacerKey = '${_slideKey(last.uid, 0)}:false';
+    } else {
+      spacerKey = '${_slideKey(last.uid, count)}:true';
+      if (spacerNote != null) {
+        _slideNotes[_slideKey(last.uid, count)] = spacerNote;
+      }
+    }
+    renamed['${_slideKey(uid, total)}:true'] = spacerKey;
+    return partUids;
   }
 
   /// 발표 보기 ⌘/Ctrl+V. 현재 슬라이드 바로 뒤에 넣는다. 현재 위치·관객 화면은 그대로다.
@@ -2152,55 +2224,54 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         slides,
         _currentSlideIndex.clamp(0, slides.isEmpty ? 0 : slides.length - 1),
         _slideClipboard,
+        {},
       );
     });
     // 다음 페이지가 바뀌었을 수 있다(싱어 화면의 '다음').
     _sendCurrentSlide();
   }
 
-  /// [slides] 의 [slideIndex] 페이지 바로 뒤에 [items] 를 새 콘티 항목으로 넣고 그 uid 들을 돌려준다.
+  /// [slides] 의 [slideIndex] 페이지 바로 뒤에 [pieces] 를 새 콘티 항목으로 넣고 그 uid 들을 돌려준다.
   /// 곡·PPT 중간 페이지면 그 항목을 그 페이지에서 둘로 나눠 사이에 넣는다(외부 PPT 중간에 찬양·말씀 넣기).
-  /// setState 안에서 부른다.
+  /// 나누느라 바뀐 슬라이드 키는 [renamed] 에 적는다. setState 안에서 부른다.
   List<int> _insertItemsAfterSlide(
     List<_SlideInfo> slides,
     int slideIndex,
-    List<({StagingItem item, SlideBackground? background})> items,
+    List<_SlidePiece> pieces,
+    Map<String, String> renamed,
   ) {
     // 빈 콘티면 맨 앞에 넣는다.
     final current = slideIndex < slides.length ? slides[slideIndex] : null;
     final at = _stagingItems.indexWhere((e) => e.uid == current?.stagingUid);
     // 같은 곡(같은 PPT)끼리 맞닿는 자리만 자동 여백을 빼 이어 붙인다. 다른 곡이면 여백을 둔다.
     final onPage = at >= 0 && !current!.isAutoSpacer;
-    // 원래 다음 항목과 이어져 있던 자리(앞서 곡 중간에 붙여 넣은 자리 등)
-    final wasJoined = onPage && _noSpacerUids.contains(current.stagingUid);
     final tailAt = onPage
-        ? _splitStagingItem(at, current.pageIndexInItem + 1)
+        ? _splitStagingItem(at, current.pageIndexInItem + 1, renamed)
         : null;
     var insertAt = tailAt ?? at + 1;
     final next = insertAt < _stagingItems.length
         ? _stagingItems[insertAt].item
         : null;
-    final first = items.first.item;
-    final last = items.last.item;
     if (onPage) {
-      final head = _stagingItems[at];
-      if (_sameSource(head.item, first)) {
+      // 나눴으면 앞부분의 마지막 조각, 아니면 놓은 페이지의 항목
+      final head = _stagingItems[insertAt - 1];
+      if (_sameSource(head.item, pieces.first.item)) {
         _noSpacerUids.add(head.uid);
       } else {
         _noSpacerUids.remove(head.uid);
       }
     }
     final uids = <int>[];
-    for (final c in items) {
+    for (final c in pieces) {
       final uid = _nextUid++;
       uids.add(uid);
       _stagingItems.insert(insertAt++, (uid: uid, item: c.item));
       if (c.background != null) _itemBackgrounds[uid] = c.background!;
+      if (c.joinNext) _noSpacerUids.add(uid);
     }
-    if ((tailAt != null || wasJoined) &&
-        next != null &&
-        _sameSource(last, next)) {
-      _noSpacerUids.add(_stagingItems[insertAt - 1].uid);
+    // 뒤 항목과 같은 곡·같은 PPT 면 이어 붙인다(나눈 자리, 또는 그 곡 맨 앞에 놓은 경우).
+    if (next != null && _sameSource(pieces.last.item, next)) {
+      _noSpacerUids.add(uids.last);
     }
     return uids;
   }
@@ -2223,91 +2294,114 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
     String keyOf(_SlideInfo s) =>
         '${_slideKey(s.stagingUid, s.pageIndexInItem)}:${s.isAutoSpacer}';
-    final groups = _slidesToItems(picked);
+    final pieces = _slidesToPieces(picked);
     final movedKeys = {for (final s in picked) keyOf(s)};
-    final current = slides[_currentSlideIndex.clamp(0, slides.length - 1)];
-    final currentMovedAt = picked.indexOf(current);
+    final currentAt = _currentSlideIndex.clamp(0, slides.length - 1);
+    final current = slides[currentAt];
     // 놓을 자리가 옮기느라 사라지면(통째로 옮긴 곡의 자동 여백 등) 그 앞 페이지 뒤에 넣는다.
     final anchors = [
       for (var i = afterIndex; i >= 0; i--)
         if (!movedKeys.contains(keyOf(slides[i]))) keyOf(slides[i]),
     ];
-    final notes = [
+    final notes = <String, String>{
       for (final s in picked)
-        _slideNotes.remove(_slideKey(s.stagingUid, s.pageIndexInItem)),
-    ];
+        keyOf(s): ?_slideNotes.remove(
+          _slideKey(s.stagingUid, s.pageIndexInItem),
+        ),
+    };
+    final movedPages = <int, Set<int>>{};
+    for (final s in picked) {
+      (movedPages[s.stagingUid] ??= {}).add(s.pageIndexInItem);
+    }
 
     setState(() {
-      // 1) 옮긴 페이지만 원래 항목에서 뺀다. 남은 페이지는 번호가 당겨지므로 바뀐 키를 적어 둔다.
-      //    남은 페이지가 없는 항목은 항목째 뺀다(여백만 남지 않게).
-      final renamed = <String, String>{};
+      // 단계마다 바뀐 슬라이드 키. 옮긴 페이지는 [placed], 나머지는 단계를 차례로 따라간다.
+      final takenOut = <String, String>{};
+      final split = <String, String>{};
+      final placed = <String, String>{};
+      String resolve(String key) =>
+          placed[key] ?? split[takenOut[key] ?? key] ?? takenOut[key] ?? key;
+
+      // 1) 옮긴 페이지만 원래 항목에서 뺀다. 남은 페이지가 없는 항목은 항목째 뺀다(여백만 남지 않게).
       final emptied = <int>{};
-      for (final g in groups) {
-        final uid = g.pages.first.stagingUid;
-        final moved = {for (final s in g.pages) s.pageIndexInItem};
-        if (!_takePagesOut(uid, moved, renamed)) emptied.add(uid);
+      for (final MapEntry(key: uid, value: moved) in movedPages.entries) {
+        if (!_takePagesOut(uid, moved, takenOut)) emptied.add(uid);
       }
       _removeStagingWhere((e) => emptied.contains(e.uid), prune: false);
       for (final uid in emptied) {
         _itemBackgrounds.remove(uid);
         _deletedSlideKeys.removeWhere((k) => k.startsWith('$uid:'));
+        _slideNotes.removeWhere((k, _) => k.startsWith('$uid:'));
       }
-      String newKey(String key) => renamed[key] ?? key;
 
       // 2) 놓을 자리 뒤에 넣는다.
       final remaining = _allSlides;
       var target = 0;
       for (final key in anchors) {
-        final i = remaining.indexWhere((s) => keyOf(s) == newKey(key));
+        final i = remaining.indexWhere(
+          (s) => keyOf(s) == (takenOut[key] ?? key),
+        );
         if (i >= 0) {
           target = i;
           break;
         }
       }
-      final uids = _insertItemsAfterSlide(remaining, target, [
-        for (final g in groups) (item: g.item, background: g.background),
-      ]);
+      final uids = _insertItemsAfterSlide(remaining, target, pieces, split);
       _pruneSourceWatches();
 
-      // 3) 메모를 새 자리로 옮기고, 보던 페이지를 다시 찾는다.
-      var n = 0;
-      for (var g = 0; g < groups.length; g++) {
-        for (var j = 0; j < groups[g].pages.length; j++) {
-          final note = notes[n++];
-          if (note != null) _slideNotes[_slideKey(uids[g], j)] = note;
+      // 3) 옮긴 페이지의 새 키·메모.
+      for (var g = 0; g < pieces.length; g++) {
+        final pages = pieces[g].pages;
+        for (var j = 0; j < pages.length; j++) {
+          final to = _slideKey(uids[g], j);
+          placed[keyOf(pages[j])] = '$to:false';
+          final note = notes[keyOf(pages[j])];
+          if (note != null) _slideNotes[to] = note;
         }
       }
+
+      // 4) 보던 페이지를 다시 찾는다. 없어졌으면(옮긴 곡의 자동 여백 등) 옮기지 않은
+      //    앞쪽 페이지, 없으면 뒤쪽 — 앞쪽은 보통 앞 곡의 여백이라 화면이 크게 안 바뀐다.
       final result = _allSlides;
-      final int found;
-      if (currentMovedAt >= 0) {
-        final movedSlides = [
-          for (var i = 0; i < result.length; i++)
-            if (uids.contains(result[i].stagingUid) && !result[i].isAutoSpacer)
-              i,
-        ];
-        found = currentMovedAt < movedSlides.length
-            ? movedSlides[currentMovedAt]
-            : -1;
-      } else {
-        found = result.indexWhere((s) => keyOf(s) == newKey(keyOf(current)));
+      int find(_SlideInfo s) {
+        final key = resolve(keyOf(s));
+        return result.indexWhere((r) => keyOf(r) == key);
       }
-      if (found >= 0) _currentSlideIndex = found;
+
+      var found = find(current);
+      for (final i in [
+        for (var i = currentAt - 1; i >= 0; i--) i,
+        for (var i = currentAt + 1; i < slides.length; i++) i,
+      ]) {
+        if (found >= 0) break;
+        if (movedKeys.contains(keyOf(slides[i]))) continue;
+        found = find(slides[i]);
+      }
+      _currentSlideIndex = found >= 0 ? found : 0;
       _clampCurrentSlideIndex();
       if (_currentSlideIndex < result.length) {
-        _previewStagingUid = result[_currentSlideIndex].stagingUid;
+        final now = result[_currentSlideIndex];
+        _previewStagingUid = now.stagingUid;
+        // 재생 중인 동영상이 옮겨지거나 나뉘어 항목(uid)이 바뀌어도 끊지 않고 이어서 튼다.
+        if (found >= 0 &&
+            current.media != null &&
+            now.stagingUid != current.stagingUid) {
+          _movedMediaGroup = (
+            uid: now.stagingUid,
+            group: _mediaGroupOf(current.stagingUid),
+          );
+        }
       }
     });
     _sendCurrentSlide();
   }
 
   /// 곡·PPT 항목 [uid] 에서 [moved] 페이지를 빼고 남은 페이지로 항목을 다시 만든다.
-  /// 메모·지운 페이지 표시는 당겨진 번호로 옮기고, 바뀐 키를 [renamed] 에 적는다
-  /// (`uid:페이지:자동여백여부` 형식). 남은 페이지가 없으면(지운 페이지뿐이어도) false.
+  /// 바뀐 슬라이드 키를 [renamed] 에 적는다. 남은 페이지가 없으면(지운 페이지뿐이어도) false.
   bool _takePagesOut(int uid, Set<int> moved, Map<String, String> renamed) {
     final index = _stagingItems.indexWhere((e) => e.uid == uid);
     if (index < 0) return false;
-    final item = _stagingItems[index].item;
-    final total = _pageCount(item);
+    final total = _pageCount(_stagingItems[index].item);
     final kept = [
       for (var j = 0; j < total; j++)
         if (!moved.contains(j)) j,
@@ -2315,69 +2409,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     if (kept.every((j) => _deletedSlideKeys.contains(_slideKey(uid, j)))) {
       return false;
     }
-    final List<StagingItem> rebuilt;
-    switch (item) {
-      case SongStagingItem(:final song):
-        final pages = song.pairedPages;
-        final keptPages = [for (final j in kept) pages[j]];
-        // 곡 끝의 빈 페이지는 가사로 담으면 사라지므로 빈 페이지 항목으로 남긴다.
-        var end = keptPages.length;
-        while (end > 0 &&
-            keptPages[end - 1].korean.isEmpty &&
-            keptPages[end - 1].english.isEmpty) {
-          end--;
-        }
-        rebuilt = [
-          SongStagingItem(_songWithPages(song, keptPages.sublist(0, end))),
-          for (var j = end; j < keptPages.length; j++) const BlankStagingItem(),
-        ];
-      case ImageStagingItem(:final sourceName, :final imagePaths):
-        // 원본의 일부 페이지만 남으므로 원본 경로(다시 불러오기)는 뺀다 — 나누기와 같은 규칙.
-        rebuilt = [
-          ImageStagingItem(
-            sourceName: sourceName,
-            imagePaths: [for (final j in kept) imagePaths[j]],
-          ),
-        ];
-      default:
-        return false; // 성경·빈 페이지는 한 장짜리라 옮기면 남는 게 없다
-    }
-
-    // 새 위치: 처음 것은 원래 uid 의 앞쪽 페이지, 끝 빈 페이지들은 새 빈 페이지 항목.
-    final targets = <(int, int)>[];
-    _stagingItems[index] = (uid: uid, item: rebuilt.first);
-    final firstCount = _pageCount(rebuilt.first);
-    for (var k = 0; k < firstCount; k++) {
-      targets.add((uid, k));
-    }
-    var lastUid = uid;
-    for (var r = 1; r < rebuilt.length; r++) {
-      lastUid = _nextUid++;
-      _stagingItems.insert(index + r, (uid: lastUid, item: rebuilt[r]));
-      targets.add((lastUid, 0));
-      final background = _itemBackgrounds[uid];
-      if (background != null) _itemBackgrounds[lastUid] = background;
-    }
-
-    final oldNotes = <int, String>{};
-    final oldDeleted = <int>{};
-    for (var j = 0; j < total; j++) {
-      final note = _slideNotes.remove(_slideKey(uid, j));
-      if (note != null) oldNotes[j] = note;
-      if (_deletedSlideKeys.remove(_slideKey(uid, j))) oldDeleted.add(j);
-    }
-    for (var k = 0; k < kept.length; k++) {
-      final (toUid, toPage) = targets[k];
-      final j = kept[k];
-      final to = _slideKey(toUid, toPage);
-      if (oldNotes[j] != null) _slideNotes[to] = oldNotes[j]!;
-      if (oldDeleted.contains(j)) _deletedSlideKeys.add(to);
-      renamed['${_slideKey(uid, j)}:false'] = '$to:false';
-    }
-    // 뒤 자동 여백: 끝에 빈 페이지 항목이 생겼으면 그쪽이 여백 없음 표시를 이어받는다.
-    if (lastUid != uid && _noSpacerUids.remove(uid)) _noSpacerUids.add(lastUid);
-    renamed['${_slideKey(uid, total)}:true'] =
-        '${_slideKey(uid, firstCount)}:true';
+    _rebuildItem(index, [kept], renamed);
     return true;
   }
 
@@ -2411,64 +2443,23 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   }
 
   /// 곡·PPT 항목 [index] 를 [cut] 페이지 앞에서 둘로 나누고 뒷부분이 들어간 자리를 돌려준다.
-  /// 배경·메모·지운 페이지 표시도 같이 옮긴다. 뒤에 남은(지우지 않은) 페이지가 없으면 null.
-  int? _splitStagingItem(int index, int cut) {
+  /// 배경·메모·지운 페이지 표시도 같이 옮기고, 바뀐 슬라이드 키를 [renamed] 에 적는다.
+  /// 뒤에 남은(지우지 않은) 페이지가 없으면 null.
+  int? _splitStagingItem(int index, int cut, Map<String, String> renamed) {
     final entry = _stagingItems[index];
+    if (entry.item is! SongStagingItem && entry.item is! ImageStagingItem) {
+      return null;
+    }
     final length = _pageCount(entry.item);
     final hasTail = [
       for (var j = cut; j < length; j++) _slideKey(entry.uid, j),
     ].any((k) => !_deletedSlideKeys.contains(k));
     if (!hasTail) return null;
-    final StagingItem head;
-    final StagingItem tail;
-    // 곡 끝의 빈 페이지는 가사로 담으면 사라지므로 앞부분 끝 빈 페이지는 빈 페이지 항목으로 뺀다.
-    var headEnd = cut;
-    switch (entry.item) {
-      case SongStagingItem(:final song):
-        final pages = song.pairedPages;
-        while (headEnd > 0 &&
-            pages[headEnd - 1].korean.isEmpty &&
-            pages[headEnd - 1].english.isEmpty) {
-          headEnd--;
-        }
-        head = SongStagingItem(_songWithPages(song, pages.sublist(0, headEnd)));
-        tail = SongStagingItem(_songWithPages(song, pages.sublist(cut)));
-      case ImageStagingItem(:final sourceName, :final imagePaths):
-        head = ImageStagingItem(
-          sourceName: sourceName,
-          imagePaths: imagePaths.sublist(0, cut),
-        );
-        tail = ImageStagingItem(
-          sourceName: sourceName,
-          imagePaths: imagePaths.sublist(cut),
-        );
-      default:
-        return null;
-    }
-    _stagingItems[index] = (uid: entry.uid, item: head);
-    var at = index + 1;
-    void move(int j, int toUid, int toPage) {
-      final from = _slideKey(entry.uid, j);
-      final to = _slideKey(toUid, toPage);
-      final note = _slideNotes.remove(from);
-      if (note != null) _slideNotes[to] = note;
-      if (_deletedSlideKeys.remove(from)) _deletedSlideKeys.add(to);
-    }
-
-    for (var j = headEnd; j < cut; j++) {
-      final uid = _nextUid++;
-      _stagingItems.insert(at++, (uid: uid, item: const BlankStagingItem()));
-      move(j, uid, 0);
-    }
-    final uid = _nextUid++;
-    _stagingItems.insert(at, (uid: uid, item: tail));
-    final background = _itemBackgrounds[entry.uid];
-    if (background != null) _itemBackgrounds[uid] = background;
-    if (_noSpacerUids.contains(entry.uid)) _noSpacerUids.add(uid);
-    for (var j = cut; j < length; j++) {
-      move(j, uid, j - cut);
-    }
-    return at;
+    final parts = _rebuildItem(index, [
+      [for (var j = 0; j < cut; j++) j],
+      [for (var j = cut; j < length; j++) j],
+    ], renamed);
+    return _stagingItems.indexWhere((e) => e.uid == parts.last.first);
   }
 
   static PraiseSong _songWithPages(
@@ -7980,6 +7971,52 @@ String normalizeEditableLyrics(String raw) {
   return pages.join('\n\n');
 }
 
+/// [item] 의 [pages](원래 페이지 번호, 오름차순)만 담은 항목들. 나누기·복사·옮기기가 같이 쓴다.
+/// 곡 끝의 빈 페이지는 가사로 담으면 사라지므로 빈 페이지 항목으로 뗀다(가사가 하나도 없으면
+/// 전부 빈 페이지 항목). [from] 은 각 항목에 들어간 원래 페이지 번호.
+/// 페이지 전부면 원래 항목을 그대로 돌려준다(PPT 원본 경로가 남게). 원본의 일부만 담은 PPT 는
+/// 다시 구우면 전 페이지가 들어오므로 원본 경로를 뺀다.
+@visibleForTesting
+List<({StagingItem item, List<int> from})> itemsFromPages(
+  StagingItem item,
+  List<int> pages,
+) {
+  if (pages.isEmpty) return const [];
+  if (pages.length == _PraiseHomePageState._pageCount(item)) return [(item: item, from: pages)];
+  switch (item) {
+    case SongStagingItem(:final song):
+      final all = song.pairedPages;
+      bool isEmpty(int j) => all[j].korean.isEmpty && all[j].english.isEmpty;
+      var end = pages.length;
+      while (end > 0 && isEmpty(pages[end - 1])) {
+        end--;
+      }
+      return [
+        if (end > 0)
+          (
+            item: SongStagingItem(
+              _PraiseHomePageState._songWithPages(song, [for (final j in pages.take(end)) all[j]]),
+            ),
+            from: pages.sublist(0, end),
+          ),
+        for (final j in pages.skip(end))
+          (item: const BlankStagingItem(), from: [j]),
+      ];
+    case ImageStagingItem(:final sourceName, :final imagePaths):
+      return [
+        (
+          item: ImageStagingItem(
+            sourceName: sourceName,
+            imagePaths: [for (final j in pages) imagePaths[j]],
+          ),
+          from: pages,
+        ),
+      ];
+    default:
+      return [(item: item, from: pages)];
+  }
+}
+
 // 페이지 목록 → 저장 형식 인코딩.
 @visibleForTesting
 String encodePages(Iterable<String> pages) {
@@ -9798,6 +9835,10 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
     return true;
   }
 
+  void _endDrag() {
+    if (_isDragging) setState(() => _isDragging = false);
+  }
+
   /// 썸네일 [i] 를 끌면 옮길 페이지들. 골라 담은 페이지를 끌면 고른 것 전부, 아니면 그 한 장.
   List<int> _dragSourcesFor(int i) =>
       _marked.contains(i) ? (_marked.toList()..sort()) : [i];
@@ -9808,7 +9849,8 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
     final canDrag = !slide.isAutoSpacer && slide.stagingUid >= 0;
     return _ThumbDragDrop(
       sources: canDrag ? () => _dragSourcesFor(i) : null,
-      feedback: _dragFeedback(i, cs, thumbW),
+      // 끌 때만 만든다(썸네일마다 미리 그리지 않게).
+      feedbackBuilder: (_) => _dragFeedback(i, cs, thumbW),
       // 맨 앞 빈 페이지 앞에는 넣을 수 없다.
       allowBefore: i > 0,
       onDragStateChanged: (dragging) {
@@ -10616,6 +10658,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
                   controller: _gridScrollController,
                   axis: Axis.vertical,
                   isActive: _isDragging,
+                  onPointerEnd: _endDrag,
                   child: GridView.builder(
                     controller: _gridScrollController,
                     padding: const EdgeInsets.all(pad),
@@ -10690,6 +10733,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
       controller: _stripScrollController,
       axis: Axis.horizontal,
       isActive: _isDragging,
+      onPointerEnd: _endDrag,
       child: ListView.builder(
         controller: _stripScrollController,
         scrollDirection: Axis.horizontal,
@@ -10757,7 +10801,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
 class _ThumbDragDrop extends StatefulWidget {
   const _ThumbDragDrop({
     required this.sources,
-    required this.feedback,
+    required this.feedbackBuilder,
     required this.allowBefore,
     required this.onDragStateChanged,
     required this.onDrop,
@@ -10766,7 +10810,7 @@ class _ThumbDragDrop extends StatefulWidget {
 
   // null 이면 끌 수 없다(놓을 자리로만 쓴다). 끄는 순간의 고른 페이지를 읽도록 함수로 받는다.
   final List<int> Function()? sources;
-  final Widget feedback;
+  final WidgetBuilder feedbackBuilder;
   final bool allowBefore;
   final ValueChanged<bool> onDragStateChanged;
   final void Function(List<int> sources, bool after) onDrop;
@@ -10836,11 +10880,12 @@ class _ThumbDragDropState extends State<_ThumbDragDrop> {
       dragAnchorStrategy: pointerDragAnchorStrategy,
       feedback: Transform.translate(
         offset: const Offset(-24, -24),
-        child: widget.feedback,
+        child: Builder(builder: widget.feedbackBuilder),
       ),
       childWhenDragging: Opacity(opacity: 0.4, child: target),
       onDragStarted: () => widget.onDragStateChanged(true),
-      // 놓은 뒤 목록이 다시 그려지며 이 위젯이 사라지면 불리지 않으므로 onDrop 쪽에서도 끈다.
+      // 끄는 동안 자동 스크롤로 이 썸네일이 목록에서 빠지면 불리지 않는다 —
+      // 그래서 목록의 _EdgeAutoScroll 이 손을 뗄 때도 끈다.
       onDragEnd: (_) => widget.onDragStateChanged(false),
       child: target,
     );
@@ -10854,12 +10899,15 @@ class _EdgeAutoScroll extends StatefulWidget {
     required this.controller,
     required this.axis,
     required this.isActive,
+    required this.onPointerEnd,
     required this.child,
   });
 
   final ScrollController controller;
   final Axis axis;
   final bool isActive;
+  // 손을 떼면(놓기·취소 어느 쪽이든) 부른다. 끄던 썸네일이 사라져 onDragEnd 가 안 와도 끄기를 끝낸다.
+  final VoidCallback onPointerEnd;
   final Widget child;
 
   @override
@@ -10922,8 +10970,14 @@ class _EdgeAutoScrollState extends State<_EdgeAutoScroll> {
   Widget build(BuildContext context) {
     return Listener(
       onPointerMove: _onMove,
-      onPointerUp: (_) => _stop(),
-      onPointerCancel: (_) => _stop(),
+      onPointerUp: (_) {
+        _stop();
+        widget.onPointerEnd();
+      },
+      onPointerCancel: (_) {
+        _stop();
+        widget.onPointerEnd();
+      },
       child: widget.child,
     );
   }
