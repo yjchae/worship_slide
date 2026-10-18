@@ -9,8 +9,11 @@ import 'slide_page_data.dart';
 /// 슬라이드 한 장을 렌더링하는 공유 위젯.
 /// 발표 팝업과 컨트롤러 썸네일 모두 이 위젯을 사용한다.
 class SlideRenderView extends StatelessWidget {
-  const SlideRenderView({super.key, required this.data});
+  const SlideRenderView({super.key, required this.data, this.textOnly = false});
   final SlidePageData data;
+
+  /// 배경(색·이미지)과 미디어 표시 없이 글자만 — 배경 영상 위에 얹을 가사 PNG 를 굽는 데 쓴다.
+  final bool textOnly;
 
   // ppt_tool render가 굽는 이미지 가로 픽셀 (RENDER_IMAGE_WIDTH와 동일)
   static const int _imageMaxWidth = 1920;
@@ -35,7 +38,23 @@ class SlideRenderView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (textOnly) return _buildSlide(context);
     final media = data.media;
+    final backdrop = data.backdrop;
+    if (media == null && backdrop != null) {
+      // 미리보기는 영상을 틀지 않는다. 대체 배경(이미지·색) 위 가사 + 작은 표시.
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          _buildSlide(context),
+          _mediaBadge(
+            Icons.movie_filter_outlined,
+            '배경 영상',
+            covers: false,
+          ),
+        ],
+      );
+    }
     if (media == null) return _buildSlide(context);
     // 미리보기는 재생하지 않는다 — 무엇이 나갈지만 표시한다. 화면 전체 동영상·유튜브는
     // 발표 창에서도 페이지를 덮으므로 검은 바탕, 음악·PPT 안 동영상은 페이지 위 작은 표시.
@@ -44,36 +63,40 @@ class SlideRenderView extends StatelessWidget {
       fit: StackFit.expand,
       children: [
         if (covers) const ColoredBox(color: Colors.black) else _buildSlide(context),
-        Align(
+        _mediaBadge(mediaIcon(media.kind), media.label, covers: covers),
+      ],
+    );
+  }
+
+  static Widget _mediaBadge(IconData icon, String label, {required bool covers}) {
+    return Align(
+      alignment: covers ? Alignment.center : Alignment.topRight,
+      child: FractionallySizedBox(
+        widthFactor: covers ? 0.8 : 0.4,
+        heightFactor: covers ? 0.3 : 0.14,
+        child: FittedBox(
           alignment: covers ? Alignment.center : Alignment.topRight,
-          child: FractionallySizedBox(
-            widthFactor: covers ? 0.8 : 0.4,
-            heightFactor: covers ? 0.3 : 0.14,
-            child: FittedBox(
-              alignment: covers ? Alignment.center : Alignment.topRight,
-              child: Container(
-                margin: const EdgeInsets.all(6),
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.black54,
-                  borderRadius: BorderRadius.circular(6),
+          child: Container(
+            margin: const EdgeInsets.all(6),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.black54,
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, color: Colors.white, size: 18),
+                const SizedBox(width: 6),
+                Text(
+                  label,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
                 ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(mediaIcon(media.kind), color: Colors.white, size: 18),
-                    const SizedBox(width: 6),
-                    Text(
-                      media.label,
-                      style: const TextStyle(color: Colors.white, fontSize: 13),
-                    ),
-                  ],
-                ),
-              ),
+              ],
             ),
           ),
         ),
-      ],
+      ),
     );
   }
 
@@ -86,7 +109,7 @@ class SlideRenderView extends StatelessWidget {
   Widget _buildSlide(BuildContext context) {
     final style = data.style;
     final isBible = data.isBible;
-    final backgroundImage = _backgroundImageFile(style);
+    final backgroundImage = textOnly ? null : _backgroundImageFile(style);
 
     // 외부 PPT 이미지 슬라이드는 디자인 설정을 타지 않고 원본 그대로 보여준다.
     final imagePath = data.imagePath;
@@ -201,7 +224,7 @@ class SlideRenderView extends StatelessWidget {
             titleOffsetY;
 
         return Container(
-          color: style.backgroundColor,
+          color: textOnly ? null : style.backgroundColor,
           child: Stack(
             clipBehavior: Clip.hardEdge,
             children: [

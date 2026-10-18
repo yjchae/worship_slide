@@ -17,6 +17,8 @@ namespace {
 constexpr wchar_t kAppHost[] = L"app.worship";
 // 동영상·음악 파일 폴더. Dart kWindowsMediaHost 와 같아야 한다.
 constexpr wchar_t kMediaHost[] = L"media.worship";
+// 배경 영상 위 가사 PNG 폴더. Dart kWindowsOverlayHost 와 같아야 한다.
+constexpr wchar_t kOverlayHost[] = L"overlay.worship";
 
 std::wstring TempDir() {
   wchar_t buf[MAX_PATH + 1] = {};
@@ -71,6 +73,10 @@ const std::string& MediaLayer::current_key() const {
 void MediaLayer::Update(const Media* media, double image_aspect) {
   if (current_ && media && media->key == current_->media.key) {
     LayoutSlot(*current_);
+    if (!media->overlay_js.empty() && media->overlay_js != current_->media.overlay_js) {
+      current_->media.overlay_js = media->overlay_js;
+      Run(media->overlay_js);
+    }
     return;
   }
   Retire();
@@ -161,6 +167,11 @@ void MediaLayer::CreateController(const std::shared_ptr<Slot>& slot) {
             if (!s->media.path.empty()) {
               view3->SetVirtualHostNameToFolderMapping(
                   kMediaHost, FolderOf(s->media.path).c_str(),
+                  COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_DENY_CORS);
+            }
+            if (!s->media.overlay_dir.empty()) {
+              view3->SetVirtualHostNameToFolderMapping(
+                  kOverlayHost, s->media.overlay_dir.c_str(),
                   COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_DENY_CORS);
             }
             EventRegistrationToken token{};

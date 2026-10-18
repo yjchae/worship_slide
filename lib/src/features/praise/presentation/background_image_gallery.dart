@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
 
 import '../data/background_image_library.dart';
 
@@ -45,10 +46,11 @@ class _BackgroundImageGalleryState extends State<BackgroundImageGallery> {
 
   Future<void> _register() async {
     await FilePicker.skipEntitlementsChecks();
+    final video = widget.library.isVideo;
     final result = await FilePicker.pickFiles(
-      dialogTitle: '배경 이미지 등록 (PNG / JPG)',
+      dialogTitle: video ? '배경 영상 등록 (MP4 권장)' : '배경 이미지 등록 (PNG / JPG)',
       type: FileType.custom,
-      allowedExtensions: BackgroundImageLibrary.allowedExtensions,
+      allowedExtensions: widget.library.extensions,
       allowMultiple: true,
     );
     if (result == null) return;
@@ -61,21 +63,27 @@ class _BackgroundImageGalleryState extends State<BackgroundImageGallery> {
       if (!mounted) return;
       ScaffoldMessenger.maybeOf(
         context,
-      )?.showSnackBar(SnackBar(content: Text('이미지를 등록하지 못했습니다: $e')));
+      )?.showSnackBar(
+        SnackBar(content: Text('${video ? '영상' : '이미지'}을 등록하지 못했습니다: $e')),
+      );
     }
     await _reload();
     if (last != null) widget.onChanged(last);
   }
 
   Future<void> _remove(String path) async {
+    final video = widget.library.isVideo;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('배경 이미지 삭제'),
-        content: const Text(
-          '공통 모음에서 이 이미지를 지웁니다.\n'
-          '이 이미지를 배경으로 쓰는 항목(저장한 콘티 포함)은 배경 색만 남습니다.\n'
-          '이미 적용한 헌금송 화면은 그대로입니다.',
+        title: Text(video ? '배경 영상 삭제' : '배경 이미지 삭제'),
+        content: Text(
+          video
+              ? '공통 모음에서 이 영상을 지웁니다.\n'
+                    '이 영상을 배경으로 쓰는 항목(저장한 콘티 포함)은 배경 이미지·색만 남습니다.'
+              : '공통 모음에서 이 이미지를 지웁니다.\n'
+                    '이 이미지를 배경으로 쓰는 항목(저장한 콘티 포함)은 배경 색만 남습니다.\n'
+                    '이미 적용한 헌금송 화면은 그대로입니다.',
         ),
         actions: [
           TextButton(
@@ -133,26 +141,59 @@ class _BackgroundImageGalleryState extends State<BackgroundImageGallery> {
             selected: selected == path,
             onTap: () => widget.onChanged(path),
             onRemove: _paths.contains(path) ? () => _remove(path) : null,
-            child: Image.file(
-              File(path),
-              fit: BoxFit.cover,
-              cacheWidth: 192,
-              errorBuilder: (_, _, _) =>
-                  const Icon(Icons.broken_image_outlined, size: 18),
-            ),
+            tooltip: widget.library.isVideo ? _displayName(path) : null,
+            child: widget.library.isVideo
+                ? _videoTile(path)
+                : Image.file(
+                    File(path),
+                    fit: BoxFit.cover,
+                    cacheWidth: 192,
+                    errorBuilder: (_, _, _) =>
+                        const Icon(Icons.broken_image_outlined, size: 18),
+                  ),
           ),
         _tile(
           context,
           selected: false,
           onTap: _register,
           child: Center(
-            child: Icon(Icons.add_photo_alternate_outlined, color: cs.primary),
+            child: Icon(
+              widget.library.isVideo
+                  ? Icons.video_call_outlined
+                  : Icons.add_photo_alternate_outlined,
+              color: cs.primary,
+            ),
           ),
-          tooltip: '이미지 등록',
+          tooltip: widget.library.isVideo ? '영상 등록' : '이미지 등록',
         ),
       ],
     );
   }
+
+  // 등록할 때 앞에 붙인 시각(`1700000000000_`)은 빼고 보여 준다.
+  static String _displayName(String path) =>
+      p.basename(path).replaceFirst(RegExp(r'^\d{10,}_'), '');
+
+  // 영상은 썸네일을 못 뽑으므로(플러그인 없이) 아이콘 + 파일 이름.
+  Widget _videoTile(String path) => ColoredBox(
+    color: const Color(0xFF1B2028),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.movie_outlined, size: 18, color: Colors.white70),
+          const SizedBox(height: 2),
+          Text(
+            _displayName(path),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 10, color: Colors.white70),
+          ),
+        ],
+      ),
+    ),
+  );
 
   Widget _tile(
     BuildContext context, {

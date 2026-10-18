@@ -144,10 +144,20 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
   private var mediaRect: [Double]?
   private var mediaFadeOut = 0.0
   private var mediaAspect = 16.0 / 9.0  // PPT 안 동영상 레터박스용 페이지 이미지 비율
+  // 배경 영상(가사 뒤 반복 재생) 레이어에 지금 띄운 가사 PNG 를 바꾸는 JS. 같은 영상으로 페이지만
+  // 넘어가면 레이어는 그대로 두고 이것만 다시 부른다(Dart SlideBackdrop).
+  private var mediaOverlayJs: String?
 
   private func updateMedia(_ media: [String: Any]?) {
     let key = media?["key"] as? String
-    if key == mediaKey { layoutMedia(); return }
+    if key == mediaKey {
+      layoutMedia()
+      if let js = media?["overlay_js"] as? String, js != mediaOverlayJs {
+        mediaOverlayJs = js
+        mediaView?.evaluateJavaScript(js, completionHandler: nil)
+      }
+      return
+    }
     retireMedia()
     guard let media = media, let key = key, let html = media["html"] as? String,
           let content = window?.contentView else { return }
@@ -167,6 +177,7 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
     mediaView = view
     mediaKey = key
     mediaKind = media["kind"] as? String ?? ""
+    mediaOverlayJs = media["overlay_js"] as? String  // 첫 가사 PNG 는 페이지 HTML 에 들어 있다
     mediaRect = (media["rect"] as? [NSNumber])?.map { $0.doubleValue }
     mediaFadeOut = (media["fade_out"] as? NSNumber)?.doubleValue ?? 0
     mediaAspect = 16.0 / 9.0

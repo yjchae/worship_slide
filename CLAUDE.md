@@ -79,7 +79,10 @@ lib/
       praise_home_page.dart          -- 단일 화면(5,700줄). 검색·성경·디자인·콘티·발표 제어 전부 여기
       slide_page_data.dart           -- 발표 창에 보낼 한 페이지의 JSON 표현
       singer_view_data.dart          -- 싱어 화면에 보낼 현재+다음 페이지 JSON 표현
-      slide_render_view.dart         -- 미리보기/썸네일용 Flutter 슬라이드 렌더러
+      slide_render_view.dart         -- 미리보기/썸네일용 Flutter 슬라이드 렌더러 (textOnly = 가사 PNG 굽기용)
+      slide_backdrop.dart            -- 배경 영상(가사 뒤 반복 재생) 레이어 페이지 HTML + 발표 창 media JSON
+      lyrics_overlay_renderer.dart   -- 배경 영상 위에 얹을 가사 투명 PNG 굽기(화면 밖 위젯 렌더)
+      presentation_timer.dart        -- 발표 경과 시간(기준 시각 방식). 발표 보기 시계·싱어 화면이 같이 본다
       offering_dialog.dart           -- 헌금송 디자인 등록 / 항목에 적용(높낮이) 다이얼로그
       offering_overlay_painter.dart  -- 헌금송 띠(라인 + 헌금 + 계좌) painter. 미리보기·PNG 공용
       sync_dialog.dart               -- 동기화 설정 (가져오기 메뉴 '찬양·콘티 동기화'·상태 줄): 접속 키 넣기·찬양 동기화 버튼
@@ -125,6 +128,12 @@ lib/
   전체화면 풀기만, 창 닫기는 Ctrl+F4(macOS 는 ⌘F4 도) — 발표 창과 같은 이유(잘못 눌러 꺼지는 사고 방지)
 - 열 때 키 포커스를 가져가지 않는다(메인 창 넘기기 단축키 유지). 싱어 창을 클릭해 포커스가 가도 화살표·Space·PageUp/Down 은
   `singerKey` 로 Dart 에 넘겨 똑같이 넘어간다
+- **시계·경과 시간**: 머리줄에 `오후 7:32 · 12:05 / 20:00`(목표 80% 넘으면 주황, 넘기면 빨강). 값은 `PresentationTimer`
+  (쌓인 시간 + 흐르기 시작한 시각) 하나 — 발표를 시작하면 0부터, 끝나면 멈춘다. 싱어 JSON `clock`
+  (`show`·`elapsed_ms`·`running`·`target_ms`·`rev`)을 받은 순간부터 각 화면이 자기 시계로 센다(매초 안 보낸다).
+  일시정지·리셋·목표·'싱어 표시' 스위치(발표 보기 경과 시간 칸)는 `rev` 를 올리고 알린다 → `_sendSingerView`.
+  흐르는 `elapsed_ms` 는 다시 보낼지 비교할 때 뺀다(`_singerDedupeKey`). 휴대폰 서버는 `elapsed_ms` 를 빼고 저장했다가
+  보낼 때 그 순간 값을 `{"clock_ms":N,` 로 맨 앞에 붙인다 — 늦게 연 휴대폰도 맞는 값을 받고, 폴링마다 1.5초 넘게 어긋날 때만 다시 맞춘다
 - 갱신은 `_sendCurrentSlide` 에 얹혀 있다(페이지가 바뀌는 모든 경로가 거기를 지난다). 블랙아웃 중에도 가사는 계속
   보이고 "관객 화면 꺼짐" 표시만 뜬다. 발표를 끝내면 같이 닫힌다
 - macOS `SingerWindowController`(MainFlutterWindow.swift, WKWebView HTML), Windows `windows/runner/singer_window.cpp`(GDI)
@@ -306,6 +315,21 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
     (Dart `_allSlides` 는 앞 항목의 uid 를, Python `export_presentation` 은 앞 항목의
     background 를 그대로 빌려 쓴다)
   - 저장은 `worship_conti_items.background` 한 칸(JSON, DB version 11)
+- **배경 영상** (가사 뒤 반복 재생, '항목 배경' 다이얼로그의 '배경 영상'): `SlideBackground.videoPath`·`videoDim`
+  (JSON `video_path`·`video_dim`, 마이그레이션 없음). 영상은 `BackgroundImageLibrary.videos()`(`Application Support/background_videos/`,
+  mp4·m4v·mov) 에서 고른다. **발표 창에서만** 튼다 — 미리보기·PPTX 는 배경 이미지(없으면 색)를 쓰고, `.wsconti`·클라우드 콘티는
+  `mapBackgroundPaths` 가 영상 칸을 지운다(보낼 때·받을 때 둘 다). PPT 이미지 페이지·자체 미디어가 있는 페이지에는 안 깐다(`_backdropFor`).
+  - Windows 슬라이드는 부모 창 GDI, 미디어 레이어는 그 위 WebView2 자식 창이라 GDI 글자를 영상 위에 못 그린다. 그래서 **가사만
+    투명 PNG 로 구워**(`LyricsOverlayRenderer`, 미리보기와 같은 `SlideRenderView(textOnly: true)` 를 화면 밖에서 1920x1080 으로)
+    레이어 페이지가 `배경 색 → 영상(cover) → 어둡게 → 가사 PNG(contain)` 를 겹쳐 그린다. 두 플랫폼이 같은 방식이다
+  - 발표 창엔 평소 미디어와 같은 `media` 칸으로 간다(`SlideBackdrop.toPageJson`, `backdrop: true`). **key 는 영상 경로·어둡기뿐**이라
+    페이지를 넘기거나 지워도, 붙여 넣기로 곡이 둘로 나뉘어도, 같은 영상 곡이 이어져도 끊지 않는다. key 가 같으면 네이티브는
+    `overlay_js`(`setOverlay(url)`)가 바뀌었을 때만 실행한다. 레이어는 다 읽은 PNG 로만 바꾼다(깜빡임 없음)
+  - PNG 이름 = 페이지 글자·스타일의 FNV 해시(`lyrics_overlays/ov_<해시>.png`), 하루 지난 것은 처음 쓸 때 지운다. 보낼 때 굽고 다음 페이지는
+    미리 굽는다(`_presentablePage`). 굽는 사이 다음 페이지로 넘어갔으면 옛 페이지는 보내지 않는다(`_pageSendSeq`). 못 구우면 평소 슬라이드
+  - Windows 는 PNG 폴더를 `https://overlay.worship/` 로 매핑한다(`overlay_dir`). macOS 는 file://
+  - 화면 비율이 16:9 가 아니면 가사 PNG 가 contain 으로 들어가 평소 슬라이드(가로로 늘어남)와 위치가 조금 다르다. 소리는 늘 끈다.
+    재생바는 안 뜬다. 블랙아웃은 레이어 전체를 0.4초에 걸쳐 감춘다
 - **헌금송**: 찬양을 "배경 이미지 + 노란 '헌금' · '은행 계좌' 두 줄 + 위아래 라인" 위에 띄우는 기능.
   **항목별 배경 오버라이드 위에 얹었다** — 띠까지 그린 그림을 1920x1080 PNG 한 장으로 구워
   (`OfferingBackgroundComposer`) 그 항목의 `SlideBackground.imagePath` 로 건다. 그래서 렌더러 네 곳은

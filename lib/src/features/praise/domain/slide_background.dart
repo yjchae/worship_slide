@@ -17,6 +17,8 @@ class SlideBackground {
   const SlideBackground({
     required this.color,
     this.imagePath,
+    this.videoPath,
+    this.videoDim = defaultVideoDim,
     this.offering,
     this.lyricsPosition,
     this.lyricsOffsetY,
@@ -33,6 +35,19 @@ class SlideBackground {
 
   /// 이 항목의 배경 이미지 경로. null 이면 [color] 단색 배경.
   final String? imagePath;
+
+  /// 이 항목의 배경 영상(공통 영상 모음의 mp4 등). 발표 창에서만 가사 뒤에 반복 재생한다.
+  /// 미리보기·PPTX·`.wsconti` 는 영상을 모르고 [imagePath](없으면 [color])를 쓴다 —
+  /// 그래서 이미지는 영상이 없을 때의 대체 배경이 된다.
+  final String? videoPath;
+
+  bool get hasVideo => videoPath != null && videoPath!.isNotEmpty;
+
+  /// 배경 영상 위에 까는 검정의 불투명도(0~0.7). 밝은 영상(불꽃 등)에서도 가사가 읽히게.
+  final double videoDim;
+
+  static const double defaultVideoDim = 0.3;
+  static const double maxVideoDim = 0.7;
 
   /// 헌금송 배경이면 [imagePath] 를 구워 낸 디자인(이 항목의 높낮이 포함).
   /// 다시 열어 높낮이만 고치거나, PNG 가 사라졌을 때 다시 굽는 데 쓴다.
@@ -110,6 +125,8 @@ class SlideBackground {
   SlideBackground copyWith({
     Color? color,
     Object? imagePath = _sentinel,
+    Object? videoPath = _sentinel,
+    double? videoDim,
     Object? offering = _sentinel,
     Object? lyricsPosition = _sentinel,
     Object? lyricsOffsetY = _sentinel,
@@ -125,6 +142,10 @@ class SlideBackground {
       imagePath: identical(imagePath, _sentinel)
           ? this.imagePath
           : imagePath as String?,
+      videoPath: identical(videoPath, _sentinel)
+          ? this.videoPath
+          : videoPath as String?,
+      videoDim: videoDim ?? this.videoDim,
       offering: identical(offering, _sentinel)
           ? this.offering
           : offering as OfferingDesign?,
@@ -156,6 +177,8 @@ class SlideBackground {
   Map<String, dynamic> toJson() => {
     'color': colorToHex(color),
     if (hasImage) 'image_path': imagePath,
+    if (hasVideo) 'video_path': videoPath,
+    if (hasVideo) 'video_dim': videoDim,
     if (offering != null) 'offering': offering!.toJson(),
     if (lyricsPosition != null) 'text_position': lyricsPosition!.name,
     if (lyricsOffsetY != null) 'text_offset_y': lyricsOffsetY,
@@ -171,6 +194,7 @@ class SlideBackground {
     final color = tryParseHexColor(json['color'] as String?);
     if (color == null) return null;
     final path = json['image_path'] as String?;
+    final video = json['video_path'] as String?;
     final offering = json['offering'];
     final position = json['text_position'] as String?;
     final offsetY = (json['text_offset_y'] as num?)?.toDouble();
@@ -179,6 +203,9 @@ class SlideBackground {
     return SlideBackground(
       color: color,
       imagePath: (path == null || path.isEmpty) ? null : path,
+      videoPath: (video == null || video.isEmpty) ? null : video,
+      videoDim: ((json['video_dim'] as num?)?.toDouble() ?? defaultVideoDim)
+          .clamp(0.0, maxVideoDim),
       offering: offering is Map
           ? OfferingDesign.fromJson(offering.cast<String, dynamic>())
           : null,
@@ -216,6 +243,8 @@ class SlideBackground {
       other is SlideBackground &&
       other.color == color &&
       other.imagePath == imagePath &&
+      other.videoPath == videoPath &&
+      other.videoDim == videoDim &&
       other.offering == offering &&
       other.lyricsPosition == lyricsPosition &&
       other.lyricsOffsetY == lyricsOffsetY &&
@@ -230,6 +259,8 @@ class SlideBackground {
   int get hashCode => Object.hash(
     color,
     imagePath,
+    videoPath,
+    videoDim,
     offering,
     lyricsPosition,
     lyricsOffsetY,

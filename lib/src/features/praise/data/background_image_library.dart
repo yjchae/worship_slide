@@ -9,14 +9,33 @@ import 'package:path_provider/path_provider.dart';
 /// 다운로드 폴더에 있다가 지워지거나 옮겨져도 배경이 깨지지 않게 하려는 것.
 /// (폴더 이름은 헌금송 전용이던 시절 그대로 — 이미 등록한 이미지가 그대로 목록에 뜬다.)
 /// 목록은 따로 저장하지 않고 폴더 안의 파일이 곧 목록이다.
+///
+/// [BackgroundImageLibrary.videos] 는 같은 방식의 배경 영상 모음(`background_videos/`)이다.
 class BackgroundImageLibrary {
+  const BackgroundImageLibrary()
+    : _folder = 'offering_images',
+      extensions = allowedExtensions,
+      isVideo = false;
+
+  const BackgroundImageLibrary.videos()
+    : _folder = 'background_videos',
+      extensions = videoExtensions,
+      isVideo = true;
+
   /// PNG/JPG 만 받는다. 미리보기(Flutter)·Windows 발표 창(GDI+)·PPTX 가 모두
   /// 확실히 읽는 형식이 이 둘이다.
   static const List<String> allowedExtensions = ['png', 'jpg', 'jpeg'];
 
+  /// 배경 영상. 발표 창의 미디어 레이어(macOS WebKit·Windows WebView2)가 둘 다 트는 H.264 컨테이너만.
+  static const List<String> videoExtensions = ['mp4', 'm4v', 'mov'];
+
+  final String _folder;
+  final List<String> extensions;
+  final bool isVideo;
+
   Future<Directory> _dir() async {
     final appDir = await getApplicationSupportDirectory();
-    return Directory(p.join(appDir.path, 'offering_images'));
+    return Directory(p.join(appDir.path, _folder));
   }
 
   /// 등록된 이미지 경로들. 최근에 등록한 것이 앞.
@@ -56,8 +75,8 @@ class BackgroundImageLibrary {
     if (await file.exists()) await file.delete();
   }
 
-  static bool _isAllowed(String path) {
+  bool _isAllowed(String path) {
     final ext = p.extension(path).toLowerCase().replaceFirst('.', '');
-    return allowedExtensions.contains(ext);
+    return extensions.contains(ext);
   }
 }

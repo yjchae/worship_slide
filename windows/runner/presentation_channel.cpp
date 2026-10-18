@@ -399,6 +399,8 @@ void PresentationChannel::Apply(const flutter::EncodableMap& data) {
     last_media_.html    = GetStr(*m, "html");
     last_media_.fadeOut = GetDbl(*m, "fade_out", 0.0);
     if (last_media_.kind != "youtube") last_media_.path = W(GetStr(*m, "source"));
+    last_media_.overlay_dir = W(GetStr(*m, "overlay_dir"));
+    last_media_.overlay_js  = W(GetStr(*m, "overlay_js"));
     if (const auto* r = Get<flutter::EncodableList>(*m, "rect")) {
       for (const auto& v : *r) {
         if (const auto* d = std::get_if<double>(&v)) last_media_.rect.push_back(*d);

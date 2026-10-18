@@ -42,10 +42,12 @@ import '../domain/slide_media.dart';
 import '../domain/staging_item.dart';
 import 'background_image_gallery.dart';
 import 'libreoffice_install_dialog.dart';
+import 'lyrics_overlay_renderer.dart';
 import 'offering_dialog.dart';
 import 'offering_overlay_painter.dart';
 import 'presentation_timer.dart';
 import 'singer_view_data.dart';
+import 'slide_backdrop.dart';
 import 'slide_page_data.dart';
 import 'slide_render_view.dart';
 import 'cloud_conti_dialog.dart';
@@ -139,6 +141,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   final OfferingBackgroundComposer _offeringComposer =
       OfferingBackgroundComposer();
   final BackgroundImageLibrary _backgroundImages = BackgroundImageLibrary();
+  final BackgroundImageLibrary _backgroundVideos =
+      const BackgroundImageLibrary.videos();
+  // 배경 영상 위에 얹을 가사 PNG.
+  final LyricsOverlayRenderer _lyricsOverlays = LyricsOverlayRenderer();
   final BibleRepository _bibleRepository = BibleRepository();
   final WorshipContiRepository _contiRepository = WorshipContiRepository();
   final TextEditingController _searchController = TextEditingController();
@@ -731,6 +737,26 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       imagePath: slide?.imagePath,
       media: slide?.media,
       mediaGroup: slide?.stagingUid,
+      backdrop: _backdropFor(slide, checkFile: true),
+    );
+  }
+
+  /// 발표 창에 보낼 페이지. 배경 영상이 걸린 페이지면 가사 PNG 를 구워 싣는다
+  /// (못 구우면 평소 슬라이드). 다음 페이지 것도 미리 굽기 시작한다 — 넘길 때 기다리지 않게.
+  Future<SlidePageData> _presentablePage(
+    int index,
+    List<_SlideInfo> slides,
+  ) async {
+    final page = _buildSlidePageData(index, slides);
+    final backdrop = page.backdrop;
+    if (backdrop == null) return page;
+    final overlay = await _lyricsOverlays.render(page);
+    if (index + 1 < slides.length) {
+      final next = _buildSlidePageData(index + 1, slides);
+      if (next.backdrop != null) unawaited(_lyricsOverlays.render(next));
+    }
+    return page.withBackdrop(
+      overlay == null ? null : backdrop.withOverlay(overlay),
     );
   }
 
@@ -773,7 +799,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       return;
     }
     try {
-      final pageData = _buildSlidePageData(_currentSlideIndex);
+      final pageData = await _presentablePage(_currentSlideIndex, _allSlides);
       _noteSentMedia(pageData);
       await _presentationChannel.invokeMethod('openWindow', {
         ...pageData.toJson(),
@@ -1206,8 +1232,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         });
         _lastSingerJson = _singerDedupeKey(json);
       } else if (!singer && _isPresentationOpen) {
+        final pageData = await _presentablePage(_currentSlideIndex, _allSlides);
         await _presentationChannel.invokeMethod('openWindow', {
-          ..._buildSlidePageData(_currentSlideIndex).toJson(),
+          ...pageData.toJson(),
           'screen': screen.index,
         });
       }
@@ -1342,13 +1369,18 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     }
   }
 
+  int _pageSendSeq = 0;
+
   Future<void> _sendCurrentSlide() async {
     // 페이지가 바뀌는 모든 곳(넘기기·점프·편집·디자인 변경)이 이 함수를 거치므로
     // 싱어 화면도 여기서 함께 갱신한다. 관객 화면을 먼저 보내 싱어 갱신을 기다리지 않게 한다.
     final slides = _allSlides;
+    final seq = ++_pageSendSeq;
     if (_isPresentationOpen) {
       try {
-        final pageData = _buildSlidePageData(_currentSlideIndex, slides);
+        final pageData = await _presentablePage(_currentSlideIndex, slides);
+        // 가사 PNG 를 굽는 사이 다음 페이지로 넘어갔으면 그쪽이 보낸다(옛 페이지가 늦게 덮지 않게).
+        if (seq != _pageSendSeq || !_isPresentationOpen) return;
         _noteSentMedia(pageData);
         await _presentationChannel.invokeMethod(
           'updatePage',
@@ -2304,6 +2336,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         globalStyle: _style,
         swatches: _swatches,
         imageLibrary: _backgroundImages,
+        videoLibrary: _backgroundVideos,
       ),
     );
     if (result == null || !mounted) return;
@@ -9342,6 +9375,7 @@ class _ItemBackgroundDialog extends StatefulWidget {
     required this.globalStyle,
     required this.swatches,
     required this.imageLibrary,
+    required this.videoLibrary,
   });
 
   final StagingItem item;
@@ -9349,6 +9383,7 @@ class _ItemBackgroundDialog extends StatefulWidget {
   final ExportStyle globalStyle;
   final List<Color> swatches;
   final BackgroundImageLibrary imageLibrary;
+  final BackgroundImageLibrary videoLibrary;
 
   @override
   State<_ItemBackgroundDialog> createState() => _ItemBackgroundDialogState();
@@ -9483,6 +9518,77 @@ class _ItemBackgroundDialogState extends State<_ItemBackgroundDialog> {
                           ),
                         ),
                       ),
+                      // PPT 이미지는 원본 그대로 나가므로 배경 영상을 깔지 않는다.
+                      if (widget.item is! ImageStagingItem) ...[
+                        const SizedBox(height: 14),
+                        Text(
+                          '배경 영상 (공통 모음 · 발표 화면에서만 반복 재생)',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: cs.onSurfaceVariant,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        BackgroundImageGallery(
+                          library: widget.videoLibrary,
+                          selected: _background.videoPath,
+                          emptyColor: _background.color,
+                          onChanged: (path) => setState(
+                            () => _background = _background.copyWith(
+                              videoPath: path,
+                            ),
+                          ),
+                        ),
+                        if (_background.hasVideo) ...[
+                          const SizedBox(height: 4),
+                          Row(
+                            children: [
+                              Text(
+                                '영상 어둡게',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: cs.onSurfaceVariant,
+                                ),
+                              ),
+                              Expanded(
+                                child: Slider(
+                                  value: _background.videoDim,
+                                  max: SlideBackground.maxVideoDim,
+                                  divisions: 14,
+                                  label:
+                                      '${(_background.videoDim * 100).round()}%',
+                                  onChanged: (v) => setState(
+                                    () => _background = _background.copyWith(
+                                      videoDim: v,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              SizedBox(
+                                width: 40,
+                                child: Text(
+                                  '${(_background.videoDim * 100).round()}%',
+                                  textAlign: TextAlign.right,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontFeatures: [
+                                      FontFeature.tabularFigures(),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          Text(
+                            '미리보기·PPTX 에는 위 배경 이미지(없으면 색)가 쓰입니다. '
+                            '콘티 파일·클라우드 콘티에는 영상이 실리지 않습니다.',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: cs.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ],
                     ],
                   ),
                 ),
@@ -9515,6 +9621,19 @@ class _ItemBackgroundDialogState extends State<_ItemBackgroundDialog> {
       ],
     );
   }
+}
+
+/// 이 페이지에 깔 배경 영상(항목 배경의 영상). 페이지 자체 미디어·PPT 이미지 페이지에는 깔지 않는다.
+/// [checkFile] 이면 영상 파일이 아직 있는지도 본다(발표 창에 보낼 때만 — 썸네일마다 stat 하지 않게).
+SlideBackdrop? _backdropFor(_SlideInfo? slide, {bool checkFile = false}) {
+  final background = slide?.background;
+  if (background == null || !background.hasVideo) return null;
+  if (slide!.media != null || slide.imagePath != null) return null;
+  if (checkFile && !File(background.videoPath!).existsSync()) return null;
+  return SlideBackdrop(
+    videoPath: background.videoPath!,
+    dim: background.videoDim,
+  );
 }
 
 // 발표자 보기의 "화면을 떠나도 남아야 하는" 값들. 콘솔은 탭을 옮기거나
@@ -10011,6 +10130,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
       style: widget.style.withBackground(info.background),
       imagePath: info.imagePath,
       media: info.media,
+      backdrop: _backdropFor(info),
     );
   }
 

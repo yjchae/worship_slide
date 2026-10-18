@@ -591,6 +591,11 @@ class WorshipContiRepository {
   ) {
     final json = _decodeBackground(stored);
     if (json == null) return stored;
+    // 배경 영상은 파일에 싣지 않는다(동영상 페이지와 같다). 보낸 PC 의 경로가 남으면 받는 PC 의
+    // 같은 경로에 있는 아무 파일이나 틀게 되므로 받을 때도 지운다. 영상 대신 이미지·색이 남는다.
+    json
+      ..remove('video_path')
+      ..remove('video_dim');
     for (final slot in _backgroundPathSlots(json)) {
       slot.set(map(slot.value));
     }
