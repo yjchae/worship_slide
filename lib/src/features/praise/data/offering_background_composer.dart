@@ -8,6 +8,8 @@ import 'package:path_provider/path_provider.dart';
 
 import '../domain/offering_design.dart';
 import '../presentation/offering_overlay_painter.dart';
+import 'atomic_file.dart';
+import 'fnv_hash.dart';
 
 /// 헌금송 디자인을 1920x1080 PNG 한 장으로 굽는다.
 ///
@@ -33,12 +35,14 @@ class OfferingBackgroundComposer {
     );
     if (await file.exists()) return file.path;
 
-    await dir.create(recursive: true);
     final bytes = await renderPng(design);
     // 굽다가 앱이 꺼져도 반쪽짜리 파일이 캐시로 남지 않게 임시 파일에 쓰고 바꾼다.
-    final temp = File('${file.path}.tmp');
-    await temp.writeAsBytes(bytes, flush: true);
-    await temp.rename(file.path);
+    // 같은 키를 동시에 구우면 내용도 같으므로 먼저 끝난 쪽 것을 둔다.
+    await atomicWrite(
+      file,
+      (temp) => temp.writeAsBytes(bytes, flush: true),
+      overwrite: false,
+    );
     return file.path;
   }
 
@@ -107,17 +111,6 @@ class OfferingBackgroundComposer {
       }
     }
     final bytes = utf8.encode(buffer.toString());
-    // 32비트 FNV-1a 두 개(정방향·역방향)를 이어 16자리. 파일 이름용이라 이 정도면 충분하다.
-    return _fnv1a(bytes).toRadixString(16).padLeft(8, '0') +
-        _fnv1a(bytes.reversed).toRadixString(16).padLeft(8, '0');
-  }
-
-  static int _fnv1a(Iterable<int> bytes) {
-    var hash = 0x811c9dc5;
-    for (final b in bytes) {
-      hash ^= b;
-      hash = (hash * 0x01000193) & 0xFFFFFFFF;
-    }
-    return hash;
+    return fnvHex(bytes);
   }
 }

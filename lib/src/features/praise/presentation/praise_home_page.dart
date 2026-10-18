@@ -29,6 +29,7 @@ import '../data/praise_repository.dart';
 import '../data/python_bridge.dart';
 import '../data/screen_choice_store.dart';
 import '../data/singer_web_server.dart';
+import '../data/sync_service.dart';
 import '../data/source_file_watcher.dart';
 import '../data/worship_conti_repository.dart';
 import '../domain/worship_conti.dart';
@@ -45,6 +46,8 @@ import 'offering_overlay_painter.dart';
 import 'singer_view_data.dart';
 import 'slide_page_data.dart';
 import 'slide_render_view.dart';
+import 'cloud_conti_dialog.dart';
+import 'sync_dialog.dart';
 
 class PraiseHomePage extends StatefulWidget {
   const PraiseHomePage({super.key});
@@ -122,6 +125,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   );
 
   final PraiseRepository _repository = PraiseRepository();
+  // 공유 폴더(Google Drive 공유 드라이브)로 여러 PC 의 찬양을 맞추고 콘티를 주고받는다(모두 손으로).
+  final SyncService _sync = SyncService();
   final PythonBridge _pythonBridge = PythonBridge();
   final ExportStyleStore _styleStore = ExportStyleStore();
   final OfferingDesignStore _offeringStore = OfferingDesignStore();
@@ -274,6 +279,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       animationDuration: Duration.zero,
     )..addListener(_onMainTabChanged);
     _loadSongs();
+    _repository.onSongsChanged = _sync.markLocalChanged;
+    // 자동으로 하는 건 켤 때 한 번 서버를 보는 것뿐이다.
+    _sync.load().then((_) => _checkServerOnStartup());
     _loadSavedStyle();
     _loadOfferingDesign();
     _sermonStore.load().then((v) {
@@ -325,6 +333,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _remoteSyncTimer?.cancel();
     _singerWeb.stop();
     _sourceWatcher.dispose();
+    _repository.onSongsChanged = null;
+    _sync.dispose();
     HardwareKeyboard.instance.removeHandler(_handleStartKey);
     _mainTabController
       ..removeListener(_onMainTabChanged)
@@ -3417,6 +3427,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         },
         onExport: _exportContiFile,
         onImport: _importContiFile,
+        onUploadToCloud: _sync.status.value.enabled
+            ? _uploadContiToCloud
+            : null,
+        onOpenCloud: _sync.status.value.enabled ? _openCloudContis : null,
       ),
     );
     if (selected == null || !mounted) return;
@@ -3485,6 +3499,107 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     }
   }
 
+  // ── 동기화 (모두 손으로) ─────────────────────────────────────────────
+
+  void _openSyncDialog() => SyncDialog.show(
+    context,
+    service: _sync,
+    onSyncSongs: _syncSongs,
+    onOpenCloudContis: _openCloudContis,
+  );
+
+  void _openCloudContis() => CloudContiDialog.show(context, _sync);
+
+  /// '찬양 동기화' 버튼: 다른 PC 의 새 찬양·바뀐 찬양을 받고 이 PC 찬양을 올린다.
+  Future<void> _syncSongs() async {
+    final result = await _sync.syncSongs();
+    if (!mounted) return;
+    final status = _sync.status.value;
+    if (result == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('찬양 동기화 실패: ${status.lastError ?? '알 수 없는 오류'}'),
+        ),
+      );
+      return;
+    }
+    final warning = status.warning == null ? '' : '\n${status.warning}';
+    if (result.changed) {
+      await _loadSongs();
+      await _loadSubLanguages();
+      if (!mounted) return;
+    }
+    final parts = [
+      if (result.addedCount > 0) '새 찬양 ${result.addedCount}곡',
+      if (result.updatedCount > 0) '바뀐 찬양 ${result.updatedCount}곡',
+      if (result.deletedCount > 0) '지운 찬양 ${result.deletedCount}곡',
+    ];
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          parts.isEmpty
+              ? '받을 새 찬양이 없습니다. 이 PC 의 찬양은 올렸습니다.$warning'
+              : '찬양 동기화 완료: ${parts.join(' · ')}$warning',
+        ),
+      ),
+    );
+  }
+
+  /// 콘티를 클라우드에 올린다. 실패하면 이유를 담아 던진다(콘티 목록 창이 보여 준다).
+  Future<void> _uploadContiToCloud(WorshipConti conti) async {
+    try {
+      await _sync.uploadConti(conti);
+    } catch (error, stack) {
+      await AppLogger.instance.error('콘티 올리기 실패', error, stack);
+      rethrow;
+    }
+  }
+
+  /// 켤 때 한 번: 서버에 새 찬양·바뀐 찬양·새 콘티가 있으면 알리고 고르게 한다(DB 는 그대로 본다).
+  Future<void> _checkServerOnStartup() async {
+    if (!_sync.status.value.enabled) return;
+    final check = await _sync.checkForUpdates();
+    if (check == null || !check.hasAnything || !mounted) return;
+    final songs = check.songs;
+    final lines = [
+      if (check.localChanges) '이 PC 에서 고친 찬양을 아직 안 올렸습니다',
+      if (songs.addedCount > 0) '새 찬양 ${songs.addedCount}곡',
+      if (songs.updatedCount > 0) '바뀐 찬양 ${songs.updatedCount}곡',
+      if (songs.deletedCount > 0) '다른 PC 에서 지운 찬양 ${songs.deletedCount}곡',
+      if (check.newContis.isNotEmpty) '새 콘티 ${check.newContis.length}개',
+    ];
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('서버에 새 내용이 있습니다'),
+        content: Text(
+          '${lines.map((l) => '· $l').join('\n')}\n\n지금 받을까요? 나중에 \'찬양·콘티 동기화\' 에서 받아도 됩니다.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('나중에'),
+          ),
+          if (check.newContis.isNotEmpty)
+            OutlinedButton(
+              onPressed: () => Navigator.of(ctx).pop('contis'),
+              child: const Text('콘티 보기'),
+            ),
+          if (songs.changed || check.localChanges)
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop('songs'),
+              child: const Text('찬양 동기화'),
+            ),
+        ],
+      ),
+    );
+    // 한 번 알린 콘티는 다음에 켤 때 다시 알리지 않는다(클라우드 콘티 창에는 그대로 있다).
+    await _sync.markContisSeen(check.newContis.map((c) => c.uid));
+    if (!mounted) return;
+    if (choice == 'songs') await _syncSongs();
+    if (choice == 'contis' && mounted) _openCloudContis();
+  }
+
   // ── 곡 관리 ──────────────────────────────────────────────────────────
 
   Future<void> _clearAllSongs() async {
@@ -3492,7 +3607,11 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('전체 초기화'),
-        content: const Text('저장된 찬양 DB를 모두 삭제합니다. 계속할까요?'),
+        content: Text(
+          _sync.status.value.enabled
+              ? '저장된 찬양 DB를 모두 삭제합니다.\n동기화 폴더를 쓰고 있어, 다음에 \'찬양 동기화\'를 누르면 다른 PC 의 찬양도 지워집니다. 계속할까요?'
+              : '저장된 찬양 DB를 모두 삭제합니다. 계속할까요?',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -3759,6 +3878,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               _importSheetMusic(fromClipboard: true),
                           onExportSongsPressed: _exportSongBundle,
                           onImportSongsPressed: _importSongBundle,
+                          onSyncPressed: _openSyncDialog,
                           onExtractLogsPressed: _showExtractLogsDialog,
                           isCheckingUpdate: _isCheckingUpdate,
                           hasUpdate: _pendingUpdate != null,
@@ -4050,6 +4170,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                           importTotalCount: _importTotalCount,
                           importSavedCount: _importSavedCount,
                           packageInfo: _packageInfo,
+                          syncStatus: _sync.status,
+                          onSyncPressed: _openSyncDialog,
                         ),
                       ],
                     );
@@ -4354,6 +4476,7 @@ class _TopBar extends StatelessWidget {
     required this.onPasteSheetPressed,
     required this.onExportSongsPressed,
     required this.onImportSongsPressed,
+    required this.onSyncPressed,
     required this.onExtractLogsPressed,
     required this.isCheckingUpdate,
     required this.hasUpdate,
@@ -4371,6 +4494,7 @@ class _TopBar extends StatelessWidget {
   final VoidCallback onPasteSheetPressed;
   final VoidCallback onExportSongsPressed;
   final VoidCallback onImportSongsPressed;
+  final VoidCallback onSyncPressed;
   final VoidCallback onExtractLogsPressed;
   final bool isCheckingUpdate;
   final bool hasUpdate;
@@ -4459,6 +4583,12 @@ class _TopBar extends StatelessWidget {
                 Icons.file_download_outlined,
                 '곡 모음 가져오기',
                 subtitle: '같은 제목은 건너뜁니다',
+              ),
+              _item(
+                onSyncPressed,
+                Icons.sync_rounded,
+                '찬양·콘티 동기화',
+                subtitle: 'Google Drive 공유 폴더로 여러 PC',
               ),
               const PopupMenuDivider(),
               _item(onExtractLogsPressed, Icons.description_outlined, '로그 추출'),
@@ -4566,6 +4696,8 @@ class _StatusBar extends StatelessWidget {
     required this.importTotalCount,
     required this.importSavedCount,
     required this.packageInfo,
+    required this.syncStatus,
+    required this.onSyncPressed,
   });
 
   final int storedCount;
@@ -4575,6 +4707,8 @@ class _StatusBar extends StatelessWidget {
   final int importTotalCount;
   final int importSavedCount;
   final Future<PackageInfo> packageInfo;
+  final ValueListenable<SyncStatus> syncStatus;
+  final VoidCallback onSyncPressed;
 
   @override
   Widget build(BuildContext context) {
@@ -4605,6 +4739,48 @@ class _StatusBar extends StatelessWidget {
                       fontWeight: FontWeight.w500,
                     ),
             ),
+          ),
+          ValueListenableBuilder<SyncStatus>(
+            valueListenable: syncStatus,
+            builder: (context, sync, _) {
+              if (!sync.enabled) return const SizedBox.shrink();
+              final failed = sync.lastError != null;
+              final label = sync.syncing
+                  ? '동기화 중'
+                  : failed
+                  ? '동기화 실패'
+                  : sync.warning != null
+                  ? '동기화 확인 필요'
+                  : sync.hasLocalChanges
+                  ? '동기화 안 한 찬양 있음'
+                  : sync.lastSyncAt == null
+                  ? '동기화'
+                  : '동기화 ${syncAgo(sync.lastSyncAt!)}';
+              final color = failed ? cs.error : cs.onSurfaceVariant;
+              return Padding(
+                padding: const EdgeInsets.only(right: 12),
+                child: Tooltip(
+                  message: sync.lastError ?? sync.warning ?? sync.folder!,
+                  child: InkWell(
+                    onTap: onSyncPressed,
+                    borderRadius: BorderRadius.circular(AppRadius.control),
+                    child: Row(
+                      children: [
+                        Icon(
+                          failed
+                              ? Icons.sync_problem_rounded
+                              : Icons.sync_rounded,
+                          size: 13,
+                          color: color,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(label, style: style.copyWith(color: color)),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
           ),
           FutureBuilder<PackageInfo>(
             future: packageInfo,
@@ -8238,12 +8414,18 @@ class _ContiListDialog extends StatefulWidget {
     required this.onDelete,
     required this.onExport,
     required this.onImport,
+    this.onUploadToCloud,
+    this.onOpenCloud,
   });
 
   final List<WorshipConti> contis;
   final Future<void> Function(WorshipConti) onDelete;
   final Future<void> Function(WorshipConti) onExport;
   final Future<List<WorshipConti>?> Function() onImport;
+
+  /// 동기화 폴더를 골랐을 때만 — 콘티를 클라우드에 올리기 / 클라우드 콘티 목록 열기.
+  final Future<void> Function(WorshipConti)? onUploadToCloud;
+  final VoidCallback? onOpenCloud;
 
   @override
   State<_ContiListDialog> createState() => _ContiListDialogState();
@@ -8252,18 +8434,41 @@ class _ContiListDialog extends StatefulWidget {
 class _ContiListDialogState extends State<_ContiListDialog> {
   late final List<WorshipConti> _contis;
 
+  /// 올리는 중(버튼을 막는다 — 오래 걸려서 여러 번 누르기 쉽다)·이번에 올린 콘티 id.
+  final _uploading = <int>{};
+  final _uploaded = <int>{};
+
+  Future<void> _upload(WorshipConti conti) async {
+    setState(() => _uploading.add(conti.id));
+    try {
+      await widget.onUploadToCloud!(conti);
+      if (mounted) setState(() => _uploaded.add(conti.id));
+    } catch (error) {
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('클라우드에 올리지 못했습니다'),
+          content: Text(error is FileSystemException ? error.message : '$error'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('확인'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _uploading.remove(conti.id));
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     _contis = List.of(widget.contis);
   }
 
-  String _formatDate(DateTime dt) {
-    return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-'
-        '${dt.day.toString().padLeft(2, '0')} '
-        '${dt.hour.toString().padLeft(2, '0')}:'
-        '${dt.minute.toString().padLeft(2, '0')}';
-  }
 
   Future<void> _delete(WorshipConti conti) async {
     final confirmed = await showDialog<bool>(
@@ -8329,12 +8534,35 @@ class _ContiListDialogState extends State<_ContiListDialog> {
                       style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
                     subtitle: Text(
-                      '${_formatDate(conti.createdAt)}  ·  ${conti.itemCount}개',
+                      '${formatContiDate(conti.createdAt)}  ·  ${conti.itemCount}개',
                       style: const TextStyle(fontSize: 12),
                     ),
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        if (widget.onUploadToCloud != null)
+                          IconButton(
+                            icon: _uploading.contains(conti.id)
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : Icon(
+                                    _uploaded.contains(conti.id)
+                                        ? Icons.cloud_done_rounded
+                                        : Icons.cloud_upload_outlined,
+                                    size: 20,
+                                  ),
+                            tooltip: _uploaded.contains(conti.id)
+                                ? '클라우드에 올렸습니다(다시 누르면 덮어쓰기)'
+                                : '클라우드에 올리기',
+                            onPressed: _uploading.contains(conti.id)
+                                ? null
+                                : () => _upload(conti),
+                          ),
                         IconButton(
                           icon: const Icon(Icons.ios_share_rounded, size: 20),
                           tooltip: '파일로 내보내기 (다른 PC 로 옮기기)',
@@ -8357,6 +8585,16 @@ class _ContiListDialogState extends State<_ContiListDialog> {
               ),
       ),
       actions: [
+        if (widget.onOpenCloud != null)
+          TextButton.icon(
+            onPressed: () {
+              // 받은 콘티가 목록에 보이도록 이 창은 닫고 클라우드 창을 연다.
+              Navigator.of(context).pop();
+              widget.onOpenCloud!();
+            },
+            icon: const Icon(Icons.cloud_download_outlined, size: 18),
+            label: const Text('클라우드에서 내려받기'),
+          ),
         TextButton.icon(
           onPressed: _import,
           icon: const Icon(Icons.file_open_outlined, size: 18),
@@ -9789,7 +10027,8 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
   /// 썸네일 줄이 가질 수 있는 가장 큰 높이. 헤더와 현재 슬라이드 최소 높이를 뺀 나머지.
   double _maxStripHeight(BoxConstraints constraints) {
     final headerHeight =
-        58.0 + (_currentMedia != null ? _MediaBar.height : 0); // 헤더(+재생바) + 아래 여백
+        58.0 +
+        (_currentMedia != null ? _MediaBar.height : 0); // 헤더(+재생바) + 아래 여백
     final room =
         constraints.maxHeight -
         headerHeight -
@@ -11094,7 +11333,8 @@ class _MediaPageDialogState extends State<_MediaPageDialog> {
                 decoration: InputDecoration(
                   labelText: '유튜브 주소',
                   hintText: 'https://www.youtube.com/watch?v=…',
-                  helperText: '주소의 시작 위치(t=90)도 따릅니다. 발표 PC 가 인터넷에 연결돼 있어야 합니다.',
+                  helperText:
+                      '주소의 시작 위치(t=90)도 따릅니다. 발표 PC 가 인터넷에 연결돼 있어야 합니다.',
                   errorText: _error,
                   border: const OutlineInputBorder(),
                 ),
@@ -11107,9 +11347,7 @@ class _MediaPageDialogState extends State<_MediaPageDialog> {
                     child: Text(
                       _source.isEmpty ? '파일을 고르세요' : p.basename(_source),
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: _error != null ? cs.error : null,
-                      ),
+                      style: TextStyle(color: _error != null ? cs.error : null),
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -11203,7 +11441,8 @@ class _MediaBarState extends State<_MediaBar> {
   static String _time(double seconds) {
     final s = seconds.isFinite ? seconds.round() : 0;
     final h = s ~/ 3600, m = (s % 3600) ~/ 60, sec = s % 60;
-    final mmss = '${m.toString().padLeft(h > 0 ? 2 : 1, '0')}:'
+    final mmss =
+        '${m.toString().padLeft(h > 0 ? 2 : 1, '0')}:'
         '${sec.toString().padLeft(2, '0')}';
     return h > 0 ? '$h:$mmss' : mmss;
   }
@@ -11223,8 +11462,9 @@ class _MediaBarState extends State<_MediaBar> {
             final position = (_dragging ?? state?.position ?? 0)
                 .clamp(0.0, canSeek ? duration : 0.0)
                 .toDouble();
-            void jump(double delta) =>
-                widget.onSeek((position + delta).clamp(0.0, duration).toDouble());
+            void jump(double delta) => widget.onSeek(
+              (position + delta).clamp(0.0, duration).toDouble(),
+            );
             return Row(
               children: [
                 Icon(
