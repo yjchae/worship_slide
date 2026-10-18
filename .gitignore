@@ -63,3 +63,6 @@ tmp_sample/
 # 따옴표는 gitignore 에서 리터럴로 취급되므로 쓰지 않는다.
 * 2*
 * 3*
+
+# 동기화 키 만들 때 받는 OAuth 클라이언트 파일 (git 에 올리지 않는다)
+client_secret*.json
