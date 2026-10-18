@@ -1,8 +1,11 @@
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+
+import 'app_logger.dart';
 
 class PraiseDatabase {
   PraiseDatabase._();
@@ -11,6 +14,9 @@ class PraiseDatabase {
   PraiseDatabase.forTesting(Database database) : _database = database;
 
   static final PraiseDatabase instance = PraiseDatabase._();
+
+  /// 지금 앱의 DB 스키마 버전. 올리면 [upgradePraiseSchema] 에 단계를 더한다.
+  static const schemaVersion = 17;
   Database? _database;
 
   // 실행 파일 옆 폴더: macOS는 .app/Contents/MacOS/exe 이므로 3단계 위
@@ -28,14 +34,81 @@ class PraiseDatabase {
     }
 
     final dbPath = p.join(_dbDirectory, 'worship_slides.db');
+    await backupBeforeUpgrade(dbPath, toVersion: schemaVersion);
     _database = await openDatabase(
       dbPath,
-      version: 17,
+      version: schemaVersion,
       onCreate: (db, version) => createPraiseSchema(db),
       onUpgrade: (db, oldVersion, newVersion) =>
           upgradePraiseSchema(db, oldVersion),
     );
     return _database!;
+  }
+}
+
+/// DB 파일 맨 앞(SQLite 헤더)에서 스키마 버전(user_version)을 읽는다. DB 를 열지 않고 읽어야
+/// 마이그레이션이 손대기 전 값을 볼 수 있다. 파일이 없거나 SQLite 파일이 아니면 null.
+Future<int?> readSqliteUserVersion(String dbPath) async {
+  final file = File(dbPath);
+  if (!await file.exists()) return null;
+  final raf = await file.open();
+  try {
+    final header = await raf.read(64);
+    const magic = 'SQLite format 3\u0000';
+    if (header.length < 64 ||
+        String.fromCharCodes(header.sublist(0, 16)) != magic) {
+      return null;
+    }
+    // 오프셋 60 의 4바이트(빅 엔디언)가 user_version.
+    return ByteData.sublistView(header, 60, 64).getUint32(0);
+  } finally {
+    await raf.close();
+  }
+}
+
+/// 앱 업데이트로 DB 스키마를 올리기 **전에** 원래 파일을 `<db>.v<옛 버전>.bak` 으로 복사해 둔다.
+/// 마이그레이션이 중간에 실패하거나 새 버전에 문제가 있어 옛 앱으로 돌아가야 할 때 이 파일을
+/// `worship_slides.db` 로 이름 바꿔 쓰면 된다. 새 DB·이미 최신인 DB 는 복사하지 않는다.
+/// 같은 버전 사본이 이미 있으면 그대로 둔다(처음 올리기 직전 것이 가장 믿을 만하다).
+/// 비정상 종료로 남은 저널(`-journal`·`-wal`)도 같이 복사한다 — 없으면 사본이 반쯤 쓴 상태다.
+/// 복사에 실패해도 앱은 연다(로그만 남긴다). 반환값은 만든 사본 경로.
+Future<String?> backupBeforeUpgrade(
+  String dbPath, {
+  required int toVersion,
+}) async {
+  try {
+    final from = await readSqliteUserVersion(dbPath);
+    if (from == null || from == 0 || from >= toVersion) return null;
+    final backup = '$dbPath.v$from.bak';
+    if (await File(backup).exists()) return null;
+    for (final suffix in const ['-journal', '-wal']) {
+      final side = File('$dbPath$suffix');
+      if (await side.exists()) await _copyAtomically(side, '$backup$suffix');
+    }
+    await _copyAtomically(File(dbPath), backup);
+    await AppLogger.instance.info(
+      '[db] 스키마 v$from → v$toVersion 전에 백업: $backup',
+    );
+    return backup;
+  } catch (error, stack) {
+    await AppLogger.instance.error(
+      '[db] 업그레이드 전 백업 실패 — 그대로 엽니다',
+      error,
+      stack,
+    );
+    return null;
+  }
+}
+
+/// 임시 이름으로 복사한 뒤 이름을 바꾼다 — 복사 도중 꺼져도 반쪽 사본이 '있는 백업'으로 남지 않게.
+Future<void> _copyAtomically(File source, String target) async {
+  final temp = '$target.${newSongUid()}.tmp';
+  try {
+    await source.copy(temp);
+    await File(temp).rename(target);
+  } catch (_) {
+    await File(temp).delete().catchError((_) => File(temp));
+    rethrow;
   }
 }
 
