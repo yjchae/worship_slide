@@ -1,12 +1,13 @@
-import 'package:file_picker/file_picker.dart';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../../../app_colors.dart';
 import '../data/sync_service.dart';
 
-/// "찬양·콘티 동기화" 설정: 공유 폴더 고르기 · 찬양 동기화 · 클라우드 콘티 · 끄기.
+/// "찬양·콘티 동기화" 설정: 접속 키 넣기 · 찬양 동기화 · 클라우드 콘티 · 연결 끊기.
 /// 동기화는 모두 손으로 한다 — 버튼을 누를 때만 맞춘다.
-class SyncDialog extends StatelessWidget {
+class SyncDialog extends StatefulWidget {
   const SyncDialog({
     super.key,
     required this.service,
@@ -36,13 +37,61 @@ class SyncDialog extends StatelessWidget {
     ),
   );
 
-  Future<void> _pickFolder() async {
-    await FilePicker.skipEntitlementsChecks();
-    final folder = await FilePicker.getDirectoryPath(
-      dialogTitle: '찬양·콘티를 같이 쓸 공유 폴더 (Google Drive 공유 드라이브 등)',
-      initialDirectory: service.status.value.folder,
+  @override
+  State<SyncDialog> createState() => _SyncDialogState();
+}
+
+class _SyncDialogState extends State<SyncDialog> {
+  final _keyController = TextEditingController();
+  bool _connecting = false;
+  String? _keyError;
+
+  @override
+  void dispose() {
+    _keyController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _connect() async {
+    setState(() {
+      _connecting = true;
+      _keyError = null;
+    });
+    try {
+      await widget.service.connect(_keyController.text);
+      _keyController.clear();
+    } on FormatException catch (error) {
+      _keyError = error.message;
+    } on FileSystemException catch (error) {
+      _keyError = error.message;
+    } catch (error) {
+      _keyError = '$error';
+    }
+    if (mounted) setState(() => _connecting = false);
+  }
+
+  Future<void> _disconnect() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('연결 끊기'),
+        content: const Text(
+          '이 PC 에서 접속 키를 지웁니다. 드라이브의 찬양·콘티는 그대로 남고, '
+          '다시 쓰려면 키를 다시 넣어야 합니다.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('연결 끊기'),
+          ),
+        ],
+      ),
     );
-    if (folder != null) await service.setFolder(folder);
+    if (ok == true) await widget.service.disconnect();
   }
 
   @override
@@ -57,20 +106,37 @@ class SyncDialog extends StatelessWidget {
       content: SizedBox(
         width: 460,
         child: ValueListenableBuilder<SyncStatus>(
-          valueListenable: service.status,
+          valueListenable: widget.service.status,
           builder: (context, status, _) => Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                '여러 PC 가 같은 폴더를 고르면 찬양과 콘티를 주고받을 수 있습니다. '
-                'Google Drive 데스크톱 앱이 PC 에 보여 주는 공유 드라이브 폴더를 고르세요.',
+                '같은 접속 키를 넣은 PC 끼리 구글 드라이브로 찬양과 콘티를 주고받습니다. '
+                '구글 로그인이나 드라이브 앱은 필요 없습니다.',
                 style: muted,
               ),
               const SizedBox(height: 16),
-              _FolderBox(status: status),
-              const SizedBox(height: 12),
-              _StatusLine(status: status),
+              if (status.enabled) ...[
+                _FolderBox(status: status),
+                const SizedBox(height: 12),
+                _StatusLine(status: status),
+              ] else ...[
+                TextField(
+                  controller: _keyController,
+                  enabled: !_connecting,
+                  minLines: 2,
+                  maxLines: 4,
+                  style: const TextStyle(fontSize: 12),
+                  decoration: InputDecoration(
+                    labelText: '접속 키 (관리자에게 받은 WS1- 로 시작하는 글)',
+                    errorText: _keyError ?? status.lastError,
+                    errorMaxLines: 3,
+                    border: const OutlineInputBorder(),
+                  ),
+                  onSubmitted: (_) => _connect(),
+                ),
+              ],
               const SizedBox(height: 16),
               Text(
                 '· 찬양 동기화: 누를 때마다 다른 PC 의 새 찬양·바뀐 찬양을 받고, 이 PC 의 찬양을 올립니다.\n'
@@ -86,34 +152,32 @@ class SyncDialog extends StatelessWidget {
       ),
       actions: [
         ValueListenableBuilder<SyncStatus>(
-          valueListenable: service.status,
+          valueListenable: widget.service.status,
           builder: (context, status, _) => Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (status.enabled)
-                TextButton(
-                  onPressed: () => service.setFolder(null),
-                  child: const Text('동기화 끄기'),
-                ),
-              const SizedBox(width: 8),
-              OutlinedButton(
-                onPressed: _pickFolder,
-                child: Text(status.enabled ? '폴더 바꾸기' : '폴더 고르기'),
-              ),
               if (status.enabled) ...[
+                TextButton(
+                  onPressed: status.syncing ? null : _disconnect,
+                  child: const Text('연결 끊기'),
+                ),
                 const SizedBox(width: 8),
                 OutlinedButton.icon(
-                  onPressed: onOpenCloudContis,
+                  onPressed: widget.onOpenCloudContis,
                   icon: const Icon(Icons.cloud_download_outlined, size: 18),
                   label: const Text('클라우드 콘티'),
                 ),
                 const SizedBox(width: 8),
                 FilledButton.icon(
-                  onPressed: status.syncing ? null : onSyncSongs,
+                  onPressed: status.syncing ? null : widget.onSyncSongs,
                   icon: const Icon(Icons.sync_rounded, size: 18),
                   label: const Text('찬양 동기화'),
                 ),
-              ],
+              ] else
+                FilledButton(
+                  onPressed: _connecting ? null : _connect,
+                  child: Text(_connecting ? '확인하는 중…' : '연결'),
+                ),
               const SizedBox(width: 8),
               TextButton(
                 onPressed: () => Navigator.of(context).pop(),
@@ -144,17 +208,11 @@ class _FolderBox extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Icon(
-            status.enabled
-                ? Icons.folder_shared_rounded
-                : Icons.cloud_off_rounded,
-            size: 18,
-            color: cs.onSurfaceVariant,
-          ),
+          Icon(Icons.cloud_done_rounded, size: 18, color: cs.onSurfaceVariant),
           const SizedBox(width: 10),
           Expanded(
-            child: SelectableText(
-              status.folder ?? '동기화 꺼짐 — 이 PC 의 찬양·콘티만 씁니다',
+            child: Text(
+              status.folder ?? '',
               style: TextStyle(fontSize: 13, color: cs.onSurface),
             ),
           ),
@@ -184,7 +242,7 @@ class _StatusLine extends StatelessWidget {
       text = '이번 실행에서 아직 찬양을 맞추지 않았습니다$local';
     } else {
       final peers = status.peers.isEmpty
-          ? '같은 폴더를 쓰는 다른 PC 없음'
+          ? '같은 키를 쓰는 다른 PC 없음'
           : '다른 PC ${status.peers.length}대: ${status.peers.join(', ')}';
       text = '${syncAgo(status.lastSyncAt!)} 찬양 맞춤 · $peers$local';
     }

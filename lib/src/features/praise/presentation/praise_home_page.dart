@@ -125,7 +125,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   );
 
   final PraiseRepository _repository = PraiseRepository();
-  // 공유 폴더(Google Drive 공유 드라이브)로 여러 PC 의 찬양을 맞추고 콘티를 주고받는다(모두 손으로).
+  // 구글 드라이브(관리자가 건넨 접속 키)로 여러 PC 의 찬양을 맞추고 콘티를 주고받는다(모두 손으로).
   final SyncService _sync = SyncService();
   final PythonBridge _pythonBridge = PythonBridge();
   final ExportStyleStore _styleStore = ExportStyleStore();
@@ -3609,7 +3609,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         title: const Text('전체 초기화'),
         content: Text(
           _sync.status.value.enabled
-              ? '저장된 찬양 DB를 모두 삭제합니다.\n동기화 폴더를 쓰고 있어, 다음에 \'찬양 동기화\'를 누르면 다른 PC 의 찬양도 지워집니다. 계속할까요?'
+              ? '저장된 찬양 DB를 모두 삭제합니다.\n동기화를 쓰고 있어, 다음에 \'찬양 동기화\'를 누르면 다른 PC 의 찬양도 지워집니다. 계속할까요?'
               : '저장된 찬양 DB를 모두 삭제합니다. 계속할까요?',
         ),
         actions: [
@@ -4588,7 +4588,7 @@ class _TopBar extends StatelessWidget {
                 onSyncPressed,
                 Icons.sync_rounded,
                 '찬양·콘티 동기화',
-                subtitle: 'Google Drive 공유 폴더로 여러 PC',
+                subtitle: '구글 드라이브로 여러 PC',
               ),
               const PopupMenuDivider(),
               _item(onExtractLogsPressed, Icons.description_outlined, '로그 추출'),
@@ -8423,7 +8423,7 @@ class _ContiListDialog extends StatefulWidget {
   final Future<void> Function(WorshipConti) onExport;
   final Future<List<WorshipConti>?> Function() onImport;
 
-  /// 동기화 폴더를 골랐을 때만 — 콘티를 클라우드에 올리기 / 클라우드 콘티 목록 열기.
+  /// 동기화 접속 키를 넣었을 때만 — 콘티를 클라우드에 올리기 / 클라우드 콘티 목록 열기.
   final Future<void> Function(WorshipConti)? onUploadToCloud;
   final VoidCallback? onOpenCloud;
 

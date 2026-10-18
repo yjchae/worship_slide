@@ -4,11 +4,10 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 
 import '../domain/worship_conti.dart';
-import 'atomic_file.dart';
-import 'sync_snapshot.dart';
+import 'sync_store.dart';
 import 'worship_conti_repository.dart';
 
-/// 클라우드(공유 폴더)에 올라가 있는 콘티 하나의 정보.
+/// 클라우드에 올라가 있는 콘티 하나의 정보.
 class CloudConti {
   const CloudConti({
     required this.uid,
@@ -62,70 +61,66 @@ class CloudConti {
   }
 }
 
-/// 저장 콘티를 클라우드(공유 폴더)에 **손으로** 올리고 내려받는다. 자동으로 맞추지 않는다.
+/// 저장 콘티를 클라우드에 **손으로** 올리고 내려받는다. 자동으로 맞추지 않는다.
 ///
-/// 콘티 하나 = `<폴더>/worship_slides_sync/contis/<콘티 uid>.wsconti`(이미지까지 담긴, '파일로
-/// 내보내기'와 같은 파일) + 목록용 작은 정보 파일 `<콘티 uid>.json`. 정보 파일을 나중에 쓰므로
-/// 목록에 보이면 콘티 파일도 다 쓴 것이다(다른 PC 에서는 드라이브가 아직 내려받는 중일 수 있다).
+/// 콘티 하나 = `conti_<콘티 uid>.wsconti`(이미지까지 담긴, '파일로 내보내기'와 같은 파일) +
+/// 목록용 작은 정보 파일 `conti_<콘티 uid>.json`. 찬양 스냅샷과 같은 폴더에 두고 `conti_` 로 가른다.
+/// 정보 파일을 나중에 쓰므로 목록에 보이면 콘티 파일도 다 올라간 것이다.
 /// 같은 콘티를 다시 올리면 덮어쓰고, 받은 콘티를 다시 받으면 그 콘티를 바꾼다(uid 가 같다).
 class ContiCloudRepository {
   ContiCloudRepository({WorshipContiRepository? contis})
     : _contis = contis ?? WorshipContiRepository();
 
-  static const dirName = 'contis';
+  static const prefix = 'conti_';
 
   final WorshipContiRepository _contis;
 
-  Directory _dir(String folder) =>
-      Directory(p.join(folder, syncDirName, dirName));
+  static String contiName(String uid) =>
+      '$prefix$uid.${WorshipContiRepository.contiFileExtension}';
 
-  File _contiFile(String folder, String uid) => File(
-    p.join(
-      _dir(folder).path,
-      '$uid.${WorshipContiRepository.contiFileExtension}',
-    ),
-  );
-
-  File _infoFile(String folder, String uid) =>
-      File(p.join(_dir(folder).path, '$uid.json'));
+  static String infoName(String uid) => '$prefix$uid.json';
 
   /// 클라우드의 콘티 목록(올린 시각 늦은 순).
-  Future<List<CloudConti>> list(String folder) async {
-    final dir = _dir(folder);
-    if (!await dir.exists()) return const [];
-    final result = <CloudConti>[];
-    await for (final entity in dir.list()) {
-      if (entity is! File || p.extension(entity.path) != '.json') continue;
-      try {
-        final info = CloudConti.fromJson(
-          jsonDecode(await entity.readAsString()),
-        );
-        // 정보 파일 이름과 안의 uid 가 다르면 믿지 않는다.
-        if (info != null &&
-            p.basenameWithoutExtension(entity.path) == info.uid) {
-          result.add(info);
-        }
-      } on FormatException {
-        // 드라이브가 아직 내려받는 중이면 다음에 다시 본다.
-      } on FileSystemException {
-        // 위와 같다.
+  Future<List<CloudConti>> list(SyncStore store) async {
+    final infos = await Future.wait([
+      for (final entry in await store.list())
+        if (entry.name.startsWith(prefix) && entry.name.endsWith('.json'))
+          () async {
+            try {
+              final info = CloudConti.fromJson(
+                jsonDecode(await store.read(entry)),
+              );
+              // 정보 파일 이름과 안의 uid 가 다르면 믿지 않는다.
+              return info != null && entry.name == infoName(info.uid)
+                  ? info
+                  : null;
+            } on FormatException {
+              return null; // 깨진 정보 파일은 건너뛴다.
+            }
+          }(),
+    ]);
+    final byUid = <String, CloudConti>{};
+    for (final info in infos.nonNulls) {
+      final seen = byUid[info.uid];
+      if (seen == null || info.uploadedAt.isAfter(seen.uploadedAt)) {
+        byUid[info.uid] = info;
       }
     }
-    result.sort((a, b) => b.uploadedAt.compareTo(a.uploadedAt));
-    return result;
+    return byUid.values.toList()
+      ..sort((a, b) => b.uploadedAt.compareTo(a.uploadedAt));
   }
 
   /// 이 PC 의 콘티를 올린다(같은 콘티가 이미 있으면 덮어쓴다).
   Future<void> upload(
-    String folder,
+    SyncStore store,
     WorshipConti conti, {
     required String deviceName,
   }) async {
     final uid = await _contis.contiUid(conti.id);
-    await atomicWrite(
-      _contiFile(folder, uid),
-      (temp) => _contis.exportContiFile(conti.id, temp.path),
-    );
+    await _withTemp((temp) async {
+      await _contis.exportContiFile(conti.id, temp.path);
+      await store.upload(contiName(uid), temp);
+    });
     final info = CloudConti(
       uid: uid,
       name: conti.name,
@@ -134,36 +129,48 @@ class ContiCloudRepository {
       uploadedBy: deviceName,
       uploadedAt: DateTime.now(),
     );
-    await atomicWriteString(_infoFile(folder, uid), jsonEncode(info.toJson()));
+    await store.write(infoName(uid), jsonEncode(info.toJson()));
   }
 
   /// 클라우드 콘티를 이 PC 로 받는다. 이미 받은 콘티면 바꾼다. 반환값은 콘티 id.
-  /// 드라이브가 아직 다 내려받지 않았으면 [FileSystemException].
-  Future<int> download(String folder, CloudConti conti) async {
-    final file = _contiFile(folder, conti.uid);
-    if (!await file.exists()) {
+  /// 콘티 파일이 없으면 [FileSystemException].
+  Future<int> download(SyncStore store, CloudConti conti) async {
+    final name = contiName(conti.uid);
+    final found = (await store.list()).where((e) => e.name == name).toList()
+      ..sort((a, b) => b.modified.compareTo(a.modified));
+    if (found.isEmpty) {
       throw const FileSystemException(
-        '콘티 파일이 아직 이 PC 로 내려오지 않았습니다. 잠시 뒤에 다시 받아 주세요.',
+        '클라우드에서 콘티 파일을 찾지 못했습니다. 올린 PC 에서 다시 올려 주세요.',
       );
     }
-    try {
-      // 정보 파일(= 파일 이름)의 uid 로 넣는다 — 목록에서 고른 그 콘티를 바꾸게.
-      return await _contis.importContiFile(file.path, cloudUid: conti.uid);
-    } on FormatException {
-      throw const FileSystemException(
-        '콘티 파일을 다 읽지 못했습니다(아직 내려받는 중일 수 있습니다). 잠시 뒤에 다시 받아 주세요.',
-      );
-    }
+    return _withTemp((temp) async {
+      await store.download(found.first, temp);
+      try {
+        // 정보 파일(= 파일 이름)의 uid 로 넣는다 — 목록에서 고른 그 콘티를 바꾸게.
+        return await _contis.importContiFile(temp.path, cloudUid: conti.uid);
+      } on FormatException {
+        throw const FileSystemException(
+          '콘티 파일을 다 읽지 못했습니다. 잠시 뒤에 다시 받아 주세요.',
+        );
+      }
+    });
   }
 
   /// 클라우드에서 지운다(이미 받은 PC 의 콘티는 그대로다).
-  Future<void> delete(String folder, CloudConti conti) async {
+  Future<void> delete(SyncStore store, CloudConti conti) async {
     // 정보 파일부터 지운다 — 목록에서 먼저 사라져 반쯤 지운 콘티를 받지 않게.
-    for (final file in [
-      _infoFile(folder, conti.uid),
-      _contiFile(folder, conti.uid),
-    ]) {
-      if (await file.exists()) await file.delete();
+    await store.delete(infoName(conti.uid));
+    await store.delete(contiName(conti.uid));
+  }
+
+  static Future<T> _withTemp<T>(Future<T> Function(File temp) job) async {
+    final dir = await Directory.systemTemp.createTemp('ws_cloud_');
+    try {
+      return await job(
+        File(p.join(dir.path, 'x.${WorshipContiRepository.contiFileExtension}')),
+      );
+    } finally {
+      await dir.delete(recursive: true).catchError((_) => dir);
     }
   }
 }

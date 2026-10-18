@@ -7,7 +7,7 @@ import '../data/conti_cloud_repository.dart';
 import '../data/sync_service.dart';
 import '../domain/worship_conti.dart';
 
-/// 클라우드(공유 폴더)에 올라온 콘티 목록. 골라서 이 PC 로 내려받거나 클라우드에서 지운다.
+/// 클라우드(구글 드라이브)에 올라온 콘티 목록. 골라서 이 PC 로 내려받거나 클라우드에서 지운다.
 /// 받은 콘티는 '콘티 불러오기' 목록에 들어간다.
 class CloudContiDialog extends StatefulWidget {
   const CloudContiDialog({super.key, required this.service});

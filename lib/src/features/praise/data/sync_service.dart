@@ -11,9 +11,11 @@ import '../domain/worship_conti.dart';
 import 'app_logger.dart';
 import 'atomic_file.dart';
 import 'conti_cloud_repository.dart';
+import 'drive_sync_store.dart';
 import 'praise_database.dart';
 import 'song_sync_repository.dart';
 import 'sync_snapshot.dart';
+import 'sync_store.dart';
 import 'worship_conti_repository.dart';
 
 /// 동기화 화면·상태 줄에 보여 줄 상태.
@@ -29,7 +31,7 @@ class SyncStatus {
     this.hasLocalChanges = false,
   });
 
-  /// 사용자가 고른 공유 폴더. null 이면 동기화 꺼짐.
+  /// 연결된 저장소 이름(구글 드라이브 · 폴더). null 이면 동기화 꺼짐(접속 키 없음).
   final String? folder;
   final bool syncing;
   final DateTime? lastSyncAt;
@@ -64,7 +66,7 @@ class SyncStatus {
   );
 }
 
-/// 프로그램을 켤 때 본 "서버(공유 폴더)에 있는 새 것". DB 는 건드리지 않고 센 값이다.
+/// 프로그램을 켤 때 본 "서버(구글 드라이브)에 있는 새 것". DB 는 건드리지 않고 센 값이다.
 class SyncCheck {
   const SyncCheck({
     this.songs = const SyncMergeResult(),
@@ -84,14 +86,15 @@ class SyncCheck {
   bool get hasAnything => songs.changed || newContis.isNotEmpty || localChanges;
 }
 
-/// 공유 폴더(Google Drive 공유 드라이브 등)로 여러 PC 의 찬양을 맞추고 콘티를 주고받는다.
+/// 구글 드라이브 폴더 하나로 여러 PC 의 찬양을 맞추고 콘티를 주고받는다.
 /// **모두 손으로 한다** — 찬양은 '찬양 동기화' 버튼, 콘티는 '클라우드에 올리기/내려받기'.
 /// 자동으로 하는 일은 프로그램을 켤 때 한 번 서버를 보고 새 것이 있으면 알리는 것([checkForUpdates])뿐이다.
 ///
 /// SQLite 파일 자체를 드라이브에 두면 두 PC 가 동시에 쓸 때 파일이 깨지거나 드라이브가 사본을
 /// 만든다. 그래서 **PC 마다 자기 찬양 전부를 JSON 파일 하나로만 쓰고**
-/// (`<폴더>/worship_slides_sync/<기기 id>.json`), 동기화를 누르면 다른 PC 들의 파일을 읽어 합친다.
-/// 앱은 드라이브 API 를 모른다 — Google Drive 데스크톱 앱이 PC 에 보여 주는 폴더면 된다.
+/// (`<기기 id>.json`), 동기화를 누르면 다른 PC 들의 파일을 읽어 합친다.
+/// 드라이브에는 Drive API 로 직접 붙는다([DriveSyncStore]) — PC 에 드라이브 앱도, 로그인도 필요 없고
+/// 관리자가 건넨 접속 키를 한 번 넣으면 된다([connect]).
 class SyncService {
   SyncService({
     SongSyncRepository? songs,
@@ -109,6 +112,7 @@ class SyncService {
   }
 
   static const _settingsFile = 'song_sync.json';
+  static const _keyFile = 'sync_key.txt';
 
   final SongSyncRepository _songs;
   final WorshipContiRepository _contis;
@@ -121,6 +125,8 @@ class SyncService {
 
   String? _deviceId;
 
+  SyncStore? _store;
+
   /// 이번 실행이 쓰는 내 파일 표시([SyncSnapshot.writer]). 설정에는 남기지 않는다 —
   /// 지난 실행의 파일은 [_lastWrittenAt] 으로 알아본다.
   final String _writer = newSongUid();
@@ -131,7 +137,7 @@ class SyncService {
   int? _lastWrittenAt;
 
   /// 내가 마지막으로 쓴 내 파일의 상태. 바뀌었으면 누가 썼는지 확인한다.
-  FileStat? _ownStat;
+  SyncEntry? _ownEntry;
 
   /// 마지막으로 쓴 내 파일 내용(쓴 시각 뺌). 같으면 다시 쓰지 않는다.
   String? _lastWrittenText;
@@ -152,17 +158,18 @@ class SyncService {
   Future<File> get _settings async =>
       File(p.join((await _settingsDirectory()).path, _settingsFile));
 
-  /// 저장해 둔 설정을 읽는다. 동기화는 하지 않는다.
-  /// 큐로 돈다 — 다 읽기 전에 [setFolder] 가 기기 id 없는 설정을 저장하지 않게.
+  Future<File> get _key async =>
+      File(p.join((await _settingsDirectory()).path, _keyFile));
+
+  /// 저장해 둔 설정·접속 키를 읽는다. 동기화는 하지 않는다.
+  /// 큐로 돈다 — 다 읽기 전에 [connect] 가 기기 id 없는 설정을 저장하지 않게.
   Future<void> load() => _enqueue(() async {
-    String? folder;
     String? settingsError;
     try {
       final file = await _settings;
       if (await file.exists()) {
         final json = jsonDecode(await file.readAsString());
         if (json is! Map) throw const FormatException('설정 모양이 아닙니다');
-        folder = json['folder'] is String ? json['folder'] as String : null;
         _deviceId = json['device_id'] is String
             ? json['device_id'] as String
             : null;
@@ -173,26 +180,61 @@ class SyncService {
         if (seen is List) _seenContis.addAll(seen.whereType<String>());
       }
     } catch (error, stack) {
-      // 깨진 설정을 "꺼짐"으로 덮어쓰지 않는다 — 사용자가 폴더를 다시 고를 때까지 그대로 두고 알린다.
+      // 깨진 설정을 덮어쓰지 않는다 — 기기 id 가 바뀌면 내 파일을 남의 것으로 본다.
       await AppLogger.instance.error('동기화 설정 읽기 실패', error, stack);
-      settingsError = '동기화 설정을 읽지 못해 꺼 두었습니다. 폴더를 다시 골라 주세요.';
+      settingsError = '동기화 설정을 읽지 못해 꺼 두었습니다. 접속 키를 다시 넣어 주세요.';
     }
     if (_deviceId == null || _deviceId!.isEmpty) {
       _deviceId = newSongUid();
-      if (settingsError == null) await _saveSettings(folder);
+      if (settingsError == null) await _saveSettings();
     }
-    _setStatus(SyncStatus(folder: folder, lastError: settingsError));
+    if (settingsError == null) {
+      try {
+        final key = await _key;
+        if (await key.exists()) {
+          _store = DriveSyncStore(DriveKey.parse(await key.readAsString()));
+        }
+      } catch (error, stack) {
+        await AppLogger.instance.error('접속 키 읽기 실패', error, stack);
+        settingsError = '저장된 접속 키를 읽지 못했습니다. 다시 넣어 주세요.';
+      }
+    }
+    _setStatus(SyncStatus(folder: _store?.label, lastError: settingsError));
   });
 
-  /// 공유 폴더를 바꾼다. null 이면 동기화를 끈다(공유 폴더의 파일은 지우지 않는다).
-  Future<void> setFolder(String? folder) => _enqueue(() async {
-    await _saveSettings(folder);
-    _lastWrittenText = null;
-    _ownStat = null;
-    _setStatus(
-      SyncStatus(folder: folder, hasLocalChanges: status.value.hasLocalChanges),
-    );
+  /// 관리자가 건넨 접속 키를 확인하고(드라이브 폴더까지 열어 본다) 이 PC 에 저장한다.
+  /// 키가 틀리거나 못 열면 [FormatException]·[FileSystemException](메시지를 그대로 보인다).
+  Future<void> connect(String keyText) => _enqueue(() async {
+    final store = DriveSyncStore(DriveKey.parse(keyText));
+    await store.check();
+    await atomicWriteString(await _key, keyText.trim());
+    _useStore(store);
   });
+
+  /// 접속 키를 이 PC 에서 지운다(드라이브의 파일은 그대로).
+  Future<void> disconnect() => _enqueue(() async {
+    final key = await _key;
+    if (await key.exists()) await key.delete();
+    _useStore(null);
+  });
+
+  /// 테스트: 드라이브 대신 [store] 를 쓴다.
+  @visibleForTesting
+  Future<void> useStore(SyncStore? store) => _enqueue(() async {
+    _useStore(store);
+  });
+
+  void _useStore(SyncStore? store) {
+    _store = store;
+    _lastWrittenText = null;
+    _ownEntry = null;
+    _setStatus(
+      SyncStatus(
+        folder: store?.label,
+        hasLocalChanges: status.value.hasLocalChanges,
+      ),
+    );
+  }
 
   /// 이 PC 에서 찬양을 고쳤을 때 — 상태 줄에 '동기화 안 한 변경'으로만 보인다.
   void markLocalChanged() {
@@ -202,7 +244,7 @@ class SyncService {
   }
 
   /// **'찬양 동기화' 버튼.** 다른 PC 들의 새 찬양·바뀐 찬양(지운 찬양 포함)을 이 PC 에 합치고,
-  /// 이 PC 의 찬양을 공유 폴더에 쓴다. 폴더가 없거나 실패하면 null(이유는 [status] 의 lastError).
+  /// 이 PC 의 찬양을 드라이브에 쓴다. 키가 없거나 실패하면 null(이유는 [status] 의 lastError).
   Future<SyncMergeResult?> syncSongs() {
     // 누른 순간의 값 — 그 뒤에 고친 것은(이번에 같이 올라갔더라도) "안 올림"으로 남긴다. 숨기는 것보다 낫다.
     final changesAtStart = _localChangeCount;
@@ -212,10 +254,10 @@ class SyncService {
       _setStatus(status.value.copyWith(syncing: true));
       var merged = false;
       try {
-        final read = await _readSnapshots(dirs.remoteFiles);
+        final read = await _readSnapshots(dirs.store, dirs.remote);
         final result = await _songs.merge(read.snapshots);
         merged = true;
-        await _writeOwn(dirs.ownPath);
+        await _writeOwn(dirs.store, dirs.own);
         _setStatus(
           status.value.copyWith(
             syncing: false,
@@ -226,8 +268,7 @@ class SyncService {
             lastError: () => null,
             warning: () => read.unreadable == 0
                 ? null
-                : '다른 PC 파일 ${read.unreadable}개를 읽지 못했습니다'
-                      '(드라이브가 아직 내려받는 중일 수 있습니다). 잠시 뒤에 다시 눌러 주세요.',
+                : '다른 PC 파일 ${read.unreadable}개를 읽지 못했습니다. 잠시 뒤에 다시 눌러 주세요.',
           ),
         );
         if (result.changed) {
@@ -249,16 +290,16 @@ class SyncService {
   }
 
   /// **프로그램을 켤 때 한 번.** 서버에 새 찬양·바뀐 찬양·새 콘티가 있는지만 본다(DB 는 그대로).
-  /// 폴더가 꺼져 있거나 못 읽으면 null.
+  /// 키가 없거나 못 읽으면 null.
   Future<SyncCheck?> checkForUpdates() => _enqueue(() async {
     final dirs = await _prepare();
     if (dirs == null) return null;
     try {
-      final read = await _readSnapshots(dirs.remoteFiles);
+      final read = await _readSnapshots(dirs.store, dirs.remote);
       final songs = await _songs.preview(read.snapshots);
-      final localChanges = !await _ownFileUpToDate(dirs.ownPath);
+      final localChanges = !await _ownFileUpToDate(dirs.store, dirs.own);
       final local = await _contis.contisByUid();
-      final cloud = await _cloud.list(status.value.folder!);
+      final cloud = await _cloud.list(dirs.store);
       _setStatus(
         status.value.copyWith(
           peers: _peerNames(read.snapshots),
@@ -284,7 +325,7 @@ class SyncService {
   Future<void> markContisSeen(Iterable<String> uids) => _enqueue(() async {
     final before = _seenContis.length;
     _seenContis.addAll(uids);
-    if (_seenContis.length != before) await _saveSettings(status.value.folder);
+    if (_seenContis.length != before) await _saveSettings();
   });
 
   // ── 콘티 클라우드 (손으로 올리기·내려받기) ────────────────────────────
@@ -292,24 +333,24 @@ class SyncService {
   /// 클라우드 콘티 목록과, 그중 이 PC 에 이미 있는 것(uid → 이 PC 콘티).
   Future<({List<CloudConti> cloud, Map<String, WorshipConti> local})>
   listCloudContis() async {
-    final folder = await _requireFolder();
+    final store = await _requireStore();
     return (
-      cloud: await _cloud.list(folder),
+      cloud: await _cloud.list(store),
       local: await _contis.contisByUid(),
     );
   }
 
   Future<void> uploadConti(WorshipConti conti) async =>
-      _cloud.upload(await _requireFolder(), conti, deviceName: _deviceName);
+      _cloud.upload(await _requireStore(), conti, deviceName: _deviceName);
 
   Future<int> downloadConti(CloudConti conti) async {
-    final id = await _cloud.download(await _requireFolder(), conti);
+    final id = await _cloud.download(await _requireStore(), conti);
     await markContisSeen([conti.uid]);
     return id;
   }
 
   Future<void> deleteCloudConti(CloudConti conti) async =>
-      _cloud.delete(await _requireFolder(), conti);
+      _cloud.delete(await _requireStore(), conti);
 
   void dispose() {
     if (_disposed) return;
@@ -339,65 +380,68 @@ class SyncService {
     ),
   );
 
-  /// 고른 공유 폴더. 없으면(드라이브가 꺼져 있음) 던진다 — 그대로 쓰면 이 PC 디스크에 폴더를 만들어
-  /// 올린 줄 알게 된다.
-  Future<String> _requireFolder() async {
-    final folder = status.value.folder;
-    if (folder == null) {
-      throw const FileSystemException('동기화 폴더를 먼저 골라 주세요.');
+  /// 연결된 저장소. 키가 없거나 못 열면 던진다.
+  Future<SyncStore> _requireStore() async {
+    final store = _store;
+    if (store == null) {
+      throw const FileSystemException('동기화 접속 키를 먼저 넣어 주세요.');
     }
-    if (!await Directory(folder).exists()) {
-      throw const FileSystemException(
-        '공유 폴더를 찾을 수 없습니다. Google Drive 가 켜져 있는지 확인해 주세요.',
-      );
-    }
-    return folder;
+    await store.check();
+    return store;
   }
 
   static List<String> _peerNames(List<SyncSnapshot> snapshots) => [
     for (final s in snapshots) s.deviceName.isEmpty ? s.deviceId : s.deviceName,
   ];
 
-  /// 공유 폴더를 확인하고 내 파일 경로·다른 PC 파일을 찾는다. 못 쓰면 null(상태에 오류).
-  Future<({String ownPath, List<File> remoteFiles})?> _prepare() async {
-    final folder = status.value.folder;
-    if (_disposed || folder == null) return null;
+  /// 저장소를 확인하고 내 파일·다른 PC 파일을 찾는다. 못 쓰면 null(상태에 오류).
+  Future<({SyncStore store, SyncEntry? own, List<SyncEntry> remote})?>
+  _prepare() async {
+    final store = _store;
+    if (_disposed || store == null) return null;
     try {
-      if (!await Directory(folder).exists()) {
-        throw const FileSystemException(
-          '공유 폴더를 찾을 수 없습니다. Google Drive 가 켜져 있는지 확인해 주세요.',
-        );
-      }
-      final dir = Directory(p.join(folder, syncDirName));
-      await dir.create(recursive: true);
-      if (await _ownFileTakenByOther(p.join(dir.path, '$deviceId.json'))) {
+      await store.check();
+      var entries = await store.list();
+      SyncEntry? own() =>
+          entries.where((e) => e.name == '$deviceId.json').firstOrNull;
+      if (await _ownFileTakenByOther(store, own())) {
         // 설정 폴더째 복제된 다른 PC 가 같은 기기 id 를 쓰고 있다. 이 PC 가 새 id 로 비킨다 —
         // 그대로 두면 서로의 파일을 덮어쓰고 서로를 "나"로 보고 건너뛴다.
         final old = deviceId;
         _deviceId = newSongUid();
         _lastWrittenText = null;
-        _ownStat = null;
-        await _saveSettings(folder);
+        _ownEntry = null;
+        await _saveSettings();
         await AppLogger.instance.info(
           '[sync] 기기 id 가 겹쳐 새로 만듦 $old → $deviceId',
         );
       }
-      final ownPath = p.join(dir.path, '$deviceId.json');
-      return (ownPath: ownPath, remoteFiles: await _remoteFiles(dir, ownPath));
+      final mine = own();
+      return (
+        store: store,
+        own: mine,
+        remote: [
+          for (final e in entries)
+            if (e != mine &&
+                !e.name.startsWith('.') &&
+                !e.name.startsWith(ContiCloudRepository.prefix) &&
+                p.extension(e.name).toLowerCase() == '.json')
+              e,
+        ]..sort((a, b) => a.name.compareTo(b.name)),
+      );
     } catch (error, stack) {
-      await AppLogger.instance.error('동기화 폴더 확인 실패', error, stack);
+      await AppLogger.instance.error('동기화 저장소 확인 실패', error, stack);
       _fail(error);
       return null;
     }
   }
 
   /// 임시 파일에 쓰고 이름을 바꾼다 — 쓰는 도중 꺼져도 설정이 반쯤 남지 않게. 실패하면 false.
-  Future<bool> _saveSettings(String? folder) async {
+  Future<bool> _saveSettings() async {
     try {
       await atomicWriteString(
         await _settings,
         jsonEncode({
-          'folder': folder,
           'device_id': _deviceId,
           'written_at': _lastWrittenAt,
           'seen_contis': _seenContis.toList()..sort(),
@@ -410,35 +454,31 @@ class SyncService {
     }
   }
 
-  Future<List<File>> _remoteFiles(Directory dir, String ownPath) async {
-    final files = <File>[];
-    await for (final entity in dir.list()) {
-      if (entity is! File) continue;
-      final name = p.basename(entity.path);
-      if (name.startsWith('.') || p.extension(name).toLowerCase() != '.json') {
-        continue;
-      }
-      if (p.equals(entity.path, ownPath)) continue;
-      files.add(entity);
-    }
-    files.sort((a, b) => a.path.compareTo(b.path));
-    return files;
-  }
-
-  /// 다른 PC 파일을 읽어 푼다. 곡이 수천 곡이면 파일마다 몇 MB 라서 화면 스레드가
-  /// 멈추지 않게 별도 isolate 에서 읽고 푼다. 내 기기 id 로 된 파일은 뺀다.
+  /// 다른 PC 파일을 받아 푼다. 곡이 수천 곡이면 파일마다 몇 MB 라서 화면 스레드가
+  /// 멈추지 않게 별도 isolate 에서 푼다. 내 기기 id 로 된 파일은 뺀다.
   Future<({List<SyncSnapshot> snapshots, int unreadable})> _readSnapshots(
-    List<File> files,
+    SyncStore store,
+    List<SyncEntry> entries,
   ) async {
-    final paths = [for (final f in files) f.path];
+    final texts = await Future.wait([
+      for (final e in entries)
+        () async {
+          try {
+            return (name: e.name, text: await store.read(e), error: null);
+          } on FileSystemException catch (error) {
+            return (name: e.name, text: null, error: error.message);
+          }
+        }(),
+    ]);
     final read = await Isolate.run(
       () => [
-        for (final path in paths)
+        for (final t in texts)
           () {
+            if (t.text == null) {
+              return (snapshot: null, error: '${t.name}: ${t.error}');
+            }
             try {
-              final snapshot = SyncSnapshot.fromJson(
-                jsonDecode(File(path).readAsStringSync()),
-              );
+              final snapshot = SyncSnapshot.fromJson(jsonDecode(t.text!));
               // 지운 기록 비교에 쓰는 곡 내용 해시를 여기서 미리 계산해 둔다(가사 전체를 훑는다 —
               // 화면 스레드에서 하면 발표 넘기기가 끊긴다). late final 이라 그대로 넘어간다.
               if (snapshot != null && snapshot.deletedContent.isNotEmpty) {
@@ -448,7 +488,7 @@ class SyncService {
               }
               return (snapshot: snapshot, error: null);
             } catch (error) {
-              return (snapshot: null, error: '$path: $error');
+              return (snapshot: null, error: '${t.name}: $error');
             }
           }(),
       ],
@@ -459,7 +499,7 @@ class SyncService {
       if (r.snapshot != null) {
         if (r.snapshot!.deviceId != deviceId) result.add(r.snapshot!);
       } else if (r.error != null) {
-        // 드라이브가 아직 내려받는 중이거나 다른 PC 가 쓰는 중일 수 있다.
+        // 받다가 끊겼거나 파일이 깨졌다.
         unreadable += 1;
         await AppLogger.instance.info('[sync] 읽기 건너뜀 ${r.error}');
       }
@@ -487,18 +527,25 @@ class SyncService {
     'translation_deleted',
   ];
 
-  /// 공유 폴더의 내 파일이 지금 이 PC 의 찬양과 같은지. 다르면 이 PC 에서 고친 찬양을 아직 안
+  /// 드라이브의 내 파일이 지금 이 PC 의 찬양과 같은지. 다르면 이 PC 에서 고친 찬양을 아직 안
   /// 올린 것이다. 곡이 수천 곡이면 몇 MB 라 비교는 별도 isolate 에서 한다.
-  Future<bool> _ownFileUpToDate(String path) async {
+  Future<bool> _ownFileUpToDate(SyncStore store, SyncEntry? own) async {
     final snapshot = await _songs.exportSnapshot(
       deviceId: deviceId,
       deviceName: _deviceName,
       writer: _writer,
     );
+    String? text;
+    if (own != null) {
+      try {
+        text = await store.read(own);
+      } on FileSystemException {
+        return false;
+      }
+    }
     return Isolate.run(() {
       final mine = snapshot.toJson();
-      final file = File(path);
-      if (!file.existsSync()) {
+      if (text == null) {
         // 아직 올린 적이 없다 — 찬양도 지운 기록도 없으면 올릴 것도 없다.
         return snapshot.songs.isEmpty &&
             snapshot.translations.isEmpty &&
@@ -506,7 +553,7 @@ class SyncService {
       }
       final Object? stored;
       try {
-        stored = jsonDecode(file.readAsStringSync());
+        stored = jsonDecode(text);
       } catch (_) {
         return false;
       }
@@ -518,13 +565,11 @@ class SyncService {
     });
   }
 
-  /// 내 파일은 내용이 바뀌었거나 사라졌을 때만 쓴다(드라이브가 쓸데없이 올리지 않게).
-  /// 임시 파일에 쓰고 이름을 바꿔, 다른 PC 가 반쯤 쓴 파일을 읽지 않게 한다.
-  Future<void> _writeOwn(String path) async {
+  /// 내 파일은 내용이 바뀌었거나 사라졌을 때만 쓴다(쓸데없이 올리지 않게).
+  Future<void> _writeOwn(SyncStore store, SyncEntry? own) async {
     // 쓴 시각은 내용 비교에서 뺀다 — 넣으면 바뀐 게 없어도 매번 다시 쓴다.
     final body = await _ownBody();
-    final file = File(path);
-    if (body == _lastWrittenText && await file.exists()) return;
+    if (body == _lastWrittenText && own != null) return;
     // 시각은 늘 앞으로만 간다(시계가 같은 ms 를 돌려줘도).
     final now = _clock().millisecondsSinceEpoch;
     final writtenAt = now > (_lastWrittenAt ?? 0) ? now : _lastWrittenAt! + 1;
@@ -533,35 +578,29 @@ class SyncService {
     // 내 파일을 "다른 PC 가 쓴 것"으로 오해한다.
     final previous = _lastWrittenAt;
     _lastWrittenAt = writtenAt;
-    if (!await _saveSettings(status.value.folder)) {
+    if (!await _saveSettings()) {
       _lastWrittenAt = previous;
       throw const FileSystemException('동기화 설정을 저장하지 못했습니다.');
     }
-    try {
-      await atomicWriteString(file, text);
-    } on FileSystemException {
-      // 드라이브가 파일을 잡고 있어 이름 바꾸기가 막히면 바로 덮어쓴다.
-      await file.writeAsString(text, flush: true);
-    }
+    _ownEntry = await store.write('$deviceId.json', text);
     _lastWrittenText = body;
-    _ownStat = await file.stat();
   }
 
   /// 내 파일(이 기기 id)을 다른 PC 가 쓰고 있으면 true. 내가 쓴 뒤로 파일이 바뀌었을 때만
   /// 파일 안의 표시(writer)를 읽어 본다.
-  Future<bool> _ownFileTakenByOther(String path) async {
-    final file = File(path);
-    final stat = await file.stat();
-    if (stat.type == FileSystemEntityType.notFound) return false;
-    final mine = _ownStat;
-    if (mine != null &&
-        stat.modified == mine.modified &&
-        stat.size == mine.size) {
+  Future<bool> _ownFileTakenByOther(SyncStore store, SyncEntry? own) async {
+    if (own == null) return false;
+    final mine = _ownEntry;
+    if (mine != null && own.sameVersion(mine)) return false;
+    final String text;
+    try {
+      text = await store.read(own);
+    } on FileSystemException {
       return false;
     }
     final found = await Isolate.run(() {
       try {
-        final json = jsonDecode(File(path).readAsStringSync());
+        final json = jsonDecode(text);
         if (json is! Map) return null;
         return (
           writer: json['writer'] is String ? json['writer'] as String : '',
@@ -573,7 +612,7 @@ class SyncService {
     });
     if (found == null || found.writer.isEmpty) return false;
     if (found.writer == _writer) {
-      _ownStat = stat;
+      _ownEntry = own;
       return false;
     }
     // 이번 실행에서 내가 쓴 뒤에 다른 표시로 바뀌었다 = 다른 PC.

@@ -9,6 +9,7 @@ import 'package:worship_slides/src/features/praise/data/praise_repository.dart';
 import 'package:worship_slides/src/features/praise/data/song_sync_repository.dart';
 import 'package:worship_slides/src/features/praise/data/sync_service.dart';
 import 'package:worship_slides/src/features/praise/data/sync_snapshot.dart';
+import 'package:worship_slides/src/features/praise/data/sync_store.dart';
 import 'package:worship_slides/src/features/praise/data/worship_conti_repository.dart';
 import 'package:worship_slides/src/features/praise/domain/praise_song.dart';
 import 'package:worship_slides/src/features/praise/domain/staging_item.dart';
@@ -37,6 +38,9 @@ void main() {
   // 기기 id 겹침(쓴 시각 비교)을 시험하려고 시계를 고정한다.
   var now = DateTime(2026, 1, 1);
 
+  /// 공유 폴더 [at] 을 드라이브 대신 쓴다.
+  SyncStore store(String at) => FolderSyncStore(p.join(at, syncDirName));
+
   setUp(() async {
     root = await Directory.systemTemp.createTemp('song_sync_');
     shared = p.join(root.path, '공유 드라이브');
@@ -63,7 +67,7 @@ void main() {
     );
     addTearDown(sync.dispose);
     await sync.load();
-    if (join) await sync.setFolder(shared);
+    if (join) await sync.useStore(store(shared));
     // 앱과 같이: 곡을 고치면 동기화에 알린다(상태 표시만, 자동으로 맞추지 않는다).
     final repo = PraiseRepository(database: database)
       ..onSongsChanged = sync.markLocalChanged;
@@ -187,7 +191,7 @@ void main() {
       ]);
     }
     for (final pc in [a, b, c]) {
-      await pc.sync.setFolder(shared);
+      await pc.sync.useStore(store(shared));
     }
     await syncAll([a, b, c]);
 
@@ -241,7 +245,7 @@ void main() {
   test('공유 폴더가 없으면 오류만 남기고 DB 는 그대로다', () async {
     final a = await newPc('A', join: false);
     await a.repo.insertSong(song('은혜', '가사'));
-    await a.sync.setFolder(p.join(root.path, '없는 폴더'));
+    await a.sync.useStore(store(p.join(root.path, '없는 폴더')));
     expect(await a.sync.syncSongs(), isNull);
     expect(a.sync.status.value.lastError, contains('찾을 수 없습니다'));
     expect(await a.titles(), ['은혜:가사']);
@@ -301,8 +305,8 @@ void main() {
       await a.repo.saveTranslations('일본어', {'은혜': '恵み'});
       await b.repo.addNewSongs([song('은혜', '가사')]);
       await b.repo.saveTranslations('중국어', {'은혜': '恩典'});
-      await a.sync.setFolder(shared);
-      await b.sync.setFolder(shared);
+      await a.sync.useStore(store(shared));
+      await b.sync.useStore(store(shared));
       await syncAll([a, b]);
       for (final pc in [a, b]) {
         expect(await pc.repo.translationsForTitle('은혜'), {
@@ -408,8 +412,8 @@ void main() {
       final grace = (await a.songs()).firstWhere((s) => s.title == '은혜');
       await Future<void>.delayed(const Duration(milliseconds: 5));
       await a.repo.deleteSongsByIds([grace.id!]);
-      await a.sync.setFolder(shared);
-      await b.sync.setFolder(shared);
+      await a.sync.useStore(store(shared));
+      await b.sync.useStore(store(shared));
       await syncAll([a, b]);
       expect(await a.titles(), ['축복:가사']);
       expect(await b.titles(), ['축복:가사']);
@@ -424,7 +428,7 @@ void main() {
       final first = (await a.songs()).first;
       await Future<void>.delayed(const Duration(milliseconds: 5));
       await a.repo.deleteSongsByIds([first.id!]);
-      await a.sync.setFolder(shared);
+      await a.sync.useStore(store(shared));
       await syncAll([a, b]);
       expect(await a.titles(), ['은혜:가사']);
       expect(await b.titles(), ['은혜:가사']);
@@ -459,6 +463,7 @@ void main() {
       final repo = PraiseRepository(database: database)
         ..onSongsChanged = sync.markLocalChanged;
       await sync.load();
+      await sync.useStore(store(shared));
       return _Pc(repo, contis, sync, dir);
     }
 
@@ -595,7 +600,7 @@ void main() {
           aliases: const {},
         ),
       );
-      await b.sync.setFolder(shared);
+      await b.sync.useStore(store(shared));
       await b.sync.syncSongs();
       expect(await b.titles(), ['은혜:고친 가사']);
     });
@@ -689,7 +694,7 @@ void main() {
           aliases: const {'b': 'a'},
         ),
       );
-      await b.sync.setFolder(shared);
+      await b.sync.useStore(store(shared));
       await b.sync.syncSongs();
       expect(await b.titles(), ['은혜:편곡 1', '은혜:편곡 2']);
     });
@@ -824,7 +829,7 @@ void main() {
       await a.sync.uploadConti(await saveSample(a));
       final cloud = (await b.sync.listCloudContis()).cloud.single;
       File(
-        p.join(shared, syncDirName, 'contis', '${cloud.uid}.wsconti'),
+        p.join(shared, syncDirName, 'conti_${cloud.uid}.wsconti'),
       ).deleteSync();
       await expectLater(
         b.sync.downloadConti(cloud),
@@ -835,11 +840,10 @@ void main() {
 
     test('정보 파일의 uid 가 이상하면 목록에 보이지 않는다', () async {
       final b = await newPc('B');
-      final dir = Directory(p.join(shared, syncDirName, 'contis'))
+      final dir = Directory(p.join(shared, syncDirName))
         ..createSync(recursive: true);
-      File(p.join(dir.path, '../../evil.json')).writeAsStringSync('{}');
       File(
-        p.join(dir.path, 'x.json'),
+        p.join(dir.path, 'conti_x.json'),
       ).writeAsStringSync(jsonEncode({'uid': '../../x', 'name': '나쁜 콘티'}));
       expect((await b.sync.listCloudContis()).cloud, isEmpty);
     });
@@ -916,6 +920,7 @@ void main() {
       );
       addTearDown(again.dispose);
       await again.load();
+      await again.useStore(store(shared));
       final check = await again.checkForUpdates();
       expect(check!.localChanges, isTrue);
       expect(check.hasAnything, isTrue);
@@ -938,7 +943,7 @@ void main() {
 
     test('공유 폴더가 없으면 콘티를 올렸다고 하지 않는다', () async {
       final a = await newPc('A', join: false);
-      await a.sync.setFolder(p.join(root.path, '없는 드라이브'));
+      await a.sync.useStore(store(p.join(root.path, '없는 드라이브')));
       await a.contis.saveConti('콘티', [
         (uid: 1, item: const BlankStagingItem(mainText: '환영')),
       ]);
