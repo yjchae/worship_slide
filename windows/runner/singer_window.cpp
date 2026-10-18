@@ -20,7 +20,10 @@ constexpr wchar_t kNext[]        = L"\xB2E4\xC74C";                     // 다�
 constexpr wchar_t kBlank[]       = L"\xBE48 \xD654\xBA74";              // 빈 화면
 constexpr wchar_t kLastPage[]    = L"\xB9C8\xC9C0\xB9C9 \xD398\xC774\xC9C0";  // 마지막 페이지
 constexpr wchar_t kBlackout[]    = L"\xAD00\xAC1D \xD654\xBA74 \xAEBC\xC9D0";  // 관객 화면 꺼짐
+constexpr wchar_t kAm[]          = L"\xC624\xC804";                     // 오전
+constexpr wchar_t kPm[]          = L"\xC624\xD6C4";                     // 오후
 constexpr wchar_t kFontFace[]    = L"Malgun Gothic";
+constexpr UINT_PTR kClockTimer   = 1;
 
 // 앱 화면 어두운 테마와 비슷한 차분한 색. 싱어가 무대 조명 아래서 보기 쉽게 어둡게 둔다.
 const COLORREF kBg          = RGB(13, 15, 18);
@@ -33,6 +36,9 @@ const COLORREF kMuted       = RGB(154, 164, 177);
 const COLORREF kLabel       = RGB(139, 149, 162);
 const COLORREF kPlaceholder = RGB(89, 98, 110);
 const COLORREF kBadge       = RGB(229, 72, 77);
+const COLORREF kClock       = RGB(195, 202, 212);
+const COLORREF kClockWarn   = RGB(255, 181, 71);
+const COLORREF kClockOver   = RGB(255, 107, 107);
 
 std::wstring Utf8ToWide(const std::string& s) {
   if (s.empty()) return {};
@@ -58,6 +64,14 @@ bool GetBool(const flutter::EncodableMap& m, const char* key) {
   const auto* v = Find(m, key);
   const auto* b = v ? std::get_if<bool>(v) : nullptr;
   return b ? *b : false;
+}
+
+int64_t GetInt64(const flutter::EncodableMap& m, const char* key) {
+  const auto* v = Find(m, key);
+  if (!v) return 0;
+  if (const auto* i = std::get_if<int32_t>(v)) return *i;
+  if (const auto* l = std::get_if<int64_t>(v)) return *l;
+  return 0;
 }
 
 int GetInt(const flutter::EncodableMap& m, const char* key) {
@@ -182,6 +196,8 @@ void SingerWindow::Open(HMONITOR avoid, HMONITOR chosen) {
   if (!hwnd_) return;
 
   if (pick.found) ToggleFullScreen();
+  // 시계: 0.5초마다 보이는 글자가 바뀌었는지만 보고, 바뀌었을 때만 다시 그린다.
+  SetTimer(hwnd_, kClockTimer, 500, nullptr);
   // 포커스는 메인 창에 남긴다. 넘기기 단축키가 계속 메인 창에서 먹어야 한다.
   ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
   UpdateWindow(hwnd_);
@@ -215,6 +231,16 @@ void SingerWindow::Update(const flutter::EncodableMap& data) {
   page_number_ = GetInt(data, "page_number");
   total_pages_ = GetInt(data, "total_pages");
   blackout_    = GetBool(data, "blackout");
+  // 시계: 받은 순간(clock_at_)부터 이 PC 시계로 이어서 센다.
+  {
+    const auto* v = Find(data, "clock");
+    const auto* m = v ? std::get_if<flutter::EncodableMap>(v) : nullptr;
+    clock_show_    = m && GetBool(*m, "show");
+    clock_running_ = m && GetBool(*m, "running");
+    clock_ms_      = m ? GetInt64(*m, "elapsed_ms") : 0;
+    clock_target_  = m ? GetInt64(*m, "target_ms") : 0;
+    clock_at_      = GetTickCount64();
+  }
   // 지금·다음 페이지가 안 쓰는 이미지는 놓아 준다(파일 잠금·메모리).
   for (auto it = image_cache_.begin(); it != image_cache_.end();) {
     if (it->first == current_.imagePath || it->first == next_.imagePath) ++it;
@@ -247,6 +273,32 @@ void SingerWindow::ToggleFullScreen() {
                  SWP_FRAMECHANGED | SWP_NOACTIVATE);
     full_ = false;
   }
+}
+
+// 머리줄 시계 글자: "오후 7:32 · " + 경과("12:05") + 목표(" / 20:00"). 경과 부분만 색이 바뀐다.
+SingerWindow::ClockText SingerWindow::CurrentClockText() const {
+  ClockText t;
+  if (!clock_show_) return t;
+  SYSTEMTIME now;
+  GetLocalTime(&now);
+  const int h12 = now.wHour % 12 == 0 ? 12 : now.wHour % 12;
+  wchar_t buf[64];
+  swprintf_s(buf, L"%s %d:%02d \x00B7 ", now.wHour < 12 ? kAm : kPm, h12, now.wMinute);
+  t.time = buf;
+  const int64_t ms = clock_ms_ + (clock_running_
+      ? static_cast<int64_t>(GetTickCount64() - clock_at_) : 0);
+  const int64_t sec = ms / 1000;
+  swprintf_s(buf, L"%02lld:%02lld", sec / 60, sec % 60);
+  t.elapsed = buf;
+  if (clock_target_ > 0) {
+    swprintf_s(buf, L" / %02lld:00", clock_target_ / 60000);
+    t.target = buf;
+    t.color = ms > clock_target_ ? kClockOver
+            : ms * 10 >= clock_target_ * 8 ? kClockWarn : kClock;
+  } else {
+    t.color = kClock;
+  }
+  return t;
 }
 
 // ── rendering ─────────────────────────────────────────────────────────────────
@@ -290,6 +342,35 @@ void SingerWindow::Paint(HDC hdc, RECT cli) const {
   DrawLine(hdc, pageText, {header.right - pageW, header.top, header.right, header.bottom},
            headerPx, true, RGB(230, 233, 238), DT_RIGHT);
   int titleRight = header.right - pageW;
+  const ClockText clock = CurrentClockText();
+  last_clock_ = clock.time + clock.elapsed + clock.target;
+  if (!last_clock_.empty()) {
+    // 오른쪽부터: 목표 · 경과(색) · 현재 시각. 글자 폭을 재서 차례로 붙인다.
+    HFONT font = MakeFont(headerPx, true);
+    HGDIOBJ old = SelectObject(hdc, font);
+    auto width = [&](const std::wstring& text) {
+      RECT r = {0, 0, 0, 0};
+      if (!text.empty()) {
+        DrawTextW(hdc, text.c_str(), -1, &r, DT_SINGLELINE | DT_NOPREFIX | DT_CALCRECT);
+      }
+      return static_cast<int>(r.right - r.left);
+    };
+    const int targetW = width(clock.target);
+    const int elapsedW = width(clock.elapsed);
+    const int timeW = width(clock.time);
+    SelectObject(hdc, old);
+    DeleteObject(font);
+    int x = titleRight - headerPx / 2;
+    DrawLine(hdc, clock.target, {x - targetW, header.top, x, header.bottom},
+             headerPx, true, kClock, DT_LEFT);
+    x -= targetW;
+    DrawLine(hdc, clock.elapsed, {x - elapsedW, header.top, x, header.bottom},
+             headerPx, true, clock.color, DT_LEFT);
+    x -= elapsedW;
+    DrawLine(hdc, clock.time, {x - timeW, header.top, x, header.bottom},
+             headerPx, true, kClock, DT_LEFT);
+    titleRight = x - timeW - headerPx / 2;
+  }
   if (blackout_) {
     const int badgeW = headerPx * 8;
     const int badgeH = headerPx * 16 / 10;
@@ -462,6 +543,16 @@ LRESULT CALLBACK SingerWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
       InvalidateRect(hwnd, nullptr, FALSE);
       return 0;
 
+    case WM_TIMER:
+      if (wp == kClockTimer) {
+        const ClockText t = self->CurrentClockText();
+        if (t.time + t.elapsed + t.target != self->last_clock_) {
+          InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        return 0;
+      }
+      break;
+
     case WM_LBUTTONDBLCLK:
       self->ToggleFullScreen();
       return 0;
@@ -491,6 +582,7 @@ LRESULT CALLBACK SingerWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
       break;
 
     case WM_CLOSE:
+      KillTimer(hwnd, kClockTimer);
       // 사용자가 닫았다. Dart 에 알려 버튼 상태를 맞춘다.
       self->hwnd_ = nullptr;
       if (self->notify_) self->notify_("singerClosed", "");

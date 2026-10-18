@@ -760,6 +760,13 @@ class SingerWindowController: NSWindowController, NSWindowDelegate {
     // 다음 페이지가 다른 곡·말씀이면 그 제목을 같이 알려 준다.
     let nextLabel = (!nextTitle.isEmpty && nextTitle != title) ? "다음 · \(nextTitle)" : "다음"
     let badge = blackout ? "<span class=\"badge\">관객 화면 꺼짐</span>" : ""
+    // 시계·경과 시간. 페이지를 다시 읽은 순간부터 JS 가 이어서 센다(Dart 는 매초 보내지 않는다).
+    let clock = lastData["clock"] as? [String: Any]
+    let clockShow = (clock?["show"] as? Bool) ?? false
+    let clockRun = (clock?["running"] as? Bool) ?? false
+    let clockMs = (clock?["elapsed_ms"] as? NSNumber)?.int64Value ?? 0
+    let clockTarget = (clock?["target_ms"] as? NSNumber)?.int64Value ?? 0
+    let clockConfig = "{show:\(clockShow),ms:\(clockMs),run:\(clockRun),target:\(clockTarget)}"
 
     return """
     <!DOCTYPE html><html><head><meta charset="utf-8">
@@ -771,6 +778,8 @@ class SingerWindowController: NSWindowController, NSWindowDelegate {
       header{display:flex;align-items:center;gap:1.2vw;font-size:2.6vh;color:#9aa4b1;flex:none;}
       header .title{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;}
       header .page{font-variant-numeric:tabular-nums;font-weight:700;color:#e6e9ee;}
+      header .clock{font-variant-numeric:tabular-nums;font-weight:700;color:#c3cad4;white-space:nowrap;}
+      .clock .warn{color:#ffb547;} .clock .over{color:#ff6b6b;}
       .badge{background:#e5484d;color:#fff;border-radius:999px;padding:.2em .8em;font-size:2.2vh;font-weight:700;}
       .label{font-size:2.3vh;color:#8b95a2;font-weight:600;flex:none;
         white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
@@ -788,7 +797,7 @@ class SingerWindowController: NSWindowController, NSWindowDelegate {
       .placeholder{color:#59626e;font-size:3.4vh;font-weight:600;}
       img{max-width:100%;max-height:100%;object-fit:contain;display:block;}
     </style></head><body>
-      <header><span class="title">\(title)</span>\(badge)<span class="page">\(pageNumber) / \(totalPages)</span></header>
+      <header><span class="title">\(title)</span>\(badge)<span class="clock" id="clock"></span><span class="page">\(pageNumber) / \(totalPages)</span></header>
       <div class="box current">\(pageHTML(current, emptyLabel: "빈 화면"))</div>
       <div class="label">\(nextLabel)</div>
       <div class="box next">\(pageHTML(next, emptyLabel: "마지막 페이지"))</div>
@@ -819,6 +828,21 @@ class SingerWindowController: NSWindowController, NSWindowDelegate {
     document.addEventListener('dblclick', function(){
       window.webkit.messageHandlers.singer.postMessage('toggleFullScreen');
     });
+    var CLOCK=\(clockConfig), loadedAt=Date.now();
+    function two(n){ return (n<10?'0':'')+n; }
+    function drawClock(){
+      var box=document.getElementById('clock');
+      if(!CLOCK.show){ box.textContent=''; return; }
+      var ms=CLOCK.ms+(CLOCK.run?Date.now()-loadedAt:0), sec=Math.floor(ms/1000);
+      var now=new Date(), h=now.getHours();
+      var time=(h<12?'오전 ':'오후 ')+((h%12)||12)+':'+two(now.getMinutes());
+      var cls=CLOCK.target>0 && ms>CLOCK.target ? 'over' : (CLOCK.target>0 && ms>=CLOCK.target*0.8 ? 'warn' : '');
+      box.textContent=time+' · ';
+      var e=document.createElement('span'); e.className=cls;
+      e.textContent=two(Math.floor(sec/60))+':'+two(sec%60); box.appendChild(e);
+      if(CLOCK.target>0) box.appendChild(document.createTextNode(' / '+two(Math.floor(CLOCK.target/60000))+':00'));
+    }
+    drawClock(); setInterval(drawClock,500);
     </script>
     </body></html>
     """

@@ -44,6 +44,7 @@ import 'background_image_gallery.dart';
 import 'libreoffice_install_dialog.dart';
 import 'offering_dialog.dart';
 import 'offering_overlay_painter.dart';
+import 'presentation_timer.dart';
 import 'singer_view_data.dart';
 import 'slide_page_data.dart';
 import 'slide_render_view.dart';
@@ -259,6 +260,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   @override
   void initState() {
     super.initState();
+    // 일시정지·리셋·목표를 바꾸면 싱어 화면(네이티브·휴대폰)도 바로 맞춘다.
+    _presenterView.timer.addListener(_sendSingerView);
     _exitListener = AppLifecycleListener(
       onExitRequested: () async {
         // 무슨 일이 있어도 앱은 닫혀야 한다.
@@ -329,6 +332,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   @override
   void dispose() {
+    _presenterView.timer.removeListener(_sendSingerView);
+    _presenterView.timer.dispose();
     _exitListener.dispose();
     _mediaPlayback.dispose();
     _remoteSyncTimer?.cancel();
@@ -781,6 +786,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       setState(() {
         _isPresentationOpen = true;
       });
+      _presenterView.timer.start();
       // 발표를 시작하면 발표 보기 탭으로. 편집 탭은 그대로 살아 있다.
       _mainTabController.index = 1;
       // 발표 전에 잡아둔 확대 영역을 새 창에 그대로 반영한다.
@@ -794,6 +800,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   }
 
   void _resetPresentationState() {
+    if (_isPresentationOpen) _presenterView.timer.stop();
     _isPresentationOpen = false;
     _isBlackout = false;
     // 발표 창을 닫으면 네이티브 쪽 확대 상태도 함께 사라진다(macOS 는 컨트롤러를
@@ -859,6 +866,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       pageNumber: slides.isEmpty ? 0 : index + 1,
       totalPages: slides.length,
       isBlackout: _isBlackout,
+      clock: _presenterView.timer.toSingerJson(),
     );
   }
 
@@ -874,7 +882,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         ...json,
         'screen': await _screenIndex(_singerScreen, singer: true),
       });
-      _lastSingerJson = jsonEncode(json);
+      _lastSingerJson = _singerDedupeKey(json);
       if (mounted) setState(() => _isSingerOpen = true);
     } catch (e) {
       if (!mounted) return;
@@ -1196,7 +1204,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
           ...json,
           'screen': screen.index,
         });
-        _lastSingerJson = jsonEncode(json);
+        _lastSingerJson = _singerDedupeKey(json);
       } else if (!singer && _isPresentationOpen) {
         await _presentationChannel.invokeMethod('openWindow', {
           ..._buildSlidePageData(_currentSlideIndex).toJson(),
@@ -1213,6 +1221,12 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     } catch (_) {}
     if (mounted) setState(() => _isSingerOpen = false);
   }
+
+  // 경과 시간은 흐르는 동안 매번 달라서 빼고 비교한다. 시계 쪽이 바뀌면 rev 가 바뀐다.
+  static String _singerDedupeKey(Map<String, dynamic> json) => jsonEncode({
+    ...json,
+    'clock': {...?(json['clock'] as Map?)}..remove('elapsed_ms'),
+  });
 
   // 마지막으로 싱어 창에 보낸 JSON. 싱어 화면은 스타일을 안 쓰므로 디자인 슬라이더를
   // 끌 때처럼 내용이 그대로면 다시 보내지 않는다(macOS 는 보낼 때마다 HTML 을 통째로 다시 읽는다).
@@ -1247,7 +1261,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       'zoom': _zoomJson,
     });
     if (!_isSingerOpen) return;
-    final encoded = jsonEncode(json);
+    final encoded = _singerDedupeKey(json);
     if (encoded == _lastSingerJson) return;
     try {
       await _presentationChannel.invokeMethod('updateSinger', json);
@@ -9507,9 +9521,8 @@ class _ItemBackgroundDialogState extends State<_ItemBackgroundDialog> {
 // 모든 페이지 보기로 바꾸면 통째로 트리에서 빠지기 때문에, State 안에 두면
 // 예배 도중에 경과 시간이 00:00 으로 리셋된다.
 class PresenterViewState {
-  Duration elapsed = Duration.zero;
-  bool isPaused = false;
-  int targetMinutes = 20;
+  // 발표를 시작·끝낼 때 홈 화면이 start/stop 하고, 바뀌면 싱어 화면에 다시 보낸다.
+  final PresentationTimer timer = PresentationTimer();
   double splitRatio = 0.68;
   // 아래 썸네일 줄 높이. 현재 슬라이드와 썸네일 사이 막대를 끌어 바꾼다.
   double stripHeight = _PresenterConsoleState._defaultStripHeight;
@@ -10398,7 +10411,10 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
           const SizedBox(height: 6),
           _nextPreview(cs),
           const SizedBox(height: 14),
-          _ElapsedClock(isRunning: widget.isPresentationOpen, state: _view),
+          _ElapsedClock(
+            isRunning: widget.isPresentationOpen,
+            timer: _view.timer,
+          ),
           const SizedBox(height: 14),
           _pointerBox(cs),
           const SizedBox(height: 14),
@@ -10686,11 +10702,12 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
 
 // 경과 시간만 따로 뗀 이유: 1초마다 setState 를 하면 콘솔 전체(슬라이드 미리보기
 // 두 장 + 썸네일 전부)가 매초 다시 그려진다. 시계만 다시 그리게 가둔다.
+// 값은 [PresentationTimer] 가 들고 있다(탭을 옮겨도 계속 흘러야 한다). 이 위젯은 1초마다 다시 그리기만 한다.
 class _ElapsedClock extends StatefulWidget {
-  const _ElapsedClock({required this.isRunning, required this.state});
+  const _ElapsedClock({required this.isRunning, required this.timer});
 
   final bool isRunning;
-  final PresenterViewState state;
+  final PresentationTimer timer;
 
   @override
   State<_ElapsedClock> createState() => _ElapsedClockState();
@@ -10699,32 +10716,18 @@ class _ElapsedClock extends StatefulWidget {
 class _ElapsedClockState extends State<_ElapsedClock> {
   Timer? _ticker;
   late final _targetController = TextEditingController(
-    text: widget.state.targetMinutes.toString(),
+    text: widget.timer.targetMinutes.toString(),
   );
 
-  // 시계 값은 위젯이 아니라 부모가 들고 있다(탭을 옮겨도 계속 흘러야 한다).
-  Duration get _elapsed => widget.state.elapsed;
-  bool get _isPaused => widget.state.isPaused;
-  int get _targetMinutes => widget.state.targetMinutes;
+  PresentationTimer get _timer => widget.timer;
 
   @override
   void initState() {
     super.initState();
-    if (widget.isRunning) _start();
-  }
-
-  @override
-  void didUpdateWidget(_ElapsedClock oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    // 발표를 새로 시작하면 0부터 다시.
-    if (!oldWidget.isRunning && widget.isRunning) {
-      widget.state.elapsed = Duration.zero;
-      widget.state.isPaused = false;
-      _start();
-    } else if (oldWidget.isRunning && !widget.isRunning) {
-      _ticker?.cancel();
-      _ticker = null;
-    }
+    // 현재 시각도 보여 주므로 발표 중이 아니어도 돈다.
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
@@ -10732,14 +10735,6 @@ class _ElapsedClockState extends State<_ElapsedClock> {
     _ticker?.cancel();
     _targetController.dispose();
     super.dispose();
-  }
-
-  void _start() {
-    _ticker?.cancel();
-    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted || _isPaused) return;
-      setState(() => widget.state.elapsed += const Duration(seconds: 1));
-    });
   }
 
   static String _fmt(Duration d) {
@@ -10751,29 +10746,72 @@ class _ElapsedClockState extends State<_ElapsedClock> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final target = Duration(minutes: _targetMinutes);
+    final elapsed = _timer.elapsed;
+    final target = _timer.target;
     final ratio = target.inSeconds == 0
         ? 0.0
-        : (_elapsed.inSeconds / target.inSeconds).clamp(0.0, 1.0);
-    final over = _elapsed > target;
+        : (elapsed.inSeconds / target.inSeconds).clamp(0.0, 1.0);
+    final over = elapsed > target;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          '경과 시간',
-          style: TextStyle(
-            fontSize: 11,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.3,
-            color: cs.onSurfaceVariant,
-          ),
+        Row(
+          children: [
+            Text(
+              '경과 시간',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.3,
+                color: cs.onSurfaceVariant,
+              ),
+            ),
+            const Spacer(),
+            Tooltip(
+              message: '싱어 화면에 시계·경과 시간 표시',
+              child: InkWell(
+                borderRadius: BorderRadius.circular(6),
+                onTap: () => setState(
+                  () => _timer.setShowOnSinger(!_timer.showOnSinger),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 2,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.mic_external_on_rounded,
+                        size: 14,
+                        color: _timer.showOnSinger
+                            ? cs.primary
+                            : cs.onSurfaceVariant.withValues(alpha: 0.5),
+                      ),
+                      const SizedBox(width: 3),
+                      Text(
+                        _timer.showOnSinger ? '싱어 표시' : '싱어 숨김',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: _timer.showOnSinger
+                              ? cs.primary
+                              : cs.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
         const SizedBox(height: 6),
         Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
             Text(
-              _fmt(_elapsed),
+              _fmt(elapsed),
               style: TextStyle(
                 fontSize: 30,
                 fontWeight: FontWeight.w800,
@@ -10823,7 +10861,7 @@ class _ElapsedClockState extends State<_ElapsedClock> {
                 onChanged: (v) {
                   final n = int.tryParse(v);
                   if (n != null && n > 0) {
-                    setState(() => widget.state.targetMinutes = n);
+                    setState(() => _timer.setTargetMinutes(n));
                   }
                 },
               ),
@@ -10836,18 +10874,20 @@ class _ElapsedClockState extends State<_ElapsedClock> {
             const Spacer(),
             IconButton(
               visualDensity: VisualDensity.compact,
-              onPressed: () =>
-                  setState(() => widget.state.isPaused = !_isPaused),
+              onPressed: () => setState(
+                () => _timer.togglePause(presenting: widget.isRunning),
+              ),
               icon: Icon(
-                _isPaused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+                _timer.isPaused
+                    ? Icons.play_arrow_rounded
+                    : Icons.pause_rounded,
                 size: 19,
               ),
-              tooltip: _isPaused ? '계속' : '일시정지',
+              tooltip: _timer.isPaused ? '계속' : '일시정지',
             ),
             IconButton(
               visualDensity: VisualDensity.compact,
-              onPressed: () =>
-                  setState(() => widget.state.elapsed = Duration.zero),
+              onPressed: () => setState(_timer.reset),
               icon: const Icon(Icons.restart_alt_rounded, size: 19),
               tooltip: '리셋',
             ),
