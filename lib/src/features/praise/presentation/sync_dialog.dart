@@ -168,11 +168,18 @@ class _SyncDialogState extends State<SyncDialog> {
                   label: const Text('클라우드 콘티'),
                 ),
                 const SizedBox(width: 8),
-                FilledButton.icon(
-                  onPressed: status.syncing ? null : widget.onSyncSongs,
-                  icon: const Icon(Icons.sync_rounded, size: 18),
-                  label: const Text('찬양 동기화'),
-                ),
+                if (status.syncing)
+                  OutlinedButton.icon(
+                    onPressed: widget.service.cancel,
+                    icon: const Icon(Icons.close_rounded, size: 18),
+                    label: const Text('동기화 취소'),
+                  )
+                else
+                  FilledButton.icon(
+                    onPressed: widget.onSyncSongs,
+                    icon: const Icon(Icons.sync_rounded, size: 18),
+                    label: const Text('찬양 동기화'),
+                  ),
               ] else
                 FilledButton(
                   onPressed: _connecting ? null : _connect,

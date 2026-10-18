@@ -30,6 +30,7 @@ import '../data/python_bridge.dart';
 import '../data/screen_choice_store.dart';
 import '../data/singer_web_server.dart';
 import '../data/sync_service.dart';
+import '../data/sync_store.dart';
 import '../data/source_file_watcher.dart';
 import '../data/worship_conti_repository.dart';
 import '../domain/worship_conti.dart';
@@ -749,7 +750,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         return null;
       }
     });
-    return base?.copyWith(fadeIn: _style.mediaFadeIn, fadeOut: _style.mediaFadeOut);
+    return base?.copyWith(
+      fadeIn: _style.mediaFadeIn,
+      fadeOut: _style.mediaFadeOut,
+    );
   }
 
   Future<void> _openPresentation() async {
@@ -3430,6 +3434,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         onUploadToCloud: _sync.status.value.enabled
             ? _uploadContiToCloud
             : null,
+        onCancelCloud: _sync.cancel,
         onOpenCloud: _sync.status.value.enabled ? _openCloudContis : null,
       ),
     );
@@ -3518,7 +3523,11 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     if (result == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('찬양 동기화 실패: ${status.lastError ?? '알 수 없는 오류'}'),
+          content: Text(
+            status.lastError == null
+                ? '찬양 동기화를 취소했습니다.'
+                : '찬양 동기화 실패: ${status.lastError}',
+          ),
         ),
       );
       return;
@@ -8416,6 +8425,7 @@ class _ContiListDialog extends StatefulWidget {
     required this.onImport,
     this.onUploadToCloud,
     this.onOpenCloud,
+    this.onCancelCloud,
   });
 
   final List<WorshipConti> contis;
@@ -8426,6 +8436,9 @@ class _ContiListDialog extends StatefulWidget {
   /// 동기화 접속 키를 넣었을 때만 — 콘티를 클라우드에 올리기 / 클라우드 콘티 목록 열기.
   final Future<void> Function(WorshipConti)? onUploadToCloud;
   final VoidCallback? onOpenCloud;
+
+  /// 올리는 중인 것을 끊는다(오래 걸리면 손으로).
+  final VoidCallback? onCancelCloud;
 
   @override
   State<_ContiListDialog> createState() => _ContiListDialogState();
@@ -8444,12 +8457,14 @@ class _ContiListDialogState extends State<_ContiListDialog> {
       await widget.onUploadToCloud!(conti);
       if (mounted) setState(() => _uploaded.add(conti.id));
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || isCancelled(error)) return;
       await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
           title: const Text('클라우드에 올리지 못했습니다'),
-          content: Text(error is FileSystemException ? error.message : '$error'),
+          content: Text(
+            error is FileSystemException ? error.message : '$error',
+          ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(),
@@ -8468,7 +8483,6 @@ class _ContiListDialogState extends State<_ContiListDialog> {
     super.initState();
     _contis = List.of(widget.contis);
   }
-
 
   Future<void> _delete(WorshipConti conti) async {
     final confirmed = await showDialog<bool>(
@@ -8556,11 +8570,13 @@ class _ContiListDialogState extends State<_ContiListDialog> {
                                         : Icons.cloud_upload_outlined,
                                     size: 20,
                                   ),
-                            tooltip: _uploaded.contains(conti.id)
+                            tooltip: _uploading.contains(conti.id)
+                                ? '올리는 중 — 누르면 취소'
+                                : _uploaded.contains(conti.id)
                                 ? '클라우드에 올렸습니다(다시 누르면 덮어쓰기)'
                                 : '클라우드에 올리기',
                             onPressed: _uploading.contains(conti.id)
-                                ? null
+                                ? widget.onCancelCloud
                                 : () => _upload(conti),
                           ),
                         IconButton(

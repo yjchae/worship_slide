@@ -255,6 +255,11 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
     정보 파일 uid 는 32자리 hex 만 받는다(파일 이름으로 쓰므로). 받을 때 곡 항목은 `worship_conti_items.song_uid` 로 그 PC 의 곡에
     다시 잇는다(`.wsconti` 공통 — 예전 콘티는 내보낼 때 지금 곡의 uid·가사로 채운다, `portableItemRow`). 클라우드에서 지워도 이미
     받은 PC 의 콘티는 남는다. 동영상·음악 파일은 안 실린다(`.wsconti` 와 같다)
+  - **끊기**: 구글 드라이브 요청은 모두 `abortTrigger` 를 단다(`DriveSyncStore._abortable`). 받는 쪽은 조각 사이 30초가 멎으면,
+    요청 하나가 10분(`maxRequest`)을 넘으면 끊는다 — 올리기(PUT)는 본문을 다 보낸 뒤에야 응답이 와서 30초 제한을 못 건다.
+    손으로는 '동기화 취소'·콘티 올리기 버튼(올리는 중에 누름)·클라우드 창의 X 가 `SyncService.cancel` → 진행 중 요청을 **모두** 끊는다.
+    취소는 다음 작업이 시작될 때(`_prepare`·`_requireStore` 의 `resetCancel`)까지 남아서, 요청 사이(합치기·DB 작업 중)에 눌러도 뒤 요청이 안 나간다.
+    끊긴 작업은 `cancelledMessage`('취소했습니다.')로 실패하고 화면은 오류 창을 띄우지 않는다(`isCancelled`)
   - 시계가 크게 틀린 PC 는 "나중에 고친 쪽" 판정이 틀릴 수 있다(OS 자동 시간 맞추기를 켜 두면 된다)
 - **DB 갱신** (`replaceAllSongs`): 전체 삭제 후 재삽입 (증분 갱신 아님)
 - **폴더 다시 가져오기** (`addNewSongs`): 같은 제목에 원본 가사까지 같으면 건너뛰고, 원본+보조 가사의 줄 모음

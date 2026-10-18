@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../../app_colors.dart';
 import '../data/conti_cloud_repository.dart';
 import '../data/sync_service.dart';
+import '../data/sync_store.dart';
 import '../domain/worship_conti.dart';
 
 /// 클라우드(구글 드라이브)에 올라온 콘티 목록. 골라서 이 PC 로 내려받거나 클라우드에서 지운다.
@@ -31,6 +32,9 @@ class _CloudContiDialogState extends State<CloudContiDialog> {
 
   /// 받거나 지우는 중인 콘티 uid(버튼을 잠깐 막는다).
   final _busy = <String>{};
+
+  /// 받는 중인 것만 — 지우기는 중간에 끊으면 콘티 파일만 클라우드에 남으므로 취소를 안 준다.
+  final _downloading = <String>{};
 
   @override
   void initState() {
@@ -91,14 +95,20 @@ class _CloudContiDialogState extends State<CloudContiDialog> {
       return;
     }
     setState(() => _busy.add(conti.uid));
+    _downloading.add(conti.uid);
     try {
       await widget.service.downloadConti(conti);
       if (!mounted) return;
       _snack('"${conti.name}" 콘티를 받았습니다. 콘티 불러오기에서 열 수 있습니다.');
       await _load();
     } catch (error) {
-      if (mounted) _snack('받지 못했습니다: ${_message(error)}');
+      if (mounted) {
+        _snack(
+          isCancelled(error) ? '받기를 취소했습니다.' : '받지 못했습니다: ${_message(error)}',
+        );
+      }
     } finally {
+      _downloading.remove(conti.uid);
       if (mounted) setState(() => _busy.remove(conti.uid));
     }
   }
@@ -186,7 +196,13 @@ class _CloudContiDialogState extends State<CloudContiDialog> {
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        if (!mine)
+                        if (_downloading.contains(conti.uid))
+                          IconButton(
+                            icon: const Icon(Icons.close_rounded, size: 20),
+                            tooltip: '취소',
+                            onPressed: widget.service.cancel,
+                          )
+                        else if (!mine)
                           IconButton(
                             icon: Icon(
                               have

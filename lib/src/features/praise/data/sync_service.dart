@@ -249,9 +249,10 @@ class SyncService {
     // 누른 순간의 값 — 그 뒤에 고친 것은(이번에 같이 올라갔더라도) "안 올림"으로 남긴다. 숨기는 것보다 낫다.
     final changesAtStart = _localChangeCount;
     return _enqueue(() async {
+      // 확인·목록 단계부터 — 그동안에도 취소 버튼이 보이고 두 번 눌리지 않게.
+      _setStatus(status.value.copyWith(syncing: true));
       final dirs = await _prepare();
       if (dirs == null) return null;
-      _setStatus(status.value.copyWith(syncing: true));
       var merged = false;
       try {
         final read = await _readSnapshots(dirs.store, dirs.remote);
@@ -352,6 +353,10 @@ class SyncService {
   Future<void> deleteCloudConti(CloudConti conti) async =>
       _cloud.delete(await _requireStore(), conti);
 
+  /// 진행 중인 찬양 동기화·콘티 올리기·받기를 모두 끊는다(그 작업은 [cancelledMessage] 로 실패한다).
+  /// 다음 작업이 시작되면([_prepare]·[_requireStore]) 취소가 풀린다.
+  void cancel() => _store?.cancel();
+
   void dispose() {
     if (_disposed) return;
     _disposed = true;
@@ -375,8 +380,12 @@ class SyncService {
     status.value.copyWith(
       syncing: false,
       hasLocalChanges: hasLocalChanges,
-      lastError: () =>
-          error is FileSystemException ? error.message : error.toString(),
+      // 손으로 끊은 것은 실패가 아니다 — 상태 줄을 '동기화 실패'로 남기지 않는다.
+      lastError: () => isCancelled(error)
+          ? null
+          : error is FileSystemException
+          ? error.message
+          : error.toString(),
     ),
   );
 
@@ -386,6 +395,7 @@ class SyncService {
     if (store == null) {
       throw const FileSystemException('동기화 접속 키를 먼저 넣어 주세요.');
     }
+    store.resetCancel();
     await store.check();
     return store;
   }
@@ -398,7 +408,11 @@ class SyncService {
   Future<({SyncStore store, SyncEntry? own, List<SyncEntry> remote})?>
   _prepare() async {
     final store = _store;
-    if (_disposed || store == null) return null;
+    if (_disposed || store == null) {
+      _setStatus(status.value.copyWith(syncing: false));
+      return null;
+    }
+    store.resetCancel();
     try {
       await store.check();
       var entries = await store.list();
@@ -466,6 +480,8 @@ class SyncService {
           try {
             return (name: e.name, text: await store.read(e), error: null);
           } on FileSystemException catch (error) {
+            // 손으로 끊었으면 "못 읽은 PC 하나"로 넘기지 않고 동기화를 멈춘다(안 그러면 내 파일까지 올린다).
+            if (isCancelled(error)) rethrow;
             return (name: e.name, text: null, error: error.message);
           }
         }(),

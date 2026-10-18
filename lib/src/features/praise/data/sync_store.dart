@@ -46,7 +46,21 @@ abstract class SyncStore {
 
   /// 그 이름 파일을 모두 지운다(없으면 그냥 둔다).
   Future<void> delete(String name);
+
+  /// 진행 중인 요청을 모두 끊고, [resetCancel] 전까지 새 요청도 끊는다
+  /// (끊긴 쪽은 [cancelledMessage] 로 실패한다).
+  void cancel();
+
+  /// 새 작업을 시작할 때 — 앞에서 누른 취소를 푼다.
+  void resetCancel();
 }
+
+/// 손으로 끊은 작업의 [FileSystemException.message] — 화면은 이것이면 오류 창을 띄우지 않는다.
+const cancelledMessage = '취소했습니다.';
+
+/// [error] 가 손으로 끊은 것인가.
+bool isCancelled(Object error) =>
+    error is FileSystemException && error.message == cancelledMessage;
 
 /// 로컬 폴더 저장소 — 테스트(여러 PC 흉내)용. [dir] 의 부모가 없으면 쓰지 않는다
 /// (없는 드라이브에 폴더를 만들어 올린 줄 알게 되지 않게).
@@ -121,4 +135,11 @@ class FolderSyncStore implements SyncStore {
     final file = File(p.join(dir, name));
     if (await file.exists()) await file.delete();
   }
+
+  /// 로컬 파일 복사는 멈출 일이 없어 끊을 것이 없다.
+  @override
+  void cancel() {}
+
+  @override
+  void resetCancel() {}
 }
