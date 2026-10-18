@@ -21,7 +21,11 @@ void main() {
     );
     addTearDown(db.close);
     await createPraiseSchema(db);
-    return WorshipContiRepository(database: PraiseDatabase.forTesting(db));
+    return WorshipContiRepository(
+      database: PraiseDatabase.forTesting(db),
+      // 단위 테스트엔 Application Support 가 없다.
+      supportDirectory: () async => Directory.systemTemp,
+    );
   }
 
   test('이미지·배경·곡 제목까지 다른 DB 로 옮겨진다', () async {

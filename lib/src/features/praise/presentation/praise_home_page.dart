@@ -3545,23 +3545,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     );
   }
 
+  /// 콘티를 클라우드에 올린다. 실패하면 이유를 담아 던진다(콘티 목록 창이 보여 준다).
   Future<void> _uploadContiToCloud(WorshipConti conti) async {
     try {
       await _sync.uploadConti(conti);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('"${conti.name}" 콘티를 클라우드에 올렸습니다.')),
-      );
     } catch (error, stack) {
       await AppLogger.instance.error('콘티 올리기 실패', error, stack);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            '콘티 올리기 실패: ${error is FileSystemException ? error.message : error}',
-          ),
-        ),
-      );
+      rethrow;
     }
   }
 
@@ -8444,6 +8434,35 @@ class _ContiListDialog extends StatefulWidget {
 class _ContiListDialogState extends State<_ContiListDialog> {
   late final List<WorshipConti> _contis;
 
+  /// 올리는 중(버튼을 막는다 — 오래 걸려서 여러 번 누르기 쉽다)·이번에 올린 콘티 id.
+  final _uploading = <int>{};
+  final _uploaded = <int>{};
+
+  Future<void> _upload(WorshipConti conti) async {
+    setState(() => _uploading.add(conti.id));
+    try {
+      await widget.onUploadToCloud!(conti);
+      if (mounted) setState(() => _uploaded.add(conti.id));
+    } catch (error) {
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('클라우드에 올리지 못했습니다'),
+          content: Text(error is FileSystemException ? error.message : '$error'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('확인'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _uploading.remove(conti.id));
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -8523,12 +8542,26 @@ class _ContiListDialogState extends State<_ContiListDialog> {
                       children: [
                         if (widget.onUploadToCloud != null)
                           IconButton(
-                            icon: const Icon(
-                              Icons.cloud_upload_outlined,
-                              size: 20,
-                            ),
-                            tooltip: '클라우드에 올리기',
-                            onPressed: () => widget.onUploadToCloud!(conti),
+                            icon: _uploading.contains(conti.id)
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : Icon(
+                                    _uploaded.contains(conti.id)
+                                        ? Icons.cloud_done_rounded
+                                        : Icons.cloud_upload_outlined,
+                                    size: 20,
+                                  ),
+                            tooltip: _uploaded.contains(conti.id)
+                                ? '클라우드에 올렸습니다(다시 누르면 덮어쓰기)'
+                                : '클라우드에 올리기',
+                            onPressed: _uploading.contains(conti.id)
+                                ? null
+                                : () => _upload(conti),
                           ),
                         IconButton(
                           icon: const Icon(Icons.ios_share_rounded, size: 20),

@@ -959,4 +959,68 @@ void main() {
       expect(a.sync.status.value.warning, contains('1개'));
     });
   });
+
+  group('마지막 리뷰', () {
+    test('동기화 도중에 고친 찬양은 "안 올림" 표시가 남는다', () async {
+      final a = await newPc('A');
+      await a.repo.insertSong(song('은혜', '가사'));
+      final running = a.sync.syncSongs();
+      await a.repo.insertSong(song('축복', '가사'));
+      await running;
+      expect(a.sync.status.value.hasLocalChanges, isTrue);
+      await a.sync.syncSongs();
+      expect(a.sync.status.value.hasLocalChanges, isFalse);
+    });
+
+    test('예전 판이 쓴 내 파일(콘티 칸이 있음)을 "안 올린 수정"으로 보지 않는다', () async {
+      final a = await newPc('A');
+      await a.repo.insertSong(song('은혜', '가사'));
+      await a.sync.syncSongs();
+      final own = File(p.join(shared, syncDirName, '${a.sync.deviceId}.json'));
+      final json = jsonDecode(own.readAsStringSync()) as Map
+        ..['contis'] = []
+        ..['conti_deleted'] = {};
+      own.writeAsStringSync(jsonEncode(json));
+      expect((await a.sync.checkForUpdates())!.localChanges, isFalse);
+    });
+
+    test('켤 때 확인은 uid 없는 행도 건드리지 않는다', () async {
+      final a = await newPc('A');
+      await a.repo.insertSong(song('은혜', '가사'));
+      final db = await databaseFactoryFfi.openDatabase(
+        p.join(a.dir.path, 'a.db'),
+      );
+      addTearDown(db.close);
+      await db.update('praise_songs', {'uid': null});
+      await a.sync.checkForUpdates();
+      expect((await db.query('praise_songs')).single['uid'], isNull);
+      // 실제 동기화는 채운다.
+      await a.sync.syncSongs();
+      expect((await db.query('praise_songs')).single['uid'], isA<String>());
+    });
+
+    test('깨진 콘티 파일을 받다 실패하면 푼 이미지 폴더를 남기지 않는다', () async {
+      final a = await newPc('A');
+      final file = File(p.join(root.path, 'broken.wsconti'))
+        ..writeAsStringSync(
+          jsonEncode({
+            'format': WorshipContiRepository.contiFileFormat,
+            'name': '깨진 콘티',
+            'items': const [],
+            'files': {
+              'file0.png': base64Encode([1, 2]),
+              'file1.png': '###',
+            },
+          }),
+        );
+      await expectLater(a.contis.importContiFile(file.path), throwsA(anything));
+      expect(
+        Directory(p.join(a.dir.path, 'imported_contis')).existsSync()
+            ? Directory(p.join(a.dir.path, 'imported_contis')).listSync()
+            : const [],
+        isEmpty,
+      );
+      expect(await a.contis.listContis(), isEmpty);
+    });
+  });
 }

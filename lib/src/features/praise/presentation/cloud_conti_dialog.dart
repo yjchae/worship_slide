@@ -83,7 +83,9 @@ class _CloudContiDialogState extends State<CloudContiDialog> {
     if (_local.containsKey(conti.uid) &&
         !await _confirm(
           '다시 받기',
-          '"${conti.name}" 은(는) 이미 이 PC 에 있습니다. 클라우드의 것으로 바꿀까요?',
+          '"${conti.name}" 은(는) 이미 이 PC 에 있습니다. 클라우드의 것으로 바꿀까요?\n'
+              '이 PC 의 콘티는 지워지고, 클라우드 판에는 없는 동영상·음악 파일 페이지와 '
+              "'원본 열어 수정' 연결이 빠집니다.",
           '바꾸기',
         )) {
       return;
@@ -160,6 +162,10 @@ class _CloudContiDialogState extends State<CloudContiDialog> {
                 itemBuilder: (context, i) {
                   final conti = cloud[i];
                   final have = _local.containsKey(conti.uid);
+                  // 이 PC 가 올린 콘티는 다시 받지 않는다 — 원본(동영상·원본 PPT 연결 포함)이 이 PC 에
+                  // 있는데 받으면 그보다 못한 사본으로 바뀐다.
+                  final mine =
+                      have && conti.uploadedBy == widget.service.deviceName;
                   final busy = _busy.contains(conti.uid);
                   return ListTile(
                     title: Text(
@@ -170,22 +176,27 @@ class _CloudContiDialogState extends State<CloudContiDialog> {
                       '${formatContiDate(conti.createdAt)} · ${conti.itemCount}개 · '
                       '${conti.uploadedBy.isEmpty ? '' : '${conti.uploadedBy} 가 '}'
                       '${formatContiDate(conti.uploadedAt)} 올림'
-                      '${have ? ' · 이 PC 에 있음' : ''}',
+                      '${mine
+                          ? ' · 이 PC 가 올림'
+                          : have
+                          ? ' · 이 PC 에 있음'
+                          : ''}',
                       style: const TextStyle(fontSize: 12),
                     ),
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        IconButton(
-                          icon: Icon(
-                            have
-                                ? Icons.sync_rounded
-                                : Icons.cloud_download_outlined,
-                            size: 20,
+                        if (!mine)
+                          IconButton(
+                            icon: Icon(
+                              have
+                                  ? Icons.sync_rounded
+                                  : Icons.cloud_download_outlined,
+                              size: 20,
+                            ),
+                            tooltip: have ? '다시 받기(바꾸기)' : '내려받기',
+                            onPressed: busy ? null : () => _download(conti),
                           ),
-                          tooltip: have ? '다시 받기(바꾸기)' : '내려받기',
-                          onPressed: busy ? null : () => _download(conti),
-                        ),
                         IconButton(
                           icon: const Icon(
                             Icons.delete_outline_rounded,

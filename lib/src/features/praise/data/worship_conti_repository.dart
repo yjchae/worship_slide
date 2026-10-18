@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -165,7 +166,7 @@ class WorshipContiRepository {
   Future<List<WorshipConti>> listContis() async {
     final db = await _db.database;
     final rows = await db.rawQuery('''
-      SELECT wc.id, wc.name, wc.created_at,
+      SELECT wc.id, wc.name, wc.created_at, wc.uid,
              COUNT(wci.id) AS item_count
       FROM worship_contis wc
       LEFT JOIN worship_conti_items wci ON wci.conti_id = wc.id
@@ -310,6 +311,8 @@ class WorshipContiRepository {
   /// 그 원본)는 base64 로 같이 넣는다. 경로 자리에는 파일 키가 들어가고
   /// [importContiFile] 이 받는 쪽 폴더에 풀면서 경로를 되돌려 쓴다.
   /// song_id 는 받는 쪽 DB 와 안 맞으므로 빼고, 제목·가사 스냅샷만 보낸다.
+  /// 이미지 읽기·base64·JSON 만들기·쓰기는 별도 isolate 에서 한다(PPT 페이지 수백 장이면
+  /// 수백 MB 라 화면이 멈춘다). 없는 이미지는 키만 남아 받는 쪽에서 "유실"이 된다.
   Future<void> exportContiFile(int contiId, String outPath) async {
     final db = await _db.database;
     final contiRows = await db.query(
@@ -319,29 +322,25 @@ class WorshipContiRepository {
     );
     if (contiRows.isEmpty) throw StateError('콘티를 찾을 수 없습니다.');
     final itemRows = await db.rawQuery(
-      '''
+      """
       SELECT wci.*, ps.title AS cur_title, ps.lyrics AS cur_lyrics,
              ps.english_lyrics AS cur_english_lyrics, ps.uid AS cur_song_uid
       FROM worship_conti_items wci
       LEFT JOIN praise_songs ps ON ps.id = wci.song_id
       WHERE wci.conti_id = ?
       ORDER BY wci.position ASC
-    ''',
+    """,
       [contiId],
     );
 
-    final files = <String, String>{};
+    // 경로 → 키. 파일은 여기서 읽지 않는다(아래 isolate 가 읽는다).
     final keyByPath = <String, String>{};
-    // 없는 파일은 경로를 그대로 둔다 — 받는 쪽에서도 로컬과 똑같이 "유실"로 처리된다.
     String? pack(String? path) {
       if (path == null || path.isEmpty) return path;
-      final file = File(path);
-      if (!file.existsSync()) return path;
-      return keyByPath.putIfAbsent(path, () {
-        final key = 'file${files.length}${p.extension(path)}';
-        files[key] = base64Encode(file.readAsBytesSync());
-        return key;
-      });
+      return keyByPath.putIfAbsent(
+        path,
+        () => 'file${keyByPath.length}${p.extension(path)}',
+      );
     }
 
     final items = <Map<String, Object?>>[];
@@ -355,16 +354,24 @@ class WorshipContiRepository {
       items.add(item);
     }
 
-    await File(outPath).writeAsString(
-      jsonEncode({
-        'format': contiFileFormat,
-        'version': 1,
-        'name': contiRows.first['name'],
-        'created_at': contiRows.first['created_at'],
-        'items': items,
-        'files': files,
-      }),
-    );
+    final header = {
+      'format': contiFileFormat,
+      'version': 1,
+      'name': contiRows.first['name'],
+      'created_at': contiRows.first['created_at'],
+    };
+    await Isolate.run(() {
+      final files = <String, String>{};
+      keyByPath.forEach((path, key) {
+        final file = File(path);
+        if (file.existsSync()) {
+          files[key] = base64Encode(file.readAsBytesSync());
+        }
+      });
+      File(outPath).writeAsStringSync(
+        jsonEncode({...header, 'items': items, 'files': files}),
+      );
+    });
   }
 
   /// [exportContiFile] 로 만든 파일을 이 PC 의 콘티 목록에 새 콘티로 넣는다.
@@ -377,28 +384,18 @@ class WorshipContiRepository {
   /// 남이 만든 파일이라 **파일 안에 담겨 온 이미지만** 쓴다. 담겨 오지 않은 경로(보낸 PC 의 로컬 경로)는
   /// 버린다 — 그대로 두면 이 PC 의 같은 경로에 있는 아무 파일이나 이 콘티를 다시 내보내거나 올릴 때
   /// 함께 실려 나간다. 원본 PPT 경로도 받지 않고, 미디어는 유튜브만 받는다(동영상·음악 경로도 로컬 경로다).
+  ///
+  /// 파일 읽기·JSON 풀기·이미지 풀기는 별도 isolate 에서 하고, 다 푼 뒤에 DB 에 넣는다. 도중에
+  /// 실패하면 푼 이미지 폴더를 지운다(반쯤 내려받은 파일을 여러 번 받아도 쓰레기가 쌓이지 않게).
   Future<int> importContiFile(
     String path, {
     Directory? filesDir,
     String? cloudUid,
   }) async {
-    final Object? data;
-    try {
-      data = jsonDecode(await File(path).readAsString());
-    } on FormatException {
-      throw const FormatException('콘티 파일이 아닙니다.');
-    }
-    if (data is! Map || data['format'] != contiFileFormat) {
-      throw const FormatException('콘티 파일이 아닙니다.');
-    }
-    final items = (data['items'] as List? ?? const []).whereType<Map>();
-    final files = data['files'] as Map? ?? const {};
-    final name = data['name'] as String? ?? '가져온 콘티';
     if (cloudUid != null && !isValidContiUid(cloudUid)) {
       throw const FormatException('콘티 파일이 아닙니다.');
     }
     final uid = cloudUid ?? newSongUid();
-
     final dir =
         filesDir ??
         Directory(
@@ -408,33 +405,79 @@ class WorshipContiRepository {
             '${DateTime.now().millisecondsSinceEpoch}',
           ),
         );
-    final pathByKey = <String, String>{};
-    // 담겨 온 이미지면 푼 경로, 아니면(보낸 PC 에 없던 파일·로컬 경로) null.
-    String? unpack(String? key) {
-      final encoded = files[key];
-      if (key == null || encoded is! String) return null;
-      return pathByKey.putIfAbsent(key, () {
-        // 키를 파일 이름으로 그대로 쓰지 않는다 — 남이 만든 파일이라 '../' 가 들어 있을 수 있다.
-        final file = File(
-          p.join(dir.path, '${pathByKey.length}${p.extension(key)}'),
-        );
-        file.parent.createSync(recursive: true);
-        file.writeAsBytesSync(base64Decode(encoded));
-        return file.path;
-      });
-    }
+    final dirPath = dir.path;
+    final unpacked = await Isolate.run(() {
+      try {
+        return _unpackContiFile(path, dirPath);
+      } catch (_) {
+        final made = Directory(dirPath);
+        if (made.existsSync()) made.deleteSync(recursive: true);
+        rethrow;
+      }
+    });
 
+    try {
+      return await _insertImported(unpacked, uid: uid, cloud: cloudUid != null);
+    } catch (_) {
+      if (await dir.exists()) await dir.delete(recursive: true);
+      rethrow;
+    }
+  }
+
+  /// isolate 안에서: 파일을 읽어 풀고, 담긴 이미지를 [dirPath] 에 쓴다.
+  static _UnpackedConti _unpackContiFile(String path, String dirPath) {
+    final Object? data;
+    try {
+      data = jsonDecode(File(path).readAsStringSync());
+    } on FormatException {
+      throw const FormatException('콘티 파일이 아닙니다.');
+    }
+    if (data is! Map || data['format'] != contiFileFormat) {
+      throw const FormatException('콘티 파일이 아닙니다.');
+    }
+    final files = data['files'] is Map ? data['files'] as Map : const {};
+    final pathByKey = <String, String>{};
+    files.forEach((key, encoded) {
+      if (key is! String || encoded is! String) return;
+      // 키를 파일 이름으로 그대로 쓰지 않는다 — 남이 만든 파일이라 '../' 가 들어 있을 수 있다.
+      final file = File(
+        p.join(dirPath, '${pathByKey.length}${p.extension(key)}'),
+      );
+      file.parent.createSync(recursive: true);
+      file.writeAsBytesSync(base64Decode(encoded));
+      pathByKey[key] = file.path;
+    });
+    return _UnpackedConti(
+      name: data['name'] is String ? data['name'] as String : '가져온 콘티',
+      createdAt: data['created_at'] is int ? data['created_at'] as int : null,
+      items: [
+        for (final item in data['items'] is List ? data['items'] as List : [])
+          if (item is Map)
+            {
+              for (final e in item.entries)
+                if (e.key is String) e.key as String: e.value,
+            },
+      ],
+      pathByKey: pathByKey,
+      missingPath: p.join(dirPath, '.missing'),
+    );
+  }
+
+  Future<int> _insertImported(
+    _UnpackedConti data, {
+    required String uid,
+    required bool cloud,
+  }) async {
     final db = await _db.database;
     // 더 새 버전 앱이 만든 파일의 모르는 칸은 버린다.
     final columns = await receivableItemColumns(db)
       ..remove('image_source_path');
-
     final now = DateTime.now().millisecondsSinceEpoch;
-    final createdAt = cloudUid != null && data['created_at'] is int
-        ? data['created_at'] as int
-        : now;
+    // 담겨 온 이미지면 푼 경로, 아니면(보낸 PC 에 없던 파일·로컬 경로) null.
+    String? unpack(String? key) => key == null ? null : data.pathByKey[key];
+
     return db.transaction((txn) async {
-      if (cloudUid != null) {
+      if (cloud) {
         for (final old in await txn.query(
           'worship_contis',
           columns: ['id'],
@@ -445,26 +488,26 @@ class WorshipContiRepository {
         }
       }
       final contiId = await txn.insert('worship_contis', {
-        'name': name,
-        'created_at': createdAt,
+        'name': data.name,
+        'created_at': cloud ? (data.createdAt ?? now) : now,
         'uid': uid,
       });
       final songIdByUid = await _songIdsByUid(txn);
       var position = 0;
-      for (final item in items) {
+      for (final item in data.items) {
         // 글자·숫자·null 이 아닌 값(다른 버전·깨진 파일)은 버린다 — 넣다가 트랜잭션째 실패하지 않게.
         final row = <String, Object?>{
           for (final e in item.entries)
             if (columns.contains(e.key) &&
                 (e.value == null || e.value is String || e.value is num))
-              e.key as String: e.value,
+              e.key: e.value,
         };
         final imagePaths = row['image_paths'];
         if (imagePaths is String) {
           // 이미지 자리는 지킨다(없는 파일 → 불러오기가 '유실'로 센다).
           row['image_paths'] = imagePaths
               .split('\n')
-              .map((key) => unpack(key) ?? p.join(dir.path, '.missing'))
+              .map((key) => unpack(key) ?? data.missingPath)
               .join('\n');
         }
         row['background'] = mapBackgroundPaths(row['background'], unpack);
@@ -513,15 +556,9 @@ class WorshipContiRepository {
 
   /// 이 PC 의 콘티 uid → 콘티. 클라우드 목록에서 "이미 받은 콘티"를 가리는 데 쓴다.
   Future<Map<String, WorshipConti>> contisByUid() async {
-    final contis = await listContis();
-    final db = await _db.database;
-    final uids = {
-      for (final r in await db.query('worship_contis', columns: ['id', 'uid']))
-        r['id'] as int: r['uid'] as String?,
-    };
     return {
-      for (final c in contis)
-        if (uids[c.id] != null) uids[c.id]!: c,
+      for (final c in await listContis())
+        if (c.uid != null) c.uid!: c,
     };
   }
 
@@ -636,4 +673,25 @@ class WorshipContiRepository {
     );
     await txn.delete('worship_contis', where: 'id = ?', whereArgs: [contiId]);
   }
+}
+
+/// isolate 가 푼 콘티 파일. DB 에 넣기 전 모양.
+class _UnpackedConti {
+  const _UnpackedConti({
+    required this.name,
+    required this.createdAt,
+    required this.items,
+    required this.pathByKey,
+    required this.missingPath,
+  });
+
+  final String name;
+  final int? createdAt;
+  final List<Map<String, Object?>> items;
+
+  /// 파일 키 → 이 PC 에 푼 이미지 경로.
+  final Map<String, String> pathByKey;
+
+  /// 담겨 오지 않은 이미지 자리에 넣는 없는 파일 경로.
+  final String missingPath;
 }

@@ -25,7 +25,12 @@ class SongSyncRepository {
     String writer = '',
   }) async {
     final db = await _databaseProvider.database;
-    final rows = await db.query('praise_songs', orderBy: 'uid');
+    // uid 없는 행(마이그레이션·모든 저장이 주므로 없어야 정상)은 다음 합치기가 채운 뒤에 싣는다.
+    final rows = await db.query(
+      'praise_songs',
+      where: 'uid IS NOT NULL',
+      orderBy: 'uid',
+    );
     return SyncSnapshot(
       deviceId: deviceId,
       deviceName: deviceName,
@@ -59,7 +64,6 @@ class SongSyncRepository {
   /// uid 없는 행 채우기도 여기서 한 번만 한다.
   Future<SyncMergeResult> merge(List<SyncSnapshot> remotes) async {
     final db = await _databaseProvider.database;
-    await fillMissingSyncUids(db);
     return db.transaction((txn) => _mergeIn(txn, remotes));
   }
 
@@ -67,7 +71,6 @@ class SongSyncRepository {
   /// 알리는 데 쓴다 — 실제 합치기를 트랜잭션 안에서 돌리고 되돌리므로 셈이 합치기와 똑같다.
   Future<SyncMergeResult> preview(List<SyncSnapshot> remotes) async {
     final db = await _databaseProvider.database;
-    await fillMissingSyncUids(db);
     late SyncMergeResult result;
     try {
       await db.transaction((txn) async {
@@ -84,6 +87,8 @@ class SongSyncRepository {
     DatabaseExecutor txn,
     List<SyncSnapshot> remotes,
   ) async {
+    // uid 없는 행 채우기도 트랜잭션 안에서 — 미리 세기(preview)면 같이 되돌려진다.
+    await fillMissingSyncUids(txn);
     final songs = await _mergeSongs(txn, remotes);
     final translations = await _mergeTranslations(txn, remotes);
     return SyncMergeResult(

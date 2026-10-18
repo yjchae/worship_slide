@@ -136,6 +136,10 @@ class SyncService {
   /// 마지막으로 쓴 내 파일 내용(쓴 시각 뺌). 같으면 다시 쓰지 않는다.
   String? _lastWrittenText;
 
+  /// 찬양을 고칠 때마다 1 씩 는다. 동기화 도중에 고친 것을 "다 올렸다"로 지우지 않으려고
+  /// 시작할 때 값과 끝날 때 값을 비교한다.
+  int _localChangeCount = 0;
+
   /// 켤 때 이미 알린(또는 받은) 클라우드 콘티 uid — 받지 않기로 한 콘티를 켤 때마다 다시 알리지 않게.
   final _seenContis = <String>{};
 
@@ -192,51 +196,57 @@ class SyncService {
 
   /// 이 PC 에서 찬양을 고쳤을 때 — 상태 줄에 '동기화 안 한 변경'으로만 보인다.
   void markLocalChanged() {
+    _localChangeCount += 1;
     if (_disposed || status.value.hasLocalChanges) return;
     _setStatus(status.value.copyWith(hasLocalChanges: true));
   }
 
   /// **'찬양 동기화' 버튼.** 다른 PC 들의 새 찬양·바뀐 찬양(지운 찬양 포함)을 이 PC 에 합치고,
   /// 이 PC 의 찬양을 공유 폴더에 쓴다. 폴더가 없거나 실패하면 null(이유는 [status] 의 lastError).
-  Future<SyncMergeResult?> syncSongs() => _enqueue(() async {
-    final dirs = await _prepare();
-    if (dirs == null) return null;
-    _setStatus(status.value.copyWith(syncing: true));
-    var merged = false;
-    try {
-      final read = await _readSnapshots(dirs.remoteFiles);
-      final result = await _songs.merge(read.snapshots);
-      merged = true;
-      await _writeOwn(dirs.ownPath);
-      _setStatus(
-        status.value.copyWith(
-          syncing: false,
-          lastSyncAt: _clock(),
-          hasLocalChanges: false,
-          peers: _peerNames(read.snapshots),
-          lastError: () => null,
-          warning: () => read.unreadable == 0
-              ? null
-              : '다른 PC 파일 ${read.unreadable}개를 읽지 못했습니다'
-                    '(드라이브가 아직 내려받는 중일 수 있습니다). 잠시 뒤에 다시 눌러 주세요.',
-        ),
-      );
-      if (result.changed) {
-        await AppLogger.instance.info(
-          '[sync] 찬양 추가 ${result.addedCount} · 수정 ${result.updatedCount} · 삭제 ${result.deletedCount}',
+  Future<SyncMergeResult?> syncSongs() {
+    // 누른 순간의 값 — 그 뒤에 고친 것은(이번에 같이 올라갔더라도) "안 올림"으로 남긴다. 숨기는 것보다 낫다.
+    final changesAtStart = _localChangeCount;
+    return _enqueue(() async {
+      final dirs = await _prepare();
+      if (dirs == null) return null;
+      _setStatus(status.value.copyWith(syncing: true));
+      var merged = false;
+      try {
+        final read = await _readSnapshots(dirs.remoteFiles);
+        final result = await _songs.merge(read.snapshots);
+        merged = true;
+        await _writeOwn(dirs.ownPath);
+        _setStatus(
+          status.value.copyWith(
+            syncing: false,
+            lastSyncAt: _clock(),
+            // 동기화하는 동안 또 고쳤으면 그건 아직 안 올라갔다.
+            hasLocalChanges: _localChangeCount != changesAtStart,
+            peers: _peerNames(read.snapshots),
+            lastError: () => null,
+            warning: () => read.unreadable == 0
+                ? null
+                : '다른 PC 파일 ${read.unreadable}개를 읽지 못했습니다'
+                      '(드라이브가 아직 내려받는 중일 수 있습니다). 잠시 뒤에 다시 눌러 주세요.',
+          ),
         );
+        if (result.changed) {
+          await AppLogger.instance.info(
+            '[sync] 찬양 추가 ${result.addedCount} · 수정 ${result.updatedCount} · 삭제 ${result.deletedCount}',
+          );
+        }
+        return result;
+      } catch (error, stack) {
+        await AppLogger.instance.error('찬양 동기화 실패', error, stack);
+        _fail(
+          error,
+          // 합치기는 끝났는데 내 파일을 못 썼으면, 다음에 누를 때 다시 쓰게 표시해 둔다.
+          hasLocalChanges: merged || status.value.hasLocalChanges,
+        );
+        return null;
       }
-      return result;
-    } catch (error, stack) {
-      await AppLogger.instance.error('찬양 동기화 실패', error, stack);
-      _fail(
-        error,
-        // 합치기는 끝났는데 내 파일을 못 썼으면, 다음에 누를 때 다시 쓰게 표시해 둔다.
-        hasLocalChanges: merged || status.value.hasLocalChanges,
-      );
-      return null;
-    }
-  });
+    });
+  }
 
   /// **프로그램을 켤 때 한 번.** 서버에 새 찬양·바뀐 찬양·새 콘티가 있는지만 본다(DB 는 그대로).
   /// 폴더가 꺼져 있거나 못 읽으면 null.
@@ -466,30 +476,46 @@ class SyncService {
     return Isolate.run(() => jsonEncode(snapshot.toJson()));
   }
 
-  /// 공유 폴더의 내 파일이 지금 이 PC 의 찬양과 같은지(쓴 시각·표시는 빼고 본다).
-  /// 다르면 이 PC 에서 고친 찬양을 아직 안 올린 것이다.
+  /// 내 파일에서 찬양 내용을 담은 칸. 이것만 비교한다 — 쓴 시각·표시·PC 이름이나, 예전 판이
+  /// 쓴 콘티 칸(`contis` 등)이 달라도 "안 올린 수정"으로 보지 않게.
+  static const _songKeys = [
+    'songs',
+    'deleted',
+    'aliases',
+    'deleted_content',
+    'translations',
+    'translation_deleted',
+  ];
+
+  /// 공유 폴더의 내 파일이 지금 이 PC 의 찬양과 같은지. 다르면 이 PC 에서 고친 찬양을 아직 안
+  /// 올린 것이다. 곡이 수천 곡이면 몇 MB 라 비교는 별도 isolate 에서 한다.
   Future<bool> _ownFileUpToDate(String path) async {
-    final mine = jsonDecode(await _ownBody()) as Map;
-    if (!await File(path).exists()) {
-      // 아직 올린 적이 없다 — 찬양도 지운 기록도 없으면 올릴 것도 없다.
-      return (mine['songs'] as List).isEmpty &&
-          (mine['translations'] as List).isEmpty &&
-          (mine['deleted'] as Map).isEmpty;
-    }
-    final stored = await Isolate.run(() {
-      try {
-        final json = jsonDecode(File(path).readAsStringSync());
-        return json is Map ? json : null;
-      } catch (_) {
-        return null;
+    final snapshot = await _songs.exportSnapshot(
+      deviceId: deviceId,
+      deviceName: _deviceName,
+      writer: _writer,
+    );
+    return Isolate.run(() {
+      final mine = snapshot.toJson();
+      final file = File(path);
+      if (!file.existsSync()) {
+        // 아직 올린 적이 없다 — 찬양도 지운 기록도 없으면 올릴 것도 없다.
+        return snapshot.songs.isEmpty &&
+            snapshot.translations.isEmpty &&
+            snapshot.deleted.isEmpty;
       }
+      final Object? stored;
+      try {
+        stored = jsonDecode(file.readAsStringSync());
+      } catch (_) {
+        return false;
+      }
+      if (stored is! Map) return false;
+      final theirs = stored;
+      return _songKeys.every(
+        (key) => jsonEncode(theirs[key]) == jsonEncode(mine[key]),
+      );
     });
-    if (stored == null) return false;
-    for (final key in const ['written_at', 'writer', 'device_name']) {
-      stored.remove(key);
-      mine.remove(key);
-    }
-    return jsonEncode(stored) == jsonEncode(mine);
   }
 
   /// 내 파일은 내용이 바뀌었거나 사라졌을 때만 쓴다(드라이브가 쓸데없이 올리지 않게).
