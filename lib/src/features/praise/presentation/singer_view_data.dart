@@ -11,9 +11,11 @@ class SingerPage {
   });
 
   final String mainText;
+
   /// 보조 언어 가사·보조 역본. 디자인에서 보조 언어를 꺼 두면 빈 문자열로 넘긴다.
   final String englishText;
   final String? title;
+
   /// 외부 PPT 에서 구운 페이지 이미지. 있으면 글자 대신 이 이미지를 보여 준다.
   final String? imagePath;
 
@@ -41,11 +43,14 @@ class SingerViewData {
   });
 
   final SingerPage current;
+
   /// 마지막 페이지면 null.
   final SingerPage? next;
+
   /// 1부터 센다.
   final int pageNumber;
   final int totalPages;
+
   /// 관객 화면이 꺼져 있는지. 싱어 화면은 가사를 계속 보여 주고 표시만 한다.
   final bool isBlackout;
 

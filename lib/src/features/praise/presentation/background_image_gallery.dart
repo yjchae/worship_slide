@@ -9,6 +9,7 @@ import '../data/background_image_library.dart';
 ///
 /// 맨 앞 칸은 "없음", 맨 뒤 칸은 "+ 등록". 썸네일에 마우스를 올리면 모음에서 지우는
 /// 버튼이 뜬다. 헌금송 디자인 등록과 항목 배경 다이얼로그가 같이 쓴다.
+/// 배경 영상 모음([BackgroundImageLibrary.videos])이면 썸네일 대신 파일 이름을 보여 준다.
 class BackgroundImageGallery extends StatefulWidget {
   const BackgroundImageGallery({
     super.key,
@@ -16,6 +17,7 @@ class BackgroundImageGallery extends StatefulWidget {
     required this.selected,
     required this.onChanged,
     this.emptyColor = Colors.black,
+    this.showNone = true,
   });
 
   final BackgroundImageLibrary library;
@@ -25,12 +27,21 @@ class BackgroundImageGallery extends StatefulWidget {
   /// "없음" 칸에 칠할 색(배경 색만 쓰는 상태를 보여 준다).
   final Color emptyColor;
 
+  /// 맨 앞 "없음" 칸을 둘지.
+  final bool showNone;
+
   @override
   State<BackgroundImageGallery> createState() => _BackgroundImageGalleryState();
 }
 
 class _BackgroundImageGalleryState extends State<BackgroundImageGallery> {
   List<String> _paths = const [];
+
+  /// 영상 → 썸네일 경로. 격자를 먼저 띄우고 하나씩 채운다.
+  final Map<String, String> _thumbs = {};
+
+  /// 등록(복사) 중이면 '+' 칸 대신 진행 표시. 큰 영상은 몇 초 걸린다.
+  bool _registering = false;
 
   @override
   void initState() {
@@ -40,19 +51,30 @@ class _BackgroundImageGalleryState extends State<BackgroundImageGallery> {
 
   Future<void> _reload() async {
     final paths = await widget.library.list();
-    if (mounted) setState(() => _paths = paths);
+    if (!mounted) return;
+    setState(() => _paths = paths);
+    if (!widget.library.isVideo) return;
+    for (final path in [?widget.selected, ...paths]) {
+      if (_thumbs.containsKey(path)) continue;
+      final thumb = await BackgroundImageLibrary.thumbnail(path);
+      if (!mounted) return;
+      if (thumb != null) setState(() => _thumbs[path] = thumb);
+    }
   }
 
   Future<void> _register() async {
     await FilePicker.skipEntitlementsChecks();
     final result = await FilePicker.pickFiles(
-      dialogTitle: '배경 이미지 등록 (PNG / JPG)',
+      dialogTitle: widget.library.isVideo
+          ? '배경 영상 등록 (MP4 / MOV / WebM)'
+          : '배경 이미지 등록 (PNG / JPG)',
       type: FileType.custom,
-      allowedExtensions: BackgroundImageLibrary.allowedExtensions,
+      allowedExtensions: widget.library.extensions,
       allowMultiple: true,
     );
     if (result == null) return;
     String? last;
+    setState(() => _registering = true);
     try {
       for (final file in result.files) {
         if (file.path != null) last = await widget.library.register(file.path!);
@@ -61,21 +83,28 @@ class _BackgroundImageGalleryState extends State<BackgroundImageGallery> {
       if (!mounted) return;
       ScaffoldMessenger.maybeOf(
         context,
-      )?.showSnackBar(SnackBar(content: Text('이미지를 등록하지 못했습니다: $e')));
+      )?.showSnackBar(SnackBar(content: Text('등록하지 못했습니다: $e')));
+    } finally {
+      if (mounted) setState(() => _registering = false);
     }
+    if (!mounted) return;
     await _reload();
     if (last != null) widget.onChanged(last);
   }
 
   Future<void> _remove(String path) async {
+    final video = widget.library.isVideo;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('배경 이미지 삭제'),
-        content: const Text(
-          '공통 모음에서 이 이미지를 지웁니다.\n'
-          '이 이미지를 배경으로 쓰는 항목(저장한 콘티 포함)은 배경 색만 남습니다.\n'
-          '이미 적용한 헌금송 화면은 그대로입니다.',
+        title: Text(video ? '배경 영상 삭제' : '배경 이미지 삭제'),
+        content: Text(
+          video
+              ? '공통 모음에서 이 영상을 지웁니다.\n'
+                    '이 영상을 쓰는 동영상 페이지(저장한 콘티 포함)는 재생되지 않습니다.'
+              : '공통 모음에서 이 이미지를 지웁니다.\n'
+                    '이 이미지를 배경으로 쓰는 항목(저장한 콘티 포함)은 배경 색만 남습니다.\n'
+                    '이미 적용한 헌금송 화면은 그대로입니다.',
         ),
         actions: [
           TextButton(
@@ -95,6 +124,7 @@ class _BackgroundImageGalleryState extends State<BackgroundImageGallery> {
     } catch (_) {
       // 다른 프로그램이 잡고 있으면(Windows) 못 지운다. 목록만 다시 읽는다.
     }
+    _thumbs.remove(path);
     if (widget.selected == path) widget.onChanged(null);
     await _reload();
   }
@@ -113,44 +143,115 @@ class _BackgroundImageGalleryState extends State<BackgroundImageGallery> {
       spacing: 8,
       runSpacing: 8,
       children: [
-        _tile(
-          context,
-          selected: selected == null,
-          onTap: () => widget.onChanged(null),
-          child: ColoredBox(
-            color: widget.emptyColor,
-            child: const Center(
-              child: Text(
-                '없음',
-                style: TextStyle(fontSize: 11, color: Colors.white70),
+        if (widget.showNone)
+          _tile(
+            context,
+            selected: selected == null,
+            onTap: () => widget.onChanged(null),
+            child: ColoredBox(
+              color: widget.emptyColor,
+              child: const Center(
+                child: Text(
+                  '없음',
+                  style: TextStyle(fontSize: 11, color: Colors.white70),
+                ),
               ),
             ),
           ),
-        ),
         for (final path in paths)
           _tile(
             context,
             selected: selected == path,
             onTap: () => widget.onChanged(path),
             onRemove: _paths.contains(path) ? () => _remove(path) : null,
-            child: Image.file(
-              File(path),
-              fit: BoxFit.cover,
-              cacheWidth: 192,
-              errorBuilder: (_, _, _) =>
-                  const Icon(Icons.broken_image_outlined, size: 18),
-            ),
+            tooltip: widget.library.isVideo
+                ? BackgroundImageLibrary.displayName(path)
+                : null,
+            child: widget.library.isVideo
+                ? _videoTile(context, path)
+                : Image.file(
+                    File(path),
+                    fit: BoxFit.cover,
+                    cacheWidth: 192,
+                    errorBuilder: (_, _, _) =>
+                        const Icon(Icons.broken_image_outlined, size: 18),
+                  ),
           ),
         _tile(
           context,
           selected: false,
-          onTap: _register,
+          onTap: _registering ? () {} : _register,
           child: Center(
-            child: Icon(Icons.add_photo_alternate_outlined, color: cs.primary),
+            child: _registering
+                ? const SizedBox.square(
+                    dimension: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Icon(
+                    widget.library.isVideo
+                        ? Icons.video_call_outlined
+                        : Icons.add_photo_alternate_outlined,
+                    color: cs.primary,
+                  ),
           ),
-          tooltip: '이미지 등록',
+          tooltip: _registering
+              ? '복사하는 중…'
+              : widget.library.isVideo
+              ? '영상 등록'
+              : '이미지 등록',
         ),
       ],
+    );
+  }
+
+  Widget _videoTile(BuildContext context, String path) {
+    final cs = Theme.of(context).colorScheme;
+    final thumb = _thumbs[path];
+    if (thumb != null) {
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          Image.file(
+            File(thumb),
+            fit: BoxFit.cover,
+            cacheWidth: 192,
+            errorBuilder: (_, _, _) => Icon(
+              Icons.movie_outlined,
+              size: 18,
+              color: cs.onSurfaceVariant,
+            ),
+          ),
+          Align(
+            alignment: Alignment.bottomCenter,
+            child: Container(
+              width: double.infinity,
+              color: Colors.black54,
+              padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+              child: Text(
+                BackgroundImageLibrary.displayName(path),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 9, color: Colors.white),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.all(4),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.movie_outlined, size: 18, color: cs.onSurfaceVariant),
+          Text(
+            BackgroundImageLibrary.displayName(path),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 10),
+          ),
+        ],
+      ),
     );
   }
 

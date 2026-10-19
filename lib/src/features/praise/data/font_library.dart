@@ -49,9 +49,9 @@ class FontLibrary {
     final dir = await _dir();
     await dir.create(recursive: true);
     final manifest = await AssetManifest.loadFromAssetBundle(rootBundle);
-    final assets = manifest
-        .listAssets()
-        .where((a) => a.startsWith(_builtInPrefix) && _isAllowed(a));
+    final assets = manifest.listAssets().where(
+      (a) => a.startsWith(_builtInPrefix) && _isAllowed(a),
+    );
     for (final asset in assets) {
       final target = File(p.join(dir.path, p.basename(asset)));
       if (await target.exists()) continue;
@@ -77,9 +77,10 @@ class FontLibrary {
       final bytes = await entity.readAsBytes();
       final info = readFontInfo(bytes);
       if (info == null) continue;
-      byFamily
-          .putIfAbsent(info.family, () => [])
-          .add((path: entity.path, weight: info.weight));
+      byFamily.putIfAbsent(info.family, () => []).add((
+        path: entity.path,
+        weight: info.weight,
+      ));
       names[info.family] = _koreanNames[info.family] ?? info.displayName;
       if (_loadedPaths.add(entity.path)) {
         await loadFontFromList(bytes, fontFamily: info.family);

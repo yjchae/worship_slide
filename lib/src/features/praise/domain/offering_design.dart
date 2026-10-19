@@ -182,7 +182,8 @@ class OfferingDesign {
       labelFontSize: num_('label_font_size', d.labelFontSize),
       accountFontSize: num_('account_font_size', d.accountFontSize),
       bandCenterY: clampBandCenterY(num_('band_center_y', d.bandCenterY)),
-      lyricsAboveBand: json['lyrics_above_band_v2'] as bool? ?? d.lyricsAboveBand,
+      lyricsAboveBand:
+          json['lyrics_above_band_v2'] as bool? ?? d.lyricsAboveBand,
       lyricsGap: num_('lyrics_gap', d.lyricsGap).clamp(0.0, maxLyricsGap),
       showLines: json['show_lines'] as bool? ?? d.showLines,
       lineWidth: num_('line_width', d.lineWidth),

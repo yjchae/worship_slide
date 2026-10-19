@@ -1,3 +1,4 @@
+import AVFoundation
 import Cocoa
 import FlutterMacOS
 import UniformTypeIdentifiers
@@ -1144,6 +1145,26 @@ class MainFlutterWindow: NSWindow {
         self.singerController?.window?.close()
         self.singerController = nil
         result(nil)
+
+      case "videoThumbnail":
+        // 배경 영상 모음 썸네일. 1초 지점(짧으면 첫 화면) 한 장을 PNG 로 쓴다.
+        guard let path = data?["path"] as? String, let out = data?["out"] as? String else {
+          result(false)
+          return
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+          let gen = AVAssetImageGenerator(asset: AVURLAsset(url: URL(fileURLWithPath: path)))
+          gen.appliesPreferredTrackTransform = true
+          gen.maximumSize = CGSize(width: 384, height: 216)
+          let frame = (try? gen.copyCGImage(at: CMTime(seconds: 1, preferredTimescale: 600), actualTime: nil))
+            ?? (try? gen.copyCGImage(at: .zero, actualTime: nil))
+          var ok = false
+          if let cg = frame,
+             let png = NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:]) {
+            ok = (try? png.write(to: URL(fileURLWithPath: out))) != nil
+          }
+          DispatchQueue.main.async { result(ok) }
+        }
 
       default:
         result(FlutterMethodNotImplemented)

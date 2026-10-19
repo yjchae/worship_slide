@@ -79,8 +79,9 @@ class PraiseSong {
     return t.isEmpty ? title.trim() : t.trim();
   }
 
-  static String _cleanTitle(String title) =>
-      title.replaceAll(RegExp(r'\s*\(\s*와이드 스크린\s*\)\s*', caseSensitive: false), '').trim();
+  static String _cleanTitle(String title) => title
+      .replaceAll(RegExp(r'\s*\(\s*와이드 스크린\s*\)\s*', caseSensitive: false), '')
+      .trim();
 
   factory PraiseSong.fromMap(Map<String, Object?> map) {
     return PraiseSong(
