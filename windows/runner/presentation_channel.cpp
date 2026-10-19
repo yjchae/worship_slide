@@ -1,5 +1,7 @@
 #include "presentation_channel.h"
 
+#include "monitor_fit.h"
+
 #include <algorithm>
 #include <cmath>
 #include <set>
@@ -315,6 +317,7 @@ void PresentationChannel::OpenWindow(HMONITOR chosen) {
       // 발표 중에 모니터를 바꾸면 그 모니터 전체화면으로 옮긴다.
       MONITORINFO info = { sizeof(info) };
       GetMonitorInfo(chosen, &info);
+      full_device_ = MonitorDevice(chosen);
       SetWindowLongPtrW(hwnd_, GWL_STYLE, WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN);
       SetWindowPos(hwnd_, HWND_TOPMOST, info.rcMonitor.left, info.rcMonitor.top,
                    info.rcMonitor.right - info.rcMonitor.left,
@@ -342,20 +345,14 @@ void PresentationChannel::OpenWindow(HMONITOR chosen) {
 
   RECT wr;
   DWORD exStyle;
+  full_device_ = MonitorDevice(mi.second);
   if (mi.second) {
     MONITORINFO info = { sizeof(info) };
     GetMonitorInfo(mi.second, &info);
     wr = info.rcMonitor;  // full screen including taskbar
     exStyle = WS_EX_TOPMOST;
   } else {
-    MONITORINFO info = { sizeof(info) };
-    GetMonitorInfo(mi.primary, &info);
-    int sw = info.rcWork.right - info.rcWork.left;
-    int sh = info.rcWork.bottom - info.rcWork.top;
-    wr.left   = info.rcWork.left + (sw - 1280) / 2;
-    wr.top    = info.rcWork.top  + (sh - 720)  / 2;
-    wr.right  = wr.left + 1280;
-    wr.bottom = wr.top  + 720;
+    wr = CenteredRect(mi.primary, 1280, 720);
     exStyle = 0;
   }
 
@@ -373,6 +370,10 @@ void PresentationChannel::OpenWindow(HMONITOR chosen) {
   media_ = std::make_unique<MediaLayer>(hwnd_, [this](const std::wstring& json) {
     if (main_) main_->InvokeMethod("mediaState", std::make_unique<EV>(Utf8(json)));
   });
+}
+
+void PresentationChannel::RefitToMonitor() {
+  RefitToDevice(hwnd_, full_device_, HWND_TOPMOST, 0);
 }
 
 void PresentationChannel::CloseWindow() {
@@ -915,6 +916,10 @@ LRESULT CALLBACK PresentationChannel::WndProc(
       InvalidateRect(hwnd, nullptr, TRUE);
       if (s_ && s_->media_) s_->media_->Layout();
       return 0;
+
+    case WM_DISPLAYCHANGE:
+      if (s_) s_->RefitToMonitor();
+      break;
 
     case WM_TIMER:
       if (wp == MediaLayer::kTimerId && s_ && s_->media_) {

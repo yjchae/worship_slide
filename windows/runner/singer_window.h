@@ -52,6 +52,8 @@ class SingerWindow {
   void PaintText(HDC hdc, RECT box, const Page& page, bool dim, int minPx) const;
   void PaintPageImage(HDC hdc, RECT box, const std::wstring& path) const;
   void ToggleFullScreen();
+  // 화면 설정이 바뀌면(WM_DISPLAYCHANGE) 전체화면을 그 모니터의 지금 크기로 다시 맞춘다.
+  void OnDisplayChange();
 
   static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
   static void Register();
@@ -60,6 +62,7 @@ class SingerWindow {
   HWND hwnd_      = nullptr;
   Notify notify_;
   bool full_ = false;  // 전체화면 여부
+  std::wstring full_device_;  // 전체화면으로 띄운 모니터 장치 이름(monitor_fit.h)
 
   Page current_, next_;
   int  page_number_ = 0, total_pages_ = 0;

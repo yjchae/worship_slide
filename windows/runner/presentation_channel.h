@@ -54,6 +54,8 @@ class PresentationChannel {
   // chosen: 사용자가 고른 모니터(nullptr = 자동). 이미 열려 있으면 그 모니터로 옮긴다.
   void OpenWindow(HMONITOR chosen);
   void CloseWindow();
+  // 화면 설정이 바뀌면(WM_DISPLAYCHANGE) 전체화면을 그 모니터의 지금 크기로 다시 맞춘다.
+  void RefitToMonitor();
   void Apply(const flutter::EncodableMap& data);
   // 지금 페이지의 미디어(last_media_)를 레이어에 넘긴다. 화면이 꺼져 있으면 미룬다.
   void SyncMedia();
@@ -75,6 +77,8 @@ class PresentationChannel {
 
   HWND main_hwnd_ = nullptr;
   HWND hwnd_      = nullptr;
+  // 전체화면으로 띄운 모니터 장치 이름(monitor_fit.h). 일반 창이면 빈 문자열.
+  std::wstring full_device_;
   ULONG_PTR gdiplus_token_ = 0;  // 이미지 슬라이드 렌더링용 GDI+ 토큰
   Slide slide_;
 

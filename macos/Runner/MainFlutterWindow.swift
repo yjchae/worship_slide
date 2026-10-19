@@ -7,10 +7,45 @@ import WebKit
 
 // ── 발표 창 ──────────────────────────────────────────────────────────────────
 
+extension NSScreen {
+  /// 해상도가 바뀌어도 그대로인 모니터 번호. NSScreen 객체는 화면 설정이 바뀌면 새로 만들어진다.
+  var displayID: CGDirectDisplayID? {
+    (deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+  }
+
+  static func with(displayID id: CGDirectDisplayID?) -> NSScreen? {
+    guard let id = id else { return nil }
+    return screens.first { $0.displayID == id }
+  }
+
+  /// 화면 설정(해상도·모니터 꽂기/빼기)이 바뀔 때 selector 를 부른다. 창이 닫힐 때 removeObserver.
+  /// 프로젝터는 연결 직후 해상도를 다시 잡는 일이 흔한데, 그러면 창이 옛 크기로 남아 화면 밖으로
+  /// 넘친다(가사가 구석에 걸쳐 보였다). 발표·싱어 창이 화면 설정이 바뀔 때 이걸로 다시 맞춘다.
+  static func observeChanges(_ target: Any, _ selector: Selector) {
+    NotificationCenter.default.addObserver(
+      target, selector: selector,
+      name: NSApplication.didChangeScreenParametersNotification, object: nil)
+  }
+
+  /// 전체화면 창을 그 모니터(id)의 지금 크기로. 모니터가 (잠깐) 없으면 그대로 둔다 — 프로젝터는
+  /// 해상도를 다시 잡으며 잠깐 빠졌다 돌아오는 일이 흔하고, 돌아오면 다음 알림에서 맞춘다.
+  static func refit(_ window: NSWindow?, toDisplay id: CGDirectDisplayID?) {
+    guard let window = window, let screen = with(displayID: id), window.frame != screen.frame else { return }
+    window.setFrame(screen.frame, display: true)
+  }
+
+  /// 이 화면 가운데 w x h 일반 창 자리(화면보다 크면 줄인다).
+  func centeredFrame(width: CGFloat, height: CGFloat) -> NSRect {
+    let base = visibleFrame
+    let w = min(width, base.width), h = min(height, base.height)
+    return NSRect(x: base.midX - w / 2, y: base.midY - h / 2, width: w, height: h)
+  }
+}
+
 class PresentationWindowController: NSWindowController, NSWindowDelegate {
   private var webView: WKWebView!
   private var keyMonitor: Any?
-  /// 창이 닫힐 때 한 번 호출된다. NotificationCenter 옵저버를 쓰면 창마다 하나씩
+  /// 창이 닫힐 때 한 번 호출된다. 창 닫힘을 NotificationCenter 옵저버로 받으면 창마다 하나씩
   /// 쌓이고(제거를 안 함) 해제된 창 주소로 남아 다음 발표에서 오작동한다.
   var onClose: (() -> Void)?
   /// 미디어 레이어의 재생 위치 JSON(문자열 그대로). 발표 보기 재생바가 받는다.
@@ -34,9 +69,19 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
     webView.autoresizingMask = [.width, .height]
     window.contentView!.addSubview(webView)
     window.delegate = self
+    NSScreen.observeChanges(self, #selector(screensChanged))
+  }
+
+  /// 전체화면으로 띄운 모니터(해상도가 바뀌어도 그대로인 번호). 일반 창이면 nil.
+  private var fullScreenDisplay: CGDirectDisplayID?
+
+  @objc private func screensChanged() {
+    NSScreen.refit(window, toDisplay: fullScreenDisplay)
   }
 
   func windowWillClose(_ notification: Notification) {
+    NotificationCenter.default.removeObserver(
+      self, name: NSApplication.didChangeScreenParametersNotification, object: nil)
     if let monitor = keyMonitor {
       NSEvent.removeMonitor(monitor)
       keyMonitor = nil
@@ -74,6 +119,7 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
   /// 포커스를 가져가면 메인 창의 넘기기 단축키가 멈춘다.
   func place(on screen: NSScreen?) {
     guard let window = self.window else { return }
+    fullScreenDisplay = screen?.displayID
     if let screen = screen {
       // 보조 모니터: 전체화면
       window.styleMask = [.borderless]
@@ -84,11 +130,7 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
       window.styleMask = [.titled, .resizable]
       window.level = .normal
       let mainScreen = NSScreen.main ?? NSScreen.screens[0]
-      let sw = mainScreen.visibleFrame.width
-      let sh = mainScreen.visibleFrame.height
-      let x = mainScreen.visibleFrame.minX + (sw - 1280) / 2
-      let y = mainScreen.visibleFrame.minY + (sh - 720) / 2
-      window.setFrame(NSRect(x: x, y: y, width: 1280, height: 720), display: true)
+      window.setFrame(mainScreen.centeredFrame(width: 1280, height: 720), display: true)
     }
     window.orderFrontRegardless()
   }
@@ -687,9 +729,18 @@ class SingerWindowController: NSWindowController, NSWindowDelegate {
     webView.autoresizingMask = [.width, .height]
     window.contentView!.addSubview(webView)
     window.delegate = self
+    NSScreen.observeChanges(self, #selector(screensChanged))
+  }
+
+  private var fullScreenDisplay: CGDirectDisplayID?
+
+  @objc private func screensChanged() {
+    if isFullScreen { NSScreen.refit(window, toDisplay: fullScreenDisplay) }
   }
 
   func windowWillClose(_ notification: Notification) {
+    NotificationCenter.default.removeObserver(
+      self, name: NSApplication.didChangeScreenParametersNotification, object: nil)
     if let monitor = keyMonitor {
       NSEvent.removeMonitor(monitor)
       keyMonitor = nil
@@ -702,11 +753,8 @@ class SingerWindowController: NSWindowController, NSWindowDelegate {
   /// 키 포커스는 가져가지 않는다 — 메인 창에서 넘기기 단축키가 계속 먹어야 한다.
   func show(fullScreenOn screen: NSScreen?, near reference: NSScreen?) {
     guard let window = self.window else { return }
-    let base = (reference ?? NSScreen.main ?? NSScreen.screens[0]).visibleFrame
-    let w = min(960, base.width), h = min(600, base.height)
-    window.setFrame(
-      NSRect(x: base.midX - w / 2, y: base.midY - h / 2, width: w, height: h),
-      display: true)
+    let base = reference ?? NSScreen.main ?? NSScreen.screens[0]
+    window.setFrame(base.centeredFrame(width: 960, height: 600), display: true)
     window.orderFrontRegardless()
     if let screen = screen { enterFullScreen(on: screen) }
 
@@ -739,6 +787,7 @@ class SingerWindowController: NSWindowController, NSWindowDelegate {
     guard let window = window, !isFullScreen else { return }
     windowedFrame = window.frame
     isFullScreen = true
+    fullScreenDisplay = screen.displayID
     window.styleMask = [.borderless]
     window.level = .screenSaver
     window.setFrame(screen.frame, display: true)
@@ -746,7 +795,7 @@ class SingerWindowController: NSWindowController, NSWindowDelegate {
 
   /// 발표 중에 사용자가 고른 모니터로 옮긴다(그 모니터 전체화면).
   func moveFullScreen(to screen: NSScreen) {
-    if isFullScreen && window?.screen == screen { return }  // 이미 거기면 깜빡이지 않게
+    if isFullScreen, let id = screen.displayID, fullScreenDisplay == id { return }  // 이미 거기면 깜빡이지 않게
     exitFullScreen()
     enterFullScreen(on: screen)
   }
@@ -757,7 +806,14 @@ class SingerWindowController: NSWindowController, NSWindowDelegate {
     window.styleMask = [.titled, .closable, .resizable, .miniaturizable]
     window.title = "싱어 화면"
     window.level = .normal
-    if let frame = windowedFrame { window.setFrame(frame, display: true) }
+    // 일반 창일 때 있던 모니터가 빠졌으면(제목줄이 어느 화면에도 없으면) 메인 화면 가운데로.
+    if let frame = windowedFrame, NSScreen.screens.contains(where: {
+      $0.visibleFrame.contains(NSPoint(x: frame.midX, y: frame.maxY - 10))
+    }) {
+      window.setFrame(frame, display: true)
+    } else if let base = NSScreen.main ?? NSScreen.screens.first {
+      window.setFrame(base.centeredFrame(width: 960, height: 600), display: true)
+    }
   }
 
   func update(data: [String: Any]) {

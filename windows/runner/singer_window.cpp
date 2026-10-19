@@ -1,5 +1,7 @@
 #include "singer_window.h"
 
+#include "monitor_fit.h"
+
 #include <algorithm>
 #include <cwchar>
 #include <memory>
@@ -181,17 +183,12 @@ void SingerWindow::Open(HMONITOR avoid, HMONITOR chosen) {
   if (chosen) pick.found = chosen;
 
   // 없으면 메인 창 모니터 가운데 일반 창. 사용자가 원하는 모니터로 끌어 놓는다.
-  MONITORINFO info = {sizeof(info)};
-  GetMonitorInfo(pick.found ? pick.found : pick.main, &info);
-  const int sw = info.rcWork.right - info.rcWork.left;
-  const int sh = info.rcWork.bottom - info.rcWork.top;
-  const int w = (std::min)(960, sw);
-  const int h = (std::min)(600, sh);
+  const RECT wr = CenteredRect(pick.found ? pick.found : pick.main, 960, 600);
 
   full_ = false;
   hwnd_ = CreateWindowExW(
       0, kClass, kTitle, WS_OVERLAPPEDWINDOW,
-      info.rcWork.left + (sw - w) / 2, info.rcWork.top + (sh - h) / 2, w, h,
+      wr.left, wr.top, wr.right - wr.left, wr.bottom - wr.top,
       nullptr, nullptr, GetModuleHandle(nullptr), this);
   if (!hwnd_) return;
 
@@ -255,10 +252,11 @@ void SingerWindow::ToggleFullScreen() {
   const LONG_PTR style = GetWindowLongPtrW(hwnd_, GWL_STYLE);
   if (!full_) {
     MONITORINFO info = {sizeof(info)};
-    if (!GetWindowPlacement(hwnd_, &placement_) ||
-        !GetMonitorInfo(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTOPRIMARY), &info)) {
+    const HMONITOR mon = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTOPRIMARY);
+    if (!GetWindowPlacement(hwnd_, &placement_) || !GetMonitorInfo(mon, &info)) {
       return;
     }
+    full_device_ = MonitorDevice(mon);
     SetWindowLongPtrW(hwnd_, GWL_STYLE, (style & ~WS_OVERLAPPEDWINDOW) | WS_POPUP);
     SetWindowPos(hwnd_, HWND_TOP, info.rcMonitor.left, info.rcMonitor.top,
                  info.rcMonitor.right - info.rcMonitor.left,
@@ -273,6 +271,10 @@ void SingerWindow::ToggleFullScreen() {
                  SWP_FRAMECHANGED | SWP_NOACTIVATE);
     full_ = false;
   }
+}
+
+void SingerWindow::OnDisplayChange() {
+  if (full_) RefitToDevice(hwnd_, full_device_, nullptr, SWP_NOZORDER | SWP_NOOWNERZORDER);
 }
 
 // 머리줄 시계 글자: "오후 7:32 · " + 경과("12:05") + 목표(" / 20:00"). 경과 부분만 색이 바뀐다.
@@ -542,6 +544,11 @@ LRESULT CALLBACK SingerWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
     case WM_SIZE:
       InvalidateRect(hwnd, nullptr, FALSE);
       return 0;
+
+    case WM_DISPLAYCHANGE:
+      // 발표 창과 같다(monitor_fit.h) — 해상도가 바뀌면 그 모니터 크기로 다시 맞춘다.
+      self->OnDisplayChange();
+      break;
 
     case WM_TIMER:
       if (wp == kClockTimer) {
