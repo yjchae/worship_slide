@@ -15,6 +15,7 @@ using std::min;
 #include <objidl.h>
 #include <gdiplus.h>
 #include <shellapi.h>
+#include <shobjidl.h>
 
 #include <flutter/standard_method_codec.h>
 #include <flutter/method_result_functions.h>
@@ -40,6 +41,22 @@ std::string Utf8(const std::wstring& w) {
   std::string out(static_cast<size_t>(n - 1), '\0');
   WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, out.data(), n, nullptr, nullptr);
   return out;
+}
+
+bool PngEncoder(CLSID* clsid) {
+  UINT count = 0, size = 0;
+  Gdiplus::GetImageEncodersSize(&count, &size);
+  if (size == 0) return false;
+  std::vector<BYTE> buf(size);
+  auto* codecs = reinterpret_cast<Gdiplus::ImageCodecInfo*>(buf.data());
+  if (Gdiplus::GetImageEncoders(count, size, codecs) != Gdiplus::Ok) return false;
+  for (UINT i = 0; i < count; ++i) {
+    if (wcscmp(codecs[i].MimeType, L"image/png") == 0) {
+      *clsid = codecs[i].Clsid;
+      return true;
+    }
+  }
+  return false;
 }
 }  // namespace
 
@@ -243,6 +260,36 @@ void PresentationChannel::Setup(flutter::FlutterEngine* engine) {
           if (data) singer_->Update(*data);
         } else if (call.method_name() == "closeSingerWindow") {
           singer_->Close();
+        } else if (call.method_name() == "videoThumbnail") {
+          // 배경 영상 모음 썸네일 = 탐색기 썸네일(코덱이 없으면 실패 → 앱은 아이콘만 보인다).
+          // ponytail: UI 스레드에서 만든다. 영상마다 한 번(성공하면 파일로 남고, 실패는 Dart 가
+          // 실행 동안 기억한다)이고 영상은 앱 폴더에 복사돼 있어 빠르다 — 느리면 작업 스레드로.
+          auto str = [&](const char* key) {
+            std::wstring out;
+            if (!data) return out;
+            auto it = data->find(EV(std::string(key)));
+            if (it != data->end()) {
+              if (const auto* s = std::get_if<std::string>(&it->second)) out = W(*s);
+            }
+            return out;
+          };
+          const std::wstring path = str("path"), out = str("out");
+          bool ok = false;
+          IShellItemImageFactory* factory = nullptr;
+          if (!path.empty() && !out.empty() &&
+              SUCCEEDED(SHCreateItemFromParsingName(path.c_str(), nullptr,
+                                                    IID_PPV_ARGS(&factory)))) {
+            HBITMAP hbm = nullptr;
+            if (SUCCEEDED(factory->GetImage({384, 216}, SIIGBF_THUMBNAILONLY, &hbm))) {
+              CLSID png;
+              Gdiplus::Bitmap bmp(hbm, nullptr);
+              ok = PngEncoder(&png) && bmp.Save(out.c_str(), &png) == Gdiplus::Ok;
+              DeleteObject(hbm);
+            }
+            factory->Release();
+          }
+          result->Success(EV(ok));
+          return;
         } else {
           result->NotImplemented();
           return;

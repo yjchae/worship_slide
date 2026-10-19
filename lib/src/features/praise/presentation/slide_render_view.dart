@@ -150,8 +150,9 @@ class SlideRenderView extends StatelessWidget {
       );
     }
 
-    final bodyTextPosition =
-        isBible ? style.bibleTextPosition : style.textPosition;
+    final bodyTextPosition = isBible
+        ? style.bibleTextPosition
+        : style.textPosition;
     final titleHPos = isBible
         ? style.bibleTitleHorizontalPosition
         : style.titleHorizontalPosition;
@@ -165,16 +166,19 @@ class SlideRenderView extends StatelessWidget {
         _lyricsBoxT +
         clampTextOffsetY(isBible ? style.bibleTextOffsetY : style.textOffsetY);
     final showTitle = isBible ? style.showBibleTitle : style.showSongTitle;
-    final titleFontSize =
-        isBible ? style.bibleTitleFontSize : style.titleFontSize;
-    final titleTextColor =
-        isBible ? style.bibleTitleTextColor : style.titleTextColor;
+    final titleFontSize = isBible
+        ? style.bibleTitleFontSize
+        : style.titleFontSize;
+    final titleTextColor = isBible
+        ? style.bibleTitleTextColor
+        : style.titleTextColor;
     final titleOffsetY = clampTextOffsetY(
       isBible ? style.bibleTitleOffsetY : style.titleOffsetY,
     );
     final bodyTextColor = isBible ? style.bibleTextColor : style.textColor;
-    final bodyTextAlign =
-        isBible ? style.bibleTextAlign : style.lyricsTextAlign;
+    final bodyTextAlign = isBible
+        ? style.bibleTextAlign
+        : style.lyricsTextAlign;
 
     final bodyAlignment = switch (bodyTextPosition) {
       VerticalTextPosition.top => Alignment.topCenter,
@@ -266,7 +270,9 @@ class SlideRenderView extends StatelessWidget {
                                   text: '\n${data.englishText}',
                                   style: TextStyle(
                                     color: style.englishTextColor,
-                                    fontSize: style.effectiveEnglishFontSize * fontScale,
+                                    fontSize:
+                                        style.effectiveEnglishFontSize *
+                                        fontScale,
                                     fontFamily: style.fontFamily,
                                     fontWeight: FontWeight.w700,
                                     height: 1.3,

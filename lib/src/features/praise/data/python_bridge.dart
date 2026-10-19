@@ -15,8 +15,7 @@ class LibreOfficeMissingException implements Exception {
   const LibreOfficeMissingException();
 
   @override
-  String toString() =>
-      'PPT를 이미지로 변환하려면 LibreOffice가 필요합니다. 설치 후 다시 시도해 주세요.';
+  String toString() => 'PPT를 이미지로 변환하려면 LibreOffice가 필요합니다. 설치 후 다시 시도해 주세요.';
 }
 
 class ClipboardEmptyException implements Exception {
@@ -34,8 +33,7 @@ class TesseractMissingException implements Exception {
   const TesseractMissingException();
 
   @override
-  String toString() =>
-      '악보에서 가사를 읽으려면 Tesseract OCR이 필요합니다. 설치 후 다시 시도해 주세요.';
+  String toString() => '악보에서 가사를 읽으려면 Tesseract OCR이 필요합니다. 설치 후 다시 시도해 주세요.';
 }
 
 /// 악보 한 장(또는 PDF 한 권)에서 뽑아낸 가사.
@@ -155,10 +153,16 @@ class PythonBridge {
         // 줄 이미지에서 글자를 하나도 못 읽었다. 이미지마다 조용히 실패했을 수도(경로를 못 여는 등),
         // 가사 없는 악보일 수도 있어서 Tesseract 로 한 번 더 해 본다.
         nativeEmpty = result.lyrics;
-        await AppLogger.instance.info('[sheet-ocr] OS OCR 이 글자를 못 읽어 Tesseract 로 다시 읽습니다');
+        await AppLogger.instance.info(
+          '[sheet-ocr] OS OCR 이 글자를 못 읽어 Tesseract 로 다시 읽습니다',
+        );
       } on PlatformException catch (error, stack) {
         // OS OCR 이 갑자기 실패하면(언어 팩 제거 등) Tesseract 로 한 번 더 해 본다.
-        await AppLogger.instance.error('OS OCR 실패, Tesseract 로 읽습니다', error, stack);
+        await AppLogger.instance.error(
+          'OS OCR 실패, Tesseract 로 읽습니다',
+          error,
+          stack,
+        );
       }
     }
     try {
@@ -177,8 +181,11 @@ class PythonBridge {
     return _nativeOcrAvailable ??= () async {
       if (!Platform.isMacOS && !Platform.isWindows) return false;
       try {
-        final available = await _ocrChannel.invokeMethod<bool>('isAvailable') ?? false;
-        await AppLogger.instance.info('[sheet-ocr] OS 내장 OCR 사용 가능: $available');
+        final available =
+            await _ocrChannel.invokeMethod<bool>('isAvailable') ?? false;
+        await AppLogger.instance.info(
+          '[sheet-ocr] OS 내장 OCR 사용 가능: $available',
+        );
         return available;
       } on PlatformException {
         return false;
@@ -205,7 +212,10 @@ class PythonBridge {
       final json = jsonDecode(stage1.stdout as String) as Map<String, dynamic>;
       // 글자가 박힌 PDF 처럼 OCR 이 필요 없으면 1단계에서 바로 끝난다.
       if (json['needs_ocr'] != true) {
-        return (lyrics: _sheetResult(stage1.stdout as String), unreadImages: false);
+        return (
+          lyrics: _sheetResult(stage1.stdout as String),
+          unreadImages: false,
+        );
       }
 
       final images = (json['images'] as List<dynamic>).cast<String>();
@@ -223,7 +233,10 @@ class PythonBridge {
         json['job'] as String,
         ocrFile.path,
       ]);
-      return (lyrics: _sheetResult(stage2.stdout as String), unreadImages: !anyText);
+      return (
+        lyrics: _sheetResult(stage2.stdout as String),
+        unreadImages: !anyText,
+      );
     } finally {
       try {
         await workDir.delete(recursive: true);
@@ -314,7 +327,8 @@ class PythonBridge {
   Future<ProcessResult> _runTool(List<String> arguments) async {
     final binary = _compiledBinaryPath;
     if (binary == null) {
-      final msg = 'ppt_tool 실행 파일을 찾을 수 없습니다. '
+      final msg =
+          'ppt_tool 실행 파일을 찾을 수 없습니다. '
           '현재 위치: ${Directory.current.path}, 실행 파일: ${Platform.resolvedExecutable}';
       await AppLogger.instance.error(msg);
       throw Exception(msg);

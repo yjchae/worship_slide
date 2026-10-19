@@ -26,8 +26,10 @@ class SlidePageData {
   final String englishText;
   final String? title;
   final bool isBible;
+
   /// 외부 PPT에서 구운 페이지 이미지. 지정되면 텍스트 대신 이 이미지만 표시된다.
   final String? imagePath;
+
   /// 이 페이지에서 재생할 동영상·음악·유튜브. 발표 창이 슬라이드 위 미디어 레이어로 띄운다.
   final SlideMedia? media;
 

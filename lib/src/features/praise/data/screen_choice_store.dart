@@ -18,6 +18,7 @@ class ScreenInfo {
   final String name;
   final int width;
   final int height;
+
   /// 앱 메인 창이 떠 있는 모니터.
   final bool isMain;
 
@@ -72,7 +73,8 @@ class ScreenChoiceStore {
     try {
       final file = await _file();
       if (!await file.exists()) return (null, null);
-      final json = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+      final json =
+          jsonDecode(await file.readAsString()) as Map<String, dynamic>;
       return (
         ScreenChoice.fromJson(json['audience']),
         ScreenChoice.fromJson(json['singer']),
@@ -85,7 +87,10 @@ class ScreenChoiceStore {
   Future<void> save(ScreenChoice? audience, ScreenChoice? singer) async {
     try {
       await (await _file()).writeAsString(
-        jsonEncode({'audience': audience?.toJson(), 'singer': singer?.toJson()}),
+        jsonEncode({
+          'audience': audience?.toJson(),
+          'singer': singer?.toJson(),
+        }),
       );
     } catch (_) {}
   }
