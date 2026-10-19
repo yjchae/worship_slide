@@ -30,7 +30,7 @@ String mediaPlayerHtml(SlideMedia media, {required bool windows}) {
         : 0,
     'fadeIn': media.fadeIn,
     'fadeOut': media.fadeOut,
-  }).replaceAll('<', r'<'); // 경로에 </script> 가 있어도 스크립트가 안 끊기게
+  }).replaceAll('<', r'\u003c'); // 경로에 </script> 가 있어도 스크립트가 안 끊기게
   return _template.replaceFirst('/*CONFIG*/null', config);
 }
 

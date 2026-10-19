@@ -203,6 +203,7 @@ void PresentationChannel::Setup(flutter::FlutterEngine* engine) {
             zoom_y_    = num("y", 0.0);
             zoom_size_ = (std::max)(num("size", 1.0), 0.01);
             if (hwnd_) InvalidateRect(hwnd_, nullptr, FALSE);
+            if (media_) media_->Run(ZoomPointerJs());
           }
         } else if (call.method_name() == "pointer") {
           if (data) {
@@ -216,6 +217,7 @@ void PresentationChannel::Setup(flutter::FlutterEngine* engine) {
             ptr_y_    = num("y", 0.0);
             ptr_size_ = num("size", 100.0);
             if (hwnd_) InvalidateRect(hwnd_, nullptr, FALSE);
+            if (media_) media_->Run(ZoomPointerJs());
           }
         } else if (call.method_name() == "blackout") {
           slide_.blackout = !slide_.blackout;
@@ -341,6 +343,19 @@ void PresentationChannel::SyncMedia() {
       aspect = static_cast<double>(image.GetWidth()) / image.GetHeight();
   }
   media_->Update(last_media_.key.empty() ? nullptr : &last_media_, aspect);
+  // 새 레이어면 지금 확대·포인터로 시작한다(페이지가 뜰 때까지 Run 이 미뤄 둔다).
+  media_->Run(ZoomPointerJs());
+}
+
+// 배경 영상 페이지는 가사가 미디어 레이어(WebView2) 안에 있어 GDI 확대·포인터가 그 아래에 가린다.
+// 레이어 페이지가 같은 계산으로 그린다. 다른 미디어 페이지엔 함수가 없어 아무 일도 안 한다.
+std::wstring PresentationChannel::ZoomPointerJs() const {
+  const wchar_t* mode = ptr_mode_ == 1 ? L"hand" : (ptr_mode_ == 2 ? L"dot" : L"off");
+  return L"window.setZoom&&setZoom(" + std::wstring(zoom_on_ ? L"true" : L"false") + L"," +
+         std::to_wstring(zoom_x_) + L"," + std::to_wstring(zoom_y_) + L"," +
+         std::to_wstring(zoom_size_) + L");window.setPtr&&setPtr('" + mode + L"'," +
+         std::to_wstring(ptr_x_) + L"," + std::to_wstring(ptr_y_) + L"," +
+         std::to_wstring(ptr_size_) + L")";
 }
 
 // ── data parsing ──────────────────────────────────────────────────────────────
@@ -399,6 +414,8 @@ void PresentationChannel::Apply(const flutter::EncodableMap& data) {
     last_media_.html    = GetStr(*m, "html");
     last_media_.fadeOut = GetDbl(*m, "fade_out", 0.0);
     if (last_media_.kind != "youtube") last_media_.path = W(GetStr(*m, "source"));
+    last_media_.overlay_dir = W(GetStr(*m, "overlay_dir"));
+    last_media_.overlay_js  = W(GetStr(*m, "overlay_js"));
     if (const auto* r = Get<flutter::EncodableList>(*m, "rect")) {
       for (const auto& v : *r) {
         if (const auto* d = std::get_if<double>(&v)) last_media_.rect.push_back(*d);

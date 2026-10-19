@@ -110,6 +110,12 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
   func setZoom(on: Bool, x: Double, y: Double, size: Double) {
     _zoomOn = on; _zoomX = x; _zoomY = y; _zoomSize = max(size, 0.01)
     webView.evaluateJavaScript(zoomCall(), completionHandler: nil)
+    // 배경 영상 페이지는 가사가 미디어 레이어에 있어서 레이어도 확대한다(다른 미디어 페이지엔 함수가 없다).
+    mediaView?.evaluateJavaScript(zoomCall(), completionHandler: nil)
+  }
+
+  private func pointerCall() -> String {
+    return "window.setPtr&&setPtr('\(_ptrMode)',\(_ptrX),\(_ptrY),\(_ptrSize))"
   }
 
   private func zoomCall() -> String {
@@ -119,8 +125,9 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
   func setPointer(mode: String, x: Double, y: Double, size: Double) {
     _ptrMode = mode; _ptrX = x; _ptrY = y; _ptrSize = size
     // 마우스가 움직일 때마다 페이지를 다시 로드하면 깜빡이므로 JS 로만 옮긴다.
-    let js = "window.setPtr&&setPtr('\(mode)',\(x),\(y),\(size))"
+    let js = pointerCall()
     webView.evaluateJavaScript(js, completionHandler: nil)
+    mediaView?.evaluateJavaScript(js, completionHandler: nil)
   }
 
   // data: Dart의 SlidePageData.toJson() 결과 ([String:Any])
@@ -144,10 +151,20 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
   private var mediaRect: [Double]?
   private var mediaFadeOut = 0.0
   private var mediaAspect = 16.0 / 9.0  // PPT 안 동영상 레터박스용 페이지 이미지 비율
+  // 배경 영상(가사 뒤 반복 재생) 레이어에 지금 띄운 가사 PNG 를 바꾸는 JS. 같은 영상으로 페이지만
+  // 넘어가면 레이어는 그대로 두고 이것만 다시 부른다(Dart SlideBackdrop).
+  private var mediaOverlayJs: String?
 
   private func updateMedia(_ media: [String: Any]?) {
     let key = media?["key"] as? String
-    if key == mediaKey { layoutMedia(); return }
+    if key == mediaKey {
+      layoutMedia()
+      if let js = media?["overlay_js"] as? String, js != mediaOverlayJs {
+        mediaOverlayJs = js
+        applyOverlay(js, attempt: 0)
+      }
+      return
+    }
     retireMedia()
     guard let media = media, let key = key, let html = media["html"] as? String,
           let content = window?.contentView else { return }
@@ -160,6 +177,10 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
             let json = message.body as? String else { return }
       self.onMediaState?(json)
     }, name: "media")
+    // 지금 확대·포인터 상태로 시작한다(배경 영상 레이어만 쓴다). 이후 바뀌면 setZoom·setPointer 가 넘긴다.
+    config.userContentController.addUserScript(WKUserScript(
+      source: "\(zoomCall());\(pointerCall());",
+      injectionTime: .atDocumentEnd, forMainFrameOnly: true))
     let view = WKWebView(frame: .zero, configuration: config)
     // 투명 — 동영상이 페이드 아웃하면 아래 슬라이드가 비친다(그대로 겹쳐 넘어간다).
     view.setValue(false, forKey: "drawsBackground")
@@ -167,6 +188,7 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
     mediaView = view
     mediaKey = key
     mediaKind = media["kind"] as? String ?? ""
+    mediaOverlayJs = media["overlay_js"] as? String  // 첫 가사 PNG 는 페이지 HTML 에 들어 있다
     mediaRect = (media["rect"] as? [NSNumber])?.map { $0.doubleValue }
     mediaFadeOut = (media["fade_out"] as? NSNumber)?.doubleValue ?? 0
     mediaAspect = 16.0 / 9.0
@@ -188,6 +210,20 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
         view.loadFileURL(url, allowingReadAccessTo: URL(fileURLWithPath: "/"))
       } catch {
         NSLog("[media] 임시 HTML 을 쓰지 못했습니다: \(error)")
+      }
+    }
+  }
+
+  /// 가사 PNG 바꾸기. 레이어 페이지가 아직 읽히는 중이면(setOverlay 가 없어 false) 잠시 뒤 다시 부른다 —
+  /// 그냥 버리면 다음 페이지로 넘길 때까지 첫 페이지 가사가 남는다. 그 사이 레이어·페이지가 바뀌면 그만둔다.
+  private func applyOverlay(_ js: String, attempt: Int) {
+    guard let view = mediaView else { return }
+    view.evaluateJavaScript(js) { [weak self, weak view] result, _ in
+      guard (result as? Bool) != true, attempt < 25, let self = self, let view = view,
+            view === self.mediaView, self.mediaOverlayJs == js else { return }
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+        guard view === self.mediaView, self.mediaOverlayJs == js else { return }
+        self.applyOverlay(js, attempt: attempt + 1)
       }
     }
   }
@@ -760,6 +796,13 @@ class SingerWindowController: NSWindowController, NSWindowDelegate {
     // 다음 페이지가 다른 곡·말씀이면 그 제목을 같이 알려 준다.
     let nextLabel = (!nextTitle.isEmpty && nextTitle != title) ? "다음 · \(nextTitle)" : "다음"
     let badge = blackout ? "<span class=\"badge\">관객 화면 꺼짐</span>" : ""
+    // 시계·경과 시간. 페이지를 다시 읽은 순간부터 JS 가 이어서 센다(Dart 는 매초 보내지 않는다).
+    let clock = lastData["clock"] as? [String: Any]
+    let clockShow = (clock?["show"] as? Bool) ?? false
+    let clockRun = (clock?["running"] as? Bool) ?? false
+    let clockMs = (clock?["elapsed_ms"] as? NSNumber)?.int64Value ?? 0
+    let clockTarget = (clock?["target_ms"] as? NSNumber)?.int64Value ?? 0
+    let clockConfig = "{show:\(clockShow),ms:\(clockMs),run:\(clockRun),target:\(clockTarget)}"
 
     return """
     <!DOCTYPE html><html><head><meta charset="utf-8">
@@ -771,6 +814,8 @@ class SingerWindowController: NSWindowController, NSWindowDelegate {
       header{display:flex;align-items:center;gap:1.2vw;font-size:2.6vh;color:#9aa4b1;flex:none;}
       header .title{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;}
       header .page{font-variant-numeric:tabular-nums;font-weight:700;color:#e6e9ee;}
+      header .clock{font-variant-numeric:tabular-nums;font-weight:700;color:#c3cad4;white-space:nowrap;}
+      .clock .warn{color:#ffb547;} .clock .over{color:#ff6b6b;}
       .badge{background:#e5484d;color:#fff;border-radius:999px;padding:.2em .8em;font-size:2.2vh;font-weight:700;}
       .label{font-size:2.3vh;color:#8b95a2;font-weight:600;flex:none;
         white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
@@ -788,7 +833,7 @@ class SingerWindowController: NSWindowController, NSWindowDelegate {
       .placeholder{color:#59626e;font-size:3.4vh;font-weight:600;}
       img{max-width:100%;max-height:100%;object-fit:contain;display:block;}
     </style></head><body>
-      <header><span class="title">\(title)</span>\(badge)<span class="page">\(pageNumber) / \(totalPages)</span></header>
+      <header><span class="title">\(title)</span>\(badge)<span class="clock" id="clock"></span><span class="page">\(pageNumber) / \(totalPages)</span></header>
       <div class="box current">\(pageHTML(current, emptyLabel: "빈 화면"))</div>
       <div class="label">\(nextLabel)</div>
       <div class="box next">\(pageHTML(next, emptyLabel: "마지막 페이지"))</div>
@@ -819,6 +864,21 @@ class SingerWindowController: NSWindowController, NSWindowDelegate {
     document.addEventListener('dblclick', function(){
       window.webkit.messageHandlers.singer.postMessage('toggleFullScreen');
     });
+    var CLOCK=\(clockConfig), loadedAt=Date.now();
+    function two(n){ return (n<10?'0':'')+n; }
+    function drawClock(){
+      var box=document.getElementById('clock');
+      if(!CLOCK.show){ box.textContent=''; return; }
+      var ms=CLOCK.ms+(CLOCK.run?Date.now()-loadedAt:0), sec=Math.floor(ms/1000);
+      var now=new Date(), h=now.getHours();
+      var time=(h<12?'오전 ':'오후 ')+((h%12)||12)+':'+two(now.getMinutes());
+      var cls=CLOCK.target>0 && ms>CLOCK.target ? 'over' : (CLOCK.target>0 && ms>=CLOCK.target*0.8 ? 'warn' : '');
+      box.textContent=time+' · ';
+      var e=document.createElement('span'); e.className=cls;
+      e.textContent=two(Math.floor(sec/60))+':'+two(sec%60); box.appendChild(e);
+      if(CLOCK.target>0) box.appendChild(document.createTextNode(' / '+two(Math.floor(CLOCK.target/60000))+':00'));
+    }
+    drawClock(); setInterval(drawClock,500);
     </script>
     </body></html>
     """

@@ -38,6 +38,7 @@ class SingerViewData {
     required this.pageNumber,
     required this.totalPages,
     required this.isBlackout,
+    this.clock,
   });
 
   final SingerPage current;
@@ -49,11 +50,16 @@ class SingerViewData {
   /// 관객 화면이 꺼져 있는지. 싱어 화면은 가사를 계속 보여 주고 표시만 한다.
   final bool isBlackout;
 
+  /// 시계·경과 시간([PresentationTimer.toSingerJson]). 받는 쪽은 받은 순간부터 자기 시계로
+  /// 이어서 센다 — 매초 보내지 않는다. null 이면 표시하지 않는다.
+  final Map<String, Object>? clock;
+
   Map<String, dynamic> toJson() => {
     'current': current.toJson(),
     'next': next?.toJson(),
     'page_number': pageNumber,
     'total_pages': totalPages,
     'blackout': isBlackout,
+    'clock': clock,
   };
 }

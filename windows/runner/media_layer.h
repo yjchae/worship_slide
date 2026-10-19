@@ -23,6 +23,10 @@ class MediaLayer {
     std::wstring path;          // 동영상·음악 파일. 유튜브는 비어 있다.
     std::vector<double> rect;   // 슬라이드 기준 [x,y,w,h]. 비면 화면 전체.
     double fadeOut = 0.0;
+    // 배경 영상(가사 뒤 반복 재생): 가사 PNG 폴더와 PNG 를 바꾸는 JS. 같은 key 로 페이지만
+    // 넘어가면 레이어는 그대로 두고 overlay_js 만 다시 실행한다(Dart SlideBackdrop).
+    std::wstring overlay_dir;
+    std::wstring overlay_js;
   };
 
   // on_state: 지금 레이어의 재생 위치 JSON({"t","d","p"}). 발표 보기 재생바가 받는다.

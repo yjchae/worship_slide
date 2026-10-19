@@ -40,6 +40,12 @@ class SingerWindow {
     std::wstring main, sub, title, imagePath;
   };
 
+  struct ClockText {
+    std::wstring time, elapsed, target;  // 비어 있으면 그리지 않는다
+    COLORREF color = 0;                  // 경과 시간 색(목표 80% 넘으면 주황, 넘기면 빨강)
+  };
+  ClockText CurrentClockText() const;
+
   void Paint(HDC hdc, RECT cli) const;
   // 상자 안에 꼭 맞는 가장 큰 글자로 원본 + 보조 가사를 가운데 그린다.
   // 원본 줄 그대로 맞추다 글자가 minPx 보다 작아지면 그때만 자동 줄바꿈한다.
@@ -58,6 +64,13 @@ class SingerWindow {
   Page current_, next_;
   int  page_number_ = 0, total_pages_ = 0;
   bool blackout_    = false;
+
+  // 시계·경과 시간(Dart PresentationTimer). 받은 순간(clock_at_, GetTickCount64)부터 이어서 센다.
+  bool clock_show_ = false, clock_running_ = false;
+  int64_t clock_ms_ = 0, clock_target_ = 0;
+  ULONGLONG clock_at_ = 0;
+  // 마지막으로 그린 시계 글자. 타이머가 이것과 다를 때만 다시 그린다.
+  mutable std::wstring last_clock_;
 
   // 경로 → 디코딩한 페이지 이미지. Update 때 지금·다음 페이지 것만 남긴다.
   mutable std::map<std::wstring, std::unique_ptr<Gdiplus::Image>> image_cache_;

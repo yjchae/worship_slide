@@ -41,6 +41,13 @@ class SingerWebServer {
 
   static const remoteOnlyKeys = ['note', 'zoom'];
 
+  // 경과 시간(clock.elapsed_ms)은 흐르는 동안 매번 달라서 저장한 JSON 에서 빼 두고, 보낼 때
+  // 그 순간 값으로 맨 앞에 붙인다(`{"clock_ms":N,...`). 늦게 연 휴대폰도 맞는 시간을 받는다.
+  int _clockMs = 0;
+  bool _clockRunning = false;
+  bool _hasClock = false;
+  final _clockWatch = Stopwatch();
+
   /// 리모컨 요청. 다 처리한 뒤([update] 까지 끝난 뒤) 돌아와야 응답에 바뀐 상태가 실린다.
   Future<void> Function(String action, Map<String, String> params)? onControl;
   Future<void> _control = Future.value();
@@ -129,6 +136,9 @@ class SingerWebServer {
     _remoteClients.clear();
     _lastJson = null;
     _lastRemoteJson = null;
+    _clockMs = 0;
+    _clockRunning = false;
+    _hasClock = false;
     _images.clear();
     running.value = false;
   }
@@ -328,6 +338,16 @@ class SingerWebServer {
       }
       public[key] = copy;
     }
+    final clock = public['clock'];
+    _hasClock = clock is Map;
+    if (clock is Map) {
+      _clockMs = (clock['elapsed_ms'] as num?)?.toInt() ?? 0;
+      _clockRunning = clock['running'] == true;
+      _clockWatch
+        ..reset()
+        ..start();
+      public['clock'] = {...clock}..remove('elapsed_ms');
+    }
     final remoteJson = jsonEncode(public);
     for (final k in remoteOnlyKeys) {
       public.remove(k);
@@ -339,9 +359,16 @@ class SingerWebServer {
     final singerChanged = json != _lastJson;
     _lastJson = json;
     _broadcast(
-      singerChanged ? 'data: $json\n\n' : null,
-      'data: $remoteJson\n\n',
+      singerChanged ? 'data: ${_live(json)}\n\n' : null,
+      'data: ${_live(remoteJson)}\n\n',
     );
+  }
+
+  /// 저장한 JSON 앞에 지금 경과 시간을 붙인다. 페이지는 이 값을 떼어 내고 나머지로 바뀐 걸 가린다.
+  String _live(String json) {
+    if (!_hasClock || !json.startsWith('{') || json == '{}') return json;
+    final ms = _clockMs + (_clockRunning ? _clockWatch.elapsedMilliseconds : 0);
+    return '{"clock_ms":$ms,${json.substring(1)}';
   }
 
   void _broadcast(String? singerText, String remoteText) {
@@ -407,14 +434,14 @@ class SingerWebServer {
             }),
           );
           final last = remote ? _lastRemoteJson : _lastJson;
-          res.write(last == null ? ': hello\n\n' : 'data: $last\n\n');
+          res.write(last == null ? ': hello\n\n' : 'data: ${_live(last)}\n\n');
         // 지금 페이지 JSON 한 번. Cloudflare 임시 터널은 SSE 를 붙잡아 두고 안 흘려보내서
         // (trycloudflare 의 알려진 제한) 터널(https) 주소에서는 페이지가 이걸 0.5초마다 묻는다.
         case '/state':
           res.headers
             ..contentType = ContentType.json
             ..set(HttpHeaders.cacheControlHeader, 'no-store');
-          res.write((remote ? _lastRemoteJson : _lastJson) ?? '{}');
+          res.write(_live((remote ? _lastRemoteJson : _lastJson) ?? '{}'));
           await res.close();
         case '/control':
           if (!remote || req.method != 'POST') {
@@ -437,7 +464,7 @@ class SingerWebServer {
           res.headers
             ..contentType = ContentType.json
             ..set(HttpHeaders.cacheControlHeader, 'no-store');
-          res.write(_lastRemoteJson ?? '{}');
+          res.write(_live(_lastRemoteJson ?? '{}'));
           await res.close();
         case '/img/current' || '/img/next':
           final path = _images[req.uri.path.substring(5)];
@@ -550,6 +577,8 @@ const singerPageHtml =
   header{display:flex;align-items:center;gap:2vw;font-size:2.4vh;color:#9aa4b1;flex:none;}
   #title{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;}
   #page{font-variant-numeric:tabular-nums;font-weight:700;color:#e6e9ee;}
+  #clock{font-variant-numeric:tabular-nums;font-weight:700;color:#c3cad4;white-space:nowrap;}
+  #clock .warn{color:#ffb547;} #clock .over{color:#ff6b6b;}
   .badge{background:#e5484d;color:#fff;border-radius:999px;padding:.2em .8em;font-size:2vh;font-weight:700;}
   .off{background:#59626e;}
   #label{font-size:2.1vh;color:#8b95a2;font-weight:600;flex:none;white-space:nowrap;overflow:hidden;
@@ -601,7 +630,7 @@ const singerPageHtml =
   #flash.r{right:0;background:linear-gradient(to left,rgba(255,213,79,.45),transparent);}
   #flash.show{opacity:1;transition:none;}
 </style></head><body>
-  <header><span id="title"></span><span id="badge"></span><span id="page"></span>
+  <header><span id="title"></span><span id="badge"></span><span id="clock"></span><span id="page"></span>
     <button id="layout"></button></header>
   <div id="panes">
     <div class="box" id="current"></div>
@@ -688,7 +717,39 @@ function setSplit(r){
   bar.addEventListener('pointerup',done);
   bar.addEventListener('pointercancel',done);
 })();
+// ── 시계·경과 시간 ── 받은 순간부터 이 휴대폰 시계로 이어서 센다(매초 받지 않는다).
+var clk={ms:0,at:0,run:false,show:false,target:0,rev:-1,last:null,paused:false};
+function takeClock(text){
+  var m=/^\{"clock_ms":(\d+),/.exec(text);
+  if(!m) return text;
+  var ms=+m[1], now=Date.now(), pred=clk.ms+(clk.run?now-clk.at:0);
+  clk.last={ms:ms,now:now};
+  // 폴링(0.5초)마다 맞추면 오가는 시간만큼 초가 흔들린다 — 1.5초 넘게 어긋날 때만 다시 맞춘다.
+  if(Math.abs(pred-ms)>1500){ clk.ms=ms; clk.at=now; }
+  return '{'+text.substring(m[0].length);
+}
+function renderClock(c){
+  if(!c){ clk.show=false; drawClock(); return; }
+  if(clk.last && (c.rev!==clk.rev || c.running!==clk.run)){ clk.ms=clk.last.ms; clk.at=clk.last.now; }
+  clk.rev=c.rev; clk.run=!!c.running; clk.show=!!c.show; clk.target=c.target_ms||0;
+  drawClock();
+}
+function two(n){ return (n<10?'0':'')+n; }
+function drawClock(){
+  var box=document.getElementById('clock');
+  if(!clk.show){ box.textContent=''; return; }
+  var ms=clk.ms+(clk.run?Date.now()-clk.at:0), sec=Math.floor(ms/1000);
+  var now=new Date(), h=now.getHours();
+  var time=(h<12?'오전 ':'오후 ')+((h%12)||12)+':'+two(now.getMinutes());
+  var cls=clk.target>0 && ms>clk.target ? 'over' : (clk.target>0 && ms>=clk.target*0.8 ? 'warn' : '');
+  box.textContent=time+' · ';
+  var e=el('span',cls,two(Math.floor(sec/60))+':'+two(sec%60));
+  box.appendChild(e);
+  if(clk.target>0) box.appendChild(document.createTextNode(' / '+two(Math.floor(clk.target/60000))+':00'));
+}
+setInterval(drawClock,500);
 function render(d){
+  renderClock(d.clock);
   var cur=d.current||{}, next=d.next;
   document.getElementById('title').textContent=cur.title||'';
   document.getElementById('page').textContent=d.page_number+' / '+d.total_pages;
@@ -713,6 +774,7 @@ function setBadge(text, cls){
 var last='';
 function offline(){ last=''; lastPages=''; setBadge('연결 끊김','badge off'); }
 function apply(text){
+  text=takeClock(text);
   if(text===last) return;
   last=text;
   // 아직 보낸 페이지가 없어도({}) 연결은 된 것이니 "연결 끊김" 은 지운다.
