@@ -1,7 +1,9 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
 
+import '../data/background_image_library.dart';
 import '../domain/export_style.dart';
 import '../domain/slide_media.dart';
 import 'slide_page_data.dart';
@@ -36,20 +38,58 @@ class SlideRenderView extends StatelessWidget {
     return file.existsSync() ? file : null;
   }
 
+  /// 썸네일이 1920px 원본을 그대로 디코딩하지 않도록 표시 크기로 제한한 디코딩 폭.
+  static int _cacheWidth(BuildContext context, BoxConstraints constraints) {
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    return constraints.maxWidth.isFinite
+        ? (constraints.maxWidth * dpr).round().clamp(1, _imageMaxWidth)
+        : _imageMaxWidth;
+  }
+
   @override
   Widget build(BuildContext context) {
     if (textOnly) return _buildSlide(context);
     final media = data.media;
     final backdrop = data.backdrop;
     if (media == null && backdrop != null) {
-      // 미리보기는 영상을 틀지 않는다. 대체 배경(이미지·색) 위 가사 + 작은 표시.
+      // 미리보기는 영상을 틀지 않는다. 영상 썸네일 위 가사 + 영상 이름 표시.
+      // 썸네일이 없거나 못 읽으면 대체 배경(색·이미지). 있는지 미리 stat 하지 않는다(썸네일 줄이 매번 그린다).
+      final style = data.style;
       return Stack(
         fit: StackFit.expand,
         children: [
-          _buildSlide(context),
+          LayoutBuilder(
+            builder: (context, constraints) => Image.file(
+              File(BackgroundImageLibrary.thumbnailPath(backdrop.videoPath)),
+              fit: BoxFit.cover,
+              cacheWidth: _cacheWidth(context, constraints),
+              frameBuilder: (_, child, _, _) => Stack(
+                fit: StackFit.expand,
+                children: [
+                  ColoredBox(color: style.backgroundColor),
+                  child,
+                  ColoredBox(
+                    color: Colors.black.withValues(alpha: backdrop.dim),
+                  ),
+                ],
+              ),
+              errorBuilder: (_, _, _) {
+                final image = _backgroundImageFile(style);
+                return ColoredBox(
+                  color: style.backgroundColor,
+                  child: image == null
+                      ? null
+                      : Image.file(image, fit: BoxFit.cover),
+                );
+              },
+            ),
+          ),
+          SlideRenderView(data: data, textOnly: true),
           _mediaBadge(
             Icons.movie_filter_outlined,
-            '배경 영상',
+            p.withoutExtension(
+              BackgroundImageLibrary.displayName(backdrop.videoPath),
+            ),
             covers: false,
           ),
         ],
@@ -62,13 +102,20 @@ class SlideRenderView extends StatelessWidget {
     return Stack(
       fit: StackFit.expand,
       children: [
-        if (covers) const ColoredBox(color: Colors.black) else _buildSlide(context),
+        if (covers)
+          const ColoredBox(color: Colors.black)
+        else
+          _buildSlide(context),
         _mediaBadge(mediaIcon(media.kind), media.label, covers: covers),
       ],
     );
   }
 
-  static Widget _mediaBadge(IconData icon, String label, {required bool covers}) {
+  static Widget _mediaBadge(
+    IconData icon,
+    String label, {
+    required bool covers,
+  }) {
     return Align(
       alignment: covers ? Alignment.center : Alignment.topRight,
       child: FractionallySizedBox(
@@ -117,10 +164,7 @@ class SlideRenderView extends StatelessWidget {
       return LayoutBuilder(
         builder: (context, constraints) {
           // 썸네일이 1920px 원본을 그대로 디코딩하지 않도록 표시 크기로 제한한다.
-          final dpr = MediaQuery.devicePixelRatioOf(context);
-          final cacheWidth = constraints.maxWidth.isFinite
-              ? (constraints.maxWidth * dpr).round().clamp(1, _imageMaxWidth)
-              : _imageMaxWidth;
+          final cacheWidth = _cacheWidth(context, constraints);
           return Container(
             color: style.backgroundColor,
             child: Stack(
