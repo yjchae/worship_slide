@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import '../../praise/data/praise_database.dart';
+import '../domain/bible_text_search.dart';
 import '../domain/bible_verse.dart';
 
 class BibleRepository {
@@ -92,18 +93,76 @@ class BibleRepository {
       whereArgs: whereArgs,
       orderBy: 'verse',
     );
-    return rows
-        .map(
-          (r) => BibleVerse(
-            id: r['id'] as int,
-            bookName: r['book_name'] as String,
-            chapter: r['chapter'] as int,
-            verse: r['verse'] as int,
-            text: r['text'] as String,
-          ),
-        )
-        .toList();
+    return rows.map(_verseFromRow).toList();
   }
+
+  /// 본문에 [query] 의 낱말이 모두 들어간 절 (정경 순서, 앞에서 [limit] 절까지).
+  ///
+  /// 낱말은 공백으로 나누고(AND) 띄어쓰기를 무시하고 찾는다 — 본문의 공백도 빼고 비교한다.
+  /// [books] 가 null 이면 모든 책, 비어 있으면 결과 없음.
+  ///
+  /// FTS 대신 LIKE 인 이유: SQLite FTS 토크나이저는 공백으로 낱말을 나눠 '사랑' 으로
+  /// '사랑하사' 를 못 찾는다(한국어 조사·어미). 한 역본 3만여 절 전체 훑기라 충분히 빠르다.
+  Future<BibleSearchResult> searchVerses({
+    required String version,
+    required String query,
+    List<String>? books,
+    int limit = 200,
+  }) async {
+    final terms = bibleSearchTerms(query);
+    if (terms.isEmpty || (books != null && books.isEmpty)) {
+      return BibleSearchResult.empty;
+    }
+
+    final where = StringBuffer('bible_version = ?');
+    final whereArgs = <Object>[version];
+    if (books != null) {
+      where.write(
+        ' AND book_name IN (${List.filled(books.length, '?').join(',')})',
+      );
+      whereArgs.addAll(books);
+    }
+    for (final term in terms) {
+      where.write(" AND $_compactText LIKE ? ESCAPE '\\'");
+      whereArgs.add('%${_escapeLike(term)}%');
+    }
+
+    final db = await _db.database;
+    final count = await db.rawQuery(
+      'SELECT COUNT(*) AS c FROM bible_verses WHERE $where',
+      whereArgs,
+    );
+    final total = count.first['c'];
+    final rows = await db.query(
+      'bible_verses',
+      where: where.toString(),
+      whereArgs: whereArgs,
+      orderBy: 'id',
+      limit: limit,
+    );
+    return BibleSearchResult(
+      verses: rows.map(_verseFromRow).toList(),
+      totalCount: total is int ? total : (total as num).toInt(),
+    );
+  }
+
+  // 띄어쓰기를 무시하고 비교할 본문 (공백·탭·줄바꿈 제거).
+  static const _compactText =
+      "REPLACE(REPLACE(REPLACE(REPLACE(text, ' ', ''), char(9), ''), char(10), ''), char(13), '')";
+
+  // LIKE 의 와일드카드(%, _)와 escape 문자 자체를 글자 그대로 찾게 한다.
+  static String _escapeLike(String value) => value
+      .replaceAll(r'\', r'\\')
+      .replaceAll('%', r'\%')
+      .replaceAll('_', r'\_');
+
+  static BibleVerse _verseFromRow(Map<String, Object?> r) => BibleVerse(
+    id: r['id'] as int,
+    bookName: r['book_name'] as String,
+    chapter: r['chapter'] as int,
+    verse: r['verse'] as int,
+    text: r['text'] as String,
+  );
 
   /// [version] 의 [bookName] 과 같은 책을 [inVersion] 에서 찾아 준다.
   ///
