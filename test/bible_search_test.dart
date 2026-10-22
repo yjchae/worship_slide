@@ -119,6 +119,30 @@ void main() {
       expect(refs(result), ['창세기 1:1', '요한복음 3:16']);
       expect(result.totalCount, 4);
     });
+    test('NBSP·전각 공백도 띄어쓰기로 보고 무시한다 (DB·강조 같게)', () async {
+      final repository = await openRepository();
+      await repository.importFromJson(
+        '{"요한복음": {"3": {"16": "세상을 이처럼　사랑하사"}}}',
+        version: '특수공백',
+      );
+      final result = await repository.searchVerses(
+        version: '특수공백',
+        query: '이처럼사랑',
+      );
+      expect(refs(result), ['요한복음 3:16']);
+      final text = result.verses.single.text;
+      expect(bibleMatchRanges(text, ['이처럼사랑']), [(4, 10)]);
+    });
+
+    test('결과가 없으면 전체 수도 0', () async {
+      final repository = await openRepository();
+      final result = await repository.searchVerses(
+        version: '개역개정',
+        query: '없는말',
+      );
+      expect(result.verses, isEmpty);
+      expect(result.totalCount, 0);
+    });
   });
 
   group('BibleSearchScope', () {

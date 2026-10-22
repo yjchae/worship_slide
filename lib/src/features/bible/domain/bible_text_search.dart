@@ -49,16 +49,21 @@ class BibleSearchResult {
   final int totalCount;
 }
 
-final _whitespace = RegExp(r'\s');
+/// 띄어쓰기로 보고 무시하는 글자. SQL(`BibleRepository`)과 강조(`bibleMatchRanges`)가 같은 목록을 써야
+/// 'DB 에선 걸렸는데 강조가 안 됨'·그 반대가 생기지 않는다.
+/// 공백·탭·줄바꿈 + 일부 성경 JSON 이 낱말 사이에 쓰는 NBSP(U+00A0)·전각 공백(U+3000).
+const bibleIgnoredSpaces = [' ', '\t', '\n', '\r', '\u00A0', '\u3000'];
+
+final _ignoredSpace = RegExp('[${bibleIgnoredSpaces.join()}]');
 
 /// 검색어를 낱말로 나눈다. 낱말끼리는 AND, 각 낱말은 띄어쓰기를 무시하고 찾는다.
 /// 그래서 '이처럼사랑' 과 '이처럼 사랑' 이 둘 다 '이처럼 사랑하사' 에 걸린다.
 List<String> bibleSearchTerms(String query) =>
-    query.split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
+    query.split(_ignoredSpace).where((t) => t.isNotEmpty).toList();
 
 /// 검색할 만한 길이인가 (공백 뺀 글자 2개 이상). 한 글자는 결과가 너무 많다.
 bool isSearchableBibleQuery(String query) =>
-    query.replaceAll(_whitespace, '').length >= 2;
+    query.replaceAll(_ignoredSpace, '').length >= 2;
 
 /// [text] 에서 [terms] 가 걸린 자리(원문 기준 [시작, 끝)). 강조 표시용.
 ///
@@ -68,7 +73,7 @@ List<(int, int)> bibleMatchRanges(String text, List<String> terms) {
   final compact = StringBuffer();
   final originalIndex = <int>[];
   for (var i = 0; i < text.length; i++) {
-    if (_whitespace.hasMatch(text[i])) continue;
+    if (_ignoredSpace.hasMatch(text[i])) continue;
     final lower = text[i].toLowerCase();
     // 소문자로 바꾸며 길이가 달라지는 글자(드묾)는 그대로 둔다 — 원문 위치가 어긋나지 않게.
     compact.write(lower.length == 1 ? lower : text[i]);
@@ -113,9 +118,9 @@ List<(int, int)> bibleMatchRanges(String text, List<String> terms) {
 /// (책, 장) 묶음은 [verses] 에서 처음 나온 순서, 묶음 안은 절 번호 순서.
 /// 장절 검색은 묶음이 늘 하나라 예전과 결과가 같다.
 List<List<BibleVerse>> bibleVersePages(List<BibleVerse> verses, int perPage) {
-  final groups = <String, List<BibleVerse>>{};
+  final groups = <(String, int), List<BibleVerse>>{};
   for (final v in verses) {
-    groups.putIfAbsent('${v.bookName}\u0000${v.chapter}', () => []).add(v);
+    groups.putIfAbsent((v.bookName, v.chapter), () => []).add(v);
   }
   final pages = <List<BibleVerse>>[];
   for (final group in groups.values) {

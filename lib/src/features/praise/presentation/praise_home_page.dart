@@ -5942,7 +5942,10 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
   final Set<int> _selectedVerseIds = {};
   int? _lastSelectedVerseIndex;
   int _versesPerPage = 2;
+  // 장절 검색 중 (본문 검색은 수십 ms 라 진행 표시 없이 옛 결과를 두었다가 바꾼다).
   bool _isSearching = false;
+  // 고른 절을 콘티에 담는 중. 보조 역본을 장마다 읽느라 기다리는 사이 다시 눌러 두 번 담기지 않게.
+  bool _isAddingVerses = false;
   bool _isSyncingBookController = false;
   Timer? _searchDebounce;
 
@@ -5952,7 +5955,9 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
   String? _scopeBook;
   BibleSearchResult _textResult = BibleSearchResult.empty;
   List<String> _textTerms = const [];
-  // 빨리 치는 동안 늦게 끝난 옛 검색이 새 결과를 덮지 않게.
+  // 마지막으로 검색을 건 검색어. 커서만 움직이거나 조합 중인 값은 다시 찾지 않는다.
+  String _queuedTextQuery = '';
+  // 늦게 끝난 옛 검색이 새 결과·다른 화면을 덮지 않게. 올리면 진행 중인 본문 검색이 무효가 된다.
   int _textSearchSeq = 0;
   // 책 입력칸(Autocomplete)은 처음 만들 때만 글자를 받으므로, 밖에서 책을 바꾸면 새로 만든다.
   int _bookFieldRevision = 0;
@@ -5975,6 +5980,7 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
     super.initState();
     _chapterController.addListener(_onBibleInputChanged);
     _verseController.addListener(_onBibleInputChanged);
+    _textQueryController.addListener(_onTextQueryChanged);
     _loadBookNames();
   }
 
@@ -5995,6 +6001,7 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
     _verseController.removeListener(_onBibleInputChanged);
     _chapterController.dispose();
     _verseController.dispose();
+    _textQueryController.removeListener(_onTextQueryChanged);
     _textQueryController.dispose();
     _verseScroll.dispose();
     super.dispose();
@@ -6074,9 +6081,13 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
     });
   }
 
+  // onChanged 가 아니라 listener 다: 한글 조합이 끝날 때는 글자가 그대로라 onChanged 가 다시 안 불려서,
+  // '사랑' 을 치고 멈추면 마지막 글자 '랑' 이 검색되지 않았다. listener 는 조합이 끝날 때도 불린다.
   void _onTextQueryChanged() {
-    // 한글 조합 중에는 찾지 않는다 (글자가 완성되면 다시 불린다).
-    if (_isComposing(_textQueryController.value)) return;
+    final value = _textQueryController.value;
+    if (_isComposing(value) || value.text == _queuedTextQuery) return;
+    _queuedTextQuery = value.text;
+    setState(() {}); // 지우기 버튼 보이기/숨기기
     _searchDebounce?.cancel();
     _searchDebounce = Timer(const Duration(milliseconds: 350), () {
       if (!mounted) return;
@@ -6233,12 +6244,12 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
   void _setMode(_BibleSearchMode mode) {
     if (mode == _mode) return;
     _searchDebounce?.cancel();
+    _textSearchSeq++;
     setState(() {
       _mode = mode;
       _selectedVerseIds.clear();
       _lastSelectedVerseIndex = null;
       _focusVerseId = null;
-      _isSearching = false;
     });
     if (mode == _BibleSearchMode.text) _searchText();
   }
@@ -6256,6 +6267,7 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
   /// 본문 결과 한 절의 장 전체를 장절 검색으로 열고 그 절을 골라 둔다 (앞뒤 문맥 보기).
   Future<void> _openChapter(BibleVerse verse) async {
     _searchDebounce?.cancel();
+    _textSearchSeq++;
     _isSyncingBookController = true;
     _chapterController.text = '${verse.chapter}';
     _verseController.text = '';
@@ -6275,27 +6287,29 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
       _lastSelectedVerseIndex = index;
       _focusVerseId = verse.id;
     });
-    _scrollToFocusedVerse(index);
+    _scrollToFocusedVerse();
   }
 
-  // 목록은 보이는 줄만 만들므로, 대략 그 자리로 먼저 뛴 뒤 만들어진 줄로 정확히 맞춘다.
-  void _scrollToFocusedVerse(int index) {
+  // 목록은 줄을 모두 만들어 두므로(_buildVerseList) 그 절의 줄로 바로 맞출 수 있다.
+  void _scrollToFocusedVerse() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_verseScroll.hasClients) return;
-      const estimatedRowHeight = 44.0;
-      final position = _verseScroll.position;
-      _verseScroll.jumpTo(
-        (index * estimatedRowHeight).clamp(0, position.maxScrollExtent),
-      );
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        final target = _focusVerseKey.currentContext;
-        if (target == null || !target.mounted) return;
-        Scrollable.ensureVisible(target, alignment: 0.3);
-      });
+      final target = _focusVerseKey.currentContext;
+      if (target == null || !target.mounted) return;
+      Scrollable.ensureVisible(target, alignment: 0.3);
     });
   }
 
   Future<void> _addSelected() async {
+    if (_isAddingVerses) return;
+    setState(() => _isAddingVerses = true);
+    try {
+      await _addSelectedVerses();
+    } finally {
+      if (mounted) setState(() => _isAddingVerses = false);
+    }
+  }
+
+  Future<void> _addSelectedVerses() async {
     final version = _selectedVersion;
     if (_selectedVerseIds.isEmpty) return;
     if (version == null) return;
@@ -6308,10 +6322,10 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
     final pages = bibleVersePages(selected, _versesPerPage);
 
     // 보조 역본 본문을 절 번호로 찾아 쓸 수 있게 장(章)마다 한 번씩 통째로 읽는다.
-    final subTextsByChapter = <String, Map<int, String>?>{};
+    final subTextsByChapter = <(String, int), Map<int, String>?>{};
     for (final page in pages) {
       final first = page.first;
-      final key = '${first.bookName}\u0000${first.chapter}';
+      final key = (first.bookName, first.chapter);
       if (!subTextsByChapter.containsKey(key)) {
         subTextsByChapter[key] = await _loadSubVerses(
           version,
@@ -6516,7 +6530,7 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
           const SizedBox(height: 8),
           // 결과 목록
           Expanded(
-            child: _isSearching
+            child: _isSearching && !_isTextMode
                 ? const Center(child: CircularProgressIndicator())
                 : shown.isEmpty
                 ? Center(
@@ -6528,13 +6542,7 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
                       ),
                     ),
                   )
-                : ListView.separated(
-                    controller: _verseScroll,
-                    itemCount: shown.length,
-                    separatorBuilder: (_, _) => const Divider(height: 1),
-                    itemBuilder: (context, index) =>
-                        _buildVerseTile(shown[index], index),
-                  ),
+                : _buildVerseList(shown),
           ),
           // 추가 버튼
           if (shown.isNotEmpty) ...[
@@ -6572,7 +6580,9 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
                 const SizedBox(width: 10),
                 Expanded(
                   child: FilledButton.icon(
-                    onPressed: _selectedVerseIds.isEmpty ? null : _addSelected,
+                    onPressed: _selectedVerseIds.isEmpty || _isAddingVerses
+                        ? null
+                        : _addSelected,
                     icon: const Icon(Icons.add_rounded),
                     label: Text(
                       _selectedVerseIds.isEmpty
@@ -6738,14 +6748,11 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
                       tooltip: '지우기',
                       onPressed: () {
                         _textQueryController.clear();
+                        _searchDebounce?.cancel();
                         _searchText();
                       },
                     ),
             ),
-            onChanged: (_) {
-              setState(() {}); // 지우기 버튼 보이기/숨기기
-              _onTextQueryChanged();
-            },
             onSubmitted: (_) {
               _searchDebounce?.cancel();
               _searchText();
@@ -6780,7 +6787,8 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
           Expanded(
             child: DropdownButtonFormField<String>(
               // initialValue 는 처음 만들 때만 읽으므로 역본이 바뀌면 새로 만든다.
-              key: ValueKey('scope-book/$_selectedVersion'),
+              // 역본이 바뀌어 고른 책이 비워질 때도(_fixScopeForBooks) 새로 만들어야 옛 값이 안 남는다.
+              key: ValueKey('scope-book/$_selectedVersion/$_scopeBook'),
               initialValue: _scopeBook,
               isExpanded: true,
               isDense: true,
@@ -6804,6 +6812,24 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
           ),
         ],
       ],
+    );
+  }
+
+  /// 절 목록. ListView 처럼 보이는 줄만 만들지 않고 모두 만든다 — 그래야 '이 장 보기' 가 줄 높이를
+  /// 어림하지 않고 그 절로 정확히 스크롤한다(감긴 줄이 많은 긴 장에서 어림이 크게 빗나갔다).
+  /// 한 장은 많아야 176절(시 119편), 본문 결과는 200절까지라 다 만들어도 가볍다.
+  Widget _buildVerseList(List<BibleVerse> verses) {
+    return SingleChildScrollView(
+      controller: _verseScroll,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (var i = 0; i < verses.length; i++) ...[
+            if (i > 0) const Divider(height: 1),
+            _buildVerseTile(verses[i], i),
+          ],
+        ],
+      ),
     );
   }
 

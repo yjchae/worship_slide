@@ -127,28 +127,28 @@ class BibleRepository {
       whereArgs.add('%${_escapeLike(term)}%');
     }
 
+    // 전체 수는 창 함수로 같은 훑기에서 센다 (LIMIT 전에 계산된다). COUNT 를 따로 돌리면
+    // 3만여 절을 두 번 훑는다. 창 함수는 SQLite 3.25+ — sqlite3 패키지가 SQLite 를 앱에 같이 싣는다.
     final db = await _db.database;
-    final count = await db.rawQuery(
-      'SELECT COUNT(*) AS c FROM bible_verses WHERE $where',
-      whereArgs,
+    final rows = await db.rawQuery(
+      'SELECT *, COUNT(*) OVER () AS total FROM bible_verses '
+      'WHERE $where ORDER BY id LIMIT ?',
+      [...whereArgs, limit],
     );
-    final total = count.first['c'];
-    final rows = await db.query(
-      'bible_verses',
-      where: where.toString(),
-      whereArgs: whereArgs,
-      orderBy: 'id',
-      limit: limit,
-    );
+    if (rows.isEmpty) return BibleSearchResult.empty;
+    final total = rows.first['total'];
     return BibleSearchResult(
       verses: rows.map(_verseFromRow).toList(),
       totalCount: total is int ? total : (total as num).toInt(),
     );
   }
 
-  // 띄어쓰기를 무시하고 비교할 본문 (공백·탭·줄바꿈 제거).
-  static const _compactText =
-      "REPLACE(REPLACE(REPLACE(REPLACE(text, ' ', ''), char(9), ''), char(10), ''), char(13), '')";
+  // 띄어쓰기를 무시하고 비교할 본문: bibleIgnoredSpaces 를 모두 뺀다.
+  // REPLACE(REPLACE(text, char(32), ''), char(9), '') ... 꼴.
+  static final _compactText = bibleIgnoredSpaces.fold(
+    'text',
+    (expr, space) => "REPLACE($expr, char(${space.codeUnitAt(0)}), '')",
+  );
 
   // LIKE 의 와일드카드(%, _)와 escape 문자 자체를 글자 그대로 찾게 한다.
   static String _escapeLike(String value) => value
