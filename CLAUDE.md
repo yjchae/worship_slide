@@ -322,7 +322,7 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   - 저장은 `worship_conti_items.background` 한 칸(JSON, DB version 11)
 - **배경 영상** (가사 뒤 반복 재생, '항목 배경' 다이얼로그의 '배경 영상'): `SlideBackground.videoPath`·`videoDim`
   (JSON `video_path`·`video_dim`, 마이그레이션 없음). 영상은 `BackgroundImageLibrary.videos()`(`Application Support/background_videos/`,
-  mp4·m4v·mov) 에서 고른다. **발표 창에서만** 튼다 — 미리보기·PPTX 는 배경 이미지(없으면 색)를 쓰고, `.wsconti`·클라우드 콘티는
+  mp4·m4v·mov) 에서 고른다. **발표 창에서만** 튼다 — 미리보기는 영상 썸네일(`BackgroundImageLibrary.thumbnail`, 없으면 만든다)에 어둡기·가사를 얹고 영상 파일이 없으면 평소 슬라이드, PPTX 는 배경 이미지(없으면 색)를 쓰고, `.wsconti`·클라우드 콘티는
   `mapBackgroundPaths` 가 영상 칸을 지운다(보낼 때·받을 때 둘 다). PPT 이미지 페이지·자체 미디어가 있는 페이지에는 안 깐다(`_backdropFor`).
   - Windows 슬라이드는 부모 창 GDI, 미디어 레이어는 그 위 WebView2 자식 창이라 GDI 글자를 영상 위에 못 그린다. 그래서 **가사만
     투명 PNG 로 구워**(`LyricsOverlayRenderer`, 미리보기와 같은 `SlideRenderView(textOnly: true)` 를 화면 밖에서 1920x1080 으로)

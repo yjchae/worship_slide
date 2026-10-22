@@ -103,7 +103,13 @@ class BackgroundImageLibrary {
 
   /// [video] 의 썸네일 경로. 없으면 OS(macOS AVFoundation·Windows 탐색기 썸네일)로 만든다.
   /// 못 만들면(코덱 없음 등) null — 격자는 아이콘으로 보인다. 실패는 이번 실행 동안 기억한다.
-  static Future<String?> thumbnail(String video) async {
+  /// 미리보기·격자가 같은 영상을 동시에 부르면 하나만 만든다(같은 `.part` 에 둘이 쓰지 않게).
+  static Future<String?> thumbnail(String video) => _thumbnailJobs[video] ??=
+      _makeThumbnail(video).whenComplete(() => _thumbnailJobs.remove(video));
+
+  static final Map<String, Future<String?>> _thumbnailJobs = {};
+
+  static Future<String?> _makeThumbnail(String video) async {
     final out = File(thumbnailPath(video));
     if (await out.exists()) {
       if (await out.length() > 0) return out.path;
