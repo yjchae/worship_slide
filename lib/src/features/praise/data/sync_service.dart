@@ -255,7 +255,7 @@ class SyncService {
       if (dirs == null) return null;
       var merged = false;
       try {
-        final read = await _readSnapshots(dirs.store, dirs.remote);
+        final read = await _readSnapshots(dirs.store, _withOwn(dirs));
         final result = await _songs.merge(read.snapshots);
         merged = true;
         await _writeOwn(dirs.store, dirs.own);
@@ -296,7 +296,7 @@ class SyncService {
     final dirs = await _prepare();
     if (dirs == null) return null;
     try {
-      final read = await _readSnapshots(dirs.store, dirs.remote);
+      final read = await _readSnapshots(dirs.store, _withOwn(dirs));
       final songs = await _songs.preview(read.snapshots);
       final localChanges = !await _ownFileUpToDate(dirs.store, dirs.own);
       final local = await _contis.contisByUid();
@@ -400,9 +400,18 @@ class SyncService {
     return store;
   }
 
-  static List<String> _peerNames(List<SyncSnapshot> snapshots) => [
-    for (final s in snapshots) s.deviceName.isEmpty ? s.deviceId : s.deviceName,
+  List<String> _peerNames(List<SyncSnapshot> snapshots) => [
+    for (final s in snapshots)
+      if (s.deviceId != deviceId)
+        s.deviceName.isEmpty ? s.deviceId : s.deviceName,
   ];
+
+  /// 합칠 파일: 다른 PC 파일 + **내 파일도**. 내 파일이 정말 내 것이면 지난 상태라 합쳐도 바뀌는 게
+  /// 없다. 하지만 기기 id 가 겹친 다른 설치본(한 PC 에 앱을 두 군데 풀면 DB 는 실행 파일 옆이라 따로인데
+  /// 설정은 Application Support 하나라 같다)이 썼을 수 있다 — 그때 빼고 덮어쓰면 그쪽의 추가·삭제가 사라진다.
+  static List<SyncEntry> _withOwn(
+    ({SyncStore store, SyncEntry? own, List<SyncEntry> remote}) dirs,
+  ) => [...dirs.remote, ?dirs.own];
 
   /// 저장소를 확인하고 내 파일·다른 PC 파일을 찾는다. 못 쓰면 null(상태에 오류).
   Future<({SyncStore store, SyncEntry? own, List<SyncEntry> remote})?>
@@ -468,8 +477,8 @@ class SyncService {
     }
   }
 
-  /// 다른 PC 파일을 받아 푼다. 곡이 수천 곡이면 파일마다 몇 MB 라서 화면 스레드가
-  /// 멈추지 않게 별도 isolate 에서 푼다. 내 기기 id 로 된 파일은 뺀다.
+  /// 동기화 파일을 받아 푼다. 곡이 수천 곡이면 파일마다 몇 MB 라서 화면 스레드가
+  /// 멈추지 않게 별도 isolate 에서 푼다. 내 기기 id 로 된 파일도 합친다([_withOwn]).
   Future<({List<SyncSnapshot> snapshots, int unreadable})> _readSnapshots(
     SyncStore store,
     List<SyncEntry> entries,
@@ -491,7 +500,7 @@ class SyncService {
     var unreadable = 0;
     for (final r in read) {
       if (r.snapshot != null) {
-        if (r.snapshot!.deviceId != deviceId) result.add(r.snapshot!);
+        result.add(r.snapshot!);
       } else if (r.error != null) {
         // 받다가 끊겼거나 파일이 깨졌다.
         unreadable += 1;

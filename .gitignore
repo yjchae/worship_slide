@@ -66,3 +66,6 @@ tmp_sample/
 
 # 동기화 키 만들 때 받는 OAuth 클라이언트 파일 (git 에 올리지 않는다)
 client_secret*.json
+
+# 사무실 팀 작업 기록
+.claude-office/

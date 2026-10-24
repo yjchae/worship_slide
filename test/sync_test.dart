@@ -1057,6 +1057,124 @@ void main() {
       expect(await a.contis.listContis(), isEmpty);
     });
   });
+
+  group('지운 곡이 다른 PC 에서 안 지워짐', () {
+    /// 같은 DB·설정 폴더로 프로그램을 다시 켠다(새 SyncService).
+    Future<_Pc> restart(_Pc pc, String name) async {
+      final db = await databaseFactoryFfi.openDatabase(
+        p.join(pc.dir.path, 'a.db'),
+      );
+      addTearDown(db.close);
+      final database = PraiseDatabase.forTesting(db);
+      final contis = WorshipContiRepository(
+        database: database,
+        supportDirectory: () async => pc.dir,
+      );
+      final sync = SyncService(
+        songs: SongSyncRepository(database: database),
+        contis: contis,
+        settingsDirectory: () async => pc.dir,
+        deviceName: name,
+        clock: () => now,
+      );
+      addTearDown(sync.dispose);
+      await sync.load();
+      await sync.useStore(store(shared));
+      final repo = PraiseRepository(database: database)
+        ..onSongsChanged = sync.markLocalChanged;
+      return _Pc(repo, contis, sync, pc.dir);
+    }
+
+    test('따로 가져온 곡을 A 에서 지우면 B 를 다시 켜고 동기화할 때 지워진다', () async {
+      final a = await newPc('A', join: false);
+      final b = await newPc('B', join: false);
+      // uid 크기 순서가 양쪽 다 나오게 여러 곡.
+      final all = [for (var i = 0; i < 12; i++) song('곡$i', '가사$i')];
+      for (final pc in [a, b]) {
+        await pc.repo.addNewSongs(all);
+      }
+      for (final pc in [a, b]) {
+        await pc.sync.useStore(store(shared));
+      }
+      await syncAll([a, b]);
+      expect(await b.songs(), hasLength(12));
+
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      for (final s in (await a.songs()).where((s) => s.title.length == 2)) {
+        await a.repo.deleteSongsByIds([s.id!]);
+      }
+      expect(await a.songs(), hasLength(2));
+      await a.sync.syncSongs();
+
+      final b2 = await restart(b, 'B');
+      final check = await b2.sync.checkForUpdates();
+      expect(check!.songs.deletedCount, 10);
+      final result = await b2.sync.syncSongs();
+      expect(result!.deletedCount, 10);
+      expect(await b2.titles(), ['곡10:가사10', '곡11:가사11']);
+    });
+
+    test('설정 폴더를 같이 쓰는 두 설치본(DB 는 따로)도 지운 곡이 넘어간다', () async {
+      // 한 PC 에 앱을 두 군데 풀어 둔 경우: DB 는 실행 파일 옆이라 따로지만 설정(기기 id)은
+      // Application Support 하나라 같다. 그래도 서로의 삭제·추가를 받아야 한다.
+      final a = await newPc('A');
+      final bDir = await Directory(p.join(root.path, 'B-db')).create();
+      Future<_Pc> openB() async {
+        final db = await databaseFactoryFfi.openDatabase(
+          p.join(bDir.path, 'a.db'),
+        );
+        addTearDown(db.close);
+        if (await db.getVersion() == 0) {
+          await createPraiseSchema(db);
+          await db.setVersion(1);
+        }
+        final database = PraiseDatabase.forTesting(db);
+        final sync = SyncService(
+          songs: SongSyncRepository(database: database),
+          contis: WorshipContiRepository(
+            database: database,
+            supportDirectory: () async => a.dir,
+          ),
+          settingsDirectory: () async => a.dir,
+          deviceName: 'B',
+          clock: () => now,
+        );
+        addTearDown(sync.dispose);
+        await sync.load();
+        await sync.useStore(store(shared));
+        final repo = PraiseRepository(database: database)
+          ..onSongsChanged = sync.markLocalChanged;
+        return _Pc(
+          repo,
+          WorshipContiRepository(database: database),
+          sync,
+          a.dir,
+        );
+      }
+
+      await a.repo.insertSong(song('은혜', '가사'));
+      await a.repo.insertSong(song('축복', '가사'));
+      await a.sync.syncSongs();
+      final b = await openB();
+      await b.sync.syncSongs();
+      expect(await b.titles(), ['은혜:가사', '축복:가사']);
+
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      final grace = (await a.songs()).firstWhere((s) => s.title == '은혜');
+      await a.repo.deleteSongsByIds([grace.id!]);
+      await a.sync.syncSongs();
+
+      final b2 = await openB();
+      final check = await b2.sync.checkForUpdates();
+      expect(check!.songs.deletedCount, 1);
+      final result = await b2.sync.syncSongs();
+      expect(result!.deletedCount, 1);
+      expect(await b2.titles(), ['축복:가사']);
+      // B 가 다시 쓴 파일이 A 의 삭제를 되돌리지 않는다.
+      await a.sync.syncSongs();
+      expect(await a.titles(), ['축복:가사']);
+    });
+  });
 }
 
 /// 드라이브 저장소처럼 isolate 로 보낼 수 없는 것(http 클라이언트 대신 포트)을 든다.
