@@ -46,51 +46,73 @@ class SlideRenderView extends StatelessWidget {
         : _imageMaxWidth;
   }
 
+  /// 배경 영상마다 (영상 파일이 있는지, 썸네일 경로). 썸네일 줄이 매번 그리므로 영상마다 한 번만 본다.
+  // ponytail: 실행 동안 기억한다 — 발표 중 영상을 지우면 미리보기는 앱을 다시 켤 때까지 영상으로 보인다
+  static final Map<String, Future<(bool, String?)>> _backdropThumbs = {};
+
+  static Future<(bool, String?)> _probeBackdrop(String video) async {
+    if (!await File(video).exists()) return (false, null);
+    return (true, await BackgroundImageLibrary.thumbnail(video));
+  }
+
   @override
   Widget build(BuildContext context) {
     if (textOnly) return _buildSlide(context);
     final media = data.media;
     final backdrop = data.backdrop;
     if (media == null && backdrop != null) {
-      // 미리보기는 영상을 틀지 않는다. 영상 썸네일 위 가사 + 영상 이름 표시.
-      // 썸네일이 없거나 못 읽으면 대체 배경(색·이미지). 있는지 미리 stat 하지 않는다(썸네일 줄이 매번 그린다).
-      final style = data.style;
+      // 미리보기는 영상을 틀지 않는다. 바닥은 평소 슬라이드(= 영상이 없을 때 발표 창이 내는 화면)이고,
+      // 영상이 있으면 그 위에 썸네일 + 어둡기 + 가사 + 영상 이름을 덮는다. 썸네일을 다 읽기 전에도 바닥이 보인다.
+      final video = backdrop.videoPath;
       return Stack(
         fit: StackFit.expand,
         children: [
-          LayoutBuilder(
-            builder: (context, constraints) => Image.file(
-              File(BackgroundImageLibrary.thumbnailPath(backdrop.videoPath)),
-              fit: BoxFit.cover,
-              cacheWidth: _cacheWidth(context, constraints),
-              frameBuilder: (_, child, _, _) => Stack(
+          _buildSlide(context),
+          FutureBuilder(
+            future: _backdropThumbs[video] ??= _probeBackdrop(video),
+            builder: (context, snapshot) {
+              final (exists, thumb) = snapshot.data ?? (false, null);
+              if (!exists) return const SizedBox.shrink();
+              return Stack(
                 fit: StackFit.expand,
                 children: [
-                  ColoredBox(color: style.backgroundColor),
-                  child,
-                  ColoredBox(
-                    color: Colors.black.withValues(alpha: backdrop.dim),
+                  if (thumb != null) ...[
+                    LayoutBuilder(
+                      builder: (context, constraints) => Image.file(
+                        File(thumb),
+                        fit: BoxFit.cover,
+                        // ponytail: 폭 기준 디코딩이라 16:9 보다 넓은 영상은 cover 로 키워져 조금 흐리다
+                        cacheWidth: _cacheWidth(context, constraints),
+                        frameBuilder: (_, child, frame, sync) =>
+                            frame == null && !sync
+                            ? const SizedBox.shrink()
+                            : Stack(
+                                fit: StackFit.expand,
+                                children: [
+                                  ColoredBox(color: data.style.backgroundColor),
+                                  child,
+                                  ColoredBox(
+                                    color: Colors.black.withValues(
+                                      alpha: backdrop.dim,
+                                    ),
+                                  ),
+                                  SlideRenderView(data: data, textOnly: true),
+                                ],
+                              ),
+                        errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                      ),
+                    ),
+                  ],
+                  _mediaBadge(
+                    Icons.movie_filter_outlined,
+                    p.withoutExtension(
+                      BackgroundImageLibrary.displayName(video),
+                    ),
+                    covers: false,
                   ),
                 ],
-              ),
-              errorBuilder: (_, _, _) {
-                final image = _backgroundImageFile(style);
-                return ColoredBox(
-                  color: style.backgroundColor,
-                  child: image == null
-                      ? null
-                      : Image.file(image, fit: BoxFit.cover),
-                );
-              },
-            ),
-          ),
-          SlideRenderView(data: data, textOnly: true),
-          _mediaBadge(
-            Icons.movie_filter_outlined,
-            p.withoutExtension(
-              BackgroundImageLibrary.displayName(backdrop.videoPath),
-            ),
-            covers: false,
+              );
+            },
           ),
         ],
       );

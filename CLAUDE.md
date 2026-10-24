@@ -21,6 +21,7 @@ flutter test test/sync_test.dart      # 찬양 동기화·클라우드 콘티(�
 flutter test test/drive_sync_store_test.dart # 구글 드라이브 저장소(가짜 Drive 서버)·접속 키
 flutter test test/db_backup_test.dart # 스키마 올리기 전 DB 자동 백업
 flutter test test/bible_search_test.dart # 성경 본문 검색(띄어쓰기 무시·범위·강조·페이지 나누기)
+flutter test test/move_pages_test.dart # 발표 보기 페이지 옮기기·나누기
 python3 python/test_render.py    # render 명령 self-check (LibreOffice 없으면 skip)
 python3 python/test_animation.py # 애니메이션 단계 펼치기 self-check (LibreOffice 불필요)
 python3 python/test_export_background.py # 항목별 배경 오버라이드 self-check (LibreOffice 불필요)
@@ -60,16 +61,22 @@ lib/
       sync_store.dart                -- 동기화 저장소 SyncStore(폴더 하나에 이름으로 파일) + FolderSyncStore(테스트용)
       drive_sync_store.dart          -- DriveSyncStore(Drive REST v3) + DriveKey(접속 키 `WS1-…`)
       sync_service.dart              -- 동기화 설정(song_sync.json)·접속 키(sync_key.txt)·찬양 동기화 버튼·켤 때 1회 확인·클라우드 콘티
-      python_bridge.dart             -- Process.run으로 ppt_tool 실행 (import / render / export)
+      python_bridge.dart             -- Process.run으로 ppt_tool 실행 (import / render / export / sheet / sheet-finish)
       export_style_store.dart        -- 스타일을 Application Support/export_style.json에 저장
       offering_design_store.dart     -- 헌금송 기본 디자인 → offering_design.json
       offering_background_composer.dart -- 헌금송 디자인을 배경 PNG 한 장으로 굽는다
       background_image_library.dart  -- 공통 배경 이미지 모음(등록 = 앱 폴더로 복사). 헌금송·항목 배경이 같이 쓴다
+      atomic_file.dart               -- 임시 파일 → 이름 바꾸기 쓰기 (동기화·설정 파일 공용)
+      fnv_hash.dart                  -- FNV-1a 16자리 hex (캐시·공유 파일 이름)
+      screen_choice_store.dart       -- 발표·싱어 창 모니터 선택 → screen_choice.json
+      sermon_design_store.dart       -- 설교 제목 페이지 마지막 디자인 → sermon_design.json
+      singer_web_server.dart         -- 휴대폰 싱어·리모컨 HTTP 서버(SSE) + cloudflared 임시 터널
       app_logger.dart                -- Application Support/logs/app.log (앱 내 "로그 보기"용)
       font_library.dart              -- 내장 무료 폰트를 Application Support/fonts 로 복사해 올린다
       source_file_watcher.dart       -- 바깥 프로그램에서 연 원본 PPT 가 저장되는지 수정 시각·크기로 지켜본다
       libreoffice_installer.dart     -- LibreOffice 설치 확인 + winget(Windows)·Homebrew(macOS) 자동 설치
     domain/
+      slide_media.dart               -- SlideMedia (동영상·음악·유튜브 페이지)
       praise_song.dart               -- PraiseSong; 페이지 구분자는 빈 줄(\n\n)
       export_style.dart              -- ExportStyle (가사/성경 각각의 색·크기·정렬·제목 표시 등)
       slide_background.dart          -- SlideBackground (콘티 항목 하나만 배경을 다르게)
@@ -77,7 +84,7 @@ lib/
       staging_item.dart              -- sealed StagingItem: Song / Bible / Image / Blank
       worship_conti.dart             -- 콘티 모델
     presentation/
-      praise_home_page.dart          -- 단일 화면(5,700줄). 검색·성경·디자인·콘티·발표 제어 전부 여기
+      praise_home_page.dart          -- 단일 화면(약 12,400줄). 검색·성경·디자인·콘티·발표 제어 전부 여기
       slide_page_data.dart           -- 발표 창에 보낼 한 페이지의 JSON 표현
       singer_view_data.dart          -- 싱어 화면에 보낼 현재+다음 페이지 JSON 표현
       slide_render_view.dart         -- 미리보기/썸네일용 Flutter 슬라이드 렌더러 (textOnly = 가사 PNG 굽기용)
@@ -85,6 +92,9 @@ lib/
       lyrics_overlay_renderer.dart   -- 배경 영상 위에 얹을 가사 투명 PNG 굽기(화면 밖 위젯 렌더)
       presentation_timer.dart        -- 발표 경과 시간(기준 시각 방식). 발표 보기 시계·싱어 화면이 같이 본다
       offering_dialog.dart           -- 헌금송 디자인 등록 / 항목에 적용(높낮이) 다이얼로그
+      media_player_html.dart         -- 발표 창 미디어 레이어 페이지 HTML·페이드 JS (mediaPlayerHtml)
+      background_image_gallery.dart  -- 배경 이미지·영상 모음 격자 UI
+      libreoffice_install_dialog.dart -- LibreOffice·cloudflared 자동 설치 안내창
       offering_overlay_painter.dart  -- 헌금송 띠(라인 + 헌금 + 계좌) painter. 미리보기·PNG 공용
       sync_dialog.dart               -- 동기화 설정 (가져오기 메뉴 '찬양·콘티 동기화'·상태 줄): 접속 키 넣기·찬양 동기화 버튼
       cloud_conti_dialog.dart        -- 클라우드 콘티 목록: 내려받기(이미 있으면 바꾸기)·클라우드에서 지우기
@@ -180,7 +190,7 @@ macOS `didChangeScreenParametersNotification` + `NSScreen.displayID`, Windows `W
     다음 페이지 글자는 현재 페이지 글자의 0.75 배를 넘지 않는다(`fitAll`) — 짧은 다음 가사가 현재보다 크게 보이지 않게
   - `note`·`zoom` 은 `_sendSingerView` 가 얹고, 서버가 싱어 키 쪽에서는 뺀다(`remoteOnlyKeys`) — 싱어 QR 로는 메모를 못 본다
 
-### Python (`python/ppt_tool.py`, 약 900줄)
+### Python (`python/ppt_tool.py`, 약 3,100줄)
 
 Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
 
@@ -336,7 +346,7 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   - 저장은 `worship_conti_items.background` 한 칸(JSON, DB version 11)
 - **배경 영상** (가사 뒤 반복 재생, '항목 배경' 다이얼로그의 '배경 영상'): `SlideBackground.videoPath`·`videoDim`
   (JSON `video_path`·`video_dim`, 마이그레이션 없음). 영상은 `BackgroundImageLibrary.videos()`(`Application Support/background_videos/`,
-  mp4·m4v·mov) 에서 고른다. **발표 창에서만** 튼다 — 미리보기·PPTX 는 배경 이미지(없으면 색)를 쓰고, `.wsconti`·클라우드 콘티는
+  mp4·m4v·mov) 에서 고른다. **발표 창에서만** 튼다 — 미리보기는 영상 썸네일(`BackgroundImageLibrary.thumbnail`, 없으면 만든다)에 어둡기·가사를 얹고 영상 파일이 없으면 평소 슬라이드, PPTX 는 배경 이미지(없으면 색)를 쓰고, `.wsconti`·클라우드 콘티는
   `mapBackgroundPaths` 가 영상 칸을 지운다(보낼 때·받을 때 둘 다). PPT 이미지 페이지·자체 미디어가 있는 페이지에는 안 깐다(`_backdropFor`).
   - Windows 슬라이드는 부모 창 GDI, 미디어 레이어는 그 위 WebView2 자식 창이라 GDI 글자를 영상 위에 못 그린다. 그래서 **가사만
     투명 PNG 로 구워**(`LyricsOverlayRenderer`, 미리보기와 같은 `SlideRenderView(textOnly: true)` 를 화면 밖에서 1920x1080 으로)
@@ -679,12 +689,17 @@ ESC = 고르기 취소, ⌘/Ctrl+C·V = 복사·붙여 넣기(`_handleEditKey`).
 
 ## 의존성
 
-- Dart: `file_picker`, `sqflite_common_ffi`, `path`, `path_provider`, `package_info_plus`, `http`, `qr_flutter`
+- Dart: `file_picker`, `sqflite_common_ffi`, `path`, `path_provider`, `package_info_plus`, `http`, `qr_flutter`, `cupertino_icons`
+- Windows 네이티브: NuGet `Microsoft.Web.WebView2`(CMake FetchContent, 미디어 레이어)
 - Python: `python-pptx`, `pymupdf`, `pyinstaller`, `pillow`(악보 오선 찾기)
 - 시스템: LibreOffice(`soffice`) — `.ppt` 임포트와 PPT 이미지 렌더에 필요 (없으면 해당 기능만 비활성)
 - 시스템: Tesseract OCR — 악보 가사 추출에 필요. 한국어는 `kor` 언어 데이터까지 (없으면 해당 기능만 비활성)
+- 시스템: `cloudflared` — 휴대폰 화면 바깥 망 주소 (선택). OS OCR(macOS Vision·Windows.Media.Ocr)이 Tesseract 보다 먼저
+- 라이선스 목록은 `THIRD_PARTY_NOTICES.md`. **의존성·글꼴을 더하면 거기도 적는다** (PyMuPDF 는 AGPL-3.0)
 
 ## 기타
 
 - `make_ppt_guide.py`, `make_user_guide.py` — 사용자 가이드 pptx/docx 생성 스크립트 (앱과 무관)
+- `docs/` — GitHub Pages 홈(`index.md`)·개인정보처리방침(`privacy.md`, OAuth 동의 화면 게시용)·사용 설명서·동기화 키 안내
+- `scripts/make_sync_key.py` — 동기화 접속 키 만들기 (관리자용)
 - `AGENTS.md` — 이 파일을 가리키는 포인터
