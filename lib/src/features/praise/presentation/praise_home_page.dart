@@ -15,6 +15,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../../../app_colors.dart';
 import '../../../app_theme.dart';
 import '../../../features/bible/data/bible_repository.dart';
+import '../../../features/bible/domain/bible_text_search.dart';
 import '../../../features/bible/domain/bible_verse.dart';
 import '../../../features/update/update_service.dart';
 import '../data/app_logger.dart';
@@ -5910,11 +5911,23 @@ class _BibleSearchPanel extends StatefulWidget {
   State<_BibleSearchPanel> createState() => _BibleSearchPanelState();
 }
 
+/// 성경 검색 방식: 책·장·절로 찾기 / 본문 낱말로 찾기.
+enum _BibleSearchMode {
+  reference('장절'),
+  text('본문');
+
+  const _BibleSearchMode(this.label);
+  final String label;
+}
+
 class _BibleSearchPanelState extends State<_BibleSearchPanel>
     with AutomaticKeepAliveClientMixin {
   // 탭 전환 시 상태 유지
   @override
   bool get wantKeepAlive => true;
+
+  // 본문 검색 결과는 앞에서부터 이만큼만 보여 준다 (흔한 낱말은 수천 절).
+  static const _textResultLimit = 200;
 
   bool _isLoading = false;
   bool _hasData = false;
@@ -5929,15 +5942,45 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
   final Set<int> _selectedVerseIds = {};
   int? _lastSelectedVerseIndex;
   int _versesPerPage = 2;
+  // 장절 검색 중 (본문 검색은 수십 ms 라 진행 표시 없이 옛 결과를 두었다가 바꾼다).
   bool _isSearching = false;
+  // 고른 절을 콘티에 담는 중. 보조 역본을 장마다 읽느라 기다리는 사이 다시 눌러 두 번 담기지 않게.
+  bool _isAddingVerses = false;
   bool _isSyncingBookController = false;
   Timer? _searchDebounce;
+
+  _BibleSearchMode _mode = _BibleSearchMode.reference;
+  final TextEditingController _textQueryController = TextEditingController();
+  BibleSearchScope _scope = BibleSearchScope.all;
+  String? _scopeBook;
+  BibleSearchResult _textResult = BibleSearchResult.empty;
+  List<String> _textTerms = const [];
+  // 마지막으로 검색을 건 검색어. 커서만 움직이거나 조합 중인 값은 다시 찾지 않는다.
+  String _queuedTextQuery = '';
+  // 늦게 끝난 옛 검색이 새 결과·다른 화면을 덮지 않게. 올리면 진행 중인 본문 검색이 무효가 된다.
+  int _textSearchSeq = 0;
+  // 책 입력칸(Autocomplete)은 처음 만들 때만 글자를 받으므로, 밖에서 책을 바꾸면 새로 만든다.
+  int _bookFieldRevision = 0;
+  final ScrollController _verseScroll = ScrollController();
+  final GlobalKey _focusVerseKey = GlobalKey();
+  // '이 장 보기' 로 넘어왔을 때 보여 줄 절.
+  int? _focusVerseId;
+
+  bool get _isTextMode => _mode == _BibleSearchMode.text;
+
+  /// 지금 목록에 보이는 절 (장절 결과 / 본문 결과).
+  List<BibleVerse> get _shownVerses =>
+      _isTextMode ? _textResult.verses : _verses;
+
+  bool get _canSplitTestaments =>
+      BibleSearchScope.canSplitTestaments(_bookNames);
 
   @override
   void initState() {
     super.initState();
     _chapterController.addListener(_onBibleInputChanged);
     _verseController.addListener(_onBibleInputChanged);
+    _textQueryController.addListener(_onTextQueryChanged);
     _loadBookNames();
   }
 
@@ -5958,6 +6001,9 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
     _verseController.removeListener(_onBibleInputChanged);
     _chapterController.dispose();
     _verseController.dispose();
+    _textQueryController.removeListener(_onTextQueryChanged);
+    _textQueryController.dispose();
+    _verseScroll.dispose();
     super.dispose();
   }
 
@@ -5992,11 +6038,24 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
         _selectedVersion = selectedVersion;
         _bookNames = books;
         _selectedBook = selectedBook;
+        _fixScopeForBooks();
       });
       _setBookText(selectedBook ?? '');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+    if (_isTextMode) _searchText();
+  }
+
+  /// 역본이 바뀌어 지금 범위가 뜻이 없어졌으면 맞춘다 (setState 안에서 부른다).
+  void _fixScopeForBooks() {
+    if (_scopeBook != null && !_bookNames.contains(_scopeBook)) {
+      _scopeBook = null;
+    }
+    final testament =
+        _scope == BibleSearchScope.oldTestament ||
+        _scope == BibleSearchScope.newTestament;
+    if (testament && !_canSplitTestaments) _scope = BibleSearchScope.all;
   }
 
   void _onBibleInputChanged({bool isComposing = false}) {
@@ -6019,6 +6078,20 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
     _searchDebounce = Timer(const Duration(milliseconds: 350), () {
       if (!mounted) return;
       _search(showMessages: false);
+    });
+  }
+
+  // onChanged 가 아니라 listener 다: 한글 조합이 끝날 때는 글자가 그대로라 onChanged 가 다시 안 불려서,
+  // '사랑' 을 치고 멈추면 마지막 글자 '랑' 이 검색되지 않았다. listener 는 조합이 끝날 때도 불린다.
+  void _onTextQueryChanged() {
+    final value = _textQueryController.value;
+    if (_isComposing(value) || value.text == _queuedTextQuery) return;
+    _queuedTextQuery = value.text;
+    setState(() {}); // 지우기 버튼 보이기/숨기기
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 350), () {
+      if (!mounted) return;
+      _searchText();
     });
   }
 
@@ -6122,38 +6195,157 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
     }
   }
 
+  /// 본문 검색. 검색어가 짧거나 범위의 책을 아직 안 골랐으면 결과를 비운다.
+  Future<void> _searchText() async {
+    final seq = ++_textSearchSeq;
+    final version = _selectedVersion;
+    final query = _textQueryController.text;
+    final books = _scope.booksOf(_bookNames, book: _scopeBook);
+
+    void clear() => setState(() {
+      _textResult = BibleSearchResult.empty;
+      _textTerms = const [];
+      _selectedVerseIds.clear();
+      _lastSelectedVerseIndex = null;
+    });
+
+    if (version == null ||
+        !isSearchableBibleQuery(query) ||
+        (books != null && books.isEmpty)) {
+      clear();
+      return;
+    }
+
+    // 수십 ms 라 진행 표시 없이 옛 결과를 두었다가 바꾼다 (칠 때마다 목록이 깜빡이지 않게).
+    try {
+      final result = await widget.bibleRepository.searchVerses(
+        version: version,
+        query: query,
+        books: books,
+        limit: _textResultLimit,
+      );
+      if (!mounted || seq != _textSearchSeq) return;
+      setState(() {
+        _textResult = result;
+        _textTerms = bibleSearchTerms(query);
+        _selectedVerseIds.clear();
+        _lastSelectedVerseIndex = null;
+      });
+      if (_verseScroll.hasClients) _verseScroll.jumpTo(0);
+    } catch (e) {
+      if (!mounted || seq != _textSearchSeq) return;
+      clear();
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('검색 실패: $e')));
+    }
+  }
+
+  void _setMode(_BibleSearchMode mode) {
+    if (mode == _mode) return;
+    _searchDebounce?.cancel();
+    _textSearchSeq++;
+    setState(() {
+      _mode = mode;
+      _selectedVerseIds.clear();
+      _lastSelectedVerseIndex = null;
+      _focusVerseId = null;
+    });
+    if (mode == _BibleSearchMode.text) _searchText();
+  }
+
+  void _setScope(BibleSearchScope scope) {
+    if (scope == _scope) return;
+    setState(() {
+      _scope = scope;
+      // 책 범위로 처음 바꿀 때는 장절 검색에서 보던 책부터.
+      if (scope == BibleSearchScope.book) _scopeBook ??= _selectedBook;
+    });
+    _searchText();
+  }
+
+  /// 본문 결과 한 절의 장 전체를 장절 검색으로 열고 그 절을 골라 둔다 (앞뒤 문맥 보기).
+  Future<void> _openChapter(BibleVerse verse) async {
+    _searchDebounce?.cancel();
+    _textSearchSeq++;
+    _isSyncingBookController = true;
+    _chapterController.text = '${verse.chapter}';
+    _verseController.text = '';
+    _isSyncingBookController = false;
+    _setBookText(verse.bookName);
+    setState(() {
+      _mode = _BibleSearchMode.reference;
+      _selectedBook = verse.bookName;
+      _bookFieldRevision++;
+    });
+    await _search(showMessages: false);
+    if (!mounted) return;
+    final index = _verses.indexWhere((v) => v.id == verse.id);
+    if (index < 0) return;
+    setState(() {
+      _selectedVerseIds.add(verse.id);
+      _lastSelectedVerseIndex = index;
+      _focusVerseId = verse.id;
+    });
+    _scrollToFocusedVerse();
+  }
+
+  // 목록은 줄을 모두 만들어 두므로(_buildVerseList) 그 절의 줄로 바로 맞출 수 있다.
+  void _scrollToFocusedVerse() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final target = _focusVerseKey.currentContext;
+      if (target == null || !target.mounted) return;
+      Scrollable.ensureVisible(target, alignment: 0.3);
+    });
+  }
+
   Future<void> _addSelected() async {
+    if (_isAddingVerses) return;
+    setState(() => _isAddingVerses = true);
+    try {
+      await _addSelectedVerses();
+    } finally {
+      if (mounted) setState(() => _isAddingVerses = false);
+    }
+  }
+
+  Future<void> _addSelectedVerses() async {
     final version = _selectedVersion;
     if (_selectedVerseIds.isEmpty) return;
     if (version == null) return;
-    final selected =
-        _verses.where((v) => _selectedVerseIds.contains(v.id)).toList()
-          ..sort((a, b) => a.verse.compareTo(b.verse));
+    final selected = _shownVerses
+        .where((v) => _selectedVerseIds.contains(v.id))
+        .toList();
     if (selected.isEmpty) return;
 
-    final chunks = <List<BibleVerse>>[];
-    for (var i = 0; i < selected.length; i += _versesPerPage) {
-      final end = i + _versesPerPage > selected.length
-          ? selected.length
-          : i + _versesPerPage;
-      chunks.add(selected.sublist(i, end));
-    }
+    // 본문 검색에서는 여러 책·장을 같이 고를 수 있다. 페이지는 한 장 안에서만 만든다.
+    final pages = bibleVersePages(selected, _versesPerPage);
 
-    // 보조 역본 본문을 절 번호로 찾아 쓸 수 있게 미리 한 장(章)을 통째로 읽는다.
-    final subTexts = await _loadSubVerses(version, selected.first.chapter);
+    // 보조 역본 본문을 절 번호로 찾아 쓸 수 있게 장(章)마다 한 번씩 통째로 읽는다.
+    final subTextsByChapter = <(String, int), Map<int, String>?>{};
+    for (final page in pages) {
+      final first = page.first;
+      final key = (first.bookName, first.chapter);
+      if (!subTextsByChapter.containsKey(key)) {
+        subTextsByChapter[key] = await _loadSubVerses(
+          version,
+          first.bookName,
+          first.chapter,
+        );
+      }
+      final subTexts = subTextsByChapter[key];
 
-    for (final chunk in chunks) {
-      final verseNums = chunk.map((v) => v.verse).toList();
+      final verseNums = page.map((v) => v.verse).toList();
       final ref = _buildReference(
         version,
-        _selectedBook!,
-        chunk.first.chapter,
+        first.bookName,
+        first.chapter,
         verseNums,
       );
-      final text = chunk.map((v) => '${v.verse}. ${v.text}').join('\n');
+      final text = page.map((v) => '${v.verse}. ${v.text}').join('\n');
       final subText = subTexts == null
           ? ''
-          : chunk
+          : page
                 .where((v) => subTexts.containsKey(v.verse))
                 .map((v) => '${v.verse}. ${subTexts[v.verse]}')
                 .join('\n');
@@ -6166,15 +6358,19 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
 
     ScaffoldMessenger.of(
       context,
-    ).showSnackBar(SnackBar(content: Text('${chunks.length}페이지 추가됨')));
+    ).showSnackBar(SnackBar(content: Text('${pages.length}페이지 추가됨')));
   }
 
   /// 보조 역본의 같은 장을 {절 번호: 본문} 으로. 못 찾으면 null.
-  Future<Map<int, String>?> _loadSubVerses(String version, int chapter) async {
+  Future<Map<int, String>?> _loadSubVerses(
+    String version,
+    String bookName,
+    int chapter,
+  ) async {
     final sub = widget.subVersion;
     if (sub.isEmpty || sub == version) return null;
     final book = await widget.bibleRepository.mapBookName(
-      bookName: _selectedBook!,
+      bookName: bookName,
       fromVersion: version,
       inVersion: sub,
     );
@@ -6189,7 +6385,10 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
 
   int get _selectedBiblePageCount {
     if (_selectedVerseIds.isEmpty) return 0;
-    return ((_selectedVerseIds.length - 1) ~/ _versesPerPage) + 1;
+    final selected = _shownVerses
+        .where((v) => _selectedVerseIds.contains(v.id))
+        .toList();
+    return bibleVersePages(selected, _versesPerPage).length;
   }
 
   bool get _isShiftPressed {
@@ -6199,6 +6398,7 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
   }
 
   void _toggleVerseSelection(int index, bool isSelected) {
+    final verses = _shownVerses;
     final lastIndex = _lastSelectedVerseIndex;
     final shouldSelectRange =
         isSelected && _isShiftPressed && lastIndex != null;
@@ -6208,12 +6408,12 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
         final start = lastIndex < index ? lastIndex : index;
         final end = lastIndex < index ? index : lastIndex;
         for (var i = start; i <= end; i++) {
-          _selectedVerseIds.add(_verses[i].id);
+          _selectedVerseIds.add(verses[i].id);
         }
       } else if (isSelected) {
-        _selectedVerseIds.add(_verses[index].id);
+        _selectedVerseIds.add(verses[index].id);
       } else {
-        _selectedVerseIds.remove(_verses[index].id);
+        _selectedVerseIds.remove(verses[index].id);
       }
       _lastSelectedVerseIndex = index;
     });
@@ -6226,13 +6426,18 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
       _selectedBook = null;
       _bookNames = const [];
       _verses = const [];
+      _textResult = BibleSearchResult.empty;
       _selectedVerseIds.clear();
       _lastSelectedVerseIndex = null;
     });
     _setBookText('');
     final books = await widget.bibleRepository.getBookNamesForVersion(version);
     if (!mounted) return;
-    setState(() => _bookNames = books);
+    setState(() {
+      _bookNames = books;
+      _fixScopeForBooks();
+    });
+    if (_isTextMode) _searchText();
   }
 
   String _buildReference(
@@ -6287,174 +6492,60 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
       );
     }
 
-    // 버전·검색·장·절 네 칸 높이를 같게: 세로 패딩을 통일하고 검색 아이콘이 높이를 키우지 않게 한다
-    const inputPadding = EdgeInsets.symmetric(horizontal: 12, vertical: 14);
+    final shown = _shownVerses;
 
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 검색 입력 행
           Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              Expanded(
-                flex: 2,
-                child: SizedBox(
-                  child: DropdownButtonFormField<String>(
-                    initialValue: _selectedVersion,
-                    isExpanded: true,
-                    decoration: const InputDecoration(
-                      labelText: '버전',
-                      border: OutlineInputBorder(),
-                      contentPadding: inputPadding,
-                    ),
-                    items: _versionNames
-                        .map((v) => DropdownMenuItem(value: v, child: Text(v)))
-                        .toList(),
-                    onChanged: _selectVersion,
+              _OptionSegments<_BibleSearchMode>(
+                values: _BibleSearchMode.values,
+                selected: _mode,
+                labelOf: (mode) => mode.label,
+                onSelected: _setMode,
+              ),
+              const Spacer(),
+              if (_isTextMode && _textResult.totalCount > 0)
+                Text(
+                  _textResult.totalCount > _textResult.verses.length
+                      ? '${_textResult.totalCount}절 중 ${_textResult.verses.length}절 표시'
+                      : '${_textResult.totalCount}절',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                flex: 3,
-                child: SizedBox(
-                  child: Autocomplete<String>(
-                    key: ValueKey(_selectedVersion),
-                    initialValue: TextEditingValue(text: _bookController.text),
-                    optionsBuilder: (textEditingValue) {
-                      final query = textEditingValue.text.trim().toLowerCase();
-                      if (query.isEmpty) return _bookNames;
-                      return _bookNames.where(
-                        (book) => book.toLowerCase().contains(query),
-                      );
-                    },
-                    onSelected: (book) {
-                      _bookController.text = book;
-                      setState(() => _selectedBook = book);
-                      _search(showMessages: false);
-                    },
-                    fieldViewBuilder:
-                        (context, controller, focusNode, onFieldSubmitted) {
-                          return TextField(
-                            controller: controller,
-                            focusNode: focusNode,
-                            textAlignVertical: TextAlignVertical.center,
-                            decoration: const InputDecoration(
-                              labelText: '성경 검색',
-                              prefixIcon: Icon(Icons.search_rounded),
-                              border: OutlineInputBorder(),
-                              prefixIconConstraints: BoxConstraints(
-                                minWidth: 40,
-                              ),
-                              contentPadding: inputPadding,
-                            ),
-                            onChanged: (_) {
-                              _setBookEditingValue(controller.value);
-                              _onBibleInputChanged(
-                                isComposing: _isComposing(controller.value),
-                              );
-                            },
-                            onSubmitted: (_) {
-                              _setBookEditingValue(controller.value);
-                              onFieldSubmitted();
-                              _search();
-                            },
-                          );
-                        },
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              SizedBox(
-                width: 96,
-                child: TextField(
-                  controller: _chapterController,
-                  keyboardType: TextInputType.number,
-                  textAlign: TextAlign.center,
-                  textAlignVertical: TextAlignVertical.center,
-                  decoration: const InputDecoration(
-                    labelText: '장',
-                    border: OutlineInputBorder(),
-                    contentPadding: inputPadding,
-                  ),
-                  onSubmitted: (_) => _search(),
-                ),
-              ),
-              const SizedBox(width: 8),
-              SizedBox(
-                width: 96,
-                child: TextField(
-                  controller: _verseController,
-                  keyboardType: TextInputType.number,
-                  textAlign: TextAlign.center,
-                  textAlignVertical: TextAlignVertical.center,
-                  decoration: const InputDecoration(
-                    labelText: '절',
-                    border: OutlineInputBorder(),
-                    contentPadding: inputPadding,
-                  ),
-                  onSubmitted: (_) => _search(),
-                ),
-              ),
             ],
           ),
+          const SizedBox(height: 10),
+          if (_isTextMode) ...[
+            _buildTextSearchRow(),
+            const SizedBox(height: 8),
+            _buildScopeRow(),
+          ] else
+            _buildReferenceSearchRow(),
           const SizedBox(height: 8),
           // 결과 목록
           Expanded(
-            child: _isSearching
+            child: _isSearching && !_isTextMode
                 ? const Center(child: CircularProgressIndicator())
-                : _verses.isEmpty
+                : shown.isEmpty
                 ? Center(
                     child: Text(
-                      _selectedBook == null
-                          ? '성경과 장 번호를 입력해 주세요.'
-                          : '장 번호를 입력하면 절을 불러옵니다.',
+                      _emptyMessage,
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         color: Theme.of(context).colorScheme.onSurfaceVariant,
                       ),
                     ),
                   )
-                : ListView.separated(
-                    itemCount: _verses.length,
-                    separatorBuilder: (_, _) => const Divider(height: 1),
-                    itemBuilder: (context, index) {
-                      final v = _verses[index];
-                      return CheckboxListTile(
-                        value: _selectedVerseIds.contains(v.id),
-                        onChanged: (val) =>
-                            _toggleVerseSelection(index, val ?? false),
-                        controlAffinity: ListTileControlAffinity.leading,
-                        title: RichText(
-                          text: TextSpan(
-                            style: DefaultTextStyle.of(context).style,
-                            children: [
-                              TextSpan(
-                                text: '${v.verse}절  ',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w700,
-                                  color: Theme.of(context).colorScheme.primary,
-                                ),
-                              ),
-                              TextSpan(
-                                text: v.text,
-                                style: const TextStyle(fontSize: 13),
-                              ),
-                            ],
-                          ),
-                        ),
-                        contentPadding: EdgeInsets.zero,
-                        dense: true,
-                      );
-                    },
-                  ),
+                : _buildVerseList(shown),
           ),
           // 추가 버튼
-          if (_verses.isNotEmpty) ...[
+          if (shown.isNotEmpty) ...[
             const SizedBox(height: 8),
             Row(
               children: [
@@ -6489,7 +6580,9 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
                 const SizedBox(width: 10),
                 Expanded(
                   child: FilledButton.icon(
-                    onPressed: _selectedVerseIds.isEmpty ? null : _addSelected,
+                    onPressed: _selectedVerseIds.isEmpty || _isAddingVerses
+                        ? null
+                        : _addSelected,
                     icon: const Icon(Icons.add_rounded),
                     label: Text(
                       _selectedVerseIds.isEmpty
@@ -6504,6 +6597,309 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
         ],
       ),
     );
+  }
+
+  String get _emptyMessage {
+    if (!_isTextMode) {
+      return _selectedBook == null
+          ? '성경과 장 번호를 입력해 주세요.'
+          : '장 번호를 입력하면 절을 불러옵니다.';
+    }
+    if (_scope == BibleSearchScope.book && _scopeBook == null) {
+      return '찾을 책을 골라 주세요.';
+    }
+    if (!isSearchableBibleQuery(_textQueryController.text)) {
+      return '본문에서 찾을 말을 2글자 이상 입력해 주세요.\n띄어쓰기는 무시하고, 여러 낱말은 모두 들어간 절을 찾습니다.';
+    }
+    return '검색 결과가 없습니다.';
+  }
+
+  // 버전·검색·장·절 네 칸 높이를 같게: 세로 패딩을 통일하고 검색 아이콘이 높이를 키우지 않게 한다
+  static const _inputPadding = EdgeInsets.symmetric(
+    horizontal: 12,
+    vertical: 14,
+  );
+
+  Widget _buildVersionDropdown() {
+    return DropdownButtonFormField<String>(
+      initialValue: _selectedVersion,
+      isExpanded: true,
+      decoration: const InputDecoration(
+        labelText: '버전',
+        border: OutlineInputBorder(),
+        contentPadding: _inputPadding,
+      ),
+      items: _versionNames
+          .map((v) => DropdownMenuItem(value: v, child: Text(v)))
+          .toList(),
+      onChanged: _selectVersion,
+    );
+  }
+
+  Widget _buildReferenceSearchRow() {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Expanded(flex: 2, child: _buildVersionDropdown()),
+        const SizedBox(width: 8),
+        Expanded(
+          flex: 3,
+          child: Autocomplete<String>(
+            key: ValueKey('$_selectedVersion/$_bookFieldRevision'),
+            initialValue: TextEditingValue(text: _bookController.text),
+            optionsBuilder: (textEditingValue) {
+              final query = textEditingValue.text.trim().toLowerCase();
+              if (query.isEmpty) return _bookNames;
+              return _bookNames.where(
+                (book) => book.toLowerCase().contains(query),
+              );
+            },
+            onSelected: (book) {
+              _bookController.text = book;
+              setState(() => _selectedBook = book);
+              _search(showMessages: false);
+            },
+            fieldViewBuilder:
+                (context, controller, focusNode, onFieldSubmitted) {
+                  return TextField(
+                    controller: controller,
+                    focusNode: focusNode,
+                    textAlignVertical: TextAlignVertical.center,
+                    decoration: const InputDecoration(
+                      labelText: '성경 검색',
+                      prefixIcon: Icon(Icons.search_rounded),
+                      border: OutlineInputBorder(),
+                      prefixIconConstraints: BoxConstraints(minWidth: 40),
+                      contentPadding: _inputPadding,
+                    ),
+                    onChanged: (_) {
+                      _setBookEditingValue(controller.value);
+                      _onBibleInputChanged(
+                        isComposing: _isComposing(controller.value),
+                      );
+                    },
+                    onSubmitted: (_) {
+                      _setBookEditingValue(controller.value);
+                      onFieldSubmitted();
+                      _search();
+                    },
+                  );
+                },
+          ),
+        ),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 96,
+          child: TextField(
+            controller: _chapterController,
+            keyboardType: TextInputType.number,
+            textAlign: TextAlign.center,
+            textAlignVertical: TextAlignVertical.center,
+            decoration: const InputDecoration(
+              labelText: '장',
+              border: OutlineInputBorder(),
+              contentPadding: _inputPadding,
+            ),
+            onSubmitted: (_) => _search(),
+          ),
+        ),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 96,
+          child: TextField(
+            controller: _verseController,
+            keyboardType: TextInputType.number,
+            textAlign: TextAlign.center,
+            textAlignVertical: TextAlignVertical.center,
+            decoration: const InputDecoration(
+              labelText: '절',
+              border: OutlineInputBorder(),
+              contentPadding: _inputPadding,
+            ),
+            onSubmitted: (_) => _search(),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTextSearchRow() {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Expanded(flex: 2, child: _buildVersionDropdown()),
+        const SizedBox(width: 8),
+        Expanded(
+          flex: 5,
+          child: TextField(
+            controller: _textQueryController,
+            textAlignVertical: TextAlignVertical.center,
+            decoration: InputDecoration(
+              labelText: '본문 검색',
+              hintText: '예: 독생자 영생',
+              prefixIcon: const Icon(Icons.search_rounded),
+              prefixIconConstraints: const BoxConstraints(minWidth: 40),
+              border: const OutlineInputBorder(),
+              contentPadding: _inputPadding,
+              suffixIcon: _textQueryController.text.isEmpty
+                  ? null
+                  : IconButton(
+                      icon: const Icon(Icons.close_rounded, size: 18),
+                      tooltip: '지우기',
+                      onPressed: () {
+                        _textQueryController.clear();
+                        _searchDebounce?.cancel();
+                        _searchText();
+                      },
+                    ),
+            ),
+            onSubmitted: (_) {
+              _searchDebounce?.cancel();
+              _searchText();
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildScopeRow() {
+    final scopes = [
+      BibleSearchScope.all,
+      if (_canSplitTestaments) ...[
+        BibleSearchScope.oldTestament,
+        BibleSearchScope.newTestament,
+      ],
+      BibleSearchScope.book,
+    ];
+    return Row(
+      children: [
+        Flexible(
+          child: _OptionSegments<BibleSearchScope>(
+            values: scopes,
+            selected: _scope,
+            labelOf: (scope) => scope.label,
+            onSelected: _setScope,
+          ),
+        ),
+        if (_scope == BibleSearchScope.book) ...[
+          const SizedBox(width: 8),
+          Expanded(
+            child: DropdownButtonFormField<String>(
+              // initialValue 는 처음 만들 때만 읽으므로 역본이 바뀌면 새로 만든다.
+              // 역본이 바뀌어 고른 책이 비워질 때도(_fixScopeForBooks) 새로 만들어야 옛 값이 안 남는다.
+              key: ValueKey('scope-book/$_selectedVersion/$_scopeBook'),
+              initialValue: _scopeBook,
+              isExpanded: true,
+              isDense: true,
+              hint: const Text('책 선택'),
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                contentPadding: EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
+              ),
+              items: _bookNames
+                  .map((b) => DropdownMenuItem(value: b, child: Text(b)))
+                  .toList(),
+              onChanged: (book) {
+                if (book == null || book == _scopeBook) return;
+                setState(() => _scopeBook = book);
+                _searchText();
+              },
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// 절 목록. ListView 처럼 보이는 줄만 만들지 않고 모두 만든다 — 그래야 '이 장 보기' 가 줄 높이를
+  /// 어림하지 않고 그 절로 정확히 스크롤한다(감긴 줄이 많은 긴 장에서 어림이 크게 빗나갔다).
+  /// 한 장은 많아야 176절(시 119편), 본문 결과는 200절까지라 다 만들어도 가볍다.
+  Widget _buildVerseList(List<BibleVerse> verses) {
+    return SingleChildScrollView(
+      controller: _verseScroll,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (var i = 0; i < verses.length; i++) ...[
+            if (i > 0) const Divider(height: 1),
+            _buildVerseTile(verses[i], i),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildVerseTile(BibleVerse v, int index) {
+    final cs = Theme.of(context).colorScheme;
+    final labelStyle = TextStyle(
+      fontSize: 12,
+      fontWeight: FontWeight.w700,
+      color: cs.primary,
+    );
+    const bodyStyle = TextStyle(fontSize: 13);
+    return CheckboxListTile(
+      key: v.id == _focusVerseId ? _focusVerseKey : null,
+      value: _selectedVerseIds.contains(v.id),
+      onChanged: (val) => _toggleVerseSelection(index, val ?? false),
+      controlAffinity: ListTileControlAffinity.leading,
+      title: RichText(
+        text: TextSpan(
+          style: DefaultTextStyle.of(context).style,
+          children: [
+            TextSpan(
+              text: _isTextMode
+                  ? '${v.bookName} ${v.chapter}:${v.verse}  '
+                  : '${v.verse}절  ',
+              style: labelStyle,
+            ),
+            if (_isTextMode)
+              ..._highlightedSpans(v.text, bodyStyle, cs)
+            else
+              TextSpan(text: v.text, style: bodyStyle),
+          ],
+        ),
+      ),
+      secondary: _isTextMode
+          ? IconButton(
+              icon: const Icon(Icons.menu_book_outlined, size: 18),
+              tooltip: '이 장 보기',
+              visualDensity: VisualDensity.compact,
+              onPressed: () => _openChapter(v),
+            )
+          : null,
+      contentPadding: EdgeInsets.zero,
+      dense: true,
+    );
+  }
+
+  /// 찾은 말을 굵게·강조색으로.
+  List<TextSpan> _highlightedSpans(
+    String text,
+    TextStyle style,
+    ColorScheme cs,
+  ) {
+    final highlight = style.copyWith(
+      fontWeight: FontWeight.w700,
+      color: cs.primary,
+      backgroundColor: cs.primaryContainer,
+    );
+    final spans = <TextSpan>[];
+    var cursor = 0;
+    for (final (start, end) in bibleMatchRanges(text, _textTerms)) {
+      if (start > cursor) {
+        spans.add(TextSpan(text: text.substring(cursor, start), style: style));
+      }
+      spans.add(TextSpan(text: text.substring(start, end), style: highlight));
+      cursor = end;
+    }
+    if (cursor < text.length) {
+      spans.add(TextSpan(text: text.substring(cursor), style: style));
+    }
+    return spans;
   }
 }
 

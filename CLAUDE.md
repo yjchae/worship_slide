@@ -20,6 +20,7 @@ flutter test                  # test/ (페이지 파싱·슬라이드 렌더·�
 flutter test test/sync_test.dart      # 찬양 동기화·클라우드 콘티(여러 PC 흉내) 단위 테스트
 flutter test test/drive_sync_store_test.dart # 구글 드라이브 저장소(가짜 Drive 서버)·접속 키
 flutter test test/db_backup_test.dart # 스키마 올리기 전 DB 자동 백업
+flutter test test/bible_search_test.dart # 성경 본문 검색(띄어쓰기 무시·범위·강조·페이지 나누기)
 flutter test test/move_pages_test.dart # 발표 보기 페이지 옮기기·나누기
 python3 python/test_render.py    # render 명령 self-check (LibreOffice 없으면 skip)
 python3 python/test_animation.py # 애니메이션 단계 펼치기 self-check (LibreOffice 불필요)
@@ -98,8 +99,9 @@ lib/
       sync_dialog.dart               -- 동기화 설정 (가져오기 메뉴 '찬양·콘티 동기화'·상태 줄): 접속 키 넣기·찬양 동기화 버튼
       cloud_conti_dialog.dart        -- 클라우드 콘티 목록: 내려받기(이미 있으면 바꾸기)·클라우드에서 지우기
   src/features/bible/
-    data/bible_repository.dart       -- 역본·책·장·절 조회, JSON 임포트
+    data/bible_repository.dart       -- 역본·책·장·절 조회, 본문 검색(searchVerses), JSON 임포트
     domain/bible_verse.dart
+    domain/bible_text_search.dart    -- 본문 검색 범위(BibleSearchScope)·검색어 나누기·강조 위치·고른 절 페이지 나누기
   src/features/update/update_service.dart -- GitHub Releases(yjchae/worship_slide) 확인·다운로드
 ```
 
@@ -285,6 +287,18 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
     취소는 다음 작업이 시작될 때(`_prepare`·`_requireStore` 의 `resetCancel`)까지 남아서, 요청 사이(합치기·DB 작업 중)에 눌러도 뒤 요청이 안 나간다.
     끊긴 작업은 `cancelledMessage`('취소했습니다.')로 실패하고 화면은 오류 창을 띄우지 않는다(`isCancelled`)
   - 시계가 크게 틀린 PC 는 "나중에 고친 쪽" 판정이 틀릴 수 있다(OS 자동 시간 맞추기를 켜 두면 된다)
+- **성경 본문 검색** (성경 검색 탭의 '장절 | 본문' 토글): 본문 모드는 낱말(공백으로 나눔, AND)이 모두 든 절을 찾는다.
+  **띄어쓰기는 무시한다** — 낱말도 본문도 공백을 빼고 `LIKE` 로 비교한다(`'이처럼사랑'` 이 `'이처럼 사랑하사'` 에 걸린다).
+  FTS 를 안 쓴 이유: SQLite FTS 토크나이저는 공백으로 낱말을 나눠 `'사랑'` 으로 `'사랑하사'` 를 못 찾는다(한국어 조사·어미).
+  공백으로 보는 글자는 `bibleIgnoredSpaces`(공백·탭·줄바꿈·NBSP·전각 공백) 하나 — SQL `REPLACE` 사슬과 강조(`bibleMatchRanges`)가 같이 쓴다.
+  결과는 정경 순서로 앞 200절, 전체 수는 같은 쿼리의 `COUNT(*) OVER ()`(한 번 훑기, sqlite3 패키지가 SQLite 3.25+ 를 같이 싣는다).
+  3만여 절 리눅스 인메모리 측정: 걸리는 절이 적으면 약 40ms(COUNT 따로 = 두 번 훑기는 약 80~120ms), 모든 절이 걸리는 최악은 약 60~110ms
+  (창 함수가 걸린 행을 다 모아서 — LIMIT 로 일찍 멈추는 두 번 쿼리는 약 40ms). 실제 검색은 대부분 앞쪽이라 창 함수를 골랐다. 스키마(색인)는 그대로다.
+  본문 검색어는 controller listener 로 받는다 — `onChanged` 는 한글 조합이 끝날 때(글자 그대로) 안 불려서 마지막 글자가 검색되지 않았다.
+  절 목록은 ListView 가 아니라 줄을 모두 만든다(`_buildVerseList`, 한 장 최대 176절·결과 200절) — '이 장 보기' 가 감긴 줄 높이를 어림하지 않고 그 절로 정확히 간다.
+  범위 = 전체 / 구약(앞 39권) / 신약(뒤 27권) / 책 하나. 66권이 아닌 역본은 구약·신약 칸을 숨긴다(`mapBookName` 과 같은 순서 가정).
+  결과 줄의 '이 장 보기' = 장절 모드로 그 장을 열고 그 절을 골라 둔다. 본문 모드에선 여러 책·장을 같이 고를 수 있어서
+  페이지는 (책, 장)마다 따로 만든다(`bibleVersePages`) — 장절 모드는 묶음이 하나라 예전과 같다
 - **DB 갱신** (`replaceAllSongs`): 전체 삭제 후 재삽입 (증분 갱신 아님)
 - **폴더 다시 가져오기** (`addNewSongs`): 같은 제목에 원본 가사까지 같으면 건너뛰고, 원본+보조 가사의 줄 모음
   (순서 무시)이 같으면 나누기 규칙만 바뀐 것으로 보고 **기존 곡을 고친다**(새 곡을 만들지 않는다). 나머지는 새로 넣는다
