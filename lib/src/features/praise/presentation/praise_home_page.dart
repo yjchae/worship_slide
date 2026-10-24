@@ -379,12 +379,6 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   // 실제 스테이징 항목이 아니므로 uid는 절대 겹치지 않는 -1로 고정.
   static const int _leadingBlankUid = -1;
 
-  Set<int?> get _selectedSongIds => _stagingItems
-      .map((e) => e.item)
-      .whereType<SongStagingItem>()
-      .map((item) => item.song.id)
-      .toSet();
-
   /// 항목이 만드는 페이지 수(자동 여백 제외).
   static int _pageCount(StagingItem item) => switch (item) {
     SongStagingItem(:final song) => song.pairedPages.length,
@@ -1826,29 +1820,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   // ── 스테이징 조작 ────────────────────────────────────────────────────
 
-  Future<void> _toggleSongSelection(PraiseSong song, bool isSelected) async {
-    if (isSelected) {
-      final alreadyAdded = _stagingItems.any(
-        (e) =>
-            e.item is SongStagingItem &&
-            (e.item as SongStagingItem).song.id == song.id,
-      );
-      if (alreadyAdded) return;
-      final staged = await _withSubLyrics(song);
-      if (!mounted) return;
-      setState(() {
-        _stagingItems.add((uid: _nextUid++, item: SongStagingItem(staged)));
-      });
-      return;
-    }
+  /// 찬양 검색 목록에서 더블클릭·끌어 놓기로 곡을 콘티 맨 끝에 담는다.
+  /// 이미 담긴 곡도 다시 담는다(같은 곡 재창).
+  Future<void> _addSongToStaging(PraiseSong song) async {
+    final staged = await _withSubLyrics(song);
+    if (!mounted) return;
     setState(() {
-      _removeStagingWhere((e) {
-        final item = e.item;
-        final matches = item is SongStagingItem && item.song.id == song.id;
-        if (matches) _itemBackgrounds.remove(e.uid);
-        return matches;
-      });
-      _clampCurrentSlideIndex();
+      _stagingItems.add((uid: _nextUid++, item: SongStagingItem(staged)));
     });
   }
 
@@ -3958,25 +3936,16 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     ).showSnackBar(const SnackBar(content: Text('저장된 찬양을 모두 삭제했습니다.')));
   }
 
-  Future<void> _deleteSelectedSongs() async {
-    final deletableIds = _stagingItems
-        .map((e) => e.item)
-        .whereType<SongStagingItem>()
-        .map((item) => item.song.id)
-        .whereType<int>()
-        .toList();
-    if (deletableIds.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('삭제할 찬양을 먼저 선택해 주세요.')));
-      return;
-    }
-
+  /// 찬양 검색 목록의 삭제 아이콘: 그 곡 하나만 DB 에서 지운다.
+  /// 콘티에 담긴 항목은 가사 스냅샷이라 그대로 둔다(그대로 발표할 수 있다).
+  Future<void> _deleteSong(PraiseSong song) async {
+    final id = song.id;
+    if (id == null) return;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('선택 곡 삭제'),
-        content: Text('${deletableIds.length}곡을 DB에서 삭제합니다. 계속할까요?'),
+        title: const Text('곡 삭제'),
+        content: Text('「${song.displayTitle}」을 DB에서 삭제합니다. 계속할까요?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -3991,21 +3960,12 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     );
     if (confirmed != true) return;
 
-    await _repository.deleteSongsByIds(deletableIds);
-    if (!mounted) return;
-    setState(() {
-      _removeStagingWhere(
-        (e) =>
-            e.item is SongStagingItem &&
-            deletableIds.contains((e.item as SongStagingItem).song.id),
-      );
-      _clampCurrentSlideIndex();
-    });
+    await _repository.deleteSongsByIds([id]);
     await _loadSongs();
     if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text('${deletableIds.length}곡을 삭제했습니다.')));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('「${song.displayTitle}」을 삭제했습니다.')),
+    );
   }
 
   Future<void> _openSongEditor(PraiseSong? song) async {
@@ -4215,6 +4175,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               },
                               onReorder: _onStagingReorder,
                               onRemove: _removeFromStaging,
+                              onDropSong: _addSongToStaging,
                               isCollapsed: _isStagingCollapsed,
                               onToggleCollapsed: () => setState(
                                 () =>
@@ -4328,9 +4289,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                             final searchColumn = _SearchAndBiblePanel(
                               searchController: _searchController,
                               songs: _songs,
-                              selectedSongIds: _selectedSongIds,
-                              onSongChanged: _toggleSongSelection,
-                              onDeleteSelected: _deleteSelectedSongs,
+                              onStageSong: _addSongToStaging,
+                              onDeleteSong: _deleteSong,
                               onClearAll: _clearAllSongs,
                               onAddSong: () => _openSongEditor(null),
                               onEditSong: _openSongEditor,
@@ -5150,6 +5110,7 @@ class _StagingPanel extends StatelessWidget {
     required this.onReloadSource,
     required this.onReorder,
     required this.onRemove,
+    required this.onDropSong,
     required this.onSelect,
     required this.isCollapsed,
     required this.onToggleCollapsed,
@@ -5171,6 +5132,8 @@ class _StagingPanel extends StatelessWidget {
   final ValueChanged<int> onReloadSource;
   final void Function(int oldIndex, int newIndex) onReorder;
   final void Function(int uid) onRemove;
+  // 찬양 검색 목록에서 끌어 온 곡 (콘티 맨 끝에 담는다)
+  final ValueChanged<PraiseSong> onDropSong;
   final ValueChanged<int> onSelect;
   final bool isCollapsed;
   final VoidCallback onToggleCollapsed;
@@ -5181,7 +5144,25 @@ class _StagingPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    // 찬양 검색 목록에서 끈 곡을 받는다. 타입이 PraiseSong 이라 발표 보기 썸네일
+    // 끌기(_ThumbDrag)·콘티 순서 바꾸기와 섞이지 않는다. 놓은 자리와 상관없이 맨 끝에 담는다.
+    return DragTarget<PraiseSong>(
+      onAcceptWithDetails: (details) => onDropSong(details.data),
+      builder: (context, candidates, _) {
+        final card = _buildCard(context, cs);
+        if (candidates.isEmpty) return card;
+        return Container(
+          foregroundDecoration: BoxDecoration(
+            border: Border.all(color: cs.primary, width: 2),
+            borderRadius: BorderRadius.circular(AppRadius.panel),
+          ),
+          child: card,
+        );
+      },
+    );
+  }
 
+  Widget _buildCard(BuildContext context, ColorScheme cs) {
     // 좁은 패널에서도 넘치지 않게 아이콘 버튼 기본 48px 탭 타깃을 32px로 줄인다.
     // (그러지 않으면 저장/불러오기 버튼이 오른쪽으로 잘려 사라진다)
     final compactIcon = IconButton.styleFrom(
@@ -5295,7 +5276,7 @@ class _StagingPanel extends StatelessWidget {
                           ),
                           const SizedBox(height: 10),
                           Text(
-                            '오른쪽 검색에서 찬양이나 성경 구절을 고르면\n여기에 순서대로 담깁니다',
+                            '찬양은 더블클릭하거나 여기로 끌어 놓고,\n성경 구절은 골라 담으면 순서대로 담깁니다',
                             style: TextStyle(
                               fontSize: 13,
                               height: 1.5,
@@ -5542,9 +5523,8 @@ class _SearchAndBiblePanel extends StatefulWidget {
   const _SearchAndBiblePanel({
     required this.searchController,
     required this.songs,
-    required this.selectedSongIds,
-    required this.onSongChanged,
-    required this.onDeleteSelected,
+    required this.onStageSong,
+    required this.onDeleteSong,
     required this.onClearAll,
     required this.onAddSong,
     required this.onEditSong,
@@ -5563,9 +5543,8 @@ class _SearchAndBiblePanel extends StatefulWidget {
 
   final TextEditingController searchController;
   final List<PraiseSong> songs;
-  final Set<int?> selectedSongIds;
-  final void Function(PraiseSong, bool) onSongChanged;
-  final VoidCallback onDeleteSelected;
+  final ValueChanged<PraiseSong> onStageSong;
+  final ValueChanged<PraiseSong> onDeleteSong;
   final VoidCallback onClearAll;
   final VoidCallback onAddSong;
   final ValueChanged<PraiseSong> onEditSong;
@@ -5639,9 +5618,8 @@ class _SearchAndBiblePanelState extends State<_SearchAndBiblePanel>
                 _SongSearchContent(
                   controller: widget.searchController,
                   songs: widget.songs,
-                  selectedSongIds: widget.selectedSongIds,
-                  onChanged: widget.onSongChanged,
-                  onDeleteSelected: widget.onDeleteSelected,
+                  onStageSong: widget.onStageSong,
+                  onDeleteSong: widget.onDeleteSong,
                   onClearAll: widget.onClearAll,
                   onAddSong: widget.onAddSong,
                   onEditSong: widget.onEditSong,
@@ -5673,9 +5651,8 @@ class _SongSearchContent extends StatelessWidget {
   const _SongSearchContent({
     required this.controller,
     required this.songs,
-    required this.selectedSongIds,
-    required this.onChanged,
-    required this.onDeleteSelected,
+    required this.onStageSong,
+    required this.onDeleteSong,
     required this.onClearAll,
     required this.onAddSong,
     required this.onEditSong,
@@ -5688,9 +5665,9 @@ class _SongSearchContent extends StatelessWidget {
 
   final TextEditingController controller;
   final List<PraiseSong> songs;
-  final Set<int?> selectedSongIds;
-  final void Function(PraiseSong song, bool isSelected) onChanged;
-  final VoidCallback onDeleteSelected;
+  // 곡 줄 더블클릭 → 콘티에 담기 (끌어 놓기는 콘티 패널의 DragTarget 이 받는다)
+  final ValueChanged<PraiseSong> onStageSong;
+  final ValueChanged<PraiseSong> onDeleteSong;
   final VoidCallback onClearAll;
   final VoidCallback onAddSong;
   final ValueChanged<PraiseSong> onEditSong;
@@ -5763,12 +5740,6 @@ class _SongSearchContent extends StatelessWidget {
               ),
               const Spacer(),
               IconButton(
-                icon: const Icon(Icons.delete_outline_rounded, size: 19),
-                tooltip: '선택 삭제',
-                visualDensity: VisualDensity.compact,
-                onPressed: selectedSongIds.isEmpty ? null : onDeleteSelected,
-              ),
-              IconButton(
                 icon: const Icon(Icons.restart_alt_rounded, size: 19),
                 tooltip: 'DB 초기화',
                 visualDensity: VisualDensity.compact,
@@ -5810,32 +5781,73 @@ class _SongSearchContent extends StatelessWidget {
                     separatorBuilder: (_, _) => const Divider(height: 1),
                     itemBuilder: (context, index) {
                       final song = songs[index];
-                      final selected = selectedSongIds.contains(song.id);
-                      return CheckboxListTile(
-                        value: selected,
-                        selected: selected,
-                        selectedTileColor: cs.primaryContainer.withValues(
-                          alpha: 0.25,
-                        ),
-                        dense: true,
-                        visualDensity: VisualDensity.compact,
-                        onChanged: (value) => onChanged(song, value ?? false),
-                        controlAffinity: ListTileControlAffinity.leading,
-                        title: Text(song.title),
-                        subtitle: Text(
-                          song.pages.join(' / '),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 4,
-                        ),
-                        secondary: IconButton(
-                          icon: const Icon(Icons.edit_outlined, size: 20),
-                          tooltip: '가사 수정',
-                          visualDensity: VisualDensity.compact,
-                          onPressed: () => onEditSong(song),
-                        ),
+                      // 더블클릭 = 담기, 끌기 = 콘티 패널에 놓아 담기. 한 번 클릭은 아무것도 안 한다
+                      // (예전 체크박스는 콘티 상태를 따라가서 '선택 삭제'가 콘티 곡을 지웠다).
+                      // 아이콘 버튼은 GestureDetector 밖에 둔다 — 안에 두면 더블탭 인식이
+                      // 첫 클릭을 붙잡아 버튼이 늦게 눌린다.
+                      return Row(
+                        children: [
+                          Expanded(
+                            child: Draggable<PraiseSong>(
+                              data: song,
+                              dragAnchorStrategy: pointerDragAnchorStrategy,
+                              feedback: Material(
+                                elevation: 4,
+                                color: cs.surface,
+                                borderRadius: BorderRadius.circular(
+                                  AppRadius.control,
+                                ),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 8,
+                                  ),
+                                  child: Text(
+                                    song.title,
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      color: cs.onSurface,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              child: GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onDoubleTap: () => onStageSong(song),
+                                child: ListTile(
+                                  dense: true,
+                                  visualDensity: VisualDensity.compact,
+                                  mouseCursor: SystemMouseCursors.grab,
+                                  title: Text(song.title),
+                                  subtitle: Text(
+                                    song.pages.join(' / '),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 4,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.edit_outlined, size: 20),
+                            tooltip: '가사 수정',
+                            visualDensity: VisualDensity.compact,
+                            onPressed: () => onEditSong(song),
+                          ),
+                          IconButton(
+                            icon: const Icon(
+                              Icons.delete_outline_rounded,
+                              size: 20,
+                            ),
+                            tooltip: '곡 삭제',
+                            visualDensity: VisualDensity.compact,
+                            color: cs.onSurfaceVariant,
+                            onPressed: () => onDeleteSong(song),
+                          ),
+                        ],
                       );
                     },
                   ),
