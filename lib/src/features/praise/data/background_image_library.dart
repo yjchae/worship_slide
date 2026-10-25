@@ -102,10 +102,19 @@ class BackgroundImageLibrary {
   }
 
   /// [video] 의 썸네일 경로. 없으면 OS(macOS AVFoundation·Windows 탐색기 썸네일)로 만든다.
-  /// 못 만들면(코덱 없음 등) null — 격자는 아이콘으로 보인다. 실패는 이번 실행 동안 기억한다.
+  /// 못 만들면(코덱 없음 등) null — 격자는 아이콘으로 보인다. 실패는 이번 실행 동안 기억한다([retry] 전까지).
   /// 미리보기·격자가 같은 영상을 동시에 부르면 하나만 만든다(같은 `.part` 에 둘이 쓰지 않게).
-  static Future<String?> thumbnail(String video) => _thumbnailJobs[video] ??=
-      _makeThumbnail(video).whenComplete(() => _thumbnailJobs.remove(video));
+  /// [retry] 면 이번 실행에서 실패했던 영상도 다시 만들어 본다(격자를 열 때).
+  static Future<String?> thumbnail(String video, {bool retry = false}) {
+    if (retry && !_thumbnailJobs.containsKey(video)) {
+      _thumbnailFailed.remove(video);
+    }
+    // 콜백이 값을 돌려주면 안 된다 — remove 가 돌려주는 건 이 작업 Future 자신이라
+    // whenComplete 가 그걸 기다리느라 영영 끝나지 않는다(격자·미리보기 썸네일이 멈춘다).
+    return _thumbnailJobs[video] ??= _makeThumbnail(video).whenComplete(() {
+      _thumbnailJobs.remove(video);
+    });
+  }
 
   static final Map<String, Future<String?>> _thumbnailJobs = {};
 

@@ -56,7 +56,7 @@ class _BackgroundImageGalleryState extends State<BackgroundImageGallery> {
     if (!widget.library.isVideo) return;
     for (final path in [?widget.selected, ...paths]) {
       if (_thumbs.containsKey(path)) continue;
-      final thumb = await BackgroundImageLibrary.thumbnail(path);
+      final thumb = await BackgroundImageLibrary.thumbnail(path, retry: true);
       if (!mounted) return;
       if (thumb != null) setState(() => _thumbs[path] = thumb);
     }

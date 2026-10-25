@@ -52,7 +52,10 @@ class SlideRenderView extends StatelessWidget {
 
   static Future<(bool, String?)> _probeBackdrop(String video) async {
     if (!await File(video).exists()) return (false, null);
-    return (true, await BackgroundImageLibrary.thumbnail(video));
+    final thumb = await BackgroundImageLibrary.thumbnail(video);
+    // 못 만들었으면 기억하지 않는다 — 나중에(격자에서 다시 시도해) 만들어지면 다음에 그릴 때 보인다.
+    if (thumb == null) _backdropThumbs.remove(video);
+    return (true, thumb);
   }
 
   @override
