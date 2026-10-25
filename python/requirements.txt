@@ -1,4 +1,6 @@
 python-pptx
-pymupdf
+# 2.0 은 import 때 pymupdf-layout 의 onnx 모델을 읽는데 PyInstaller 빌드에 그 파일이 빠져
+# render·sheet 가 FileNotFoundError 로 죽는다(2026-10). 1.x 로 고정.
+pymupdf>=1.28.2,<2
 pyinstaller
 pillow
