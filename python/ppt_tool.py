@@ -12,6 +12,7 @@ import tempfile
 import threading
 import unicodedata
 import urllib.parse
+import uuid
 import zipfile
 from pathlib import Path
 
@@ -1134,7 +1135,167 @@ def extract_slide_videos(pptx_path, out_dir, page_count, source_dir):
         return found
 
 
-def _convert_to_pdf(source_path, output_dir):
+# PowerPoint 로 PDF 만들기. 파일에 심은 글꼴(ppt/fonts/*.fntdata, EOT+MTX 압축)을 LibreOffice 는
+# 못 읽고 대체 글꼴로 그려서 크기·줄바꿈이 깨진다. PowerPoint 가 깔려 있으면 그걸로 먼저 굽는다.
+POWERPOINT_TIMEOUT_SECONDS = 180
+_MAC_POWERPOINT = "/Applications/Microsoft PowerPoint.app"
+
+# 인자: 입력 경로, 출력 PDF 경로, 문서 이름. 우리가 연 문서만 닫고, 우리가 띄웠을 때만(남은 문서가
+# 없으면) 끈다 — 사용자가 열어 둔 PowerPoint·문서는 그대로 둔다.
+_MAC_POWERPOINT_SCRIPT = """
+on run argv
+	set inPath to item 1 of argv
+	set outPath to item 2 of argv
+	set docName to item 3 of argv
+	set wasRunning to application "Microsoft PowerPoint" is running
+	set pres to missing value
+	set failure to ""
+	with timeout of %d seconds
+		tell application "Microsoft PowerPoint"
+			-- 처음 한 번은 작업 폴더 '액세스 허용'을 묻는다. 그 창이 뒤에 숨지 않게 앞으로 띄운다.
+			activate
+			try
+				open (POSIX file inPath)
+				repeat with p in presentations
+					if name of p is docName then set pres to contents of p
+				end repeat
+				if pres is missing value then error "presentation not opened"
+				save pres in (POSIX file outPath) as save as PDF
+			on error msg
+				set failure to msg
+			end try
+			if pres is not missing value then close pres saving no
+			if not wasRunning and (count of presentations) is 0 then quit
+		end tell
+	end timeout
+	if failure is not "" then error failure
+end run
+""" % (POWERPOINT_TIMEOUT_SECONDS - 10)
+
+# ReadOnly=msoTrue(-1), Untitled=msoFalse(0), WithWindow=msoFalse(0). 32 = ppSaveAsPDF.
+_WINDOWS_POWERPOINT_SCRIPT = r"""
+param([string]$InPath, [string]$OutPath)
+$ErrorActionPreference = 'Stop'
+$wasRunning = [bool](Get-Process POWERPNT -ErrorAction SilentlyContinue)
+$app = New-Object -ComObject PowerPoint.Application
+$pres = $null
+try {
+    $pres = $app.Presentations.Open($InPath, -1, 0, 0)
+    $pres.SaveAs($OutPath, 32)
+} finally {
+    if ($pres) { $pres.Close() }
+    if (-not $wasRunning -and $app.Presentations.Count -eq 0) { $app.Quit() }
+    [void][Runtime.InteropServices.Marshal]::ReleaseComObject($app)
+}
+"""
+
+
+def _powerpoint_timeout_marker():
+    return get_cache_root().parent / "powerpoint_timeout"
+
+
+def _powerpoint_work_dir():
+    # macOS PowerPoint 는 샌드박스라 처음 보는 폴더의 파일을 열면 '파일 액세스 부여' 창을 띄운다.
+    # 늘 같은 폴더에 사본을 두면 처음 한 번 허용한 것을 PowerPoint 가 기억한다 — 그래서 폴더는 지우지 않는다.
+    return get_app_support_root().parent / "powerpoint"
+
+
+def powerpoint_available():
+    # 한 번 시간이 넘으면(허용 창이 떠 있는 채로 멈춤 등) 하루 동안은 묻지 않고 LibreOffice 로 간다 —
+    # 파일마다 몇 분씩 기다리지 않게.
+    try:
+        import time
+        if time.time() - _powerpoint_timeout_marker().stat().st_mtime < 24 * 3600:
+            return False
+    except OSError:
+        pass
+    if sys.platform == "darwin":
+        return os.path.isdir(_MAC_POWERPOINT)
+    if sys.platform == "win32":
+        import winreg
+        try:
+            winreg.CloseKey(winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, r"PowerPoint.Application\CLSID"))
+            return True
+        except OSError:
+            return False
+    return False
+
+
+def _convert_with_powerpoint(source_path, output_dir):
+    """PowerPoint 로 PDF 를 만든다. 원본은 저장하지 않는다. 실패하면 예외."""
+    if sys.platform == "darwin":
+        # 사본을 고정 작업 폴더에 두고 연다(원본은 안 열린다). render 가 동시에 돌 수 있어 이름은 겹치지 않게.
+        work_dir = _powerpoint_work_dir()
+        work_dir.mkdir(parents=True, exist_ok=True)
+        name = f"slides_{uuid.uuid4().hex}"
+        doc = work_dir / f"{name}{source_path.suffix.lower()}"
+        out = work_dir / f"{name}.pdf"
+        shutil.copyfile(source_path, doc)
+        command = ["osascript", "-", str(doc), str(out), doc.name]
+        script_input = _MAC_POWERPOINT_SCRIPT
+        flags = 0
+    else:
+        work_dir = output_dir / "powerpoint"
+        work_dir.mkdir(parents=True, exist_ok=True)
+        doc = source_path
+        out = work_dir / "slides.pdf"
+        script = work_dir / "convert.ps1"
+        script.write_text(_WINDOWS_POWERPOINT_SCRIPT, encoding="utf-8")
+        command = [
+            "powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+            "-File", str(script), str(doc.resolve()), str(out.resolve()),
+        ]
+        script_input = None
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        try:
+            # 출력은 모두 받아 둔다 — stdout 은 앱이 읽는 결과 JSON 자리다.
+            result = subprocess.run(
+                command,
+                input=script_input,
+                capture_output=True,
+                text=True,
+                timeout=POWERPOINT_TIMEOUT_SECONDS,
+                creationflags=flags,
+            )
+        except subprocess.TimeoutExpired:
+            try:
+                marker = _powerpoint_timeout_marker()
+                marker.parent.mkdir(parents=True, exist_ok=True)
+                marker.write_text("", encoding="utf-8")
+            except OSError:
+                pass
+            raise RuntimeError(
+                "PowerPoint 응답 시간 초과 — PowerPoint 창에서 폴더 접근을 허용해 주세요 (하루 동안은 LibreOffice 로 굽습니다)"
+            )
+        if result.returncode != 0 or not out.is_file() or out.stat().st_size == 0:
+            raise RuntimeError(f"PowerPoint 변환 실패: {(result.stderr or result.stdout).strip()[:300]}")
+        if out.parent == output_dir:
+            return out
+        final = output_dir / "slides.pdf"
+        shutil.move(str(out), str(final))
+        return final
+    finally:
+        if doc != source_path:
+            for leftover in (doc, out):
+                try:
+                    leftover.unlink()
+                except OSError:
+                    pass
+
+
+def _convert_to_pdf(source_path, output_dir, on_powerpoint_failed=None):
+    if powerpoint_available():
+        try:
+            return _convert_with_powerpoint(source_path, output_dir)
+        except Exception as error:
+            print(
+                json.dumps({"warning": f"PowerPoint 로 못 구워 LibreOffice 로 굽습니다: {error}"}, ensure_ascii=True),
+                file=sys.stderr,
+            )
+            if on_powerpoint_failed:
+                on_powerpoint_failed()
+
     libreoffice = get_libreoffice_executable()
     if libreoffice is None:
         raise RuntimeError("LibreOffice 실행 파일을 찾지 못했습니다.")
@@ -1166,7 +1327,8 @@ def _convert_to_pdf(source_path, output_dir):
 # 3: macOS 에서 한글이 빠지던 문제(_libreoffice_env) — 예전에 구운 PNG 는 한글이 없다.
 # macOS 만 올린다 — Windows 는 그대로라 다시 구울 이유가 없다(예전 폴더가 한 벌 더 생긴다).
 # +1: PPT 안 동영상을 꺼내 둔다(extract_slide_videos) — 예전 폴더엔 동영상이 없다.
-RENDER_CACHE_VERSION = 4 if sys.platform == "darwin" else 3
+# +1: PowerPoint 가 있으면 PowerPoint 로 굽는다(심은 글꼴) — 두 플랫폼 다.
+RENDER_CACHE_VERSION = 5 if sys.platform == "darwin" else 4
 
 
 def get_render_cache_key(source_path, expand_animation):
@@ -1206,14 +1368,15 @@ def _prepare_render_source(source_path, temp_dir):
         return source_path
 
 
+def _read_render_meta(target_dir):
+    try:
+        return json.loads((target_dir / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
 def _render_result(source_name, image_paths, target_dir):
-    animated = False
-    meta_path = target_dir / "meta.json"
-    if meta_path.exists():
-        try:
-            animated = bool(json.loads(meta_path.read_text(encoding="utf-8")).get("animated"))
-        except (OSError, ValueError):
-            animated = False
+    animated = bool(_read_render_meta(target_dir).get("animated"))
     return {
         "source_name": source_name,
         "image_paths": [str(path) for path in image_paths],
@@ -1238,10 +1401,12 @@ def render_presentation_images(file_path, expand_animation=True):
     source_name = unicodedata.normalize("NFC", source_path.name)
     target_dir = get_app_support_root() / get_render_cache_key(source_path, expand_animation)
     cached = sorted(target_dir.glob("*.png"))
-    if cached:
+    # PowerPoint 가 있는데 실패해 LibreOffice 로 구운 것(심은 글꼴이 깨졌을 수 있음)은 PowerPoint 가
+    # 다시 될 때 새로 굽는다. 시간 초과 표시가 있는 동안은 powerpoint_available() 이 False 라 그대로 쓴다.
+    if cached and not (_read_render_meta(target_dir).get("powerpoint_failed") and powerpoint_available()):
         return _render_result(source_name, cached, target_dir)
 
-    if not is_pdf and get_libreoffice_executable() is None:
+    if not is_pdf and get_libreoffice_executable() is None and not powerpoint_available():
         return {"error": "libreoffice_missing"}
 
     import pymupdf
@@ -1256,6 +1421,7 @@ def render_presentation_images(file_path, expand_animation=True):
     shutil.rmtree(staging_dir, ignore_errors=True)
     staging_dir.mkdir(parents=True, exist_ok=True)
     temp_dir = Path(tempfile.mkdtemp(prefix="praise_ppt_render_"))
+    meta = {}
     try:
         if is_pdf:
             pdf_path = source_path
@@ -1269,7 +1435,9 @@ def render_presentation_images(file_path, expand_animation=True):
             animated = render_source != source_path
             pdf_dir = temp_dir / "pdf"
             pdf_dir.mkdir(parents=True, exist_ok=True)
-            pdf_path = _convert_to_pdf(render_source, pdf_dir)
+            pdf_path = _convert_to_pdf(
+                render_source, pdf_dir, lambda: meta.update(powerpoint_failed=True)
+            )
 
         page_count = 0
         with pymupdf.open(str(pdf_path)) as document:
@@ -1291,9 +1459,8 @@ def render_presentation_images(file_path, expand_animation=True):
                     file=sys.stderr,
                 )
 
-        (staging_dir / "meta.json").write_text(
-            json.dumps({"animated": animated}), encoding="utf-8"
-        )
+        meta["animated"] = animated
+        (staging_dir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
 
         shutil.rmtree(target_dir, ignore_errors=True)
         target_dir.parent.mkdir(parents=True, exist_ok=True)

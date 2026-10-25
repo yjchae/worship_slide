@@ -556,6 +556,17 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   맥 글꼴 폴더가 없어 한글 글꼴을 하나도 못 쓴다 → 내장 라틴·히브리 글꼴로 그려 **한글이 통째로 빠진 PNG** 가 나왔다(PDF 엔 글자가 있다).
   soffice 를 부를 때마다 맥 글꼴 폴더(+ 앱 내장 무료 글꼴 폴더)를 적은 `~/Library/Caches/worship_slides/fontconfig/fonts.conf` 를
   `FONTCONFIG_FILE` 로 넘긴다. 사용자가 이미 `FONTCONFIG_FILE` 을 정해 뒀으면 건드리지 않는다. 이 수정으로 `RENDER_CACHE_VERSION` 은 macOS 만 3(Windows 는 2 그대로)
+- **외부 PPT 는 PowerPoint 가 있으면 PowerPoint 로 굽는다** (`_convert_to_pdf` → `_convert_with_powerpoint`): 파일에 심은 글꼴
+  (`ppt/fonts/*.fntdata`, EOT+MTX 압축)을 LibreOffice 는 못 읽고 대체 글꼴로 그려 크기·줄바꿈이 깨진다. PowerPoint 로 PDF 를 만들고
+  원본은 저장하지 않는다(우리가 연 문서만 닫고, 우리가 띄웠고 남은 문서가 없을 때만 끈다). 없거나 실패·시간 초과(180초)면 예전 LibreOffice 경로.
+  macOS 는 osascript(stdin 스크립트). PowerPoint 는 샌드박스라 처음 보는 폴더의 파일을 열면 '파일 액세스 부여' 창을 띄운다. 그래서 사본을
+  **고정 작업 폴더** `Application Support/worship_slides/powerpoint/` 에 겹치지 않는 이름(`slides_<uuid>`)으로 두고 연다 — 처음 한 번 허용하면
+  PowerPoint 가 기억한다(사본·PDF 는 끝나면 지우고 폴더는 남긴다). 허용 창이 뒤에 숨지 않게 열기 전에 PowerPoint 를 `activate` 한다.
+  (`~$` 이름이면 묻지 않는다는 우회는 실제로는 안 통했다.)
+  Windows 는 PowerShell COM(`Presentations.Open(path, ReadOnly, , WithWindow=False)` → `SaveAs(pdf, 32)`, 새 의존성 없음 — **실제 실행은 확인 못 했다**).
+  시간 초과가 한 번 나면 하루 동안 PowerPoint 를 건너뛴다(`~/Library/Caches/worship_slides/powerpoint_timeout` 파일). PowerPoint 가 있으면 LibreOffice 없이도 .pptx 는 굽힌다.
+  PowerPoint 가 있는데 실패해서 LibreOffice 로 구웠으면 `meta.json` 에 `powerpoint_failed` 를 남기고, 다음 render 때 PowerPoint 를 쓸 수 있으면(시간 초과 표시가 없으면) 같은 폴더에 다시 굽는다.
+  숨긴 슬라이드를 PowerPoint 가 PDF 에 넣는지는 **미확인**이다(빠지면 쪽 수가 달라져 동영상 짝짓기가 어긋난다). 이 변경으로 `RENDER_CACHE_VERSION` 은 macOS 5·Windows 4
 - **PPT 렌더 캐시 위치**: `~/Library/Application Support/worship_slides/ppt_slides/<해시>/`.
   Caches가 아닌 이유 — 저장한 콘티가 나중에 이미지 유실로 깨지면 안 되기 때문.
   (`.ppt`→`.pptx` 변환 캐시는 유실돼도 되므로 `~/Library/Caches/worship_slides/ppt_import_cache/`)
