@@ -132,14 +132,20 @@ if(C.kind==='youtube'){
     var d=document.createElement('div'); d.id='m'; d.innerHTML='<div id="p"></div>';
     document.getElementById('host').appendChild(d); el=d;
     var ready=false;
+    // 자막은 늘 끈다. cc_load_policy:0 은 영상 소유자·시청 설정이 켜 둔 자막을 못 끄므로
+    // 자막 모듈을 직접 내린다(재생이 시작될 때 다시 올라오므로 PLAYING 때마다).
+    function noCaptions(){
+      try{ yt.setOption('captions','track',{}); }catch(e){}
+      try{ yt.unloadModule('captions'); yt.unloadModule('cc'); }catch(e){}
+    }
     setTimeout(function(){ if(!ready) fail('유튜브에 연결하지 못했습니다 (인터넷 연결 확인)'); },10000);
     window.onYouTubeIframeAPIReady=function(){
       yt=new YT.Player('p',{videoId:C.yt,
         playerVars:{autoplay:1,controls:0,disablekb:1,fs:0,rel:0,iv_load_policy:3,
-                    playsinline:1,start:C.start,origin:location.origin},
+                    playsinline:1,start:C.start,origin:location.origin,cc_load_policy:0},
         events:{
-          onReady:function(){ ready=true; vol(0); fadeIn(); },
-          onStateChange:function(e){ if(e.data===1) started(); },
+          onReady:function(){ ready=true; noCaptions(); vol(0); fadeIn(); },
+          onStateChange:function(e){ if(e.data===1){ noCaptions(); started(); } },
           onError:function(e){
             ready=true;
             fail(e.data===101||e.data===150||e.data===153
