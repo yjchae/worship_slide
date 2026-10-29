@@ -15,6 +15,7 @@ import 'slide_render_view.dart';
 typedef OfferingPreviewPage = ({
   String mainText,
   String englishText,
+  String extraText,
   String? title,
 });
 
@@ -103,7 +104,7 @@ class _OfferingDialogState extends State<OfferingDialog> {
     var bestLines = -1;
     for (var i = 0; i < pages.length; i++) {
       final page = pages[i];
-      final lines = '${page.mainText}\n${page.englishText}'
+      final lines = '${page.mainText}\n${page.englishText}\n${page.extraText}'
           .trim()
           .split('\n')
           .length;
@@ -595,6 +596,7 @@ class OfferingSlidePreview extends StatelessWidget {
             data: SlidePageData(
               mainText: page.mainText,
               englishText: page.englishText,
+              extraText: page.extraText,
               title: page.title,
               isBible: false,
               pageIndex: 0,

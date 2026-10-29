@@ -1748,6 +1748,30 @@ def _apply_slide_background(slide, style, background=None):
     slide.background.fill.fore_color.rgb = parse_hex_color(bg_color)
 
 
+_DEFAULT_SUB_FONT_RATIO = 0.8
+_DEFAULT_EXTRA_FONT_RATIO = 0.7
+
+
+def _sub_font_sizes(style, is_bible):
+    """보조·추가 보조 글자 크기(pt) = 본문 크기 × 비율. 찬양·성경 비율이 따로다.
+
+    설교 부제처럼 항목이 정한 english_font_size 가 있으면 그 값이 이긴다.
+    Dart ExportStyle.subFontSizeFor / extraFontSizeFor 와 같은 규칙이다.
+    """
+    prefix = "bible_" if is_bible else ""
+    body = style.get("bible_font_size" if is_bible else "font_size") or style["font_size"]
+
+    def ratio(key, default):
+        value = style.get(prefix + key)
+        return value if isinstance(value, (int, float)) and value > 0 else default
+
+    english = style.get("english_font_size") or body * ratio(
+        "sub_font_ratio", _DEFAULT_SUB_FONT_RATIO
+    )
+    extra = body * ratio("extra_font_ratio", _DEFAULT_EXTRA_FONT_RATIO)
+    return english, extra
+
+
 def add_song_slides(prs, song, style, background=None):
     is_bible = song.get("type") == "bible"
     font_name = style.get("font_family", "Pretendard")
@@ -1763,6 +1787,9 @@ def add_song_slides(prs, song, style, background=None):
     )
     include_english_lyrics = style.get("include_english_lyrics", False)
     english_color = parse_hex_color(style["english_text_color"])
+    include_extra_lyrics = style.get("include_extra_lyrics", True)
+    extra_color = parse_hex_color(style.get("extra_text_color") or "#80DEEA")
+    english_size, extra_size = _sub_font_sizes(style, is_bible)
     show_song_title = style.get(
         "show_bible_title" if is_bible else "show_song_title",
         style.get("show_song_title", False),
@@ -1777,15 +1804,21 @@ def add_song_slides(prs, song, style, background=None):
         # 문구 든 빈 페이지는 빈 줄이 있어도 한 장이다(발표 화면 _allSlides 와 같다).
         korean_pages = [song.get("lyrics", "").strip()]
         english_pages = [song.get("english_lyrics", "").strip()]
+        extra_pages = [song.get("extra_lyrics", "").strip()]
     else:
         korean_pages = _decode_pages(song["lyrics"])
         english_pages = _decode_pages(song.get("english_lyrics", ""))
-    page_count = max(len(korean_pages), len(english_pages))
+        extra_pages = _decode_pages(song.get("extra_lyrics", ""))
+    page_count = max(len(korean_pages), len(english_pages), len(extra_pages))
+
+    def page_at(pages, index):
+        return pages[index] if index < len(pages) else ""
 
     for index in range(page_count):
-        page = korean_pages[index] if index < len(korean_pages) else ""
-        english_page = english_pages[index] if index < len(english_pages) else ""
-        if not page and not english_page:
+        page = page_at(korean_pages, index)
+        english_page = page_at(english_pages, index)
+        extra_page = page_at(extra_pages, index)
+        if not page and not english_page and not extra_page:
             continue
 
         slide = prs.slides.add_slide(prs.slide_layouts[6])
@@ -1820,8 +1853,20 @@ def add_song_slides(prs, song, style, background=None):
             _add_text_run(
                 english_paragraph,
                 english_page,
-                Pt(style.get("english_font_size") or style["font_size"] * 0.8),
+                Pt(english_size),
                 english_color,
+                font_name,
+            )
+
+        # 추가 보조 언어(셋째 줄). 미리보기·발표 창과 같은 순서·색·크기.
+        if include_extra_lyrics and extra_page:
+            extra_paragraph = frame.add_paragraph()
+            extra_paragraph.alignment = lyrics_align
+            _add_text_run(
+                extra_paragraph,
+                extra_page,
+                Pt(extra_size),
+                extra_color,
                 font_name,
             )
 
@@ -1882,7 +1927,8 @@ def export_presentation(payload_json):
                                     background.get("font_files") or ())
         if song.get("type") == "blank":
             # 문구를 넣은 빈 페이지(설교 제목 등)는 가사 한 장처럼 그린다.
-            if song.get("lyrics") or song.get("english_lyrics"):
+            if (song.get("lyrics") or song.get("english_lyrics")
+                    or song.get("extra_lyrics")):
                 add_song_slides(
                     prs, song, _style_for_item(style, background), background
                 )

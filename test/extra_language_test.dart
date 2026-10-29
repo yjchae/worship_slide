@@ -13,6 +13,7 @@ import 'package:worship_slides/src/features/praise/domain/praise_song.dart';
 import 'package:worship_slides/src/features/praise/domain/staging_item.dart';
 import 'package:worship_slides/src/features/praise/presentation/praise_home_page.dart';
 import 'package:worship_slides/src/features/praise/presentation/slide_page_data.dart';
+import 'package:worship_slides/src/features/praise/presentation/slide_text_layout.dart';
 
 /// 추가 보조 언어(관객 화면 세 번째 줄): 페이지 짝짓기, 나누기·복사, 콘티 저장(DB version 18),
 /// .wsconti 왕복, 스타일 저장값.
@@ -289,6 +290,58 @@ void main() {
       );
       expect(page.toJson()['extra_text'], 'verso 1');
       expect(SlidePageData.fromJson(page.toJson()).extraText, 'verso 1');
+    });
+
+    test('발표 창 JSON 의 보조·추가 크기는 그 페이지 본문 기준 pt', () {
+      final page = SlidePageData(
+        mainText: '16. 하나님이',
+        englishText: '16. For God',
+        extraText: '16. Porque',
+        isBible: true,
+        pageIndex: 0,
+        totalPages: 1,
+        style: baseStyle(),
+      );
+      final style = page.toJson()['style'] as Map<String, dynamic>;
+      expect(style['english_font_size'], closeTo(16, 1e-9));
+      expect(style['extra_font_size'], closeTo(14, 1e-9));
+      expect(style['extra_text_color'], '#80DEEA');
+    });
+  });
+
+  group('설교자 화면(원본만)', () {
+    SlidePageData page({required bool originalOnly}) => SlidePageData(
+      mainText: '1절',
+      englishText: 'verse 1',
+      extraText: 'verso 1',
+      isBible: false,
+      pageIndex: 0,
+      totalPages: 1,
+      style: ExportStyle.fromJson({'font_size': 30, 'bible_font_size': 30}),
+      originalOnly: originalOnly,
+    );
+
+    List<TextSpan> spans(SlidePageData data) => SlideTextLayout.bodySpan(
+      data,
+      originalOnly: data.originalOnly,
+    ).children!.cast<TextSpan>();
+
+    test('보조·추가 보조는 투명 — 자리는 그대로라 원본 위치가 관객 화면과 같다', () {
+      final presenter = spans(page(originalOnly: true));
+      final audience = spans(page(originalOnly: false));
+      expect(presenter, hasLength(3));
+      expect(presenter[0].style!.color, audience[0].style!.color);
+      expect(presenter[1].style!.color, Colors.transparent);
+      expect(presenter[2].style!.color, Colors.transparent);
+      expect(presenter[1].text, audience[1].text);
+      expect(presenter[2].style!.fontSize, audience[2].style!.fontSize);
+    });
+
+    test('발표 창 JSON 에는 싣지 않는다(관객 화면은 늘 전부)', () {
+      expect(
+        page(originalOnly: true).toJson().containsKey('original_only'),
+        isFalse,
+      );
     });
   });
 }

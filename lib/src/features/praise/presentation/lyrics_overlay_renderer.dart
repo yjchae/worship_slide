@@ -85,6 +85,7 @@ class LyricsOverlayRenderer {
         'v': _renderVersion,
         'main': page.mainText,
         'sub': page.englishText,
+        'extra': page.extraText,
         'title': page.title,
         'bible': page.isBible,
         'style': page.style.toJson(),

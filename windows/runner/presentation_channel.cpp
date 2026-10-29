@@ -448,6 +448,7 @@ void PresentationChannel::Apply(const flutter::EncodableMap& data) {
 
   slide_.main    = W(GetStr(data, "main_text"));
   slide_.english = W(GetStr(data, "english_text"));
+  slide_.extra   = W(GetStr(data, "extra_text"));
   const std::string* ttl = Get<std::string>(data, "title");
   slide_.title   = ttl ? W(*ttl) : std::wstring{};
   slide_.isBible = isBible;
@@ -516,6 +517,10 @@ void PresentationChannel::Apply(const flutter::EncodableMap& data) {
   double baseSz     = GetDbl(s, "font_size", 30.0);
   // 설교 부제처럼 따로 정한 크기가 있으면 그 값, 없으면 본문의 0.8 배.
   slide_.engSz      = GetDbl(s, "english_font_size", baseSz * 0.8);
+  // 추가 보조 언어(셋째 줄). 크기는 Dart 가 본문 × 비율로 계산해 보낸다.
+  slide_.inclExtra  = GetBool(s, "include_extra_lyrics", true);
+  slide_.extraClr   = HexRgb(GetStr(s, "extra_text_color", "#80deea"), RGB(128,222,234));
+  slide_.extraSz    = GetDbl(s, "extra_font_size", slide_.mainSz * 0.7);
   slide_.fontFamily = W(GetStr(s, "font_family", ""));
 
   // 사용자가 추가한 폰트(FontLibrary). 이 프로세스에만 올려 두면 CreateFontW 가
@@ -622,7 +627,20 @@ void PresentationChannel::Paint(HDC hdc, RECT cli) const {
     engH = engCalc.bottom - engCalc.top;
   }
 
-  int totalH = mainH + (engFont ? engGap + engH : 0);
+  // Measure extra text (추가 보조 언어, 셋째 줄). 보조 줄과 같은 간격을 둔다.
+  int extraGap = 0, extraH = 0;
+  HFONT extraFont = nullptr;
+  if (slide_.inclExtra && !slide_.extra.empty()) {
+    extraGap  = (int)(slide_.mainSz * H / 540.0 * 0.4 + 0.5);
+    extraFont = makeFont(slide_.extraSz, true);
+    SelectObject(hdc, extraFont);
+    RECT extraCalc = { bodyLeft, bodyTop, bodyRight, bodyTop + bodyBoxH };
+    DrawTextW(hdc, slide_.extra.c_str(), -1, &extraCalc, calcFlags);
+    extraH = extraCalc.bottom - extraCalc.top;
+  }
+
+  int totalH = mainH + (engFont ? engGap + engH : 0)
+             + (extraFont ? extraGap + extraH : 0);
 
   // Vertical offset
   int startY;
@@ -648,11 +666,20 @@ void PresentationChannel::Paint(HDC hdc, RECT cli) const {
     int ey = startY + mainH + engGap;
     RECT r = { bodyLeft, ey, bodyRight, ey + engH + bodyBoxH };
     DrawTextW(hdc, slide_.english.c_str(), -1, &r, drawFlags);
-    SelectObject(hdc, old);
-    DeleteObject(engFont);
-  } else {
-    SelectObject(hdc, old);
   }
+
+  // Draw extra text
+  if (extraFont) {
+    SelectObject(hdc, extraFont);
+    SetTextColor(hdc, slide_.extraClr);
+    int xy = startY + mainH + (engFont ? engGap + engH : 0) + extraGap;
+    RECT r = { bodyLeft, xy, bodyRight, xy + extraH + bodyBoxH };
+    DrawTextW(hdc, slide_.extra.c_str(), -1, &r, drawFlags);
+  }
+
+  SelectObject(hdc, old);
+  if (engFont) DeleteObject(engFont);
+  if (extraFont) DeleteObject(extraFont);
   DeleteObject(mainFont);
 
   // Title
