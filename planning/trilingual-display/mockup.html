@@ -1,0 +1,661 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3개 언어 표시 화면 목업</title>
+<style>
+@font-face { font-family: Pretendard; font-weight: 400; src: url("../../assets/fonts/Pretendard-Regular.ttf"); }
+@font-face { font-family: Pretendard; font-weight: 500; src: url("../../assets/fonts/Pretendard-Medium.ttf"); }
+@font-face { font-family: Pretendard; font-weight: 600; src: url("../../assets/fonts/Pretendard-SemiBold.ttf"); }
+@font-face { font-family: Pretendard; font-weight: 700; src: url("../../assets/fonts/Pretendard-Bold.ttf"); }
+
+/* 앱 화면 색 (lib/src/app_colors.dart 밝은 테마와 같은 값) */
+:root {
+  --canvas: #F4F5F8; --surface: #FFFFFF; --line: #D6DBE6; --outline: #B4BCCC;
+  --point: #4D5E82; --ink: #1C1C21; --muted: #6E6E7A; --subtle: #EDEDF1;
+  --graphite: #2C2E35; --live: #E5484D; --warn: #B7791F; --warn-bg: #FFF6E5;
+  --r-control: 6px; --r-panel: 10px; --r-dialog: 14px;
+  /* 슬라이드 기본 색 */
+  --slide-bg: #10131A; --c-main: #FFFFFF; --c-sub: #FFF176; --c-extra: #80DEEA;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--canvas); color: var(--ink);
+  font-family: Pretendard, sans-serif; font-size: 13px; }
+.page { max-width: 1320px; margin: 0 auto; padding: 32px 16px 64px; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+.lead { color: var(--muted); margin: 0 0 32px; }
+section { margin-bottom: 48px; }
+section > h2 { font-size: 16px; margin: 0 0 4px; }
+section > p.cap { color: var(--muted); margin: 0 0 14px; line-height: 1.6; }
+
+.frame { display: inline-block; padding: 28px; background: #E3E6EE; border-radius: 16px; }
+
+/* 공통 컨트롤 */
+.dialog { background: var(--surface); border-radius: var(--r-dialog);
+  box-shadow: 0 18px 50px rgba(28,28,33,.18), 0 2px 6px rgba(28,28,33,.08); }
+.btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px;
+  border-radius: var(--r-control); font-weight: 600; font-size: 13px; border: 1px solid transparent; }
+.btn.text { color: var(--point); }
+.btn.filled { background: var(--graphite); color: #fff; }
+.btn.outline { border-color: var(--line); color: var(--ink); background: var(--surface); }
+.dd { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px 0 10px;
+  border: 1px solid var(--line); border-radius: var(--r-control); background: var(--surface); font-weight: 500; }
+.dd::after { content: "▾"; color: var(--muted); font-size: 11px; }
+.field { border: 1px solid var(--line); border-radius: var(--r-control); background: var(--surface);
+  padding: 7px 10px; min-height: 32px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--r-control); overflow: hidden; }
+.seg span { padding: 5px 12px; font-weight: 600; color: var(--muted); }
+.seg span.on { background: var(--graphite); color: #fff; }
+.sw { width: 30px; height: 18px; border-radius: 9px; background: var(--outline); position: relative; display: inline-block; vertical-align: middle; }
+.sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; }
+.sw.on { background: var(--point); }
+.sw.on::after { left: 14px; }
+.chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 600; }
+.chip.warn { background: var(--warn-bg); color: var(--warn); }
+.chip.err { background: #FDECEC; color: #B4232A; }
+.chip.ok { background: #E9F4EC; color: #2F7A45; }
+.chip.muted { background: var(--subtle); color: var(--muted); }
+.swatch { width: 18px; height: 18px; border-radius: 4px; border: 1px solid rgba(0,0,0,.18); display: inline-block; vertical-align: middle; }
+.lang-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.mono { font-variant-numeric: tabular-nums; }
+.note { position: absolute; background: #2C2E35; color: #fff; font-size: 11.5px; padding: 5px 9px;
+  border-radius: 6px; line-height: 1.45; white-space: nowrap; box-shadow: 0 4px 12px rgba(0,0,0,.2); }
+.note b { color: #FFD66B; }
+
+/* ── S1: 가사 편집 (페이지 표) ─────────────────────────── */
+.editor { width: 1240px; padding: 22px 24px 18px; position: relative; }
+.ed-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.ed-head h3 { font-size: 19px; margin: 0; flex: 0 0 auto; }
+.ed-head .title { flex: 1; }
+.ed-body { display: grid; grid-template-columns: 1fr 300px; gap: 18px; }
+.grid-head, .grid-row { display: grid; grid-template-columns: 34px 1fr 1fr 1fr 28px; gap: 8px; align-items: stretch; }
+.grid-head { padding: 0 0 8px; border-bottom: 1px solid var(--line); align-items: center; }
+.colhead { display: flex; align-items: center; gap: 8px; font-weight: 700; }
+.colhead small { color: var(--muted); font-weight: 500; }
+.grid-row { padding: 8px 0; border-bottom: 1px solid var(--subtle); position: relative; }
+.grid-row.sel { background: #F0F3F9; margin: 0 -8px; padding: 8px 8px; border-radius: 8px; border-bottom-color: transparent; }
+.pno { font-weight: 700; color: var(--muted); text-align: center; padding-top: 7px; font-size: 13px; }
+.grid-row.sel .pno { color: var(--point); }
+.cell { border: 1px solid var(--line); border-radius: var(--r-control); background: var(--surface);
+  padding: 7px 10px; line-height: 1.55; min-height: 56px; white-space: pre-line; position: relative; }
+.cell.focus { border-color: var(--point); box-shadow: 0 0 0 2px rgba(77,94,130,.15); }
+.cell.empty { border-style: dashed; border-color: #E0B867; background: #FFFBF1; color: #B08A3E; font-size: 12px; display: flex; align-items: center; }
+.cell.blank { background: var(--subtle); color: var(--muted); font-size: 12px; display: flex; align-items: center; border-style: dashed; }
+.cell .mark { position: absolute; left: -1px; top: -1px; bottom: -1px; width: 3px; border-radius: 6px 0 0 6px; }
+.rowmenu { color: var(--muted); text-align: center; padding-top: 6px; font-size: 16px; letter-spacing: -1px; }
+.rowflag { position: absolute; right: 36px; top: -9px; }
+.celltools { position: absolute; right: 6px; bottom: -14px; display: flex; gap: 4px; z-index: 2; }
+.celltools span { background: var(--surface); border: 1px solid var(--line); border-radius: 5px; padding: 2px 7px;
+  font-size: 11px; font-weight: 600; color: var(--point); box-shadow: 0 2px 6px rgba(0,0,0,.08); }
+.menu { position: absolute; width: 196px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(0,0,0,.14); padding: 6px; z-index: 5; }
+.menu div { padding: 7px 10px; border-radius: 6px; display: flex; justify-content: space-between; }
+.menu div:hover, .menu div.hl { background: var(--subtle); }
+.menu div kbd { color: var(--muted); font-family: inherit; font-size: 11px; }
+.menu hr { border: 0; border-top: 1px solid var(--subtle); margin: 4px 0; }
+.menu .danger { color: #B4232A; }
+.add-row { margin-top: 10px; display: flex; gap: 8px; }
+.side { display: flex; flex-direction: column; gap: 12px; }
+.side .lbl { font-size: 12px; color: var(--muted); font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
+.banner { display: flex; gap: 10px; align-items: center; background: #EEF2FA; border: 1px solid #D5DDEE; color: #34436A;
+  padding: 8px 12px; border-radius: 8px; margin-bottom: 10px; }
+.banner b { font-weight: 700; }
+.banner .x { margin-left: auto; color: var(--muted); }
+.ed-foot { display: flex; align-items: center; gap: 10px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.ed-foot .stat { display: flex; gap: 6px; flex: 1; flex-wrap: wrap; }
+
+/* 슬라이드 (관객 화면과 같은 비율 13.333 x 7.5, 기준 높이 540pt) */
+.slide { position: relative; background: radial-gradient(120% 90% at 50% 20%, #1D2433 0%, var(--slide-bg) 70%);
+  border-radius: 6px; overflow: hidden; color: #fff; aspect-ratio: 13.333 / 7.5; container-type: size; }
+.slide .stitle { position: absolute; left: 3%; top: 3.5%; font-size: calc(14 / 540 * 100cqh); color: #C9CED9; font-weight: 600; }
+.slide .box { position: absolute; left: 4%; right: 4%; top: calc(0.6 / 7.5 * 100%); height: calc(5.4 / 7.5 * 100%);
+  display: flex; flex-direction: column; justify-content: center; text-align: center; font-weight: 700; }
+.slide .box.over { justify-content: flex-start; }
+.slide .m { color: var(--c-main); font-size: calc(30 / 540 * 100cqh); line-height: 1.25; }
+.slide .s { color: var(--c-sub); font-size: calc(24 / 540 * 100cqh); line-height: 1.3; }
+.slide .e { color: var(--c-extra); font-size: calc(21 / 540 * 100cqh); line-height: 1.3; }
+.slide.bible .box { text-align: left; }
+.slide.bible .m { font-size: calc(26 / 540 * 100cqh); line-height: 1.35; }
+.slide.bible .s { font-size: calc(20 / 540 * 100cqh); }
+.slide.bible .e { font-size: calc(18 / 540 * 100cqh); }
+.slide .boxguide { position: absolute; left: 4%; right: 4%; top: calc(0.6 / 7.5 * 100%); height: calc(5.4 / 7.5 * 100%);
+  border: 1.5px dashed rgba(255,214,107,.85); border-radius: 4px; pointer-events: none; }
+.slide .overflow-fade { position: absolute; left: 0; right: 0; top: calc(6.0 / 7.5 * 100%); bottom: 0;
+  background: repeating-linear-gradient(135deg, rgba(229,72,77,.28) 0 8px, rgba(229,72,77,.12) 8px 16px); }
+.slide .ovtag { position: absolute; right: 2%; bottom: 3%; background: var(--live); color: #fff; font-size: 11px;
+  font-weight: 700; padding: 2px 8px; border-radius: 999px; }
+
+/* ── S3/S4: 리본 ─────────────────────────────────────────── */
+.ribbon { width: 1240px; padding: 0; overflow: hidden; }
+.rb-tabs { display: flex; gap: 2px; padding: 0 14px; border-bottom: 1px solid var(--line); align-items: flex-end; height: 42px; }
+.rb-tabs span { padding: 10px 14px; font-weight: 600; color: var(--muted); border-bottom: 2px solid transparent; }
+.rb-tabs span.on { color: var(--ink); border-bottom-color: var(--point); }
+.rb-tabs .right { margin-left: auto; color: var(--muted); padding: 10px 4px; }
+.rb-body { display: flex; gap: 0; padding: 14px; align-items: stretch; }
+.rb-prev { width: 300px; flex: 0 0 auto; margin-right: 16px; }
+.group { padding: 0 16px; border-left: 1px solid var(--line); display: flex; flex-direction: column; gap: 9px; min-width: 0; }
+.group:first-of-type { border-left: 0; }
+.group h4 { margin: 0 0 2px; font-size: 11.5px; color: var(--muted); font-weight: 700; letter-spacing: .02em; }
+.prow { display: grid; grid-template-columns: 76px 1fr; align-items: center; gap: 10px; }
+.prow > label { color: var(--muted); font-weight: 600; font-size: 12px; }
+.prow .ctl { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; }
+.num { width: 54px; height: 28px; border: 1px solid var(--line); border-radius: var(--r-control); display: inline-flex;
+  align-items: center; justify-content: flex-end; padding: 0 8px; font-weight: 600; background: var(--surface); }
+.cfield { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border: 1px solid var(--line);
+  border-radius: var(--r-control); background: var(--surface); font-size: 12px; font-weight: 600; }
+.new { outline: 2px solid #F2B84B; outline-offset: 3px; border-radius: 6px; }
+.newtag { font-size: 10px; font-weight: 800; color: #9A6510; background: #FFE9BF; padding: 1px 6px; border-radius: 999px; }
+.hint { color: var(--muted); font-size: 11.5px; }
+.slider { display: inline-flex; align-items: center; gap: 8px; }
+.slider .track { width: 110px; height: 4px; background: var(--line); border-radius: 2px; position: relative; }
+.slider .track i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--point); border-radius: 2px; }
+.slider .track b { position: absolute; top: -5px; width: 14px; height: 14px; border-radius: 50%; background: #fff; border: 2px solid var(--point); }
+
+/* ── S5: 관객 화면 ─────────────────────────────────────── */
+.stage { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; width: 1240px; }
+.stage figure { margin: 0; }
+.stage figcaption { margin-top: 8px; color: var(--muted); font-size: 12px; }
+
+/* ── S6: 콘티 썸네일 + 경고 ──────────────────────────────── */
+.conti { width: 1240px; padding: 16px; display: grid; grid-template-columns: 330px 1fr; gap: 18px; }
+.citems { display: flex; flex-direction: column; gap: 6px; }
+.citem { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.citem.sel { border-color: var(--point); box-shadow: 0 0 0 2px rgba(77,94,130,.12); }
+.citem .k { width: 22px; height: 22px; border-radius: 5px; display: grid; place-items: center; font-size: 11px; font-weight: 800; color: #fff; }
+.citem .t { flex: 1; font-weight: 600; }
+.citem .t small { display: block; font-weight: 500; color: var(--muted); font-size: 11.5px; }
+.thumbs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; align-content: start; }
+.thumb { position: relative; }
+.thumb .slide { border-radius: 5px; }
+.thumb .no { font-size: 11px; color: var(--muted); margin-top: 4px; display: flex; justify-content: space-between; }
+.thumb.bad .slide { outline: 2px solid var(--live); outline-offset: 2px; }
+.thumb .badge { position: absolute; top: 6px; right: 6px; background: var(--live); color: #fff; font-size: 10.5px; font-weight: 800;
+  padding: 2px 7px; border-radius: 999px; box-shadow: 0 2px 6px rgba(0,0,0,.3); }
+
+/* ── S7: 슬라이드 한 장 편집 ─────────────────────────────── */
+.quick { width: 560px; padding: 22px 24px 18px; }
+.quick h3 { margin: 0 0 16px; font-size: 18px; }
+.flabel { font-size: 12px; font-weight: 600; color: var(--muted); margin: 0 0 6px; display: flex; align-items: center; gap: 6px; }
+.ta { border: 1px solid var(--line); border-radius: var(--r-control); padding: 8px 10px; min-height: 64px; line-height: 1.55; white-space: pre-line; margin-bottom: 12px; }
+
+/* ── S8: 싱어 ─────────────────────────────────────────── */
+.singer { width: 600px; background: #16181D; border-radius: 10px; padding: 14px; color: #fff; }
+.singer .hd { display: flex; justify-content: space-between; color: #9AA0AE; font-size: 12px; margin-bottom: 10px; }
+.singer .cur { background: #0E1014; border-radius: 8px; padding: 22px; text-align: center; font-size: 22px; font-weight: 700; line-height: 1.4; }
+.singer .nxt { margin-top: 10px; background: #0E1014; border-radius: 8px; padding: 12px; text-align: center; font-size: 15px; color: #B8BDC9; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>3개 언어 동시 표시 — 화면 목업</h1>
+  <p class="lead">원본 · 보조 · 추가 보조를 관객 화면에 함께 띄운다. 노란 테두리(<span class="newtag">NEW</span>)는 새로 생기는 컨트롤이다. 예시 가사·구절은 목업용 샘플이다.</p>
+
+  <!-- ─────────── S1 ─────────── -->
+  <section id="s1">
+    <h2>① 가사 수정 — 페이지 표 (기본 보기)</h2>
+    <p class="cap">한 행 = 관객 화면 한 장. 좌 원본 · 가운데 보조 · 우 추가 보조. 행 높이는 그 행의 가장 긴 칸에 맞춰 세 칸이 늘 나란하다.<br>
+      오른쪽은 고른 행의 실제 슬라이드 미리보기(관객 화면과 같은 렌더러) — 넘치면 바로 보인다.</p>
+    <div class="frame">
+      <div class="dialog editor" id="shot-s1">
+        <div class="ed-head">
+          <h3>가사 수정</h3>
+          <div class="field title">주님의 사랑 넓고 깊어</div>
+          <div class="seg new"><span class="on">페이지 표</span><span>통째로</span></div>
+        </div>
+
+        <div class="banner new">
+          <span>✂︎</span>
+          <span><b>추가 보조</b> 칸에 붙여 넣은 가사를 빈 줄마다 나눠 <b>2~6페이지</b>에 넣었습니다.</span>
+          <span class="btn text" style="height:24px;padding:0 6px">되돌리기</span>
+          <span class="x">✕</span>
+        </div>
+
+        <div class="ed-body">
+          <div>
+            <div class="grid-head">
+              <div></div>
+              <div class="colhead"><span class="lang-dot" style="background:#fff;border:1px solid #999"></span>원본 <small>· 한국어</small></div>
+              <div class="colhead"><span class="lang-dot" style="background:#E2C800"></span>보조 <span class="dd">영어</span></div>
+              <div class="colhead new"><span class="lang-dot" style="background:#3BB6C6"></span>추가 보조 <span class="dd">스페인어</span>
+                <span class="btn text" style="height:24px;padding:0 4px">＋ 언어</span></div>
+              <div></div>
+            </div>
+
+            <div class="grid-row">
+              <div class="pno">1</div>
+              <div class="cell">주님의 사랑 넓고 깊어
+나의 삶을 감싸 주시네</div>
+              <div class="cell">Your love, O Lord, is wide and deep
+It wraps my life in peace</div>
+              <div class="cell">Tu amor, Señor, es grande y fiel
+Envuelve mi vida en paz</div>
+              <div class="rowmenu">⋮</div>
+            </div>
+
+            <div class="grid-row sel">
+              <div class="pno">2</div>
+              <div class="cell">어두운 밤 지날 때에도
+주의 빛이 나를 비추네
+흔들리는 이 마음 위에
+평안으로 함께하시네</div>
+              <div class="cell">Through every night and every storm
+Your light still shines on me
+When my heart is shaken low
+Your peace is near to me</div>
+              <div class="cell focus">En cada noche y tempestad
+Tu luz me alumbrará
+Cuando mi alma tiemble aquí
+Tu paz conmigo está
+                <div class="celltools new"><span>↑ 위로 당기기</span><span>↓ 아래로 밀기</span></div>
+              </div>
+              <div class="rowmenu">⋮</div>
+              <div class="rowflag"><span class="chip err">⚠ 넘침 약 112%</span></div>
+            </div>
+
+            <div class="grid-row">
+              <div class="pno">3</div>
+              <div class="cell">찬양해 찬양해
+영원히 주를 찬양해</div>
+              <div class="cell">Sing praise, sing praise
+Forever sing His praise</div>
+              <div class="cell">Alabad, alabad
+Por siempre alabad</div>
+              <div class="rowmenu" style="color:var(--point)">⋮</div>
+              <div class="menu" style="right:-6px;top:30px">
+                <div>위에 페이지 넣기</div>
+                <div>아래에 페이지 넣기</div>
+                <div class="hl">다음 페이지와 합치기</div>
+                <div>커서 위치에서 나누기 <kbd>⌘↵</kbd></div>
+                <hr>
+                <div>빈 페이지로 만들기</div>
+                <div class="danger">페이지 지우기 (세 칸 모두)</div>
+              </div>
+            </div>
+
+            <div class="grid-row">
+              <div class="pno">4</div>
+              <div class="cell blank">빈 페이지</div>
+              <div class="cell blank">빈 페이지</div>
+              <div class="cell blank">빈 페이지</div>
+              <div class="rowmenu">⋮</div>
+            </div>
+
+            <div class="grid-row">
+              <div class="pno">5</div>
+              <div class="cell">주의 사랑 영원하리</div>
+              <div class="cell">Your love endures forever</div>
+              <div class="cell empty">비어 있음 — 이 페이지는 추가 보조 없이 나옵니다</div>
+              <div class="rowmenu">⋮</div>
+            </div>
+
+            <div class="add-row">
+              <span class="btn outline">＋ 페이지 추가</span>
+              <span class="btn text">빈 줄 기준으로 다시 정렬</span>
+            </div>
+          </div>
+
+          <div class="side">
+            <div class="lbl"><span>미리보기 · 2페이지</span><span class="chip err">넘침</span></div>
+            <div class="slide">
+              <div class="stitle">주님의 사랑 넓고 깊어</div>
+              <div class="box over">
+                <div class="m">어두운 밤 지날 때에도<br>주의 빛이 나를 비추네<br>흔들리는 이 마음 위에<br>평안으로 함께하시네</div>
+                <div class="s">Through every night and every storm<br>Your light still shines on me<br>When my heart is shaken low<br>Your peace is near to me</div>
+                <div class="e">En cada noche y tempestad<br>Tu luz me alumbrará<br>Cuando mi alma tiemble aquí<br>Tu paz conmigo está</div>
+              </div>
+              <div class="boxguide"></div>
+              <div class="overflow-fade"></div>
+              <div class="ovtag">가사 상자 밖</div>
+            </div>
+            <div class="hint" style="line-height:1.6">
+              점선 = 가사 상자(5.4인치). 넘치면 관객 화면에서 아래가 잘리거나 겹칩니다.<br>
+              해결: 페이지를 나누거나(⋮ → 나누기) 디자인에서 글자 크기를 줄이세요.
+            </div>
+            <div class="lbl" style="margin-top:6px"><span>표시 언어 (이 미리보기만)</span></div>
+            <div style="display:flex;gap:10px;align-items:center">
+              <span class="sw on"></span> 보조 <span class="sw on" style="margin-left:8px"></span> 추가 보조
+            </div>
+          </div>
+        </div>
+
+        <div class="ed-foot">
+          <div class="stat">
+            <span class="chip muted">원본 5페이지</span>
+            <span class="chip ok">보조 5 / 5</span>
+            <span class="chip warn">추가 보조 4 / 5 · 1페이지 비어 있음</span>
+            <span class="chip err">넘침 1페이지</span>
+          </div>
+          <span class="btn text">취소</span>
+          <span class="btn filled">저장</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────── S2 ─────────── -->
+  <section id="s2">
+    <h2>② 가사 수정 — 통째로 (붙여 넣기용)</h2>
+    <p class="cap">지금 방식처럼 언어별 큰 입력칸. 빈 줄 = 페이지 구분은 그대로. 왼쪽 숫자는 그 칸 기준 페이지 번호로, 같은 번호끼리 한 장이 된다.<br>
+      페이지 수가 다른 칸은 머리에 경고가 뜬다. 두 보기는 저장 형식이 같아서 언제든 오가도 손실이 없다.</p>
+    <div class="frame">
+      <div class="dialog editor" id="shot-s2" style="width:1100px">
+        <div class="ed-head">
+          <h3>가사 수정</h3>
+          <div class="field title">주님의 사랑 넓고 깊어</div>
+          <div class="seg"><span>페이지 표</span><span class="on">통째로</span></div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+          <div>
+            <div class="flabel">원본 <span class="chip muted">5페이지</span></div>
+            <div class="field" style="min-height:330px;line-height:1.6;white-space:pre-line;display:grid;grid-template-columns:22px 1fr;gap:6px"><span class="hint" style="white-space:pre-line">1
+
+
+2
+
+
+
+
+3
+
+
+4
+
+5</span><span>주님의 사랑 넓고 깊어
+나의 삶을 감싸 주시네
+
+어두운 밤 지날 때에도
+주의 빛이 나를 비추네
+흔들리는 이 마음 위에
+평안으로 함께하시네
+
+찬양해 찬양해
+영원히 주를 찬양해
+
+(빈 페이지)
+
+주의 사랑 영원하리</span></div>
+          </div>
+          <div>
+            <div class="flabel">보조 <span class="dd" style="height:22px">영어</span> <span class="chip ok">5페이지</span></div>
+            <div class="field" style="min-height:330px;line-height:1.6;white-space:pre-line;display:grid;grid-template-columns:22px 1fr;gap:6px"><span class="hint" style="white-space:pre-line">1
+
+
+2
+
+
+
+
+3
+
+
+4
+
+5</span><span>Your love, O Lord, is wide and deep
+It wraps my life in peace
+
+Through every night and every storm
+Your light still shines on me
+When my heart is shaken low
+Your peace is near to me
+
+Sing praise, sing praise
+Forever sing His praise
+
+(빈 페이지)
+
+Your love endures forever</span></div>
+          </div>
+          <div class="new">
+            <div class="flabel">추가 보조 <span class="dd" style="height:22px">스페인어</span> <span class="chip warn">4페이지 · 원본보다 1 적음</span></div>
+            <div class="field" style="min-height:330px;line-height:1.6;white-space:pre-line;display:grid;grid-template-columns:22px 1fr;gap:6px"><span class="hint" style="white-space:pre-line">1
+
+
+2
+
+
+
+
+3
+
+
+4</span><span>Tu amor, Señor, es grande y fiel
+Envuelve mi vida en paz
+
+En cada noche y tempestad
+Tu luz me alumbrará
+Cuando mi alma tiemble aquí
+Tu paz conmigo está
+
+Alabad, alabad
+Por siempre alabad
+
+(빈 페이지)</span></div>
+          </div>
+        </div>
+        <div class="ed-foot">
+          <div class="stat"><span class="hint">페이지 구분: 빈 줄 (또는 ### / ====) · 빈 페이지는 '(빈 페이지)' 대신 빈 줄 두 개</span></div>
+          <span class="btn text">취소</span>
+          <span class="btn filled">저장</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────── S3 ─────────── -->
+  <section id="s3">
+    <h2>③ 디자인 리본 — 찬양 탭</h2>
+    <p class="cap">'가사' 묶음에 추가 보조 줄이 생긴다. 크기는 본문 대비 %라 본문 크기를 바꾸면 같이 따라간다.
+      색·켜기 스위치는 지금처럼 찬양·성경 공통 값이다(성경 탭에서 바꿔도 같이 바뀐다). 추가 보조 기본값은 '없음' — 업데이트해도 지금 화면 그대로.</p>
+    <div class="frame">
+      <div class="dialog ribbon" id="shot-s3">
+        <div class="rb-tabs"><span>공통</span><span class="on">찬양</span><span>성경</span><span class="right">접기 ⌃</span></div>
+        <div class="rb-body">
+          <div class="rb-prev">
+            <div class="slide">
+              <div class="stitle">주님의 사랑 넓고 깊어</div>
+              <div class="box">
+                <div class="m">주님의 사랑 넓고 깊어<br>나의 삶을 감싸 주시네</div>
+                <div class="s">Your love, O Lord, is wide and deep<br>It wraps my life in peace</div>
+                <div class="e">Tu amor, Señor, es grande y fiel<br>Envuelve mi vida en paz</div>
+              </div>
+            </div>
+          </div>
+          <div class="group" style="flex:1.35">
+            <h4>가사</h4>
+            <div class="prow"><label>크기</label><div class="ctl">
+              <span class="hint">본문</span><span class="num">30</span>
+              <span class="hint new" style="padding:2px 4px">보조 <span class="num" style="width:58px">80%</span></span>
+              <span class="hint new" style="padding:2px 4px">추가 <span class="num" style="width:58px">70%</span></span>
+            </div></div>
+            <div class="prow"><label>색상</label><div class="ctl">
+              <span class="cfield"><span class="swatch" style="background:#fff"></span>원본</span>
+              <span class="cfield"><span class="swatch" style="background:#FFF176"></span>보조</span>
+              <span class="cfield new"><span class="swatch" style="background:#80DEEA"></span>추가 보조</span>
+            </div></div>
+            <div class="prow"><label>보조 언어</label><div class="ctl">
+              <span class="dd" style="min-width:120px">영어</span><span class="sw on"></span><span class="hint">표시</span>
+            </div></div>
+            <div class="prow new"><label>추가 보조</label><div class="ctl">
+              <span class="dd" style="min-width:120px">스페인어</span><span class="sw on"></span><span class="hint">표시 · 보조와 같은 언어는 고를 수 없음</span>
+            </div></div>
+          </div>
+          <div class="group" style="flex:1">
+            <h4>가사 위치</h4>
+            <div class="prow"><label>세로 기준</label><div class="ctl"><div class="seg"><span>상단</span><span class="on">중단</span><span>하단</span></div></div></div>
+            <div class="prow"><label>미세 조정</label><div class="ctl"><span class="slider"><span class="track"><i style="width:50%"></i><b style="left:48%"></b></span><span class="mono">0.00</span></span></div></div>
+            <div class="prow"><label>가로 정렬</label><div class="ctl"><div class="seg"><span>왼쪽</span><span class="on">가운데</span><span>오른쪽</span></div></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────── S4 ─────────── -->
+  <section id="s4">
+    <h2>④ 디자인 리본 — 성경 탭 + 성경 검색 패널</h2>
+    <p class="cap">찬양과 같은 구조로 '추가 역본'을 고른다. 절을 콘티에 담는 순간 보조·추가 역본 본문이 같이 담긴다(지금 보조 역본과 같은 방식).
+      성경은 페이지당 절 수로만 나누므로, 3개 역본이 켜져 있으면 검색 패널에 '페이지당 1절 권장'을 띄운다.</p>
+    <div class="frame">
+      <div style="display:flex;flex-direction:column;gap:18px">
+        <div class="dialog ribbon" id="shot-s4">
+          <div class="rb-tabs"><span>공통</span><span>찬양</span><span class="on">성경</span><span class="right">접기 ⌃</span></div>
+          <div class="rb-body">
+            <div class="rb-prev">
+              <div class="slide bible">
+                <div class="stitle">요한복음 3:16</div>
+                <div class="box">
+                  <div class="m">16 하나님이 세상을 이처럼 사랑하사 독생자를 주셨으니 이는 그를 믿는 자마다 멸망하지 않고 영생을 얻게 하려 하심이라</div>
+                  <div class="s">16 For God so loved the world, that he gave his only begotten Son, that whosoever believeth in him should not perish, but have everlasting life.</div>
+                  <div class="e">16 Porque de tal manera amó Dios al mundo, que ha dado a su Hijo unigénito, para que todo aquel que en él cree, no se pierda, mas tenga vida eterna.</div>
+                </div>
+              </div>
+            </div>
+            <div class="group" style="flex:1.35">
+              <h4>본문</h4>
+              <div class="prow"><label>크기</label><div class="ctl">
+                <span class="hint">본문</span><span class="num">26</span>
+                <span class="hint new" style="padding:2px 4px">보조 <span class="num" style="width:58px">80%</span></span>
+                <span class="hint new" style="padding:2px 4px">추가 <span class="num" style="width:58px">70%</span></span>
+              </div></div>
+              <div class="prow"><label>색상</label><div class="ctl">
+                <span class="cfield"><span class="swatch" style="background:#fff"></span>본문</span>
+                <span class="cfield new"><span class="swatch" style="background:#FFF176"></span>보조</span>
+                <span class="cfield new"><span class="swatch" style="background:#80DEEA"></span>추가</span>
+                <span class="chip muted">보조·추가 색은 찬양과 공통</span>
+              </div></div>
+              <div class="prow"><label>보조 역본</label><div class="ctl">
+                <span class="dd" style="min-width:140px">KJV</span><span class="sw on"></span><span class="hint">표시</span>
+              </div></div>
+              <div class="prow new"><label>추가 역본</label><div class="ctl">
+                <span class="dd" style="min-width:140px">RVR1960</span><span class="sw on"></span><span class="hint">표시 · 66권 역본만</span>
+              </div></div>
+            </div>
+            <div class="group" style="flex:1">
+              <h4>본문 위치</h4>
+              <div class="prow"><label>세로 기준</label><div class="ctl"><div class="seg"><span class="on">상단</span><span>중단</span><span>하단</span></div></div></div>
+              <div class="prow"><label>미세 조정</label><div class="ctl"><span class="slider"><span class="track"><i style="width:50%"></i><b style="left:48%"></b></span><span class="mono">0.00</span></span></div></div>
+              <div class="prow"><label>가로 정렬</label><div class="ctl"><div class="seg"><span class="on">왼쪽</span><span>가운데</span><span>오른쪽</span></div></div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="dialog" id="shot-s4b" style="width:560px;padding:14px 16px">
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+            <span class="dd">개역개정</span><span class="dd">요한복음</span><span class="dd">3장</span>
+            <span style="margin-left:auto" class="hint">페이지당</span><span class="dd">2절</span>
+          </div>
+          <div class="banner new" style="margin:0 0 10px;background:var(--warn-bg);border-color:#F1D9A6;color:#7A5410">
+            <span>⚠</span><span>역본 3개가 켜져 있어 한 페이지에 글이 많습니다. <b>페이지당 1절</b>을 권장합니다.</span>
+            <span class="btn text" style="height:24px;padding:0 6px;color:#7A5410">1절로 바꾸기</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <div class="citem sel"><span class="k" style="background:var(--point)">16</span><span class="t">하나님이 세상을 이처럼 사랑하사…<small>KJV · RVR1960 함께 담김</small></span></div>
+            <div class="citem sel"><span class="k" style="background:var(--point)">17</span><span class="t">하나님이 그 아들을 세상에 보내신 것은…<small>KJV · RVR1960 함께 담김</small></span></div>
+            <div class="citem"><span class="k" style="background:var(--outline)">18</span><span class="t">그를 믿는 자는 심판을 받지 아니하는 것이요…</span></div>
+          </div>
+          <div style="display:flex;justify-content:flex-end;margin-top:10px"><span class="btn filled">콘티에 담기 (1페이지 · <span style="color:#FFB4B6">넘침</span>)</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────── S5 ─────────── -->
+  <section id="s5">
+    <h2>⑤ 관객 화면 (발표 창 · PPTX · 미리보기 모두 같은 배치)</h2>
+    <p class="cap">하나의 가사 상자 안에 원본 → 보조 → 추가 보조 순으로 쌓는다. 언어마다 색·크기가 따로다. 끈 언어는 자리도 차지하지 않는다.</p>
+    <div class="frame">
+      <div class="stage" id="shot-s5">
+        <figure>
+          <div class="slide">
+            <div class="stitle">주님의 사랑 넓고 깊어</div>
+            <div class="box">
+              <div class="m">찬양해 찬양해<br>영원히 주를 찬양해</div>
+              <div class="s">Sing praise, sing praise<br>Forever sing His praise</div>
+              <div class="e">Alabad, alabad<br>Por siempre alabad</div>
+            </div>
+          </div>
+          <figcaption>찬양 — 원본(흰색 30pt) · 보조 영어(노랑 80%) · 추가 보조 스페인어(하늘색 70%)</figcaption>
+        </figure>
+        <figure>
+          <div class="slide bible">
+            <div class="stitle">요한복음 3:16</div>
+            <div class="box" style="justify-content:flex-start">
+              <div class="m">16 하나님이 세상을 이처럼 사랑하사 독생자를 주셨으니 이는 그를 믿는 자마다 멸망하지 않고 영생을 얻게 하려 하심이라</div>
+              <div class="s" style="margin-top:.4em">16 For God so loved the world, that he gave his only begotten Son, that whosoever believeth in him should not perish, but have everlasting life.</div>
+              <div class="e" style="margin-top:.4em">16 Porque de tal manera amó Dios al mundo, que ha dado a su Hijo unigénito, para que todo aquel que en él cree, no se pierda, mas tenga vida eterna.</div>
+            </div>
+          </div>
+          <figcaption>성경 — 개역개정 · 보조 KJV · 추가 RVR1960 (페이지당 1절)</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────── S6 ─────────── -->
+  <section id="s6">
+    <h2>⑥ 넘침 경고 — 편집 탭 콘티 / 슬라이드 목록</h2>
+    <p class="cap">넘침 대응은 A안(경고만). 미리보기 렌더러로 높이를 재서 가사 상자(5.4인치)를 넘는 페이지에 빨간 배지를 단다.
+      콘티 항목에도 '넘침 N'이 뜬다. 렌더러 4곳은 자동 축소를 하지 않으므로 관객 화면·PPTX가 서로 같게 유지된다.</p>
+    <div class="frame">
+      <div class="dialog conti" id="shot-s6">
+        <div class="citems">
+          <div class="hint" style="font-weight:700;margin-bottom:2px">콘티</div>
+          <div class="citem sel"><span class="k" style="background:#4D5E82">♪</span><span class="t">주님의 사랑 넓고 깊어<small>5페이지 · 3개 언어</small></span><span class="chip err">넘침 1</span></div>
+          <div class="citem"><span class="k" style="background:#6E5FB0">✝</span><span class="t">요한복음 3:16-17<small>1페이지 · 3개 역본</small></span><span class="chip err">넘침 1</span></div>
+          <div class="citem"><span class="k" style="background:#4D5E82">♪</span><span class="t">영원히 찬양<small>4페이지 · 3개 언어</small></span><span class="chip ok">✓</span></div>
+          <div class="citem"><span class="k" style="background:#2C2E35">▢</span><span class="t">빈 페이지</span></div>
+        </div>
+        <div class="thumbs">
+          <div class="thumb"><div class="slide"><div class="box"><div class="m">주님의 사랑 넓고 깊어<br>나의 삶을 감싸 주시네</div><div class="s">Your love, O Lord, is wide and deep<br>It wraps my life in peace</div><div class="e">Tu amor, Señor, es grande y fiel<br>Envuelve mi vida en paz</div></div></div><div class="no"><span>1</span></div></div>
+          <div class="thumb bad"><div class="slide"><div class="box over"><div class="m">어두운 밤 지날 때에도<br>주의 빛이 나를 비추네<br>흔들리는 이 마음 위에<br>평안으로 함께하시네</div><div class="s">Through every night and every storm<br>Your light still shines on me<br>When my heart is shaken low<br>Your peace is near to me</div><div class="e">En cada noche y tempestad<br>Tu luz me alumbrará<br>Cuando mi alma tiemble aquí<br>Tu paz conmigo está</div></div><div class="overflow-fade"></div></div><span class="badge">넘침</span><div class="no"><span>2</span><span style="color:var(--live);font-weight:700">약 112%</span></div></div>
+          <div class="thumb"><div class="slide"><div class="box"><div class="m">찬양해 찬양해<br>영원히 주를 찬양해</div><div class="s">Sing praise, sing praise<br>Forever sing His praise</div><div class="e">Alabad, alabad<br>Por siempre alabad</div></div></div><div class="no"><span>3</span></div></div>
+          <div class="thumb"><div class="slide"></div><div class="no"><span>4</span><span>빈 페이지</span></div></div>
+          <div class="thumb"><div class="slide"><div class="box"><div class="m">주의 사랑 영원하리</div><div class="s">Your love endures forever</div></div></div><div class="no"><span>5</span><span>추가 보조 없음</span></div></div>
+          <div class="thumb bad"><div class="slide bible"><div class="box over"><div class="m">16 하나님이 세상을 이처럼 사랑하사 독생자를 주셨으니 이는 그를 믿는 자마다 멸망하지 않고 영생을 얻게 하려 하심이라 17 하나님이 그 아들을 세상에 보내신 것은 세상을 심판하려 하심이 아니요 그로 말미암아 세상이 구원을 받게 하려 하심이라</div><div class="s">16 For God so loved the world, that he gave his only begotten Son, that whosoever believeth in him should not perish, but have everlasting life. 17 For God sent not his Son into the world to condemn the world; but that the world through him might be saved.</div><div class="e">16 Porque de tal manera amó Dios al mundo…</div></div><div class="overflow-fade"></div></div><span class="badge">넘침</span><div class="no"><span>6</span><span style="color:var(--live);font-weight:700">약 150%</span></div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────── S7 ─────────── -->
+  <section id="s7">
+    <h2>⑦ 슬라이드 한 장 고치기 (썸네일 연필 · 발표 보기)</h2>
+    <p class="cap">지금 '본문 / 보조' 두 칸에 '추가 보조' 칸이 붙는다. 칸 이름에 지금 언어 이름이 같이 나온다.</p>
+    <div class="frame">
+      <div class="dialog quick" id="shot-s7">
+        <h3>2페이지 고치기 · 주님의 사랑 넓고 깊어</h3>
+        <div class="flabel">본문</div>
+        <div class="ta">어두운 밤 지날 때에도
+주의 빛이 나를 비추네</div>
+        <div class="flabel">보조 <span class="chip muted">영어</span></div>
+        <div class="ta">Through every night and every storm
+Your light still shines on me</div>
+        <div class="new" style="padding:2px">
+          <div class="flabel">추가 보조 <span class="chip muted">스페인어</span></div>
+          <div class="ta" style="margin-bottom:4px">En cada noche y tempestad
+Tu luz me alumbrará</div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
+          <span class="btn text">취소</span><span class="btn filled">적용</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────── S8 ─────────── -->
+  <section id="s8">
+    <h2>⑧ 싱어 화면 · 휴대폰 싱어/리모컨 — 바뀌지 않음</h2>
+    <p class="cap">추가 보조는 관객 화면 전용이다. 싱어 창·휴대폰에는 보내지 않는다(지금처럼 원본 중심, 보조는 기존 스위치를 그대로 따른다).</p>
+    <div class="frame">
+      <div class="singer" id="shot-s8">
+        <div class="hd"><span>2 / 5 · 주님의 사랑 넓고 깊어</span><span>오후 7:32 · 12:05 / 20:00</span></div>
+        <div class="cur">어두운 밤 지날 때에도<br>주의 빛이 나를 비추네<br>흔들리는 이 마음 위에<br>평안으로 함께하시네</div>
+        <div class="nxt">찬양해 찬양해<br>영원히 주를 찬양해</div>
+      </div>
+    </div>
+  </section>
+</div>
+</body>
+</html>
