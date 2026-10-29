@@ -4,7 +4,8 @@ import 'dart:io';
 import 'dart:ui' show AppExitResponse;
 
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart' show ValueListenable;
+import 'package:flutter/foundation.dart'
+    show ValueListenable, mapEquals, setEquals;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -20,6 +21,7 @@ import '../../../app_colors.dart';
 import '../../../app_theme.dart';
 import '../../../features/bible/data/bible_repository.dart';
 import '../../../features/bible/domain/bible_text_search.dart';
+import '../../../features/bible/domain/bible_voice_parse.dart';
 import '../../../features/bible/domain/bible_verse.dart';
 import '../../../features/update/update_service.dart';
 import '../data/app_logger.dart';
@@ -37,6 +39,7 @@ import '../data/singer_web_server.dart';
 import '../data/sync_service.dart';
 import '../data/sync_store.dart';
 import '../data/source_file_watcher.dart';
+import '../data/speech_listener.dart';
 import '../data/worship_conti_repository.dart';
 import '../domain/worship_conti.dart';
 import '../domain/export_style.dart';
@@ -113,6 +116,107 @@ typedef _SlidePiece = ({
   List<_SlideInfo> pages,
 });
 
+/// 발표 보기 성경 음성 검색 상태 줄에 보일 것.
+class _VoiceState {
+  const _VoiceState({
+    required this.version,
+    this.heard = '',
+    this.message = '',
+    this.isError = false,
+    this.insertedUids = const [],
+    this.label = '',
+  });
+
+  /// 지금 찾는 역본.
+  final String version;
+
+  /// 지금 들리는 말(중간 결과).
+  final String heard;
+
+  /// 마지막으로 한 일(넣음·못 찾음).
+  final String message;
+  final bool isError;
+
+  /// 마지막으로 넣은 항목들(띄우기·되돌리기 대상)과 그 구절.
+  final List<int> insertedUids;
+  final String label;
+
+  _VoiceState copyWith({String? heard}) => _VoiceState(
+    version: version,
+    heard: heard ?? this.heard,
+    message: message,
+    isError: isError,
+    insertedUids: insertedUids,
+    label: label,
+  );
+}
+
+/// 음성 넣기 직전(또는 직후) 콘티 상태. `_insertItemsAfterSlide` 가 곡·PPT 를 나누며 바꾸는 것만 담는다.
+class _VoiceUndo {
+  _VoiceUndo.capture(_PraiseHomePageState s)
+    : items = List.of(s._stagingItems),
+      noSpacer = Set.of(s._noSpacerUids),
+      backgrounds = Map.of(s._itemBackgrounds),
+      notes = Map.of(s._slideNotes),
+      deleted = Set.of(s._deletedSlideKeys),
+      mediaGroups = Map.of(s._mediaGroups);
+
+  final List<({int uid, StagingItem item})> items;
+  final Set<int> noSpacer;
+  final Map<int, SlideBackground> backgrounds;
+  final Map<String, String> notes;
+  final Set<String> deleted;
+  final Map<int, int> mediaGroups;
+
+  /// 넣을 때 기준이 된 페이지(그 바로 뒤에 넣었다). 되돌린 뒤 관객 화면이 돌아갈 곳.
+  int slideIndex = 0;
+
+  /// 넣은 직후 상태. 지금이 이것과 하나라도 다르면(그 사이 메모·지우기·배경 등을 고침) 통째로 되돌리지 않는다.
+  _VoiceUndo? after;
+
+  bool _sameAs(_VoiceUndo o) {
+    if (items.length != o.items.length) return false;
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].uid != o.items[i].uid ||
+          !identical(items[i].item, o.items[i].item)) {
+        return false;
+      }
+    }
+    return setEquals(noSpacer, o.noSpacer) &&
+        mapEquals(backgrounds, o.backgrounds) &&
+        mapEquals(notes, o.notes) &&
+        setEquals(deleted, o.deleted) &&
+        mapEquals(mediaGroups, o.mediaGroups);
+  }
+
+  /// 되돌렸으면 true. setState 안에서 부른다.
+  bool restore(_PraiseHomePageState s) {
+    final expected = after;
+    if (expected == null || !_VoiceUndo.capture(s)._sameAs(expected)) {
+      return false;
+    }
+    s._stagingItems
+      ..clear()
+      ..addAll(items);
+    s._noSpacerUids
+      ..clear()
+      ..addAll(noSpacer);
+    s._itemBackgrounds
+      ..clear()
+      ..addAll(backgrounds);
+    s._slideNotes
+      ..clear()
+      ..addAll(notes);
+    s._deletedSlideKeys
+      ..clear()
+      ..addAll(deleted);
+    s._mediaGroups
+      ..clear()
+      ..addAll(mediaGroups);
+    return true;
+  }
+}
+
 class _PraiseHomePageState extends State<PraiseHomePage>
     with SingleTickerProviderStateMixin {
   static const MethodChannel _savePanelChannel = MethodChannel(
@@ -166,6 +270,26 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   // 배경 영상 위에 얹을 가사 PNG.
   final LyricsOverlayRenderer _lyricsOverlays = LyricsOverlayRenderer();
   final BibleRepository _bibleRepository = BibleRepository();
+
+  // 발표 보기 성경 음성 검색. null = 꺼짐. 켜 두는 동안 계속 듣는다.
+  final SpeechListener _speech = SpeechListener();
+  final ValueNotifier<_VoiceState?> _voice = ValueNotifier(null);
+  List<String> _voiceVersions = const [];
+  // 이어 말하기("17절")·역본은 켤 때마다 새로 시작한다.
+  String _voiceVersion = '';
+  int? _voiceBook;
+  int? _voiceChapter;
+  // 같은 구절을 여러 번 말해도 한 번만 넣는다(구절 → 넣은 시각).
+  final Map<String, DateTime> _voiceRecent = {};
+  // 역본마다 책 이름(말할 때마다 3만여 절을 다시 훑지 않게).
+  final Map<String, List<String>> _voiceBooks = {};
+  // 들은 마디를 하나씩 차례로 처리한다(빨리 연달아 와도 순서·중복 검사가 꼬이지 않게).
+  Future<void> _voiceQueue = Future.value();
+  // 마지막으로 음성으로 넣은 항목과 그때 보던 페이지. 페이지를 안 넘기고 또 말하면 그 뒤에 잇는다
+  // (안 그러면 둘째 구절이 첫째 앞에 들어가 순서가 뒤집힌다).
+  ({String currentKey, int lastUid})? _voiceChain;
+  // 마지막 넣기 직전 콘티 상태. 되돌리기 때 곡을 나눈 것까지 되돌린다.
+  _VoiceUndo? _voiceUndo;
   final WorshipContiRepository _contiRepository = WorshipContiRepository();
   final TextEditingController _searchController = TextEditingController();
   final UpdateService _updateService = UpdateService();
@@ -355,11 +479,15 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   }
 
   void _onMainTabChanged() {
+    // 성경 음성 검색은 발표 보기에서만 쓴다.
+    if (_mainTabController.index != 1 && _voice.value != null) _stopVoice();
     if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
+    _speech.stop();
+    _voice.dispose();
     _presenterView.timer.removeListener(_sendSingerView);
     _presenterView.timer.dispose();
     _exitListener.dispose();
@@ -2475,6 +2603,254 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _sendCurrentSlide();
   }
 
+  // ── 성경 음성 검색 (발표 보기) ─────────────────────────────────────────
+  //
+  // 켜 두면 계속 듣다가 "다니엘 3장 1절에서 10절" 같은 말을 들으면 그 구절 페이지를
+  // 현재 페이지 바로 뒤에 넣는다(붙여 넣기와 같은 자리). 관객 화면은 그대로다.
+  // "개역개정" 처럼 역본을 말하면 그 뒤로는 그 역본으로 찾는다(기본 새번역).
+
+  Future<void> _toggleVoice() async {
+    if (_voice.value != null) {
+      await _stopVoice();
+      return;
+    }
+    final versions = await _bibleRepository.getVersions();
+    if (!mounted) return;
+    if (versions.isEmpty) {
+      _showSnack('성경 데이터를 먼저 가져와 주세요.');
+      return;
+    }
+    _voiceVersions = versions;
+    // DB 이름이 자모가 풀린 꼴(NFD)일 수 있어 합쳐서 비교한다.
+    _voiceVersion = versions.firstWhere(
+      (v) => composeHangul(v) == '새번역',
+      orElse: () => versions.first,
+    );
+    _voiceBook = null;
+    _voiceChapter = null;
+    _voiceRecent.clear();
+    _voiceBooks.clear();
+    _voiceChain = null;
+    _voiceUndo = null;
+    _speech
+      ..onPartial = (text) {
+        final v = _voice.value;
+        if (v != null) _voice.value = v.copyWith(heard: text);
+      }
+      ..onFinal = (text) {
+        // 하나가 실패해도 다음 마디는 처리되게 오류를 여기서 받는다.
+        _voiceQueue = _voiceQueue
+            .then((_) => _onVoiceHeard(text))
+            .catchError(
+              (Object e, StackTrace st) =>
+                  AppLogger.instance.error('[voice] 처리 실패: $text', e, st),
+            );
+      }
+      ..onError = (message) {
+        if (_voice.value == null) return;
+        AppLogger.instance.info('[voice] 멈춤: $message');
+        setState(() => _voice.value = null);
+        _showSnack('성경 음성 검색이 꺼졌습니다: $message');
+      };
+    setState(() {
+      _voice.value = _VoiceState(
+        version: _voiceVersion,
+        message: '구절을 말하면 다음 장에 넣습니다',
+      );
+    });
+    final error = await _speech.start(
+      grammar: bibleVoiceGrammar(versions),
+      hints: [...bibleCanonKorean, ...versions, '장', '절', '편'],
+    );
+    if (error == null) {
+      // 권한 창이 떠 있는 사이에 다시 눌러 껐으면 켜진 마이크를 끈다.
+      if (_voice.value == null || !mounted) await _speech.stop();
+      return;
+    }
+    if (!mounted) return;
+    AppLogger.instance.info('[voice] 못 켬: $error');
+    setState(() => _voice.value = null);
+    _showSnack('음성 인식을 켤 수 없습니다: $error');
+  }
+
+  Future<void> _stopVoice() async {
+    setState(() => _voice.value = null);
+    await _speech.stop();
+  }
+
+  void _voiceMessage(String message, {bool error = false}) {
+    final v = _voice.value;
+    if (v == null) return;
+    _voice.value = _VoiceState(
+      version: _voiceVersion,
+      message: message,
+      isError: error,
+      // 마지막에 넣은 것은 다음에 넣거나 되돌릴 때까지 띄우기·되돌리기 버튼을 남긴다.
+      insertedUids: v.insertedUids,
+      label: v.label,
+    );
+  }
+
+  Future<void> _onVoiceHeard(String text) async {
+    if (_voice.value == null || !mounted) return;
+    final command = parseBibleVoice(text, _voiceVersions);
+    if (command == null) {
+      _voice.value = _voice.value!.copyWith(heard: '');
+      return;
+    }
+    AppLogger.instance.info('[voice] "$text" → $command');
+    if (command.version != null) _voiceVersion = command.version!;
+    if (!command.hasReference) {
+      _voiceMessage('역본: $_voiceVersion');
+      return;
+    }
+    final bookIndex = command.book ?? _voiceBook;
+    final chapter = command.chapter ?? _voiceChapter;
+    if (bookIndex == null || chapter == null) {
+      _voiceMessage('"$text" — 어느 책인지 말해 주세요', error: true);
+      return;
+    }
+    final version = _voiceVersion;
+    final books = _voiceBooks[version] ??= await _bibleRepository
+        .getBookNamesForVersion(version);
+    final canonName = bibleCanonKorean[bookIndex];
+    final book = books.length == bibleCanonKorean.length
+        ? books[bookIndex]
+        : books.where((b) => composeHangul(b) == canonName).firstOrNull;
+    if (book == null) {
+      _voiceMessage('$version 에 $canonName 이(가) 없습니다', error: true);
+      return;
+    }
+    var verses = await _bibleRepository.getVerses(
+      version: version,
+      bookName: book,
+      chapter: chapter,
+    );
+    final from = command.fromVerse;
+    if (from != null) {
+      final to = command.toVerse ?? from;
+      verses = [
+        for (final v in verses)
+          if (v.verse >= from && v.verse <= to) v,
+      ];
+    }
+    if (!mounted || _voice.value == null) return;
+    if (verses.isEmpty) {
+      _voiceMessage('"$text" — $book $chapter장에 그런 절이 없습니다', error: true);
+      return;
+    }
+    _voiceBook = bookIndex;
+    _voiceChapter = chapter;
+
+    final label = _buildReference(version, book, chapter, [
+      for (final v in verses) v.verse,
+    ]);
+    final last = _voiceRecent[label];
+    final now = DateTime.now();
+    if (last != null && now.difference(last) < const Duration(minutes: 10)) {
+      _voiceMessage('이미 넣은 구절: $label');
+      return;
+    }
+    _voiceRecent[label] = now; // 기다리는 사이 같은 구절이 또 와도 막히게 먼저 적는다
+    final items = await _bibleItemsFor(
+      repository: _bibleRepository,
+      version: version,
+      verses: verses,
+      perPage: _BibleSearchPanelState._versesPerPage,
+      subVersion: _style.bibleSubVersion,
+      extraVersion: _style.bibleExtraVersion,
+    );
+    if (!mounted || _voice.value == null || items.isEmpty) {
+      _voiceRecent.remove(label);
+      return;
+    }
+    final slides = _allSlides;
+    final currentAt = _currentSlideIndex.clamp(
+      0,
+      slides.isEmpty ? 0 : slides.length - 1,
+    );
+    final currentKey = slides.isEmpty
+        ? ''
+        : _slideKey(
+            slides[currentAt].stagingUid,
+            slides[currentAt].pageIndexInItem,
+          );
+    // 페이지를 안 넘기고 또 말했으면 지난번에 넣은 항목의 마지막 페이지 뒤에 잇는다.
+    var at = currentAt;
+    final chain = _voiceChain;
+    if (chain != null && chain.currentKey == currentKey) {
+      final last = slides.lastIndexWhere(
+        (s) => s.stagingUid == chain.lastUid && !s.isAutoSpacer,
+      );
+      if (last >= 0) at = last;
+    }
+    final undo = _VoiceUndo.capture(this);
+    late final List<int> uids;
+    setState(() {
+      uids = _insertItemsAfterSlide(slides, at, [
+        for (final item in items)
+          (item: item, background: null, joinNext: false, pages: const []),
+      ], {});
+    });
+    _voiceChain = (currentKey: currentKey, lastUid: uids.last);
+    _voiceUndo = undo
+      ..slideIndex = at
+      ..after = _VoiceUndo.capture(this);
+    _voice.value = _VoiceState(
+      version: version,
+      message:
+          '다음 장에 넣음: $label${items.length > 1 ? ' (${items.length}장)' : ''}',
+      insertedUids: uids,
+      label: label,
+    );
+    // 다음 페이지가 바뀌었다(싱어 화면의 '다음').
+    _sendCurrentSlide();
+  }
+
+  /// 음성으로 넣은 페이지로 넘긴다(관객 화면에 띄우기).
+  void _showVoiceInsert() {
+    final uids = _voice.value?.insertedUids ?? const [];
+    if (uids.isEmpty) return;
+    final index = _allSlides.indexWhere((s) => s.stagingUid == uids.first);
+    if (index >= 0) _goToSlide(index);
+  }
+
+  /// 음성으로 넣은 페이지를 뺀다(잘못 알아들었을 때).
+  void _undoVoiceInsert() {
+    final v = _voice.value;
+    final uids = (v?.insertedUids ?? const []).toSet();
+    if (v == null || uids.isEmpty) return;
+    _voiceRecent.remove(v.label);
+    final undo = _voiceUndo;
+    _voiceUndo = null;
+    _voiceChain = null;
+    final before = _allSlides;
+    final first = before.indexWhere((s) => uids.contains(s.stagingUid));
+    final last = before.lastIndexWhere((s) => uids.contains(s.stagingUid));
+    setState(() {
+      // 넣은 뒤로 아무것도 안 바뀌었으면 곡을 나눈 것까지 통째로 되돌린다.
+      // 그 사이 다른 걸 고쳤으면 고친 걸 지우지 않게 넣은 항목만 뺀다.
+      if (undo == null || !undo.restore(this)) {
+        _removeStagingWhere((e) => uids.contains(e.uid));
+      }
+      // 관객 화면이 보던 페이지를 지킨다: 넣은 페이지보다 뒤였으면 빠진 장 수(곡을 나누며 생긴 여백 포함)만큼
+      // 당기고, 넣은 페이지(또는 그 앞 여백)를 보고 있었으면 넣기 직전 기준 페이지로.
+      final removed = before.length - _allSlides.length;
+      final anchor = undo?.slideIndex ?? first - 1;
+      if (first >= 0) {
+        if (_currentSlideIndex > last) {
+          _currentSlideIndex -= removed;
+        } else if (_currentSlideIndex > anchor) {
+          _currentSlideIndex = anchor;
+        }
+      }
+      if (_currentSlideIndex < 0) _currentSlideIndex = 0;
+      _clampCurrentSlideIndex();
+    });
+    _voice.value = _VoiceState(version: _voiceVersion, message: '되돌렸습니다');
+    _sendCurrentSlide();
+  }
+
   /// [slides] 의 [slideIndex] 페이지 바로 뒤에 [pieces] 를 새 콘티 항목으로 넣고 그 uid 들을 돌려준다.
   /// 곡·PPT 중간 페이지면 그 항목을 그 페이지에서 둘로 나눠 사이에 넣는다(외부 PPT 중간에 찬양·말씀 넣기).
   /// 나누느라 바뀐 슬라이드 키는 [renamed] 에 적는다. setState 안에서 부른다.
@@ -4456,6 +4832,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               },
                               viewState: _presenterView,
                               isActive: _mainTabController.index == 1,
+                              voice: _voice,
+                              onToggleVoice: _toggleVoice,
+                              onShowVoiceInsert: _showVoiceInsert,
+                              onUndoVoiceInsert: _undoVoiceInsert,
                               onZoomChanged: (center, scale) {
                                 setState(() {
                                   _zoomCenter = center;
@@ -6127,6 +6507,103 @@ class _SearchFilterChip extends StatelessWidget {
 
 // ── BibleSearchPanel ──────────────────────────────────────────────────────
 
+/// 고른 절 → 콘티에 담을 성경 항목들(페이지마다 하나). 성경 검색 탭 담기와 발표 보기 음성 검색이 같이 쓴다.
+/// 보조·추가 역본 본문은 장(章)마다 한 번씩 통째로 읽어 절 번호로 붙인다.
+Future<List<BibleStagingItem>> _bibleItemsFor({
+  required BibleRepository repository,
+  required String version,
+  required List<BibleVerse> verses,
+  required int perPage,
+  required String subVersion,
+  required String extraVersion,
+}) async {
+  final items = <BibleStagingItem>[];
+  final subTextsByChapter = <(String, int), Map<int, String>?>{};
+  final extraTextsByChapter = <(String, int), Map<int, String>?>{};
+  for (final page in bibleVersePages(verses, perPage)) {
+    final first = page.first;
+    final key = (first.bookName, first.chapter);
+    if (!subTextsByChapter.containsKey(key)) {
+      subTextsByChapter[key] = await _loadOtherVersionVerses(
+        repository,
+        subVersion,
+        version,
+        first.bookName,
+        first.chapter,
+      );
+      extraTextsByChapter[key] = extraVersion == subVersion
+          ? null
+          : await _loadOtherVersionVerses(
+              repository,
+              extraVersion,
+              version,
+              first.bookName,
+              first.chapter,
+            );
+    }
+    items.add(
+      BibleStagingItem(
+        reference: _buildReference(
+          version,
+          first.bookName,
+          first.chapter,
+          page.map((v) => v.verse).toList(),
+        ),
+        text: page.map((v) => '${v.verse}. ${v.text}').join('\n'),
+        subText: versesText(page, subTextsByChapter[key]),
+        extraText: versesText(page, extraTextsByChapter[key]),
+      ),
+    );
+  }
+  return items;
+}
+
+/// 다른 역본([sub], 보조·추가 역본)의 같은 장을 {절 번호: 본문} 으로.
+/// 고르지 않았거나 본문과 같은 역본이거나 못 찾으면 null.
+Future<Map<int, String>?> _loadOtherVersionVerses(
+  BibleRepository repository,
+  String sub,
+  String version,
+  String bookName,
+  int chapter,
+) async {
+  if (sub.isEmpty || sub == version) return null;
+  final book = await repository.mapBookName(
+    bookName: bookName,
+    fromVersion: version,
+    inVersion: sub,
+  );
+  if (book == null) return null;
+  final verses = await repository.getVerses(
+    version: sub,
+    bookName: book,
+    chapter: chapter,
+  );
+  return {for (final v in verses) v.verse: v.text};
+}
+
+String _buildReference(
+  String version,
+  String book,
+  int chapter,
+  List<int> verses,
+) {
+  if (verses.isEmpty) return '';
+  verses.sort();
+  if (verses.length == 1) return '$version $book $chapter:${verses.first}';
+  bool contiguous = true;
+  for (int i = 1; i < verses.length; i++) {
+    if (verses[i] != verses[i - 1] + 1) {
+      contiguous = false;
+      break;
+    }
+  }
+  final verseStr = contiguous
+      ? '${verses.first}-${verses.last}'
+      : verses.join(',');
+  return '$version $book $chapter:$verseStr';
+}
+
 class _BibleSearchPanel extends StatefulWidget {
   const _BibleSearchPanel({
     required this.bibleRepository,
@@ -6182,7 +6659,8 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
   List<BibleVerse> _verses = const [];
   final Set<int> _selectedVerseIds = {};
   int? _lastSelectedVerseIndex;
-  int _versesPerPage = 2;
+  // 발표 보기 성경 음성 검색도 이 값으로 나눈다(패널은 하나뿐이라 static).
+  static int _versesPerPage = 2;
   // 장절 검색 중 (본문 검색은 수십 ms 라 진행 표시 없이 옛 결과를 두었다가 바꾼다).
   bool _isSearching = false;
   // 고른 절을 콘티에 담는 중. 보조 역본을 장마다 읽느라 기다리는 사이 다시 눌러 두 번 담기지 않게.
@@ -6560,77 +7038,21 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
     if (selected.isEmpty) return;
 
     // 본문 검색에서는 여러 책·장을 같이 고를 수 있다. 페이지는 한 장 안에서만 만든다.
-    final pages = bibleVersePages(selected, _versesPerPage);
-
-    // 보조·추가 역본 본문을 절 번호로 찾아 쓸 수 있게 장(章)마다 한 번씩 통째로 읽는다.
-    final subTextsByChapter = <(String, int), Map<int, String>?>{};
-    final extraTextsByChapter = <(String, int), Map<int, String>?>{};
-    for (final page in pages) {
-      final first = page.first;
-      final key = (first.bookName, first.chapter);
-      if (!subTextsByChapter.containsKey(key)) {
-        subTextsByChapter[key] = await _loadOtherVersionVerses(
-          widget.subVersion,
-          version,
-          first.bookName,
-          first.chapter,
-        );
-        extraTextsByChapter[key] = widget.extraVersion == widget.subVersion
-            ? null
-            : await _loadOtherVersionVerses(
-                widget.extraVersion,
-                version,
-                first.bookName,
-                first.chapter,
-              );
-      }
-
-      final verseNums = page.map((v) => v.verse).toList();
-      final ref = _buildReference(
-        version,
-        first.bookName,
-        first.chapter,
-        verseNums,
-      );
-      final text = page.map((v) => '${v.verse}. ${v.text}').join('\n');
-      widget.onAddItem(
-        BibleStagingItem(
-          reference: ref,
-          text: text,
-          subText: versesText(page, subTextsByChapter[key]),
-          extraText: versesText(page, extraTextsByChapter[key]),
-        ),
-      );
-    }
+    final items = await _bibleItemsFor(
+      repository: widget.bibleRepository,
+      version: version,
+      verses: selected,
+      perPage: _versesPerPage,
+      subVersion: widget.subVersion,
+      extraVersion: widget.extraVersion,
+    );
+    items.forEach(widget.onAddItem);
     if (!mounted) return;
     setState(() => _selectedVerseIds.clear());
 
     ScaffoldMessenger.of(
       context,
-    ).showSnackBar(SnackBar(content: Text('${pages.length}페이지 추가됨')));
-  }
-
-  /// 다른 역본([sub], 보조·추가 역본)의 같은 장을 {절 번호: 본문} 으로.
-  /// 고르지 않았거나 본문과 같은 역본이거나 못 찾으면 null.
-  Future<Map<int, String>?> _loadOtherVersionVerses(
-    String sub,
-    String version,
-    String bookName,
-    int chapter,
-  ) async {
-    if (sub.isEmpty || sub == version) return null;
-    final book = await widget.bibleRepository.mapBookName(
-      bookName: bookName,
-      fromVersion: version,
-      inVersion: sub,
-    );
-    if (book == null) return null;
-    final verses = await widget.bibleRepository.getVerses(
-      version: sub,
-      bookName: book,
-      chapter: chapter,
-    );
-    return {for (final v in verses) v.verse: v.text};
+    ).showSnackBar(SnackBar(content: Text('${items.length}페이지 추가됨')));
   }
 
   int get _selectedBiblePageCount {
@@ -6688,28 +7110,6 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
       _fixScopeForBooks();
     });
     if (_isTextMode) _searchText();
-  }
-
-  String _buildReference(
-    String version,
-    String book,
-    int chapter,
-    List<int> verses,
-  ) {
-    if (verses.isEmpty) return '';
-    verses.sort();
-    if (verses.length == 1) return '$version $book $chapter:${verses.first}';
-    bool contiguous = true;
-    for (int i = 1; i < verses.length; i++) {
-      if (verses[i] != verses[i - 1] + 1) {
-        contiguous = false;
-        break;
-      }
-    }
-    final verseStr = contiguous
-        ? '${verses.first}-${verses.last}'
-        : verses.join(',');
-    return '$version $book $chapter:$verseStr';
   }
 
   @override
@@ -10808,6 +11208,10 @@ class _PresenterConsole extends StatefulWidget {
     required this.onZoomChanged,
     required this.viewState,
     required this.isActive,
+    required this.voice,
+    required this.onToggleVoice,
+    required this.onShowVoiceInsert,
+    required this.onUndoVoiceInsert,
   });
 
   final List<_SlideInfo> slides;
@@ -10853,6 +11257,11 @@ class _PresenterConsole extends StatefulWidget {
   // 발표 보기 탭이 보이는 중인지. 숨은 탭(IndexedStack)도 살아 있으므로
   // Ctrl+F 같은 전역 단축키는 이 값으로 거른다.
   final bool isActive;
+  // 성경 음성 검색. 값이 null 이면 꺼짐.
+  final ValueListenable<_VoiceState?> voice;
+  final VoidCallback onToggleVoice;
+  final VoidCallback onShowVoiceInsert;
+  final VoidCallback onUndoVoiceInsert;
 
   @override
   State<_PresenterConsole> createState() => _PresenterConsoleState();
@@ -11391,7 +11800,10 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
   double _maxStripHeight(BoxConstraints constraints) {
     final headerHeight =
         58.0 +
-        (_currentMedia != null ? _MediaBar.height : 0); // 헤더(+재생바) + 아래 여백
+        (_currentMedia != null ? _MediaBar.height : 0) +
+        (widget.voice.value != null
+            ? _VoiceBar.height
+            : 0); // 헤더(+재생바·음성 줄) + 아래 여백
     final room =
         constraints.maxHeight -
         headerHeight -
@@ -11415,6 +11827,12 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
             playback: widget.mediaPlayback,
             onToggle: widget.onToggleMedia,
             onSeek: widget.onSeekMedia,
+          ),
+        if (widget.voice.value != null)
+          _VoiceBar(
+            voice: widget.voice,
+            onShow: widget.onShowVoiceInsert,
+            onUndo: widget.onUndoVoiceInsert,
           ),
         const SizedBox(height: 10),
         Expanded(
@@ -11611,6 +12029,18 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
           tooltip: '새 페이지 추가 (현재 항목 뒤)',
           onSelected: widget.onAddPage,
           itemBuilder: (_) => _addPageMenuItems,
+        ),
+        IconButton(
+          onPressed: widget.onToggleVoice,
+          icon: Icon(
+            widget.voice.value != null
+                ? Icons.record_voice_over_rounded
+                : Icons.record_voice_over_outlined,
+          ),
+          tooltip: widget.voice.value != null
+              ? '성경 음성 검색 끄기'
+              : '성경 음성 검색 (말한 구절을 다음 장에 넣기)',
+          color: widget.voice.value != null ? cs.primary : null,
         ),
         IconButton(
           onPressed: () =>
@@ -13044,6 +13474,62 @@ class _MediaPageDialogState extends State<_MediaPageDialog> {
 
 /// 발표 보기 재생바: 멈춤/재생(페이드) · 10초 앞뒤 · 끌어서 위치 옮기기.
 /// 관객 화면에는 아무것도 안 보인다 — 조작만 발표 창 미디어 레이어로 보낸다.
+/// 발표 보기 성경 음성 검색 상태 줄: 듣는 중 · 들리는 말 · 마지막에 넣은 구절 + 띄우기/되돌리기.
+class _VoiceBar extends StatelessWidget {
+  const _VoiceBar({
+    required this.voice,
+    required this.onShow,
+    required this.onUndo,
+  });
+
+  static const height = 36.0;
+
+  final ValueListenable<_VoiceState?> voice;
+  final VoidCallback onShow;
+  final VoidCallback onUndo;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme.bodySmall;
+    return SizedBox(
+      height: height,
+      child: ValueListenableBuilder<_VoiceState?>(
+        valueListenable: voice,
+        builder: (context, v, _) {
+          if (v == null) return const SizedBox.shrink();
+          return Row(
+            children: [
+              Icon(Icons.fiber_manual_record, size: 10, color: cs.error),
+              const SizedBox(width: 6),
+              Text('듣는 중 · ${v.version}', style: text),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  v.heard.isNotEmpty ? v.heard : v.message,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: text?.copyWith(
+                    color: v.heard.isNotEmpty
+                        ? cs.onSurfaceVariant
+                        : v.isError
+                        ? cs.error
+                        : cs.onSurface,
+                  ),
+                ),
+              ),
+              if (v.insertedUids.isNotEmpty) ...[
+                TextButton(onPressed: onShow, child: const Text('바로 띄우기')),
+                TextButton(onPressed: onUndo, child: const Text('되돌리기')),
+              ],
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
 class _MediaBar extends StatefulWidget {
   const _MediaBar({
     required this.media,

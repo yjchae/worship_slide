@@ -21,6 +21,7 @@ flutter test test/sync_test.dart      # 찬양 동기화·클라우드 콘티(�
 flutter test test/drive_sync_store_test.dart # 구글 드라이브 저장소(가짜 Drive 서버)·접속 키
 flutter test test/db_backup_test.dart # 스키마 올리기 전 DB 자동 백업
 flutter test test/bible_search_test.dart # 성경 본문 검색(띄어쓰기 무시·범위·강조·페이지 나누기)
+flutter test test/bible_voice_parse_test.dart # 성경 음성 검색: 말 → 역본·책·장·절 (한글 수사·범위·이어 말하기·SRGS 문법)
 flutter test test/move_pages_test.dart # 발표 보기 페이지 옮기기·나누기
 flutter test test/extra_language_test.dart # 추가 보조 언어(세 번째 줄) 페이지·콘티 저장·스타일·설교자 화면
 flutter test test/lyrics_page_grid_test.dart # 가사 수정 창 페이지 표·넘침 측정 (LYRICS_EDITOR_SHOT=경로 면 창을 PNG 로)
@@ -123,6 +124,8 @@ lib/
 - `worship_slides/presentation_main` — 네이티브 → Dart: `presentationClosed`, `singerClosed`, `mediaState`(재생 위치 JSON),
   `singerKey`(`"next"`/`"prev"` — 싱어 화면에 포커스가 있을 때 누른 넘기기 키)
 - `worship_slides/save_panel` — 저장 위치 선택 (macOS NSSavePanel)
+- `worship_slides/speech` — 성경 음성 검색: `start {grammar, hints}` / `stop`, 네이티브 → Dart `partial`·`final {text}`·`error {message}`
+  (macOS `BibleSpeechListener` = Speech, Windows `speech_channel.cpp` = Windows.Media.SpeechRecognition)
 - `worship_slides/ocr` — 악보 가사 줄 이미지 OCR: `isAvailable` / `recognize({paths})`
   (macOS `SheetTextRecognizer` = Vision, Windows `ocr_channel.cpp` = Windows.Media.Ocr)
 
@@ -311,6 +314,22 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   범위 = 전체 / 구약(앞 39권) / 신약(뒤 27권) / 책 하나. 66권이 아닌 역본은 구약·신약 칸을 숨긴다(`mapBookName` 과 같은 순서 가정).
   결과 줄의 '이 장 보기' = 장절 모드로 그 장을 열고 그 절을 골라 둔다. 본문 모드에선 여러 책·장을 같이 고를 수 있어서
   페이지는 (책, 장)마다 따로 만든다(`bibleVersePages`) — 장절 모드는 묶음이 하나라 예전과 같다
+- **성경 음성 검색** (기획 `planning/bible-voice-search/plan.md`): 발표 보기 툴바의 말하는 사람 아이콘. 켜 두면 계속 듣고
+  "다니엘 3장 1절에서 10절"·"시편 107편 5절"·"17절"(앞 책·장 이어 말하기)을 들으면 그 구절 페이지를 **현재 페이지 바로 뒤**에 넣는다
+  (붙여 넣기와 같은 `_insertItemsAfterSlide`, 관객 화면은 그대로 — 상태 줄 '바로 띄우기'·'되돌리기'). 발표 보기 탭을 떠나면 끈다.
+  페이지를 안 넘기고 또 말하면 지난번 넣은 항목 뒤에 잇는다(`_voiceChain`, 순서가 뒤집히지 않게).
+  들은 마디는 `_voiceQueue` 로 하나씩 처리하고 중복 표시는 기다리기 전에 남긴다. 되돌리기는 넣기 직전 상태(`_VoiceUndo`)로
+  곡·PPT 나눈 것까지 되돌리되, 그 사이 무엇이든(항목·메모·지운 페이지·배경) 바뀌었으면 넣은 항목만 뺀다.
+  되돌린 뒤 관객 화면은 넣기 전 기준 페이지(또는 뒤였으면 빠진 장 수만큼 당긴 자리)로. 띄우기·되돌리기 버튼은 다음에 넣거나 되돌릴 때까지 남는다.
+  역본은 켤 때 새번역(없으면 첫 역본), 역본 이름을 말하면 그 뒤로 그 역본.
+  **DB 역본 이름이 자모가 풀린 꼴(NFD)인 경우가 있어**(실제 DB 에서 확인) 비교는 `composeHangul` 로 합쳐서 한다. 같은 구절은 10분 안에 다시 넣지 않는다.
+  항목은 성경 검색 탭 담기와 같은 `_bibleItemsFor`(보조·추가 역본·페이지당 절 수 `_BibleSearchPanelState._versesPerPage`).
+  말 → 구절은 순수 함수 `parseBibleVoice`(`bible_voice_parse.dart`, 정경 66권 순서 번호 → 역본 책 이름, 한글 수사, 책 없이 한글 수사로 시작하는
+  말은 글 맨 앞일 때만, `N:N` 은 책이 있을 때만 — '오후 3:30'). macOS 는 1.2초 말이 끊기면 그 마디를 `final` 로 넘기고 새 요청으로 잇는다(50초 상한, 온디바이스가 되면 켠다).
+  Windows 는 받아쓰기('온라인 음성 인식' 설정 필요) 대신 Dart 가 만든 SRGS 문법(`bibleVoiceGrammar`, 앞뒤 GARBAGE)으로 오프라인으로 듣고
+  확신도 Medium 미만은 버린다. 한국어 음성 언어 팩이 필요하다. 켜기·끄기는 한 번에 하나씩(`State::op`), 늦은 켜기는 뒤 요청이 있으면 건너뛴다.
+  macOS 는 입력 장치가 바뀌면(`AVAudioEngineConfigurationChange`) 새 장치로 다시 켜고, 없으면(샘플레이트 0) 켜지 않는다 — 그대로 `installTap` 하면 잡을 수 없는 예외로 앱이 죽는다. C++ 은 오류 코드만 보내고 한글 안내는 `SpeechListener._describe`.
+  **실제 음성 인식은 사람이 말해 봐야 확인된다**(Windows 는 PR CI 컴파일만)
 - **DB 갱신** (`replaceAllSongs`): 전체 삭제 후 재삽입 (증분 갱신 아님)
 - **폴더 다시 가져오기** (`addNewSongs`): 같은 제목에 원본 가사까지 같으면 건너뛰고, 원본+보조 가사의 줄 모음
   (순서 무시)이 같으면 나누기 규칙만 바뀐 것으로 보고 **기존 곡을 고친다**(새 곡을 만들지 않는다). 나머지는 새로 넣는다

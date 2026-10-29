@@ -8,6 +8,7 @@
 
 #include "win32_window.h"
 #include "ocr_channel.h"
+#include "speech_channel.h"
 #include "presentation_channel.h"
 
 // A window that does nothing but host a Flutter view.
@@ -34,6 +35,7 @@ class FlutterWindow : public Win32Window {
   // Presentation window channel.
   std::unique_ptr<PresentationChannel> presentation_channel_;
   std::unique_ptr<OcrChannel> ocr_channel_;
+  std::unique_ptr<SpeechChannel> speech_channel_;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

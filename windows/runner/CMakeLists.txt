@@ -13,6 +13,7 @@ add_executable(${BINARY_NAME} WIN32
   "ocr_channel.cpp"
   "presentation_channel.cpp"
   "singer_window.cpp"
+  "speech_channel.cpp"
   "utils.cpp"
   "win32_window.cpp"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"

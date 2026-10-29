@@ -26,6 +26,10 @@
 	<string>$(PRODUCT_COPYRIGHT)</string>
 	<key>NSMainNibFile</key>
 	<string>MainMenu</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>설교 중 말한 성경 구절을 알아듣기 위해 마이크를 씁니다.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>설교 중 말한 성경 구절("요한복음 3장 16절")을 찾아 다음 장에 넣기 위해 음성 인식을 씁니다.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>

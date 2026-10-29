@@ -1,6 +1,7 @@
 import AVFoundation
 import Cocoa
 import FlutterMacOS
+import Speech
 import UniformTypeIdentifiers
 import Vision
 import WebKit
@@ -1067,10 +1068,232 @@ enum SheetTextRecognizer {
   }
 }
 
+// ── 성경 음성 검색 (Speech) ─────────────────────────────────────────────────
+//
+// 켜 두는 동안 마이크를 계속 듣는다. 말이 1.2초 끊기면 그 마디를 마무리해 `final` 로 넘기고
+// 바로 새 요청으로 잇는다(서버 인식은 요청 하나가 약 1분이라 50초마다도 끊는다).
+// 한국어 온디바이스 인식이 되는 Mac 이면 음성이 애플 서버로 나가지 않는다.
+
+final class BibleSpeechListener {
+  private let channel: FlutterMethodChannel
+  private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "ko-KR"))
+  private let engine = AVAudioEngine()
+  private let lock = NSLock()
+  private var request: SFSpeechAudioBufferRecognitionRequest?
+  private var task: SFSpeechRecognitionTask?
+  private var hints: [String] = []
+  private var running = false
+  private var silenceTimer: Timer?
+  private var capTimer: Timer?
+  private var lastText = ""
+  private var startedAt = Date()
+  // 요청이 시작하자마자 계속 실패하면(장치·권한 문제) 멈춘다.
+  private var quickFailures = 0
+  // 켜고 끌 때마다 올린다. 미뤄 둔 새 요청(restart)이 그 사이 껐다 켠 뒤에 또 돌지 않게.
+  private var generation = 0
+
+  init(channel: FlutterMethodChannel) {
+    self.channel = channel
+    // 입력 장치가 바뀌면(프로젝터·에어팟·USB 마이크를 꽂거나 뺌) 엔진이 멈추고 탭도 더는 소리를 안 준다.
+    // 그대로 두면 '듣는 중' 으로 보이면서 아무것도 못 듣는다 → 새 장치로 다시 켠다.
+    NotificationCenter.default.addObserver(
+      forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
+    ) { [weak self] _ in
+      self?.reconnect()
+    }
+  }
+
+  private func reconnect() {
+    guard running else { return }
+    if engine.isRunning { engine.stop() }
+    do {
+      try startEngine()
+    } catch {
+      NSLog("[voice] 입력 장치 바뀜, 다시 못 켬: %@", error.localizedDescription)
+      stop()
+      channel.invokeMethod("error", arguments: ["message": error.localizedDescription])
+      return
+    }
+    // 들은 말이 있으면 넘기고 새 요청으로 잇는다(옛 요청은 옛 장치 형식이다).
+    if !lastText.isEmpty {
+      channel.invokeMethod("final", arguments: ["text": lastText])
+    }
+    quickFailures = 0
+    generation += 1
+    task?.cancel()
+    restart()
+  }
+
+  func start(hints: [String], result: @escaping FlutterResult) {
+    self.hints = hints
+    if running { result(nil); return }
+    SFSpeechRecognizer.requestAuthorization { status in
+      DispatchQueue.main.async {
+        guard status == .authorized else {
+          result(FlutterError(code: "denied", message: "음성 인식 권한이 없습니다. 시스템 설정 > 개인정보 보호 및 보안 > 음성 인식에서 허용해 주세요.", details: nil))
+          return
+        }
+        AVCaptureDevice.requestAccess(for: .audio) { granted in
+          DispatchQueue.main.async {
+            guard granted else {
+              result(FlutterError(code: "denied", message: "마이크 권한이 없습니다. 시스템 설정 > 개인정보 보호 및 보안 > 마이크에서 허용해 주세요.", details: nil))
+              return
+            }
+            guard let recognizer = self.recognizer, recognizer.isAvailable else {
+              result(FlutterError(code: "unavailable", message: "이 Mac 에서 한국어 음성 인식을 쓸 수 없습니다.", details: nil))
+              return
+            }
+            do {
+              try self.startEngine()
+            } catch {
+              result(FlutterError(code: "audio", message: error.localizedDescription, details: nil))
+              return
+            }
+            self.running = true
+            self.quickFailures = 0
+            self.generation += 1
+            self.beginRequest()
+            result(nil)
+          }
+        }
+      }
+    }
+  }
+
+  func stop() {
+    running = false
+    generation += 1
+    silenceTimer?.invalidate()
+    capTimer?.invalidate()
+    task?.cancel()
+    task = nil
+    setRequest(nil)?.endAudio()
+    if engine.isRunning { engine.stop() }
+    engine.inputNode.removeTap(onBus: 0)
+  }
+
+  private func startEngine() throws {
+    let input = engine.inputNode
+    let format = input.outputFormat(forBus: 0)
+    // 입력 장치가 없으면 0 이다. 그대로 installTap 하면 Swift 가 못 잡는 예외로 앱이 죽는다.
+    guard format.sampleRate > 0, format.channelCount > 0 else {
+      throw NSError(domain: "BibleSpeech", code: 1, userInfo: [
+        NSLocalizedDescriptionKey: "마이크(소리 입력 장치)가 없습니다. 마이크를 연결하거나 시스템 설정 > 사운드 > 입력에서 골라 주세요.",
+      ])
+    }
+    input.removeTap(onBus: 0)
+    input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+      guard let self else { return }
+      self.lock.lock()
+      let request = self.request
+      self.lock.unlock()
+      request?.append(buffer)
+    }
+    engine.prepare()
+    try engine.start()
+  }
+
+  /// 지금 요청을 바꾸고 옛 요청을 돌려준다. 오디오 탭(다른 스레드)이 같이 읽어서 잠근다.
+  @discardableResult
+  private func setRequest(_ new: SFSpeechAudioBufferRecognitionRequest?) -> SFSpeechAudioBufferRecognitionRequest? {
+    lock.lock()
+    defer { lock.unlock() }
+    let old = request
+    request = new
+    return old
+  }
+
+  private func beginRequest() {
+    guard running, let recognizer else { return }
+    task?.cancel()
+    let req = SFSpeechAudioBufferRecognitionRequest()
+    req.shouldReportPartialResults = true
+    req.contextualStrings = hints
+    if recognizer.supportsOnDeviceRecognition { req.requiresOnDeviceRecognition = true }
+    setRequest(req)
+    lastText = ""
+    startedAt = Date()
+    var delivered = false
+    capTimer?.invalidate()
+    capTimer = Timer.scheduledTimer(withTimeInterval: 50, repeats: false) { [weak self] _ in
+      guard let self, self.isCurrent(req) else { return }
+      req.endAudio()
+    }
+    task = recognizer.recognitionTask(with: req) { [weak self] res, err in
+      DispatchQueue.main.async {
+        guard let self, self.running, self.isCurrent(req) else { return }
+        if let res {
+          let text = res.bestTranscription.formattedString
+          if res.isFinal {
+            if !delivered, !text.isEmpty {
+              delivered = true
+              self.channel.invokeMethod("final", arguments: ["text": text])
+            }
+            self.quickFailures = 0
+            self.restart()
+            return
+          }
+          if text != self.lastText {
+            self.lastText = text
+            self.channel.invokeMethod("partial", arguments: ["text": text])
+            self.armSilence(req)
+          }
+        } else if let err {
+          // 말이 없었거나 시간 제한 — 들은 말이 있으면 넘기고 새 요청으로 잇는다.
+          if !delivered, !self.lastText.isEmpty {
+            delivered = true
+            self.channel.invokeMethod("final", arguments: ["text": self.lastText])
+          }
+          if Date().timeIntervalSince(self.startedAt) < 1 {
+            self.quickFailures += 1
+          } else {
+            self.quickFailures = 0
+          }
+          if self.quickFailures >= 5 {
+            NSLog("[voice] %@", err.localizedDescription)
+            self.stop()
+            self.channel.invokeMethod("error", arguments: ["message": err.localizedDescription])
+            return
+          }
+          self.restart()
+        }
+      }
+    }
+  }
+
+  private func isCurrent(_ req: SFSpeechAudioBufferRecognitionRequest) -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return request === req
+  }
+
+  private func armSilence(_ req: SFSpeechAudioBufferRecognitionRequest) {
+    silenceTimer?.invalidate()
+    silenceTimer = Timer.scheduledTimer(withTimeInterval: 1.2, repeats: false) { [weak self] _ in
+      guard let self, self.isCurrent(req) else { return }
+      req.endAudio()
+    }
+  }
+
+  private func restart() {
+    silenceTimer?.invalidate()
+    task = nil
+    setRequest(nil)
+    // 빨리 실패하면 잠깐 쉬었다 잇는다(같은 오류로 바쁘게 돌지 않게).
+    let delay = quickFailures > 0 ? 0.5 : 0
+    let gen = generation
+    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+      guard let self, self.generation == gen else { return }
+      self.beginRequest()
+    }
+  }
+}
+
 class MainFlutterWindow: NSWindow {
   private var presentationController: PresentationWindowController?
   private var singerController: SingerWindowController?
   private var mainPresentationChannel: FlutterMethodChannel?
+  private var speechListener: BibleSpeechListener?
 
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
@@ -1152,6 +1375,23 @@ class MainFlutterWindow: NSWindow {
         result(FlutterMethodNotImplemented)
       }
     }
+    // ── 성경 음성 검색 채널 ───────────────────────────────────────────────
+    let speechChannel = FlutterMethodChannel(name: "worship_slides/speech", binaryMessenger: messenger)
+    let speech = BibleSpeechListener(channel: speechChannel)
+    speechListener = speech
+    speechChannel.setMethodCallHandler { call, result in
+      switch call.method {
+      case "start":
+        let hints = (call.arguments as? [String: Any])?["hints"] as? [String] ?? []
+        speech.start(hints: hints, result: result)
+      case "stop":
+        speech.stop()
+        result(nil)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+
     mainPresentationChannel = FlutterMethodChannel(
       name: "worship_slides/presentation_main", binaryMessenger: messenger)
 
