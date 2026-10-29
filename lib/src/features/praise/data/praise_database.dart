@@ -16,7 +16,7 @@ class PraiseDatabase {
   static final PraiseDatabase instance = PraiseDatabase._();
 
   /// 지금 앱의 DB 스키마 버전. 올리면 [upgradePraiseSchema] 에 단계를 더한다.
-  static const schemaVersion = 17;
+  static const schemaVersion = 18;
   Database? _database;
 
   // 실행 파일 옆 폴더: macOS는 .app/Contents/MacOS/exe 이므로 3단계 위
@@ -178,7 +178,10 @@ Future<void> createPraiseSchema(DatabaseExecutor db) async {
     no_spacer       INTEGER,
     image_source_path TEXT,
     media           TEXT,
-    song_uid        TEXT
+    song_uid        TEXT,
+    song_extra_lyrics TEXT,
+    bible_extra_text TEXT,
+    blank_extra_text TEXT
   )
 ''');
   await db.execute(_createSongTranslations);
@@ -525,6 +528,21 @@ Future<void> upgradePraiseSchema(DatabaseExecutor db, int oldVersion) async {
       'ALTER TABLE worship_conti_items ADD COLUMN song_uid TEXT',
     );
     await fillMissingSyncUids(db);
+  }
+  if (oldVersion < 18) {
+    // 추가 보조 언어(관객 화면 세 번째 줄) 스냅샷. 곡·성경·빈 페이지 항목마다.
+    for (final column in const [
+      'song_extra_lyrics',
+      'bible_extra_text',
+      'blank_extra_text',
+    ]) {
+      await _addColumnIfMissing(
+        db,
+        'worship_conti_items',
+        column,
+        'ALTER TABLE worship_conti_items ADD COLUMN $column TEXT',
+      );
+    }
   }
 }
 

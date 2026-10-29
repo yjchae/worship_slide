@@ -11,6 +11,7 @@ class SlidePageData {
   const SlidePageData({
     required this.mainText,
     required this.englishText,
+    this.extraText = '',
     this.title,
     required this.isBible,
     required this.pageIndex,
@@ -20,10 +21,14 @@ class SlidePageData {
     this.media,
     this.mediaGroup,
     this.backdrop,
+    this.originalOnly = false,
   });
 
   final String mainText;
   final String englishText;
+
+  /// 추가 보조 줄(관객 화면 세 번째 줄). 싱어 화면에는 보내지 않는다.
+  final String extraText;
   final String? title;
   final bool isBible;
 
@@ -41,6 +46,10 @@ class SlidePageData {
   /// 발표 창에는 가사 PNG([SlideBackdrop.overlayPath])를 구운 뒤에만 실린다.
   final SlideBackdrop? backdrop;
 
+  /// 원본만 보이기(발표 보기·설교자 화면). 보조·추가 보조 줄은 자리만 차지하고 안 보인다.
+  /// 화면에 그릴 때만 쓰고 발표 창 JSON 에는 싣지 않는다.
+  final bool originalOnly;
+
   /// 발표 창에 실제로 보낼 배경 영상(가사 PNG 까지 준비된 것).
   SlideBackdrop? get _sentBackdrop =>
       media == null && backdrop?.overlayPath != null ? backdrop : null;
@@ -57,12 +66,16 @@ class SlidePageData {
   Map<String, dynamic> toJson() => {
     'main_text': mainText,
     'english_text': englishText,
+    'extra_text': extraText,
     'title': title,
     'is_bible': isBible,
     'page_index': pageIndex,
     'total_pages': totalPages,
     'style': {
       ...style.toJson(),
+      // 발표 창은 비율을 모른다 — 이 페이지의 보조·추가 보조 글자 크기(pt)를 계산해 싣는다.
+      'english_font_size': style.subFontSizeFor(isBible: isBible),
+      'extra_font_size': style.extraFontSizeFor(isBible: isBible),
       'font_files': FontLibrary.filesFor(style.fontFamily),
     },
     'image_path': imagePath,
@@ -79,6 +92,7 @@ class SlidePageData {
     return SlidePageData(
       mainText: (json['main_text'] as String?) ?? '',
       englishText: (json['english_text'] as String?) ?? '',
+      extraText: (json['extra_text'] as String?) ?? '',
       title: json['title'] as String?,
       isBible: (json['is_bible'] as bool?) ?? false,
       pageIndex: (json['page_index'] as int?) ?? 0,
@@ -95,6 +109,7 @@ class SlidePageData {
   SlidePageData withBackdrop(SlideBackdrop? value) => SlidePageData(
     mainText: mainText,
     englishText: englishText,
+    extraText: extraText,
     title: title,
     isBible: isBible,
     pageIndex: pageIndex,
@@ -104,5 +119,6 @@ class SlidePageData {
     media: media,
     mediaGroup: mediaGroup,
     backdrop: value,
+    originalOnly: originalOnly,
   );
 }

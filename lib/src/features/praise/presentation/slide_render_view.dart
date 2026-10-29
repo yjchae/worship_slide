@@ -7,6 +7,7 @@ import '../data/background_image_library.dart';
 import '../domain/export_style.dart';
 import '../domain/slide_media.dart';
 import 'slide_page_data.dart';
+import 'slide_text_layout.dart';
 
 /// 슬라이드 한 장을 렌더링하는 공유 위젯.
 /// 발표 팝업과 컨트롤러 썸네일 모두 이 위젯을 사용한다.
@@ -19,12 +20,12 @@ class SlideRenderView extends StatelessWidget {
 
   // ppt_tool render가 굽는 이미지 가로 픽셀 (RENDER_IMAGE_WIDTH와 동일)
   static const int _imageMaxWidth = 1920;
-  static const double _slideW = 13.333;
-  static const double _slideH = 7.5;
-  static const double _lyricsBoxT = 0.6;
-  static const double _lyricsBoxH = 5.4;
-  static const double _lyricsBoxW = _slideW * 0.9;
-  static const double _lyricsBoxL = (_slideW - _lyricsBoxW) / 2;
+  static const double _slideW = SlideTextLayout.slideW;
+  static const double _slideH = SlideTextLayout.slideH;
+  static const double _lyricsBoxT = SlideTextLayout.lyricsBoxT;
+  static const double _lyricsBoxH = SlideTextLayout.lyricsBoxH;
+  static const double _lyricsBoxW = SlideTextLayout.lyricsBoxW;
+  static const double _lyricsBoxL = SlideTextLayout.lyricsBoxL;
   static const double _titleBoxH = 0.55;
   static const double _titlePad = 0.2;
   static const double _titleBoxWSide = _slideW - (_titlePad * 2);
@@ -228,7 +229,6 @@ class SlideRenderView extends StatelessWidget {
     final titleVPos = isBible
         ? style.bibleTitleVerticalPosition
         : style.titleVerticalPosition;
-    final bodyFontSize = isBible ? style.bibleFontSize : style.fontSize;
     // 본문 상자는 크기가 고정이고, 미세 조정이 그 상자를 통째로 위아래로 민다.
     // 그래야 상단/중단/하단 어느 기준이든 밀어 준 만큼 똑같이 움직인다.
     final bodyBoxTop =
@@ -244,10 +244,6 @@ class SlideRenderView extends StatelessWidget {
     final titleOffsetY = clampTextOffsetY(
       isBible ? style.bibleTitleOffsetY : style.titleOffsetY,
     );
-    final bodyTextColor = isBible ? style.bibleTextColor : style.textColor;
-    final bodyTextAlign = isBible
-        ? style.bibleTextAlign
-        : style.lyricsTextAlign;
 
     final bodyAlignment = switch (bodyTextPosition) {
       VerticalTextPosition.top => Alignment.topCenter,
@@ -255,11 +251,7 @@ class SlideRenderView extends StatelessWidget {
       VerticalTextPosition.bottom => Alignment.bottomCenter,
     };
 
-    final textAlign = switch (bodyTextAlign) {
-      HorizontalPosition.left => TextAlign.left,
-      HorizontalPosition.center => TextAlign.center,
-      HorizontalPosition.right => TextAlign.right,
-    };
+    final textAlign = SlideTextLayout.textAlign(data);
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -321,33 +313,10 @@ class SlideRenderView extends StatelessWidget {
                         style: const TextStyle(),
                         child: RichText(
                           textAlign: textAlign,
-                          text: TextSpan(
-                            children: [
-                              TextSpan(
-                                text: data.mainText,
-                                style: TextStyle(
-                                  color: bodyTextColor,
-                                  fontSize: bodyFontSize * fontScale,
-                                  fontFamily: style.fontFamily,
-                                  fontWeight: FontWeight.w700,
-                                  height: 1.25,
-                                ),
-                              ),
-                              if (style.includeEnglishLyrics &&
-                                  data.englishText.isNotEmpty)
-                                TextSpan(
-                                  text: '\n${data.englishText}',
-                                  style: TextStyle(
-                                    color: style.englishTextColor,
-                                    fontSize:
-                                        style.effectiveEnglishFontSize *
-                                        fontScale,
-                                    fontFamily: style.fontFamily,
-                                    fontWeight: FontWeight.w700,
-                                    height: 1.3,
-                                  ),
-                                ),
-                            ],
+                          text: SlideTextLayout.bodySpan(
+                            data,
+                            fontScale: fontScale,
+                            originalOnly: data.originalOnly,
                           ),
                         ),
                       ),

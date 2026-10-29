@@ -22,11 +22,14 @@ flutter test test/drive_sync_store_test.dart # 구글 드라이브 저장소(가
 flutter test test/db_backup_test.dart # 스키마 올리기 전 DB 자동 백업
 flutter test test/bible_search_test.dart # 성경 본문 검색(띄어쓰기 무시·범위·강조·페이지 나누기)
 flutter test test/move_pages_test.dart # 발표 보기 페이지 옮기기·나누기
+flutter test test/extra_language_test.dart # 추가 보조 언어(세 번째 줄) 페이지·콘티 저장·스타일·설교자 화면
+flutter test test/lyrics_page_grid_test.dart # 가사 수정 창 페이지 표·넘침 측정 (LYRICS_EDITOR_SHOT=경로 면 창을 PNG 로)
 python3 python/test_render.py    # render 명령 self-check (LibreOffice 없으면 skip)
 python3 python/test_animation.py # 애니메이션 단계 펼치기 self-check (LibreOffice 불필요)
 python3 python/test_export_background.py # 항목별 배경 오버라이드 self-check (LibreOffice 불필요)
 python3 python/test_export_text.py       # 가사 줄바꿈 self-check (LibreOffice 불필요)
 python3 python/test_export_position.py   # 본문·제목 세로 미세 조정 self-check (LibreOffice 불필요)
+python3 python/test_export_extra.py      # 추가 보조 언어(셋째 줄) 문단·색·크기 self-check (LibreOffice 불필요)
 python3 python/test_split_language.py    # 한/보조 언어 줄 나누기 self-check (LibreOffice 불필요)
 python3 python/test_sheet_lyrics.py      # 악보 가사 추출 self-check (Tesseract 없으면 OCR 부분만 skip)
 python3 python/test_media.py             # PPT 안 동영상 꺼내기 self-check (LibreOffice 불필요)
@@ -52,7 +55,7 @@ lib/
   src/app_colors.dart                -- 앱 화면 색·둥글기 토큰 (슬라이드·발표 창·PPTX 색과 무관)
   src/features/praise/
     data/
-      praise_database.dart           -- SQLite 스키마 + 마이그레이션 (현재 version 17)
+      praise_database.dart           -- SQLite 스키마 + 마이그레이션 (현재 version 18)
       praise_repository.dart         -- 곡 CRUD (searchSongs, replaceAllSongs, deleteSongsByIds ...)
       worship_conti_repository.dart  -- 콘티 저장/불러오기 (곡 가사 스냅샷까지 함께 보관)
       sync_snapshot.dart             -- 찬양 동기화 파일 모양: SyncSnapshot(PC 한 대분) · SyncSong · SyncTranslation
@@ -88,6 +91,9 @@ lib/
       slide_page_data.dart           -- 발표 창에 보낼 한 페이지의 JSON 표현
       singer_view_data.dart          -- 싱어 화면에 보낼 현재+다음 페이지 JSON 표현
       slide_render_view.dart         -- 미리보기/썸네일용 Flutter 슬라이드 렌더러 (textOnly = 가사 PNG 굽기용)
+      slide_text_layout.dart         -- 가사 상자 글자(원본→보조→추가 보조) + 넘침 측정. 렌더러와 넘침 경고가 같이 쓴다
+      lyrics_editor_dialog.dart      -- 가사 수정 창: 페이지 표(좌 원본·가운데 보조·우 추가 보조) / 통째로
+      lyrics_page_grid.dart          -- 페이지 표 순수 모델(나누기·밀기·당기기·합치기) + 가사 페이지 형식 함수
       slide_backdrop.dart            -- 배경 영상(가사 뒤 반복 재생) 레이어 페이지 HTML + 발표 창 media JSON
       lyrics_overlay_renderer.dart   -- 배경 영상 위에 얹을 가사 투명 PNG 굽기(화면 밖 위젯 렌더)
       presentation_timer.dart        -- 발표 경과 시간(기준 시각 방식). 발표 보기 시계·싱어 화면이 같이 본다
@@ -328,7 +334,34 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
     역본마다 책 이름이 다르므로(창세기/Genesis) `mapBookName` 이 이름 → 정경 순서 index 순으로
     짝을 찾는다. 권 수가 다르면 포기하고 보조 본문 없이 담는다
   - `subLanguage`·`bibleSubVersion` 은 `ExportStyle` 에 얹혀 `export_style.json` 에 저장된다.
-    렌더러는 둘 다 읽지 않는다 (담을 때 이미 결정되어 있다)
+    렌더러는 둘 다 읽지 않는다 (담을 때 이미 결정되어 있다). `ExportStyleStore.load` 가 예전엔 이 두 키를
+    안 읽어서 다시 켜면 '영어'·'없음'으로 돌아갔다 — 새 키를 더하면 `ExportStyle.fromJson` 과 스토어 **두 곳**에 다 넣는다
+  - **추가 보조 언어 (관객 화면 세 번째 줄, 기획 `planning/trilingual-display/plan.md`)**: 보조 칸 옆에
+    고정 칸 하나를 더 둔다(`List` 로 일반화하지 않음). 곡 `PraiseSong.extraLyrics`(DB `praise_songs` 엔 없음, 콘티 스냅샷 전용),
+    성경·빈 페이지 `extraText`, 슬라이드 `SlidePageData.extraText`(JSON `extra_text`). 콘티 저장은
+    `worship_conti_items.song_extra_lyrics`·`bible_extra_text`·`blank_extra_text`(DB version 18).
+    `pairedPages` 는 `LyricsPage`(korean·english·extra) — 곡을 고치거나 나눌 때는 `copyWith`·`_songWithPages` 로 만들어
+    추가 칸을 빠뜨리지 않는다. 언어는 `ExportStyle.extraLanguage`·`bibleExtraVersion`(기본 '' = 없음)을 담을 때 입힌다
+    (`_withSubLyrics`·`_reapplySubLanguage`, 성경은 `_loadOtherVersionVerses` + `versesText`). 보조와 같은 언어는 담지 않는다.
+    글자 크기는 본문 × 비율(`sub/extra_font_ratio`, 성경은 `bible_*`) — `subFontSizeFor`·`extraFontSizeFor`, 설교 부제
+    `englishFontSize` 가 이긴다. 싱어 화면에는 보내지 않는다.
+    렌더러 네 곳 모두 보조 다음에 같은 방식으로 셋째 블록을 그린다(Dart `SlideTextLayout.bodySpan`, macOS `.extra-text`,
+    Windows `slide_.extra`, PPTX `extra_lyrics` 문단). 발표 창은 비율을 모른다 — `SlidePageData.toJson` 이 그 페이지의
+    `english_font_size`·`extra_font_size`(pt)를 계산해 싣는다. 그래서 성경 보조 크기도 이제 성경 본문 기준이다(예전엔 찬양 본문 × 0.8)
+  - **설교자 화면(발표 보기)은 원본만** (`SlidePageData.originalOnly`, `_PresenterConsoleState._pageDataFor`): 보조·추가 보조를
+    **투명하게** 그린다 — 빼면 원본 위치가 움직여 '영역 확대'·포인터 좌표가 관객 화면과 어긋난다. 설교 페이지 부제는 내용이라 그대로 보인다.
+    발표 창 JSON 에는 싣지 않는다(관객 화면은 늘 전부)
+  - **넘침 경고(자동 축소 안 함)**: `SlideTextLayout.overflowRatio` 가 미리보기와 같은 글자 배치로 높이를 재서 5.4인치 상자를 넘으면
+    발표 보기 썸네일 빨간 테두리·'넘침' 배지, 콘티 목록 '넘침 N', 가사 수정 창 행 경고·미리보기 점선. 미리보기·macOS 는 넘치면
+    상자를 줄여 그리고 Windows·PPTX 는 안 줄이므로 화면마다 다르게 깨진다 — 그래서 경고로 알린다. 값은 "약 N%"(발표 창 줄바꿈과 조금 다를 수 있다).
+    발표 창은 보조 블록마다 앞에 틈(Windows 본문 × 0.4, macOS 0.4em)을 두므로 측정도 블록마다 본문 × 0.4 를 더한다. 캐시 키는 해시(`Object.hashAll`)
+  - 언어를 바꾸면(`_reapplySubLanguage(subChanged:, extraChanged:)`) **바뀐 칸만** 다시 입힌다. 나눈·고친 곡에서 원본 페이지를 못 찾은
+    페이지는 그 칸을 비운다(옛 언어 글이 남지 않게). 바뀜 여부는 '실제로 쓰이는 추가 보조'(보조와 같으면 없음)로 따진다.
+    번역이 원본보다 길어 장 수가 바뀌면 `remapTrailingPages` 가 자동 여백 표시·메모만 새 끝으로 옮기고(앞 페이지 번호는 그대로라
+    지운 표시를 풀지 않는다), 보던 슬라이드는 (항목, 페이지)로 다시 찾는다
+  - **가사 수정 창** (`LyricsEditorDialog`): 한 행 = 관객 화면 한 장. 칸에 빈 줄이 든 글을 넣으면(붙여 넣기·엔터 두 번)
+    빈 줄마다 아래 행으로 나누고 그 열의 아래 칸은 밀어 내린다(덮어쓰지 않음, 3조각 이상이면 되돌리기 배너). 칸 도구 '위로 당기기'(위 칸에 잇는다)·
+    '아래로 밀기'는 그 언어 열만 옮긴다. 저장 형식은 그대로(빈 줄 = 페이지)라 '통째로' 보기와 오가도 잃지 않는다
   - **켜기/끄기**는 리본 찬양 탭 '보조 언어'·성경 탭 '보조 역본' 줄의 스위치 = `includeEnglishLyrics`
     (`include_english_lyrics`). 렌더러 네 곳이 원래부터 읽는 값이라 담긴 보조 가사는 그대로 두고 표시만 끈다.
     값이 하나라 두 탭 스위치가 같이 움직인다

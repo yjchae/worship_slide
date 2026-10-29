@@ -12,6 +12,10 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart' as p;
 import 'package:qr_flutter/qr_flutter.dart';
 
+// 가사 페이지 형식 함수는 lyrics_page_grid.dart 로 옮겼다. 예전처럼 이 파일에서도 보이게 둔다.
+export 'lyrics_page_grid.dart'
+    show encodePages, lyricsToEditText, normalizeEditableLyrics;
+
 import '../../../app_colors.dart';
 import '../../../app_theme.dart';
 import '../../../features/bible/data/bible_repository.dart';
@@ -43,7 +47,9 @@ import '../domain/slide_media.dart';
 import '../domain/staging_item.dart';
 import 'background_image_gallery.dart';
 import 'libreoffice_install_dialog.dart';
+import 'lyrics_editor_dialog.dart';
 import 'lyrics_overlay_renderer.dart';
+import 'lyrics_page_grid.dart';
 import 'offering_dialog.dart';
 import 'offering_overlay_painter.dart';
 import 'presentation_timer.dart';
@@ -51,6 +57,7 @@ import 'singer_view_data.dart';
 import 'slide_backdrop.dart';
 import 'slide_page_data.dart';
 import 'slide_render_view.dart';
+import 'slide_text_layout.dart';
 import 'cloud_conti_dialog.dart';
 import 'sync_dialog.dart';
 
@@ -67,6 +74,7 @@ class _SlideInfo {
     required this.stagingUid,
     required this.mainText,
     required this.englishText,
+    this.extraText = '',
     required this.title,
     required this.isBible,
     required this.pageIndexInItem,
@@ -79,6 +87,8 @@ class _SlideInfo {
   final int stagingUid;
   final String mainText;
   final String englishText;
+  // 추가 보조 줄(관객 화면 세 번째 줄).
+  final String extraText;
   final String? title;
   final bool isBible;
   final int pageIndexInItem; // 해당 아이템(곡/성경) 내의 페이지 인덱스
@@ -491,10 +501,20 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   }
 
   Future<void> _updateStyle(ExportStyle style) async {
-    final languageChanged = style.subLanguage != _style.subLanguage;
+    // 추가 보조가 보조와 같은 언어면 추가 보조는 없는 것(_extraLyricsFor)이라 그 값으로 비교한다 —
+    // 보조만 바꿔도 추가 보조가 비거나 다시 채워질 수 있다.
+    String effectiveExtra(ExportStyle s) =>
+        s.extraLanguage == s.subLanguage ? '' : s.extraLanguage;
+    final subChanged = style.subLanguage != _style.subLanguage;
+    final extraChanged = effectiveExtra(style) != effectiveExtra(_style);
     setState(() => _style = style);
     await _styleStore.save(style);
-    if (languageChanged) await _reapplySubLanguage();
+    if (subChanged || extraChanged) {
+      await _reapplySubLanguage(
+        subChanged: subChanged,
+        extraChanged: extraChanged,
+      );
+    }
     await _sendCurrentSlide();
   }
 
@@ -506,19 +526,26 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   Future<PraiseSong> _withSubLyrics(PraiseSong song) async {
     final sub = await _repository.subLyricsFor(song, _style.subLanguage);
-    if (sub == song.englishLyrics) return song;
-    return PraiseSong(
-      id: song.id,
-      fileName: song.fileName,
-      title: song.title,
-      lyrics: song.lyrics,
-      englishLyrics: sub,
-    );
+    final extra = await _extraLyricsFor(song);
+    if (sub == song.englishLyrics && extra == song.extraLyrics) return song;
+    return song.copyWith(englishLyrics: sub, extraLyrics: extra);
+  }
+
+  /// 추가 보조 언어 가사. 언어를 안 골랐거나 보조와 같은 언어면 빈 문자열.
+  Future<String> _extraLyricsFor(PraiseSong song) async {
+    final language = _style.extraLanguage;
+    if (language.isEmpty || language == _style.subLanguage) return '';
+    return _repository.subLyricsFor(song, language);
   }
 
   /// 언어를 바꿨을 때 이미 담아 둔 곡들의 보조 가사를 다시 입힌다.
   /// 본문(한글) 가사는 슬라이드에서 고쳤을 수 있으므로 그대로 둔다.
-  Future<void> _reapplySubLanguage() async {
+  /// 바뀐 언어 칸에서 원본 페이지를 못 찾은 페이지(이 콘티에서 고친 페이지)는 비운다 —
+  /// 옛 언어 글이 남지 않게. 바뀌지 않은 칸은 그대로 둔다(콘티에서 고친 번역 보존).
+  Future<void> _reapplySubLanguage({
+    required bool subChanged,
+    required bool extraChanged,
+  }) async {
     final updated = <(int, StagingItem)>[];
     for (var i = 0; i < _stagingItems.length; i++) {
       final item = _stagingItems[i].item;
@@ -526,38 +553,76 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       final matches = _songs.where((s) => s.id == item.song.id);
       if (matches.isEmpty) continue;
       final base = matches.first;
-      final sub = await _repository.subLyricsFor(base, _style.subLanguage);
-      final full = PraiseSong(
-        id: base.id,
-        fileName: base.fileName,
-        title: base.title,
-        lyrics: base.lyrics,
-        englishLyrics: sub,
-      ).pairedPages;
+      // 바뀐 언어만 읽는다(안 바뀐 칸은 아래에서 지금 값을 그대로 쓴다).
+      final sub = subChanged
+          ? await _repository.subLyricsFor(base, _style.subLanguage)
+          : item.song.englishLyrics;
+      final extra = extraChanged
+          ? await _extraLyricsFor(base)
+          : item.song.extraLyrics;
+      final full = base
+          .copyWith(englishLyrics: sub, extraLyrics: extra)
+          .pairedPages;
       final mine = item.song.pairedPages;
       // 곡을 나누거나 일부만 복사한 항목은 같은 가사 페이지를 찾아 그 번역만 입힌다.
-      final byMain = {for (final f in full) f.korean: f.english};
-      final newSub = mine.length == full.length
+      final byMain = {for (final f in full) f.korean: f};
+      // 추가 보조가 원본보다 길면 장 수만으로는 통째인지 모르므로 원본 가사도 본다.
+      final whole =
+          item.song.lyrics == base.lyrics || mine.length == full.length;
+      final newSub = !subChanged
+          ? item.song.englishLyrics
+          : whole
           ? sub
-          : encodePages(mine.map((m) => byMain[m.korean] ?? m.english));
-      if (newSub == item.song.englishLyrics) continue;
+          : encodePages(
+              mine.map((m) => byMain[m.korean]?.english ?? ''),
+            );
+      final newExtra = !extraChanged
+          ? item.song.extraLyrics
+          : whole
+          ? extra
+          : encodePages(
+              mine.map((m) => byMain[m.korean]?.extra ?? ''),
+            );
+      if (newSub == item.song.englishLyrics &&
+          newExtra == item.song.extraLyrics) {
+        continue;
+      }
       updated.add((
         i,
         SongStagingItem(
-          PraiseSong(
-            id: item.song.id,
-            fileName: item.song.fileName,
-            title: item.song.title,
-            lyrics: item.song.lyrics,
-            englishLyrics: newSub,
-          ),
+          item.song.copyWith(englishLyrics: newSub, extraLyrics: newExtra),
         ),
       ));
     }
     if (updated.isEmpty || !mounted) return;
+    // 보던 슬라이드는 번호가 아니라 (항목, 페이지)로 다시 찾는다 — 앞 곡 장 수가 바뀌어도 관객 화면이 안 넘어가게.
+    final slides = _allSlides;
+    final current = _currentSlideIndex < slides.length
+        ? slides[_currentSlideIndex]
+        : null;
     setState(() {
       for (final (index, item) in updated) {
-        _stagingItems[index] = (uid: _stagingItems[index].uid, item: item);
+        final entry = _stagingItems[index];
+        // 번역이 원본보다 길면 장 수가 바뀐다. 앞 페이지 번호는 그대로라 지운 표시·메모는 두고
+        // 자동 여백 것만 새 끝으로 옮긴다.
+        remapTrailingPages(
+          uid: entry.uid,
+          oldCount: _pageCount(entry.item),
+          newCount: _pageCount(item),
+          deletedKeys: _deletedSlideKeys,
+          notes: _slideNotes,
+        );
+        _stagingItems[index] = (uid: entry.uid, item: item);
+      }
+      if (current != null) {
+        final found = _allSlides.indexWhere(
+          (s) =>
+              s.stagingUid == current.stagingUid &&
+              s.isAutoSpacer == current.isAutoSpacer &&
+              (current.isAutoSpacer ||
+                  s.pageIndexInItem == current.pageIndexInItem),
+        );
+        if (found >= 0) _currentSlideIndex = found;
       }
       _clampCurrentSlideIndex();
     });
@@ -607,6 +672,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
             stagingUid: entry.uid,
             mainText: item.mainText,
             englishText: item.englishText,
+            extraText: item.extraText,
             title: null,
             isBible: false,
             pageIndexInItem: 0,
@@ -624,6 +690,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
               stagingUid: entry.uid,
               mainText: pairs[j].korean,
               englishText: pairs[j].english,
+              extraText: pairs[j].extra,
               title: song.displayTitle,
               isBible: false,
               pageIndexInItem: j,
@@ -683,6 +750,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
             stagingUid: entry.uid,
             mainText: item.text,
             englishText: item.subText,
+            extraText: item.extraText,
             title: item.reference,
             isBible: true,
             pageIndexInItem: 0,
@@ -712,6 +780,53 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     return slides;
   }
 
+  /// 항목 uid → 가사 상자를 넘는 페이지 수(콘티 목록의 '넘침 N'). 재는 값은 기억해 두므로
+  /// 다시 그릴 때마다 TextPainter 를 돌리지 않는다.
+  Map<int, int> _overflowCounts() {
+    // 다시 그릴 때마다 모든 페이지를 재지 않게, 넘침에 영향을 주는 것이 그대로면 지난 값을 쓴다.
+    // 항목·배경은 바뀔 때 새 객체로 갈아 끼우므로 identity 로 충분하다.
+    final signature = Object.hash(
+      identityHashCode(_style),
+      Object.hashAll([
+        for (final e in _stagingItems) ...[e.uid, identityHashCode(e.item)],
+      ]),
+      Object.hashAllUnordered([
+        for (final e in _itemBackgrounds.entries)
+          Object.hash(e.key, identityHashCode(e.value)),
+      ]),
+      Object.hashAllUnordered(_deletedSlideKeys),
+      Object.hashAllUnordered(_noSpacerUids),
+    );
+    if (signature == _overflowSignature) return _overflowCountsMemo;
+    _overflowSignature = signature;
+    return _overflowCountsMemo = _measureOverflowCounts();
+  }
+
+  int? _overflowSignature;
+  Map<int, int> _overflowCountsMemo = const {};
+
+  Map<int, int> _measureOverflowCounts() {
+    final slides = _allSlides;
+    final counts = <int, int>{};
+    for (var i = 0; i < slides.length; i++) {
+      final slide = slides[i];
+      final page = SlidePageData(
+        mainText: slide.mainText,
+        englishText: slide.englishText,
+        extraText: slide.extraText,
+        isBible: slide.isBible,
+        pageIndex: i,
+        totalPages: slides.length,
+        style: _style.withBackground(slide.background),
+        imagePath: slide.imagePath,
+      );
+      if (SlideTextLayout.overflows(page)) {
+        counts.update(slides[i].stagingUid, (n) => n + 1, ifAbsent: () => 1);
+      }
+    }
+    return counts;
+  }
+
   void _clampCurrentSlideIndex() {
     final total = _allSlides.length;
     if (total == 0) {
@@ -737,6 +852,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     return SlidePageData(
       mainText: slide?.mainText ?? '',
       englishText: slide?.englishText ?? '',
+      extraText: slide?.extraText ?? '',
       title: slide?.title,
       isBible: slide?.isBible ?? false,
       pageIndex: index,
@@ -1485,24 +1601,39 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       return;
     }
 
-    final result = await showDialog<(String, String)?>(
+    final result = await showDialog<(String, String, String)?>(
       context: context,
       builder: (_) => _SlideQuickEditDialog(
         mainText: info.mainText,
         englishText: info.englishText,
+        extraText: info.extraText,
         isBible: info.isBible,
         title: info.title,
+        subLabel: _subFieldLabel(info.isBible),
+        extraLabel: _extraFieldLabel(info.isBible),
       ),
     );
     if (result == null || !mounted) return;
-    final (newMain, newEnglish) = result;
-    await _applySlideEdit(info, newMain, newEnglish, slideIndex);
+    final (newMain, newEnglish, newExtra) = result;
+    await _applySlideEdit(info, newMain, newEnglish, newExtra, slideIndex);
+  }
+
+  /// 한 장 고치기의 보조·추가 보조 칸 이름. 지금 고른 언어·역본 이름을 붙인다.
+  String _subFieldLabel(bool isBible) => isBible
+      ? '보조 역본${_style.bibleSubVersion.isEmpty ? '' : ' · ${_style.bibleSubVersion}'} (비워도 됩니다)'
+      : '보조 · ${_style.subLanguage} 가사 (비워도 됩니다)';
+
+  String _extraFieldLabel(bool isBible) {
+    final name = isBible ? _style.bibleExtraVersion : _style.extraLanguage;
+    final kind = isBible ? '추가 역본' : '추가 보조';
+    return name.isEmpty ? '$kind (비워도 됩니다)' : '$kind · $name (비워도 됩니다)';
   }
 
   Future<void> _applySlideEdit(
     _SlideInfo info,
     String newMain,
     String newEnglish,
+    String newExtra,
     int slideIndex,
   ) async {
     if (info.isAutoSpacer) return;
@@ -1521,28 +1652,26 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       final pairs = List.of(song.pairedPages);
 
       if (info.pageIndexInItem < pairs.length) {
-        pairs[info.pageIndexInItem] = (korean: newMain, english: newEnglish);
+        pairs[info.pageIndexInItem] = (
+          korean: newMain,
+          english: newEnglish,
+          extra: newExtra,
+        );
       }
 
-      newItem = SongStagingItem(
-        PraiseSong(
-          id: song.id,
-          fileName: song.fileName,
-          title: song.title,
-          lyrics: encodePages(pairs.map((p) => p.korean)),
-          englishLyrics: encodePages(pairs.map((p) => p.english)),
-        ),
-      );
+      newItem = SongStagingItem(_songWithPages(song, pairs));
     } else if (item is BibleStagingItem) {
       newItem = BibleStagingItem(
         reference: item.reference,
         text: newMain,
         subText: newEnglish,
+        extraText: newExtra,
       );
     } else if (item is BlankStagingItem) {
       newItem = BlankStagingItem(
         mainText: newMain,
         englishText: newEnglish,
+        extraText: newExtra,
         media: item.media,
       );
     } else {
@@ -1569,22 +1698,31 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       return _editMediaPage(uid, item);
     }
 
-    final (mainText, subText, isBible) = switch (item) {
-      SongStagingItem(:final song) => (song.lyrics, song.englishLyrics, false),
-      BibleStagingItem(:final text, :final subText) => (text, subText, true),
-      BlankStagingItem(:final mainText, :final englishText) => (
-        mainText,
-        englishText,
+    final (mainText, subText, extraText, isBible) = switch (item) {
+      SongStagingItem(:final song) => (
+        song.lyrics,
+        song.englishLyrics,
+        song.extraLyrics,
         false,
       ),
-      _ => ('', '', false),
+      BibleStagingItem(:final text, :final subText, :final extraText) => (
+        text,
+        subText,
+        extraText,
+        true,
+      ),
+      BlankStagingItem(:final mainText, :final englishText, :final extraText) =>
+        (mainText, englishText, extraText, false),
+      _ => ('', '', '', false),
     };
 
-    final result = await showDialog<(String, String)?>(
+    final result = await showDialog<(String, String, String)?>(
       context: context,
       builder: (_) => _SlideQuickEditDialog(
         mainText: mainText,
         englishText: subText,
+        extraText: extraText,
+        extraLabel: _extraFieldLabel(isBible),
         isBible: isBible,
         title: item.displayTitle,
         heading: '이 콘티에서만 수정',
@@ -1598,26 +1736,26 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       ),
     );
     if (result == null || !mounted) return;
-    final (newMain, newSub) = result;
+    final (newMain, newSub, newExtra) = result;
 
     final StagingItem newItem = switch (item) {
       SongStagingItem(:final song) => SongStagingItem(
-        PraiseSong(
-          id: song.id,
-          fileName: song.fileName,
-          title: song.title,
+        song.copyWith(
           lyrics: normalizeEditableLyrics(newMain),
           englishLyrics: normalizeEditableLyrics(newSub),
+          extraLyrics: normalizeEditableLyrics(newExtra),
         ),
       ),
       BibleStagingItem(:final reference) => BibleStagingItem(
         reference: reference,
         text: newMain,
         subText: newSub,
+        extraText: newExtra,
       ),
       BlankStagingItem(:final media) => BlankStagingItem(
         mainText: newMain,
         englishText: newSub,
+        extraText: newExtra,
         media: media,
       ),
       _ => item,
@@ -1890,6 +2028,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   Future<_SermonPageResult?> _showSermonDialog({
     String title = '',
     String subtitle = '',
+    String extraText = '',
     SlideBackground? design,
   }) {
     var initial =
@@ -1903,6 +2042,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       builder: (_) => _SermonPageDialog(
         initialTitle: title,
         initialSubtitle: subtitle,
+        extraText: extraText,
         initialDesign: initial,
         canRevert: design != null,
         globalStyle: _style,
@@ -1939,6 +2079,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     final result = await _showSermonDialog(
       title: item.mainText,
       subtitle: item.englishText,
+      extraText: item.extraText,
       design: _itemBackgrounds[uid],
     );
     if (result == null || !mounted) return;
@@ -1956,10 +2097,12 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                   result.title,
                   result.subtitle,
                 ].where((t) => t.isNotEmpty).join('\n'),
+                extraText: item.extraText,
               )
             : BlankStagingItem(
                 mainText: result.title,
                 englishText: result.subtitle,
+                extraText: item.extraText,
               ),
       );
       if (design == null) {
@@ -2042,6 +2185,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         item: BlankStagingItem(
           mainText: result.text,
           englishText: item.englishText,
+          extraText: item.extraText,
           media: result.media,
         ),
       );
@@ -2541,16 +2685,12 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     return _stagingItems.indexWhere((e) => e.uid == parts.last.first);
   }
 
-  static PraiseSong _songWithPages(
-    PraiseSong song,
-    List<({String korean, String english})> pages,
-  ) => PraiseSong(
-    id: song.id,
-    fileName: song.fileName,
-    title: song.title,
-    lyrics: encodePages(pages.map((p) => p.korean)),
-    englishLyrics: encodePages(pages.map((p) => p.english)),
-  );
+  static PraiseSong _songWithPages(PraiseSong song, List<LyricsPage> pages) =>
+      song.copyWith(
+        lyrics: encodePages(pages.map((p) => p.korean)),
+        englishLyrics: encodePages(pages.map((p) => p.english)),
+        extraLyrics: encodePages(pages.map((p) => p.extra)),
+      );
 
   /// 콘티 항목 하나의 배경만 따로 지정한다(헌금송만 다른 배경 등).
   /// 다이얼로그에서 "전역 배경 사용"으로 되돌리면 오버라이드가 지워진다.
@@ -2595,6 +2735,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
           (
             mainText: slide.mainText,
             englishText: slide.englishText,
+            extraText: slide.extraText,
             title: slide.title,
           ),
     ];
@@ -3975,10 +4116,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     if (!mounted) return;
     final result = await showDialog<SongEditResult>(
       context: context,
-      builder: (context) => _SongEditDialog(
+      builder: (context) => LyricsEditorDialog(
         song: song,
         translations: translations,
         languages: _subLanguages,
+        subLanguage: _style.subLanguage,
+        extraLanguage: _style.extraLanguage,
+        style: _style,
       ),
     );
     if (result == null || !mounted) return;
@@ -4196,6 +4340,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                                 });
                                 _sendCurrentSlide();
                               },
+                              overflowCounts: _overflowCounts(),
                             );
                             final presentationAndStagingColumn = Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
@@ -4300,6 +4445,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               bibleDataRevision: _bibleDataRevision,
                               onAddBibleItem: _addBibleItem,
                               bibleSubVersion: _style.bibleSubVersion,
+                              bibleExtraVersion: _style.bibleExtraVersion,
                               onCollapse: () =>
                                   setState(() => _isSearchCollapsed = true),
                               searchInTitle: _searchInTitle,
@@ -5096,6 +5242,36 @@ class _KindTag extends StatelessWidget {
   }
 }
 
+/// 가사 상자를 넘는 페이지가 있다는 빨간 표시('넘침 2'). 발표는 막지 않고 알리기만 한다.
+class _OverflowChip extends StatelessWidget {
+  const _OverflowChip(this.label, {this.tooltip});
+
+  final String label;
+  final String? tooltip;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final chip = Container(
+      margin: const EdgeInsets.only(left: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(
+        color: cs.errorContainer,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+          color: cs.onErrorContainer,
+        ),
+      ),
+    );
+    return tooltip == null ? chip : Tooltip(message: tooltip!, child: chip);
+  }
+}
+
 // ── StagingPanel ──────────────────────────────────────────────────────────
 
 class _StagingPanel extends StatelessWidget {
@@ -5117,9 +5293,13 @@ class _StagingPanel extends StatelessWidget {
     required this.onSaveConti,
     required this.onLoadConti,
     required this.onAddBlank,
+    this.overflowCounts = const {},
   });
 
   final List<({int uid, StagingItem item})> stagingItems;
+
+  /// 항목 uid → 가사 상자를 넘는 페이지 수. 0 인 항목은 없다.
+  final Map<int, int> overflowCounts;
   final int? selectedUid;
   // 항목별 배경 오버라이드. 키가 있는 항목만 전역 배경 대신 이 배경으로 나간다.
   final Map<int, SlideBackground> backgrounds;
@@ -5383,6 +5563,14 @@ class _StagingPanel extends StatelessWidget {
                                                 ),
                                               ),
                                             ),
+                                            if (overflowCounts[entry.uid]
+                                                case final count?)
+                                              _OverflowChip(
+                                                '넘침 $count',
+                                                tooltip:
+                                                    '가사 상자를 넘는 페이지가 $count장 있습니다. '
+                                                    '페이지를 나누거나 글자 크기를 줄여 주세요.',
+                                              ),
                                           ],
                                         ),
                                         if (item.previewText.isNotEmpty)
@@ -5534,6 +5722,7 @@ class _SearchAndBiblePanel extends StatefulWidget {
     required this.bibleDataRevision,
     required this.onAddBibleItem,
     required this.bibleSubVersion,
+    this.bibleExtraVersion = '',
     required this.onCollapse,
     required this.searchInTitle,
     required this.searchInLyrics,
@@ -5554,6 +5743,7 @@ class _SearchAndBiblePanel extends StatefulWidget {
   final int bibleDataRevision;
   final void Function(BibleStagingItem) onAddBibleItem;
   final String bibleSubVersion;
+  final String bibleExtraVersion;
   final VoidCallback onCollapse;
   final bool searchInTitle;
   final bool searchInLyrics;
@@ -5635,6 +5825,7 @@ class _SearchAndBiblePanelState extends State<_SearchAndBiblePanel>
                   bibleDataRevision: widget.bibleDataRevision,
                   onAddItem: widget.onAddBibleItem,
                   subVersion: widget.bibleSubVersion,
+                  extraVersion: widget.bibleExtraVersion,
                 ),
               ],
             ),
@@ -5909,6 +6100,7 @@ class _BibleSearchPanel extends StatefulWidget {
     required this.bibleDataRevision,
     required this.onAddItem,
     required this.subVersion,
+    this.extraVersion = '',
   });
 
   final BibleRepository bibleRepository;
@@ -5918,6 +6110,9 @@ class _BibleSearchPanel extends StatefulWidget {
 
   /// 본문 아래 함께 담을 보조 역본. 빈 문자열이면 담지 않는다.
   final String subVersion;
+
+  /// 보조 역본 아래 세 번째로 담을 추가 역본. 빈 문자열이면 담지 않는다.
+  final String extraVersion;
 
   @override
   State<_BibleSearchPanel> createState() => _BibleSearchPanelState();
@@ -6333,19 +6528,28 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
     // 본문 검색에서는 여러 책·장을 같이 고를 수 있다. 페이지는 한 장 안에서만 만든다.
     final pages = bibleVersePages(selected, _versesPerPage);
 
-    // 보조 역본 본문을 절 번호로 찾아 쓸 수 있게 장(章)마다 한 번씩 통째로 읽는다.
+    // 보조·추가 역본 본문을 절 번호로 찾아 쓸 수 있게 장(章)마다 한 번씩 통째로 읽는다.
     final subTextsByChapter = <(String, int), Map<int, String>?>{};
+    final extraTextsByChapter = <(String, int), Map<int, String>?>{};
     for (final page in pages) {
       final first = page.first;
       final key = (first.bookName, first.chapter);
       if (!subTextsByChapter.containsKey(key)) {
-        subTextsByChapter[key] = await _loadSubVerses(
+        subTextsByChapter[key] = await _loadOtherVersionVerses(
+          widget.subVersion,
           version,
           first.bookName,
           first.chapter,
         );
+        extraTextsByChapter[key] = widget.extraVersion == widget.subVersion
+            ? null
+            : await _loadOtherVersionVerses(
+                widget.extraVersion,
+                version,
+                first.bookName,
+                first.chapter,
+              );
       }
-      final subTexts = subTextsByChapter[key];
 
       final verseNums = page.map((v) => v.verse).toList();
       final ref = _buildReference(
@@ -6355,14 +6559,13 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
         verseNums,
       );
       final text = page.map((v) => '${v.verse}. ${v.text}').join('\n');
-      final subText = subTexts == null
-          ? ''
-          : page
-                .where((v) => subTexts.containsKey(v.verse))
-                .map((v) => '${v.verse}. ${subTexts[v.verse]}')
-                .join('\n');
       widget.onAddItem(
-        BibleStagingItem(reference: ref, text: text, subText: subText),
+        BibleStagingItem(
+          reference: ref,
+          text: text,
+          subText: versesText(page, subTextsByChapter[key]),
+          extraText: versesText(page, extraTextsByChapter[key]),
+        ),
       );
     }
     if (!mounted) return;
@@ -6373,13 +6576,14 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
     ).showSnackBar(SnackBar(content: Text('${pages.length}페이지 추가됨')));
   }
 
-  /// 보조 역본의 같은 장을 {절 번호: 본문} 으로. 못 찾으면 null.
-  Future<Map<int, String>?> _loadSubVerses(
+  /// 다른 역본([sub], 보조·추가 역본)의 같은 장을 {절 번호: 본문} 으로.
+  /// 고르지 않았거나 본문과 같은 역본이거나 못 찾으면 null.
+  Future<Map<int, String>?> _loadOtherVersionVerses(
+    String sub,
     String version,
     String bookName,
     int chapter,
   ) async {
-    final sub = widget.subVersion;
     if (sub.isEmpty || sub == version) return null;
     final book = await widget.bibleRepository.mapBookName(
       bookName: bookName,
@@ -6558,6 +6762,10 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
           ),
           // 추가 버튼
           if (shown.isNotEmpty) ...[
+            if (_threeVersions && _versesPerPage > 1) ...[
+              const SizedBox(height: 8),
+              _buildThreeVersionsHint(),
+            ],
             const SizedBox(height: 8),
             Row(
               children: [
@@ -6566,6 +6774,8 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
                 SizedBox(
                   width: 92,
                   child: DropdownButtonFormField<int>(
+                    // '1절로 바꾸기' 로 밖에서 바꿀 때 다시 그리게.
+                    key: ValueKey(_versesPerPage),
                     initialValue: _versesPerPage,
                     isDense: true,
                     decoration: const InputDecoration(
@@ -6606,6 +6816,44 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
               ],
             ),
           ],
+        ],
+      ),
+    );
+  }
+
+  /// 보조·추가 역본을 둘 다 담는가(한 페이지에 역본 세 개).
+  bool get _threeVersions =>
+      widget.subVersion.isNotEmpty &&
+      widget.extraVersion.isNotEmpty &&
+      widget.extraVersion != widget.subVersion;
+
+  /// 역본 세 개를 한 페이지에 담으면 글이 많아 가사 상자를 넘기 쉽다 — 1절씩 권한다.
+  Widget _buildThreeVersionsHint() {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 2, 2, 2),
+      decoration: BoxDecoration(
+        color: cs.tertiaryContainer,
+        borderRadius: BorderRadius.circular(AppRadius.control),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            Icons.warning_amber_rounded,
+            size: 16,
+            color: cs.onTertiaryContainer,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              '역본 3개를 함께 담아 한 페이지에 글이 많습니다. 페이지당 1절을 권장합니다.',
+              style: TextStyle(fontSize: 12, color: cs.onTertiaryContainer),
+            ),
+          ),
+          TextButton(
+            onPressed: () => setState(() => _versesPerPage = 1),
+            child: const Text('1절로 바꾸기'),
+          ),
         ],
       ),
     );
@@ -6999,6 +7247,8 @@ class _DesignRibbonState extends State<_DesignRibbon> {
   // 3줄 + 줄 사이 + 묶음 이름. 리본 내용 높이가 이 값으로 고정된다.
   static const double _contentHeight = 118;
   static const double _columnWidth = 236;
+  // 색 칸 셋(원본·보조·추가)이 한 줄에 들어가는 열. 칸마다 이름이 잘리지 않게 넓힌다.
+  static const double _threeColorColumnWidth = 280;
   static const double _rowGap = 4;
 
   late _RibbonTab _tab;
@@ -7291,6 +7541,8 @@ class _DesignRibbonState extends State<_DesignRibbon> {
                           _update(_style.copyWith(englishTextColor: c)),
                     ),
                   ),
+                  const SizedBox(width: 6),
+                  Expanded(child: _extraColorField()),
                 ],
               ),
             ),
@@ -7310,6 +7562,41 @@ class _DesignRibbonState extends State<_DesignRibbon> {
                   ),
                 ),
               ),
+            ),
+          ], width: _threeColorColumnWidth),
+          _column([
+            _PropertyRow(
+              label: '추가 보조',
+              child: _extraSwitchRow(
+                _DenseDropdown(
+                  // 보조 언어를 바꾸면 고를 수 있는 목록이 달라지므로 새로 만든다.
+                  key: ValueKey(
+                    'extra:${_style.subLanguage}:${_style.extraLanguage}',
+                  ),
+                  value:
+                      widget.subLanguages.contains(_style.extraLanguage) &&
+                          _style.extraLanguage != _style.subLanguage
+                      ? _style.extraLanguage
+                      : '',
+                  items: [
+                    for (final language in widget.subLanguages)
+                      if (language != _style.subLanguage) language,
+                  ],
+                  noneLabel: '없음',
+                  onChanged: (language) =>
+                      _update(_style.copyWith(extraLanguage: language ?? '')),
+                ),
+              ),
+            ),
+            _ratioRow(
+              '보조 크기',
+              _style.subFontRatio,
+              (v) => _style.copyWith(subFontRatio: v),
+            ),
+            _ratioRow(
+              '추가 크기',
+              _style.extraFontRatio,
+              (v) => _style.copyWith(extraFontRatio: v),
             ),
           ]),
         ],
@@ -7360,12 +7647,34 @@ class _DesignRibbonState extends State<_DesignRibbon> {
               ),
             ),
             _PropertyRow(
-              label: '본문 색',
-              child: _ColorField(
-                dialogTitle: '본문 색상',
-                color: _style.bibleTextColor,
-                colors: widget.textSwatches,
-                onSelected: (c) => _update(_style.copyWith(bibleTextColor: c)),
+              label: '색상',
+              child: Row(
+                children: [
+                  Expanded(
+                    child: _ColorField(
+                      caption: '본문',
+                      dialogTitle: '본문 색상',
+                      color: _style.bibleTextColor,
+                      colors: widget.textSwatches,
+                      onSelected: (c) =>
+                          _update(_style.copyWith(bibleTextColor: c)),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  // 보조·추가 색은 찬양과 같은 값이다(렌더러가 한 키로 읽는다).
+                  Expanded(
+                    child: _ColorField(
+                      caption: '보조',
+                      dialogTitle: '보조 역본 색상 (찬양과 공통)',
+                      color: _style.englishTextColor,
+                      colors: widget.textSwatches,
+                      onSelected: (c) =>
+                          _update(_style.copyWith(englishTextColor: c)),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(child: _extraColorField()),
+                ],
               ),
             ),
             _PropertyRow(
@@ -7387,6 +7696,47 @@ class _DesignRibbonState extends State<_DesignRibbon> {
                         ),
                       ),
                     ),
+            ),
+          ], width: _threeColorColumnWidth),
+          _column([
+            _PropertyRow(
+              label: '추가 역본',
+              child: widget.bibleVersions.isEmpty
+                  ? const _HintText('성경을 먼저 가져와 주세요.')
+                  : _extraSwitchRow(
+                      _DenseDropdown(
+                        key: ValueKey(
+                          'bible-extra:${_style.bibleSubVersion}:'
+                          '${_style.bibleExtraVersion}',
+                        ),
+                        value:
+                            widget.bibleVersions.contains(
+                                  _style.bibleExtraVersion,
+                                ) &&
+                                _style.bibleExtraVersion !=
+                                    _style.bibleSubVersion
+                            ? _style.bibleExtraVersion
+                            : '',
+                        items: [
+                          for (final version in widget.bibleVersions)
+                            if (version != _style.bibleSubVersion) version,
+                        ],
+                        noneLabel: '표시 안 함',
+                        onChanged: (version) => _update(
+                          _style.copyWith(bibleExtraVersion: version ?? ''),
+                        ),
+                      ),
+                    ),
+            ),
+            _ratioRow(
+              '보조 크기',
+              _style.bibleSubFontRatio,
+              (v) => _style.copyWith(bibleSubFontRatio: v),
+            ),
+            _ratioRow(
+              '추가 크기',
+              _style.bibleExtraFontRatio,
+              (v) => _style.copyWith(bibleExtraFontRatio: v),
             ),
           ]),
         ],
@@ -7498,6 +7848,62 @@ class _DesignRibbonState extends State<_DesignRibbon> {
           ),
         ),
       ],
+    );
+  }
+
+  /// 추가 보조(셋째 줄) 표시 스위치 + 언어/역본 선택. `include_extra_lyrics` 하나라
+  /// 찬양·성경 탭이 같은 값을 쓴다([_subLanguageSwitchRow] 와 같은 방식).
+  Widget _extraSwitchRow(Widget selector) {
+    final on = _style.includeExtraLyrics;
+    return Row(
+      children: [
+        Tooltip(
+          message: on ? '추가 보조 끄기' : '추가 보조 켜기',
+          child: SizedBox(
+            height: 26,
+            child: _compactSwitch(
+              on,
+              (v) => _update(_style.copyWith(includeExtraLyrics: v)),
+            ),
+          ),
+        ),
+        const SizedBox(width: 4),
+        Expanded(
+          child: IgnorePointer(
+            ignoring: !on,
+            child: Opacity(opacity: on ? 1 : 0.38, child: selector),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 추가 보조 색(찬양·성경 공통).
+  Widget _extraColorField() {
+    return _ColorField(
+      caption: '추가',
+      dialogTitle: '추가 보조 색상 (찬양·성경 공통)',
+      color: _style.extraTextColor,
+      colors: widget.textSwatches,
+      onSelected: (c) => _update(_style.copyWith(extraTextColor: c)),
+    );
+  }
+
+  /// 보조·추가 보조 글자 크기(본문 대비 %). 본문 크기를 바꾸면 같이 따라간다.
+  Widget _ratioRow(
+    String label,
+    double ratio,
+    ExportStyle Function(double ratio) apply,
+  ) {
+    return _PropertyRow(
+      label: '$label %',
+      child: _ValueSlider(
+        value: ratio * 100,
+        min: 40,
+        max: 120,
+        divisions: 16,
+        onChanged: (v) => _update(apply(v / 100)),
+      ),
     );
   }
 
@@ -8072,6 +8478,7 @@ class _OptionSegments<T> extends StatelessWidget {
 /// 보조 언어·역본 드롭다운. [noneLabel] 이 있으면 맨 위에 '' 값으로 넣는다.
 class _DenseDropdown extends StatelessWidget {
   const _DenseDropdown({
+    super.key,
     required this.value,
     required this.items,
     required this.onChanged,
@@ -8330,6 +8737,7 @@ class _PreviewBox extends StatelessWidget {
   Widget build(BuildContext context) {
     final String sampleText;
     final String sampleEnglishText;
+    final String sampleExtraText;
     final String? titleText;
     final bool isBible;
     String? imagePath;
@@ -8338,29 +8746,38 @@ class _PreviewBox extends StatelessWidget {
       case ImageStagingItem(:final imagePaths):
         sampleText = '';
         sampleEnglishText = '';
+        sampleExtraText = '';
         titleText = null;
         isBible = false;
         imagePath = imagePaths.isEmpty ? null : imagePaths.first;
       case SongStagingItem(:final song):
-        sampleText = song.pages.isEmpty ? song.displayTitle : song.pages.first;
-        sampleEnglishText = song.englishPages.isEmpty
-            ? ''
-            : song.englishPages.first;
+        final first = song.pairedPages.firstOrNull;
+        sampleText = first?.korean ?? song.displayTitle;
+        sampleEnglishText = first?.english ?? '';
+        sampleExtraText = first?.extra ?? '';
         titleText = song.displayTitle;
         isBible = false;
-      case BibleStagingItem(:final text, :final reference, :final subText):
+      case BibleStagingItem(
+        :final text,
+        :final reference,
+        :final subText,
+        :final extraText,
+      ):
         sampleText = text;
         sampleEnglishText = subText;
+        sampleExtraText = extraText;
         titleText = reference;
         isBible = true;
-      case BlankStagingItem(:final mainText, :final englishText):
+      case BlankStagingItem(:final mainText, :final englishText, :final extraText):
         sampleText = mainText;
         sampleEnglishText = englishText;
+        sampleExtraText = extraText;
         titleText = null;
         isBible = false;
       case null:
         sampleText = '선택한 항목이 여기에 미리보기로 보입니다.';
         sampleEnglishText = '';
+        sampleExtraText = '';
         titleText = null;
         isBible = false;
     }
@@ -8380,6 +8797,7 @@ class _PreviewBox extends StatelessWidget {
             data: SlidePageData(
               mainText: sampleText,
               englishText: sampleEnglishText,
+              extraText: sampleExtraText,
               title: titleText,
               isBible: isBible,
               pageIndex: 0,
@@ -8587,28 +9005,6 @@ class _SheetLyricsDialogState extends State<_SheetLyricsDialog> {
 
 // ── 곡 편집 다이얼로그 ─────────────────────────────────────────────────
 
-/// 곡 편집 결과: 곡 본체 + 언어별 보조 가사 ('영어' 는 song.englishLyrics).
-typedef SongEditResult = (PraiseSong song, Map<String, String> subLyrics);
-
-class _SongEditDialog extends StatefulWidget {
-  const _SongEditDialog({
-    this.song,
-    this.translations = const {},
-    this.languages = const [PraiseRepository.defaultSubLanguage],
-  });
-
-  final PraiseSong? song;
-
-  /// 영어를 뺀 언어별 가사 (DB 에서 읽어 온 것).
-  final Map<String, String> translations;
-
-  /// 드롭다운에 띄울 언어 목록.
-  final List<String> languages;
-
-  @override
-  State<_SongEditDialog> createState() => _SongEditDialogState();
-}
-
 /// 원본을 다시 구워 PPT 항목 [uid] 의 장 수가 [oldCount] → [newCount] 로 바뀔 때
 /// 지운 페이지 표시(`uid:페이지`)와 메모를 맞춘다. 지운 페이지 표시가 풀렸으면 true.
 ///
@@ -8641,24 +9037,27 @@ bool remapReloadedPages({
   return restored;
 }
 
-// 저장 형식이 편집 형식과 동일하므로 변환 불필요.
+/// 번역 때문에 곡 [uid] 의 장 수가 [oldCount] → [newCount] 로 바뀔 때. 번역은 끝에만 붙거나 빠지므로
+/// 앞 페이지 번호는 그대로다 — 지운 표시·메모는 두고([remapReloadedPages] 와 달리 풀지 않는다),
+/// 자동 여백(`uid:장수`) 것만 새 끝으로 옮기고 줄어든 범위 밖 것은 버린다.
 @visibleForTesting
-String lyricsToEditText(String stored) => stored;
-
-// 편집 텍스트 → 저장 형식 정규화.
-// 규칙: 빈 줄 1개(\n\n) = 페이지 구분, 빈 줄 N개 = 빈 페이지 N-1장.
-// ###, ==== 은 명시적 페이지 구분자로 허용.
-@visibleForTesting
-String normalizeEditableLyrics(String raw) {
-  var text = raw.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
-  // ###, ==== → \n\n (주변 줄바꿈 포함 소비)
-  text = text.replaceAll(RegExp(r'\n?[ \t]*(###|====)[ \t]*\n?'), '\n\n');
-  // 분리 → 각 페이지 trim → 후행 빈 페이지 제거 → 재결합
-  final pages = text.split(RegExp(r'\n[ \t]*\n')).map((p) => p.trim()).toList();
-  while (pages.isNotEmpty && pages.last.isEmpty) {
-    pages.removeLast();
+void remapTrailingPages({
+  required int uid,
+  required int oldCount,
+  required int newCount,
+  required Set<String> deletedKeys,
+  required Map<String, String> notes,
+}) {
+  if (oldCount == newCount) return;
+  String key(int page) => '$uid:$page';
+  final spacerDeleted = deletedKeys.remove(key(oldCount));
+  final spacerNote = notes.remove(key(oldCount));
+  for (var j = newCount; j < oldCount; j++) {
+    deletedKeys.remove(key(j));
+    notes.remove(key(j));
   }
-  return pages.join('\n\n');
+  if (spacerDeleted) deletedKeys.add(key(newCount));
+  if (spacerNote != null) notes[key(newCount)] = spacerNote;
 }
 
 /// [item] 의 [pages](원래 페이지 번호, 오름차순)만 담은 항목들. 나누기·복사·옮기기가 같이 쓴다.
@@ -8678,7 +9077,7 @@ List<({StagingItem item, List<int> from})> itemsFromPages(
   switch (item) {
     case SongStagingItem(:final song):
       final all = song.pairedPages;
-      bool isEmpty(int j) => all[j].korean.isEmpty && all[j].english.isEmpty;
+      bool isEmpty(int j) => all[j].isEmptyPage;
       var end = pages.length;
       while (end > 0 && isEmpty(pages[end - 1])) {
         end--;
@@ -8708,200 +9107,6 @@ List<({StagingItem item, List<int> from})> itemsFromPages(
       ];
     default:
       return [(item: item, from: pages)];
-  }
-}
-
-// 페이지 목록 → 저장 형식 인코딩.
-@visibleForTesting
-String encodePages(Iterable<String> pages) {
-  final list = pages.toList();
-  while (list.isNotEmpty && list.last.isEmpty) list.removeLast();
-  return list.join('\n\n');
-}
-
-class _SongEditDialogState extends State<_SongEditDialog> {
-  late final TextEditingController _titleController;
-  late final TextEditingController _lyricsController;
-  late final TextEditingController _englishController;
-  late Map<String, String> _subLyrics;
-  late String _language;
-
-  @override
-  void initState() {
-    super.initState();
-    _titleController = TextEditingController(text: widget.song?.title ?? '');
-    _lyricsController = TextEditingController(
-      text: _toEditText(widget.song?.lyrics ?? ''),
-    );
-    _subLyrics = {
-      PraiseRepository.defaultSubLanguage: widget.song?.englishLyrics ?? '',
-      for (final language in widget.languages)
-        if (language != PraiseRepository.defaultSubLanguage)
-          language: widget.translations[language] ?? '',
-      ...widget.translations,
-    };
-    _language = PraiseRepository.defaultSubLanguage;
-    _englishController = TextEditingController(
-      text: _toEditText(_subLyrics[_language] ?? ''),
-    );
-  }
-
-  /// 편집 중인 언어의 내용을 맵에 되돌려 넣는다.
-  void _stashCurrent() {
-    _subLyrics[_language] = _normalizeLyrics(_englishController.text);
-  }
-
-  void _switchLanguage(String language) {
-    setState(() {
-      _stashCurrent();
-      _language = language;
-      _englishController.text = _toEditText(_subLyrics[language] ?? '');
-    });
-  }
-
-  Future<void> _addLanguage() async {
-    final name = await showDialog<String>(
-      context: context,
-      builder: (context) => const _TextPromptDialog(
-        title: '언어 추가',
-        label: '언어',
-        hintText: '예: 일본어, 중국어, 스페인어',
-        initialValue: '',
-      ),
-    );
-    final language = name?.trim() ?? '';
-    if (language.isEmpty || !mounted) return;
-    _subLyrics.putIfAbsent(language, () => '');
-    _switchLanguage(language);
-  }
-
-  @override
-  void dispose() {
-    _titleController.dispose();
-    _lyricsController.dispose();
-    _englishController.dispose();
-    super.dispose();
-  }
-
-  String _normalizeLyrics(String raw) {
-    return normalizeEditableLyrics(raw);
-  }
-
-  static String _toEditText(String stored) => lyricsToEditText(stored);
-
-  void _save() {
-    final title = _titleController.text.trim();
-    if (title.isEmpty) return;
-    _stashCurrent();
-    Navigator.of(context).pop((
-      PraiseSong(
-        id: widget.song?.id,
-        fileName: widget.song?.fileName ?? title,
-        title: title,
-        lyrics: _normalizeLyrics(_lyricsController.text),
-        englishLyrics: _subLyrics[PraiseRepository.defaultSubLanguage] ?? '',
-      ),
-      Map<String, String>.from(_subLyrics),
-    ));
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final isNew = widget.song?.id == null;
-    return Dialog(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 620),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                isNew ? '새 곡 추가' : '가사 수정',
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 20),
-              TextField(
-                controller: _titleController,
-                decoration: const InputDecoration(
-                  labelText: '제목',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _lyricsController,
-                maxLines: 10,
-                textAlignVertical: TextAlignVertical.top,
-                decoration: const InputDecoration(
-                  labelText: '원본 가사',
-                  hintText: '페이지 구분: 빈 줄 (또는 ### / ====)',
-                  border: OutlineInputBorder(),
-                  alignLabelWithHint: true,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  const Text('보조 언어'),
-                  const SizedBox(width: 12),
-                  DropdownButton<String>(
-                    value: _language,
-                    items: [
-                      for (final language in _subLyrics.keys)
-                        DropdownMenuItem(
-                          value: language,
-                          child: Text(language),
-                        ),
-                    ],
-                    onChanged: (language) {
-                      if (language != null) _switchLanguage(language);
-                    },
-                  ),
-                  const SizedBox(width: 8),
-                  TextButton.icon(
-                    onPressed: _addLanguage,
-                    icon: const Icon(Icons.add, size: 18),
-                    label: const Text('언어 추가'),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: _englishController,
-                maxLines: 10,
-                textAlignVertical: TextAlignVertical.top,
-                decoration: InputDecoration(
-                  labelText: '$_language 가사',
-                  hintText: '페이지 구분: 빈 줄 (또는 ### / ====)',
-                  border: const OutlineInputBorder(),
-                  alignLabelWithHint: true,
-                ),
-              ),
-              const SizedBox(height: 24),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('취소'),
-                  ),
-                  const SizedBox(width: 8),
-                  FilledButton(
-                    onPressed: _save,
-                    child: Text(isNew ? '추가' : '저장'),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 }
 
@@ -8936,6 +9141,9 @@ class _SlideThumbnailState extends State<_SlideThumbnail> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    // 넘친 비율(관객 화면 기준). 안 넘치면 null.
+    final ratio = SlideTextLayout.cachedOverflowRatio(widget.data);
+    final overflow = ratio > SlideTextLayout.overflowThreshold ? ratio : null;
 
     return GestureDetector(
       onTap: widget.onTap,
@@ -8979,6 +9187,47 @@ class _SlideThumbnailState extends State<_SlideThumbnail> {
                       ),
                     ),
                   ),
+                  if (overflow != null) ...[
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            border: Border.all(color: cs.error, width: 2),
+                            borderRadius: BorderRadius.circular(
+                              AppRadius.control,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      bottom: 4,
+                      right: 4,
+                      child: Tooltip(
+                        message:
+                            '관객 화면에서 가사가 상자를 넘습니다 '
+                            '(${SlideTextLayout.overflowLabel(overflow)})',
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 1,
+                          ),
+                          decoration: BoxDecoration(
+                            color: cs.error,
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Text(
+                            '넘침',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                              color: cs.onError,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                   if (_hovered)
                     Positioned(
                       top: 4,
@@ -9077,22 +9326,28 @@ class _SlideQuickEditDialog extends StatefulWidget {
   const _SlideQuickEditDialog({
     required this.mainText,
     required this.englishText,
+    this.extraText = '',
     required this.isBible,
     this.title,
     this.heading = '슬라이드 수정',
     this.helper,
     this.subLabel,
+    this.extraLabel,
     this.mainMaxLines = 7,
   });
 
   final String mainText;
   final String englishText;
+
+  /// 추가 보조 줄(관객 화면 셋째 줄).
+  final String extraText;
   final bool isBible;
   final String? title;
   final String heading;
   final String? helper;
   // 보조 칸 라벨. 콘티 임시 수정은 어느 언어 칸인지 이름으로 알려 준다.
   final String? subLabel;
+  final String? extraLabel;
   final int mainMaxLines;
 
   @override
@@ -9102,6 +9357,7 @@ class _SlideQuickEditDialog extends StatefulWidget {
 class _SlideQuickEditDialogState extends State<_SlideQuickEditDialog> {
   late final TextEditingController _mainCtrl;
   late final TextEditingController _englishCtrl;
+  late final TextEditingController _extraCtrl;
 
   @override
   void initState() {
@@ -9120,12 +9376,19 @@ class _SlideQuickEditDialogState extends State<_SlideQuickEditDialog> {
         selection: const TextSelection.collapsed(offset: 0),
       ),
     );
+    _extraCtrl = TextEditingController.fromValue(
+      TextEditingValue(
+        text: widget.extraText,
+        selection: const TextSelection.collapsed(offset: 0),
+      ),
+    );
   }
 
   @override
   void dispose() {
     _mainCtrl.dispose();
     _englishCtrl.dispose();
+    _extraCtrl.dispose();
     super.dispose();
   }
 
@@ -9165,6 +9428,17 @@ class _SlideQuickEditDialogState extends State<_SlideQuickEditDialog> {
                   border: const OutlineInputBorder(),
                 ),
               ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _extraCtrl,
+                maxLines: 4,
+                decoration: InputDecoration(
+                  labelText:
+                      widget.extraLabel ??
+                      (widget.isBible ? '추가 역본 본문 (선택)' : '추가 보조 가사 (선택)'),
+                  border: const OutlineInputBorder(),
+                ),
+              ),
             ],
           ),
         ),
@@ -9175,8 +9449,11 @@ class _SlideQuickEditDialogState extends State<_SlideQuickEditDialog> {
           child: const Text('취소'),
         ),
         FilledButton(
-          onPressed: () =>
-              Navigator.pop(context, (_mainCtrl.text, _englishCtrl.text)),
+          onPressed: () => Navigator.pop(context, (
+            _mainCtrl.text,
+            _englishCtrl.text,
+            _extraCtrl.text,
+          )),
           child: const Text('적용'),
         ),
       ],
@@ -9867,6 +10144,7 @@ class _SermonPageDialog extends StatefulWidget {
   const _SermonPageDialog({
     required this.initialTitle,
     required this.initialSubtitle,
+    this.extraText = '',
     required this.initialDesign,
     required this.canRevert,
     required this.globalStyle,
@@ -9876,6 +10154,9 @@ class _SermonPageDialog extends StatefulWidget {
 
   final String initialTitle;
   final String initialSubtitle;
+
+  /// 페이지에 이미 든 추가 보조 줄. 이 창에서 고치지는 않고 미리보기에만 그린다.
+  final String extraText;
   final SlideBackground initialDesign;
   final bool canRevert;
   final ExportStyle globalStyle;
@@ -9990,6 +10271,7 @@ class _SermonPageDialogState extends State<_SermonPageDialog> {
                   previewItem: BlankStagingItem(
                     mainText: _titleNow.isEmpty ? '설교 주제' : _titleNow,
                     englishText: _subtitleNow,
+                    extraText: widget.extraText,
                   ),
                 ),
               ),
@@ -10912,7 +11194,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
         SlideSearchScope.title =>
           slide.pageIndexInItem == 0 && norm(slide.title ?? '').contains(q),
         SlideSearchScope.lyrics => norm(
-          '${slide.mainText} ${slide.englishText}',
+          '${slide.mainText} ${slide.englishText} ${slide.extraText}',
         ).contains(q),
       };
     }
@@ -11016,6 +11298,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
     return SlidePageData(
       mainText: info.mainText,
       englishText: info.englishText,
+      extraText: info.extraText,
       title: info.title,
       isBible: info.isBible,
       pageIndex: i,
@@ -11024,6 +11307,8 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
       imagePath: info.imagePath,
       media: info.media,
       backdrop: _backdropFor(info),
+      // 설교자 화면은 원본만. 설교 페이지의 부제는 언어가 아니라 내용이라 그대로 둔다.
+      originalOnly: !(info.background?.isSermon ?? false),
     );
   }
 

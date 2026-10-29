@@ -532,6 +532,7 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
 
     let mainText = escapeHtml((data["main_text"] as? String) ?? "")
     let englishText = escapeHtml((data["english_text"] as? String) ?? "")
+    let extraText = escapeHtml((data["extra_text"] as? String) ?? "")
     let titleText = escapeHtml((data["title"] as? String) ?? "")
     let isBible = (data["is_bible"] as? Bool) ?? false
     let style = (data["style"] as? [String: Any]) ?? [:]
@@ -553,6 +554,10 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
     // 설교 부제처럼 따로 정한 크기가 있으면 그 값, 없으면 본문의 0.8 배.
     let englishFontSize = (style["english_font_size"] as? Double)
       ?? ((style["font_size"] as? Double) ?? 30) * 0.8
+    // 추가 보조 언어(셋째 줄). 크기는 Dart 가 본문 × 비율로 계산해 보낸다.
+    let includeExtra = (style["include_extra_lyrics"] as? Bool) ?? true
+    let extraColor = style["extra_text_color"] as? String ?? "#80deea"
+    let extraFontSize = (style["extra_font_size"] as? Double) ?? fontSize * 0.7
 
     // 본문 상자는 크기가 고정이고, 미세 조정(text_offset_y)이 그 상자를 통째로
     // 위아래로 민다. 미리보기(Dart)·PPTX 와 같은 규칙이다.
@@ -631,6 +636,10 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
       <div class="english-text">\(englishText.replacingOccurrences(of: "\n", with: "<br>"))</div>
     """ : ""
 
+    let extraSection = (includeExtra && !extraText.isEmpty) ? """
+      <div class="extra-text">\(extraText.replacingOccurrences(of: "\n", with: "<br>"))</div>
+    """ : ""
+
     let titleSection = showTitle ? """
       <div style="position:absolute;\(titlePositionCSS)
         color:\(titleColor);font-size:calc(\(titleFontSize)/540*100vh);
@@ -658,12 +667,16 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
       .english-text{color:\(englishColor);font-size:calc(\(englishFontSize)/540*100vh);
         font-weight:700;line-height:1.3;text-align:\(textAlign);
         margin-top:0.4em;white-space:pre-wrap;width:100%;}
+      .extra-text{color:\(extraColor);font-size:calc(\(extraFontSize)/540*100vh);
+        font-weight:700;line-height:1.3;text-align:\(textAlign);
+        margin-top:0.4em;white-space:pre-wrap;width:100%;}
       \(Self.pointerCSS)
     </style></head><body>
       <div id="stage">
         <div class="body-box">
           <div class="main-text">\(mainText.replacingOccurrences(of: "\n", with: "<br>"))</div>
           \(englishSection)
+          \(extraSection)
         </div>
         \(titleSection)
       </div>

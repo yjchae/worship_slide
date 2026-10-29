@@ -280,19 +280,33 @@ class PythonBridge {
             'title': song.displayTitle,
             'lyrics': song.lyrics,
             'english_lyrics': song.englishLyrics,
+            'extra_lyrics': song.extraLyrics,
           },
-          BibleStagingItem(:final reference, :final text, :final subText) => {
-            'type': 'bible',
-            'title': reference,
-            'lyrics': text,
-            'english_lyrics': subText,
-          },
-          BlankStagingItem(:final mainText, :final englishText) => {
-            'type': 'blank',
-            'title': '',
-            'lyrics': mainText,
-            'english_lyrics': englishText,
-          },
+          BibleStagingItem(
+            :final reference,
+            :final text,
+            :final subText,
+            :final extraText,
+          ) =>
+            {
+              'type': 'bible',
+              'title': reference,
+              'lyrics': text,
+              'english_lyrics': subText,
+              'extra_lyrics': extraText,
+            },
+          BlankStagingItem(
+            :final mainText,
+            :final englishText,
+            :final extraText,
+          ) =>
+            {
+              'type': 'blank',
+              'title': '',
+              'lyrics': mainText,
+              'english_lyrics': englishText,
+              'extra_lyrics': extraText,
+            },
           ImageStagingItem(:final sourceName, :final imagePaths) => {
             'type': 'image',
             'title': sourceName,

@@ -15,6 +15,7 @@ import 'slide_render_view.dart';
 typedef OfferingPreviewPage = ({
   String mainText,
   String englishText,
+  String extraText,
   String? title,
 });
 
@@ -65,7 +66,10 @@ class OfferingDialog extends StatefulWidget {
 
 class _OfferingDialogState extends State<OfferingDialog> {
   late OfferingDesign _design = widget.initial;
-  late int _pageIndex = _longestPageIndex(widget.previewPages);
+  late int _pageIndex = _longestPageIndex(
+    widget.previewPages,
+    widget.globalStyle,
+  );
 
   late final TextEditingController _labelController = TextEditingController(
     text: widget.initial.label,
@@ -98,15 +102,20 @@ class _OfferingDialogState extends State<OfferingDialog> {
   ];
 
   /// 가사가 가장 긴 페이지부터 보여준다. 띠를 비켜 놓을 기준이 그 페이지다.
-  static int _longestPageIndex(List<OfferingPreviewPage> pages) {
+  /// 디자인에서 끈 줄·빈 줄은 세지 않는다(화면에 안 보이는 글이 고르지 않게).
+  static int _longestPageIndex(
+    List<OfferingPreviewPage> pages,
+    ExportStyle style,
+  ) {
     var best = 0;
     var bestLines = -1;
     for (var i = 0; i < pages.length; i++) {
       final page = pages[i];
-      final lines = '${page.mainText}\n${page.englishText}'
-          .trim()
-          .split('\n')
-          .length;
+      final lines = [
+        page.mainText,
+        if (style.includeEnglishLyrics) page.englishText,
+        if (style.includeExtraLyrics) page.extraText,
+      ].where((t) => t.trim().isNotEmpty).join('\n').split('\n').length;
       if (lines > bestLines) {
         best = i;
         bestLines = lines;
@@ -595,6 +604,7 @@ class OfferingSlidePreview extends StatelessWidget {
             data: SlidePageData(
               mainText: page.mainText,
               englishText: page.englishText,
+              extraText: page.extraText,
               title: page.title,
               isBible: false,
               pageIndex: 0,

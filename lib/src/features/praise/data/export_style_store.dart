@@ -126,6 +126,31 @@ class ExportStyleStore {
       englishFontSize: (json['english_font_size'] as num?)?.toDouble(),
       mediaFadeIn: (json['media_fade_in'] as num?)?.toDouble() ?? 1.0,
       mediaFadeOut: (json['media_fade_out'] as num?)?.toDouble() ?? 2.0,
+      subLanguage: (json['sub_language'] as String?) ?? '영어',
+      bibleSubVersion: (json['bible_sub_version'] as String?) ?? '',
+      extraLanguage: (json['extra_language'] as String?) ?? '',
+      bibleExtraVersion: (json['bible_extra_version'] as String?) ?? '',
+      includeExtraLyrics: json['include_extra_lyrics'] as bool? ?? true,
+      extraTextColor: parseHexColor(
+        json['extra_text_color'] as String?,
+        const Color(0xFF80DEEA),
+      ),
+      subFontRatio: parseFontRatio(
+        json['sub_font_ratio'],
+        kDefaultSubFontRatio,
+      ),
+      extraFontRatio: parseFontRatio(
+        json['extra_font_ratio'],
+        kDefaultExtraFontRatio,
+      ),
+      bibleSubFontRatio: parseFontRatio(
+        json['bible_sub_font_ratio'],
+        kDefaultSubFontRatio,
+      ),
+      bibleExtraFontRatio: parseFontRatio(
+        json['bible_extra_font_ratio'],
+        kDefaultExtraFontRatio,
+      ),
     );
   }
 

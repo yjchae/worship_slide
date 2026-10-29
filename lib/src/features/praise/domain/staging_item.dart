@@ -24,6 +24,7 @@ class BibleStagingItem extends StagingItem {
     required this.reference,
     required this.text,
     this.subText = '',
+    this.extraText = '',
   });
 
   final String reference;
@@ -31,6 +32,9 @@ class BibleStagingItem extends StagingItem {
 
   /// 보조 역본 본문. 담을 때 확정되어 스냅샷처럼 남는다 (곡 가사와 같은 방식).
   final String subText;
+
+  /// 추가 역본 본문(관객 화면 세 번째 줄). [subText] 와 같은 방식이다.
+  final String extraText;
 
   @override
   String get displayTitle => reference;
@@ -68,11 +72,15 @@ class BlankStagingItem extends StagingItem {
   const BlankStagingItem({
     this.mainText = '',
     this.englishText = '',
+    this.extraText = '',
     this.media,
   });
 
   final String mainText;
   final String englishText;
+
+  /// 추가 보조 줄(관객 화면 세 번째 줄).
+  final String extraText;
   final SlideMedia? media;
 
   @override

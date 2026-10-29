@@ -28,19 +28,21 @@ class PresentationChannel {
   using Channel = flutter::MethodChannel<EV>;
 
   struct Slide {
-    std::wstring main, english, title, fontFamily;
+    // extra = 추가 보조 언어(셋째 줄).
+    std::wstring main, english, extra, title, fontFamily;
     // 외부 PPT에서 구운 페이지 이미지. 비어 있지 않으면 텍스트 대신 이 이미지만 그린다.
     std::wstring imagePath;
     // 슬라이드 배경 이미지. 비어 있으면 bg 단색만 깔린다.
     // 항목별 배경을 쓰면 페이지마다 달라질 수 있다(전역 디자인 값이 아니다).
     std::wstring bgImagePath;
-    bool    isBible  = false, showTitle = false, inclEng = true;
+    bool    isBible  = false, showTitle = false, inclEng = true, inclExtra = true;
     bool    blackout = false;
     COLORREF bg      = RGB(27, 27, 27);
     COLORREF txt     = RGB(255, 255, 255);
     COLORREF eng     = RGB(255, 241, 118);
+    COLORREF extraClr = RGB(128, 222, 234);
     COLORREF ttlClr  = RGB(255, 255, 255);
-    double   mainSz  = 30.0, engSz = 24.0, ttlSz = 14.0;
+    double   mainSz  = 30.0, engSz = 24.0, extraSz = 21.0, ttlSz = 14.0;
     // 본문 세로 미세 조정 (인치, + = 아래로). 고정 크기 상자를 통째로 민다.
     double   boxOffsetY = 0.0;
     int      vAlign  = 1;     // 0=top 1=center 2=bottom
