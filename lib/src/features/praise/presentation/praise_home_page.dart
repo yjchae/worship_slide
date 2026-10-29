@@ -635,12 +635,24 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         s.extraLanguage == s.subLanguage ? '' : s.extraLanguage;
     final subChanged = style.subLanguage != _style.subLanguage;
     final extraChanged = effectiveExtra(style) != effectiveExtra(_style);
+    // 성경도 같다 — 추가 역본이 보조 역본과 같으면 없는 것(_bibleItemsFor).
+    String effectiveBibleExtra(ExportStyle s) =>
+        s.bibleExtraVersion == s.bibleSubVersion ? '' : s.bibleExtraVersion;
+    final bibleSubChanged = style.bibleSubVersion != _style.bibleSubVersion;
+    final bibleExtraChanged =
+        effectiveBibleExtra(style) != effectiveBibleExtra(_style);
     setState(() => _style = style);
     await _styleStore.save(style);
     if (subChanged || extraChanged) {
       await _reapplySubLanguage(
         subChanged: subChanged,
         extraChanged: extraChanged,
+      );
+    }
+    if (bibleSubChanged || bibleExtraChanged) {
+      await _reapplyBibleVersions(
+        subChanged: bibleSubChanged,
+        extraChanged: bibleExtraChanged,
       );
     }
     await _sendCurrentSlide();
@@ -749,6 +761,66 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         if (found >= 0) _currentSlideIndex = found;
       }
       _clampCurrentSlideIndex();
+    });
+  }
+
+  /// 보조·추가 역본을 바꿨을 때 이미 담아 둔 성경 항목에도 다시 입힌다 (찬양의 [_reapplySubLanguage] 와 같은 일).
+  /// 역본·책·장·절은 항목 참조(`역본 책 장:절`)에서 다시 푼다. 바뀐 칸만 고치므로 안 바뀐 칸에서 손으로
+  /// 고친 글은 남는다. 참조를 못 풀거나 그 역본에 짝 책이 없으면 그 칸을 비운다(옛 역본 글이 남지 않게).
+  /// 성경 항목은 늘 한 장이라 장 수·보던 슬라이드는 그대로다.
+  Future<void> _reapplyBibleVersions({
+    required bool subChanged,
+    required bool extraChanged,
+  }) async {
+    final subVersion = _style.bibleSubVersion;
+    final extraVersion = _style.bibleExtraVersion == subVersion
+        ? ''
+        : _style.bibleExtraVersion;
+    final chapters = <(String, String, String, int), Map<int, String>?>{};
+    Future<String> textIn(String other, BibleReference? ref) async {
+      if (ref == null) return '';
+      final key = (other, ref.version, ref.book, ref.chapter);
+      if (!chapters.containsKey(key)) {
+        chapters[key] = await _loadOtherVersionVerses(
+          _bibleRepository,
+          other,
+          ref.version,
+          ref.book,
+          ref.chapter,
+        );
+      }
+      return verseNumbersText(ref.verses, chapters[key]);
+    }
+
+    final updated = <int, (BibleStagingItem, BibleStagingItem)>{};
+    for (final entry in List.of(_stagingItems)) {
+      final item = entry.item;
+      if (item is! BibleStagingItem) continue;
+      final ref = parseBibleReference(item.reference, _bibleVersions);
+      final sub = subChanged ? await textIn(subVersion, ref) : item.subText;
+      final extra = extraChanged
+          ? await textIn(extraVersion, ref)
+          : item.extraText;
+      if (sub == item.subText && extra == item.extraText) continue;
+      updated[entry.uid] = (
+        item,
+        BibleStagingItem(
+          reference: item.reference,
+          text: item.text,
+          subText: sub,
+          extraText: extra,
+        ),
+      );
+    }
+    if (updated.isEmpty || !mounted) return;
+    setState(() {
+      for (var i = 0; i < _stagingItems.length; i++) {
+        final entry = _stagingItems[i];
+        final change = updated[entry.uid];
+        // 읽는 사이 그 항목을 고쳤으면(가사 수정 등) 고친 쪽을 둔다.
+        if (change == null || !identical(entry.item, change.$1)) continue;
+        _stagingItems[i] = (uid: entry.uid, item: change.$2);
+      }
     });
   }
 

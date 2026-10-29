@@ -354,7 +354,9 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   - **성경**: `ExportStyle.bibleSubVersion` 에 역본 하나를 전역으로 고르면 절을 콘티에 담을 때
     그 역본 본문을 `BibleStagingItem.subText` 에 함께 담는다 (DB `worship_conti_items.bible_sub_text`).
     역본마다 책 이름이 다르므로(창세기/Genesis) `mapBookName` 이 이름 → 정경 순서 index 순으로
-    짝을 찾는다. 권 수가 다르면 포기하고 보조 본문 없이 담는다
+    짝을 찾는다. 권 수가 다르면 포기하고 보조 본문 없이 담는다.
+    역본을 나중에 바꿔도 **이미 담은 성경 항목에 다시 입힌다**(`_reapplyBibleVersions`, 찬양의 `_reapplySubLanguage` 와 같은 일, 바뀐 칸만).
+    역본·책·장·절은 항목 참조(`역본 책 장:절`, `_buildReference`)를 `parseBibleReference` 로 다시 풀어 얻는다 — 참조 모양을 바꾸면 둘 다 고친다
   - `subLanguage`·`bibleSubVersion` 은 `ExportStyle` 에 얹혀 `export_style.json` 에 저장된다.
     렌더러는 둘 다 읽지 않는다 (담을 때 이미 결정되어 있다). `ExportStyleStore.load` 가 예전엔 이 두 키를
     안 읽어서 다시 켜면 '영어'·'없음'으로 돌아갔다 — 새 키를 더하면 `ExportStyle.fromJson` 과 스토어 **두 곳**에 다 넣는다

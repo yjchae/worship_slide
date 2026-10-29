@@ -135,10 +135,56 @@ List<List<BibleVerse>> bibleVersePages(List<BibleVerse> verses, int perPage) {
 
 /// 다른 역본(보조·추가 역본) 본문을 [page] 의 절 순서대로 `절. 본문` 줄로 잇는다.
 /// 그 역본에 없는 절은 뺀다. [texts] 가 null(역본을 안 골랐거나 못 찾음)이면 빈 문자열.
-String versesText(List<BibleVerse> page, Map<int, String>? texts) {
+String versesText(List<BibleVerse> page, Map<int, String>? texts) =>
+    verseNumbersText([for (final v in page) v.verse], texts);
+
+/// [versesText] 를 절 번호만으로. 이미 담아 둔 성경 항목에 역본을 다시 입힐 때 쓴다.
+String verseNumbersText(List<int> verses, Map<int, String>? texts) {
   if (texts == null) return '';
-  return page
-      .where((v) => texts.containsKey(v.verse))
-      .map((v) => '${v.verse}. ${texts[v.verse]}')
+  return verses
+      .where(texts.containsKey)
+      .map((v) => '$v. ${texts[v]}')
       .join('\n');
+}
+
+/// 성경 항목 참조(`역본 책 장:절`)를 푼 값.
+typedef BibleReference = ({
+  String version,
+  String book,
+  int chapter,
+  List<int> verses,
+});
+
+/// 담을 때 만든 참조 문자열(`개역개정 요한복음 3:16-18`, `KJV 1 John 4:9,11`)을 다시 푼다.
+/// 역본 이름에 공백이 있을 수 있어 [versions] 중 앞에 맞는 가장 긴 이름을 역본으로 본다.
+/// 책 이름은 그 뒤부터 마지막 `장:절` 앞까지(`1 John`·`Song of Songs` 처럼 공백이 있어도 된다).
+/// 모양이 다르거나 아는 역본이 아니면 null.
+BibleReference? parseBibleReference(String reference, List<String> versions) {
+  final sorted = [...versions]..sort((a, b) => b.length - a.length);
+  final version = sorted
+      .where((v) => v.isNotEmpty && reference.startsWith('$v '))
+      .firstOrNull;
+  if (version == null) return null;
+  final rest = reference.substring(version.length + 1);
+  final match = RegExp(r'^(.+) (\d+):([\d,-]+)$').firstMatch(rest);
+  if (match == null) return null;
+  final verseStr = match.group(3)!;
+  final List<int> verses;
+  final range = RegExp(r'^(\d+)-(\d+)$').firstMatch(verseStr);
+  if (range != null) {
+    final from = int.parse(range.group(1)!);
+    final to = int.parse(range.group(2)!);
+    if (to < from) return null;
+    verses = [for (var v = from; v <= to; v++) v];
+  } else {
+    final parts = verseStr.split(',').map(int.tryParse).toList();
+    if (parts.any((v) => v == null)) return null;
+    verses = parts.cast<int>();
+  }
+  return (
+    version: version,
+    book: match.group(1)!,
+    chapter: int.parse(match.group(2)!),
+    verses: verses,
+  );
 }
