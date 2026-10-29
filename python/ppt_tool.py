@@ -388,6 +388,70 @@ def _libreoffice_env():
     return {**os.environ, "FONTCONFIG_FILE": str(conf)}
 
 
+def _embedded_font_dir(pptx_path, work_dir):
+    """pptx 에 심은 글꼴을 TTF 로 풀어 work_dir/fonts 에 둔다. 없으면 None.
+
+    LibreOffice 는 심은 글꼴(EOT+MTX)을 못 읽어 대체 글꼴로 그린다. 같은 글꼴이라도 PPT 마다 일부 글자만
+    담겼을 수 있어서 이번 변환 전용 폴더에 둔다. 푸는 데 큰 글꼴은 10초 넘게 걸려 푼 결과는 캐시한다.
+    """
+    import eot_font
+
+    try:
+        with zipfile.ZipFile(pptx_path) as archive:
+            names = [n for n in archive.namelist() if n.startswith("ppt/fonts/") and n.endswith(".fntdata")]
+            fonts = [archive.read(n) for n in names]
+    except (OSError, zipfile.BadZipFile):
+        return None
+    font_dir = work_dir / "fonts"
+    cache_dir = get_cache_root().parent / "embedded_fonts"
+    for data in fonts:
+        try:
+            if eot_font.eot_fs_type(data) & 0xF == 0x2:  # 포함 금지 글꼴은 쓰지 않는다
+                continue
+            cached = cache_dir / f"{hashlib.sha1(data).hexdigest()}.ttf"
+            if not cached.exists():
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                tmp = cached.with_suffix(f".{os.getpid()}.tmp")
+                tmp.write_bytes(eot_font.eot_to_ttf(data))
+                os.replace(tmp, cached)
+            font_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(cached, font_dir / cached.name)
+        except Exception as error:  # 글꼴 하나를 못 풀어도 나머지로 굽는다
+            print(json.dumps({"warning": f"심은 글꼴을 건너뜁니다: {error}"}, ensure_ascii=True), file=sys.stderr)
+    return font_dir if font_dir.is_dir() else None
+
+
+def _libreoffice_env_with_fonts(font_dir):
+    """_libreoffice_env 설정에 이번 변환 전용 글꼴 폴더를 더한다. fontconfig 를 못 쓰는 곳(Windows)은 그대로."""
+    env = _libreoffice_env()
+    if env is None or font_dir is None:
+        return env
+    from xml.sax.saxutils import escape
+
+    conf = font_dir.parent / "fonts.conf"
+    conf.write_text(
+        '<?xml version="1.0"?>\n<!DOCTYPE fontconfig SYSTEM "fonts.dtd">\n<fontconfig>\n'
+        f"  <include>{escape(env['FONTCONFIG_FILE'])}</include>\n  <dir>{escape(str(font_dir))}</dir>\n</fontconfig>\n",
+        encoding="utf-8",
+    )
+    return {**env, "FONTCONFIG_FILE": str(conf)}
+
+
+def has_restricted_embedded_fonts(pptx_path):
+    """'미리 보기/인쇄만 허용'(또는 포함 금지) 글꼴을 심었는지. macOS PowerPoint 는 이런 문서를 잠가 PDF 로 안 낸다."""
+    import eot_font
+
+    try:
+        with zipfile.ZipFile(pptx_path) as archive:
+            return any(
+                eot_font.eot_fs_type(archive.read(n)) & 0x6
+                for n in archive.namelist()
+                if n.startswith("ppt/fonts/") and n.endswith(".fntdata")
+            )
+    except Exception:  # 깨진 zip·EOT 면 그냥 예전처럼 PowerPoint 부터
+        return False
+
+
 def convert_ppt_group_to_pptx(source_paths, output_dir):
     libreoffice = get_libreoffice_executable()
     if libreoffice is None:
@@ -1156,8 +1220,10 @@ on run argv
 			activate
 			try
 				open (POSIX file inPath)
-				repeat with p in presentations
-					if name of p is docName then set pres to contents of p
+				-- `repeat with p in presentations` 는 이름이 빈 값으로 나오고 `whose` 는 -1750 이라 번호로 찾는다.
+				set docNames to name of every presentation
+				repeat with i from 1 to count of docNames
+					if item i of docNames is docName then set pres to presentation i
 				end repeat
 				if pres is missing value then error "presentation not opened"
 				save pres in (POSIX file outPath) as save as PDF
@@ -1285,7 +1351,10 @@ def _convert_with_powerpoint(source_path, output_dir):
 
 
 def _convert_to_pdf(source_path, output_dir, on_powerpoint_failed=None):
-    if powerpoint_available():
+    is_pptx = source_path.suffix.lower() == ".pptx"
+    # macOS PowerPoint 는 이런 문서의 'PDF 로 저장'을 막아 두고 오류도 없이 아무것도 안 한다 → 바로 LibreOffice.
+    skip_powerpoint = sys.platform == "darwin" and is_pptx and has_restricted_embedded_fonts(source_path)
+    if powerpoint_available() and not skip_powerpoint:
         try:
             return _convert_with_powerpoint(source_path, output_dir)
         except Exception as error:
@@ -1313,7 +1382,9 @@ def _convert_to_pdf(source_path, output_dir, on_powerpoint_failed=None):
         check=True,
         capture_output=True,
         text=True,
-        env=_libreoffice_env(),
+        env=_libreoffice_env_with_fonts(
+            _embedded_font_dir(source_path, output_dir / "embedded") if is_pptx else None
+        ),
     )
 
     converted = sorted(output_dir.glob("*.pdf"))
@@ -1328,7 +1399,8 @@ def _convert_to_pdf(source_path, output_dir, on_powerpoint_failed=None):
 # macOS 만 올린다 — Windows 는 그대로라 다시 구울 이유가 없다(예전 폴더가 한 벌 더 생긴다).
 # +1: PPT 안 동영상을 꺼내 둔다(extract_slide_videos) — 예전 폴더엔 동영상이 없다.
 # +1: PowerPoint 가 있으면 PowerPoint 로 굽는다(심은 글꼴) — 두 플랫폼 다.
-RENDER_CACHE_VERSION = 5 if sys.platform == "darwin" else 4
+# 6: macOS LibreOffice 에 심은 글꼴을 풀어 넘긴다(_embedded_font_dir) — Windows 는 fontconfig 가 없어 그대로.
+RENDER_CACHE_VERSION = 6 if sys.platform == "darwin" else 4
 
 
 def get_render_cache_key(source_path, expand_animation):

@@ -33,6 +33,7 @@ python3 python/test_export_extra.py      # 추가 보조 언어(셋째 줄) 문�
 python3 python/test_split_language.py    # 한/보조 언어 줄 나누기 self-check (LibreOffice 불필요)
 python3 python/test_sheet_lyrics.py      # 악보 가사 추출 self-check (Tesseract 없으면 OCR 부분만 skip)
 python3 python/test_media.py             # PPT 안 동영상 꺼내기 self-check (LibreOffice 불필요)
+python3 python/test_eot_font.py [pptx]   # PPT 심은 글꼴(EOT/MTX) 풀기 self-check (pptx 를 주면 실제 글꼴까지 풀어 본다)
 
 # 배포용 전체 빌드 (PyInstaller + Flutter 릴리즈 + dist/ 구성)
 ./scripts/build.sh    # macOS
@@ -600,6 +601,16 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   시간 초과가 한 번 나면 하루 동안 PowerPoint 를 건너뛴다(`~/Library/Caches/worship_slides/powerpoint_timeout` 파일). PowerPoint 가 있으면 LibreOffice 없이도 .pptx 는 굽힌다.
   PowerPoint 가 있는데 실패해서 LibreOffice 로 구웠으면 `meta.json` 에 `powerpoint_failed` 를 남기고, 다음 render 때 PowerPoint 를 쓸 수 있으면(시간 초과 표시가 없으면) 같은 폴더에 다시 굽는다.
   숨긴 슬라이드를 PowerPoint 가 PDF 에 넣는지는 **미확인**이다(빠지면 쪽 수가 달라져 동영상 짝짓기가 어긋난다). 이 변경으로 `RENDER_CACHE_VERSION` 은 macOS 5·Windows 4
+- **PPT 에 심은 글꼴** (`python/eot_font.py`, `_embedded_font_dir`): `ppt/fonts/*.fntdata` 는 EOT 이고 대개 MicroType Express(MTX) 압축이다.
+  LibreOffice 는 못 읽어 대체 글꼴로 그리고(크기·줄바꿈이 깨짐), 심은 글꼴에 **'미리 보기/인쇄만 허용'(fsType 0x4)** 이 섞여 있으면
+  macOS PowerPoint 는 문서를 편집 잠금으로 열어 'PDF 로 저장'이 비활성 — AppleScript 저장은 오류도 없이 아무것도 안 한다(그래서 `powerpoint_failed` 만 남았다).
+  - 그래서 그런 pptx 는 macOS 에서 PowerPoint 를 건너뛰고(`has_restricted_embedded_fonts`) LibreOffice 로 굽되, 심은 글꼴을 TTF 로 풀어
+    이번 변환 전용 폴더에 두고 fontconfig `<include>` + `<dir>` 로 넘긴다(`_libreoffice_env_with_fonts`). 같은 글꼴도 PPT 마다 일부 글자만 담겼을 수 있어 폴더는 변환마다 따로
+  - MTX 풀기는 W3C 명세(https://www.w3.org/Submission/MTX/)를 순수 Python 으로 옮겼다: LZCOMP(적응 허프만 3개 + 런 렝스) → CTF(글리프 세 쌍 좌표·push 데이터·hop 코드·cvt) → TTF.
+    `hdmx`·`VDMX`(힌팅 결과 캐시)·`DSIG` 는 되살리지 않고 뺀다. 첫 윤곽 값은 '점 수'가 아니라 '끝점 번호(점 수-1)'다(명세 5.7.2 — 반대로 읽으면 글리프 흐름이 어긋난다)
+  - 큰 글꼴(맑은 고딕 6MB)은 푸는 데 약 13초라 푼 TTF 는 `~/Library/Caches/worship_slides/embedded_fonts/<sha1>.ttf` 에 캐시한다. 포함 금지(fsType 0x2) 글꼴은 쓰지 않는다
+  - Windows 는 LibreOffice 가 fontconfig 를 안 써서 아직 이 경로가 없다(`_libreoffice_env` 가 None). 이 변경으로 macOS `RENDER_CACHE_VERSION` 6
+  - macOS PowerPoint '파일 액세스 부여' 창은 폴더를 한 번 허용해도 파일마다 다시 뜨는 일이 있다(이 Mac 에서 확인). 창에서 '선택…'으로 작업 폴더 자체를 골라야 한다
 - **PPT 렌더 캐시 위치**: `~/Library/Application Support/worship_slides/ppt_slides/<해시>/`.
   Caches가 아닌 이유 — 저장한 콘티가 나중에 이미지 유실로 깨지면 안 되기 때문.
   (`.ppt`→`.pptx` 변환 캐시는 유실돼도 되므로 `~/Library/Caches/worship_slides/ppt_import_cache/`)

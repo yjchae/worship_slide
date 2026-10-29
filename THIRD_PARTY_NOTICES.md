@@ -37,6 +37,8 @@ Worship Slides 가 사용하거나 배포본에 포함하는 외부 소프트웨
 
 > PyMuPDF 는 AGPL-3.0 입니다. 이 앱은 소스 코드 전체를 공개 저장소로 배포하므로 AGPL 의 소스 공개 조건을 따릅니다.
 
+> PPT 에 심은 글꼴(MicroType Express 압축)은 W3C Member Submission [MTX](https://www.w3.org/Submission/MTX/) 명세를 보고 직접 구현한 코드(`python/eot_font.py`)로 풉니다. 별도 라이브러리는 쓰지 않습니다.
+
 ### Windows 네이티브
 
 | 이름 | 용도 | 라이선스 |
