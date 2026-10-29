@@ -573,16 +573,12 @@ class _PraiseHomePageState extends State<PraiseHomePage>
           ? item.song.englishLyrics
           : whole
           ? sub
-          : encodePages(
-              mine.map((m) => byMain[m.korean]?.english ?? ''),
-            );
+          : encodePages(mine.map((m) => byMain[m.korean]?.english ?? ''));
       final newExtra = !extraChanged
           ? item.song.extraLyrics
           : whole
           ? extra
-          : encodePages(
-              mine.map((m) => byMain[m.korean]?.extra ?? ''),
-            );
+          : encodePages(mine.map((m) => byMain[m.korean]?.extra ?? ''));
       if (newSub == item.song.englishLyrics &&
           newExtra == item.song.extraLyrics) {
         continue;
@@ -931,7 +927,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       return;
     }
     try {
-      final pageData = (await _presentablePage(_currentSlideIndex, _allSlides))!;
+      final pageData = (await _presentablePage(
+        _currentSlideIndex,
+        _allSlides,
+      ))!;
       _noteSentMedia(pageData);
       await _presentationChannel.invokeMethod('openWindow', {
         ...pageData.toJson(),
@@ -997,7 +996,11 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   // ── 싱어 화면 ───────────────────────────────────────────────────────────
 
-  SingerViewData _buildSingerViewData([List<_SlideInfo>? allSlides]) {
+  /// [originalOnly] = 휴대폰(싱어·리모컨)용: 보조 가사를 빼고 원본만. 설교 부제는 내용이라 둔다.
+  SingerViewData _buildSingerViewData([
+    List<_SlideInfo>? allSlides,
+    bool originalOnly = false,
+  ]) {
     final slides = allSlides ?? _allSlides;
     final index = slides.isEmpty
         ? 0
@@ -1010,9 +1013,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         // 디자인에서 보조 언어를 꺼 두면 싱어 화면에서도 뺀다(관객 화면과 같게).
         // 설교 부제는 이 스위치와 상관없이 보이므로 그 페이지 style 로 본다.
         englishText:
-            _style.withBackground(slide.background).includeEnglishLyrics
-            ? slide.englishText
-            : '',
+            (originalOnly && !(slide.background?.isSermon ?? false)) ||
+                !_style.withBackground(slide.background).includeEnglishLyrics
+            ? ''
+            : slide.englishText,
         title: slide.title,
         imagePath: slide.imagePath,
       );
@@ -1417,7 +1421,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     slides ??= _allSlides; // getter 가 매번 목록을 새로 만들므로 한 번만
     final json = _buildSingerViewData(slides).toJson();
     _singerWeb.update({
-      ...json,
+      ..._buildSingerViewData(slides, true).toJson(),
       // 리모컨에만 간다(SingerWebServer.remoteOnlyKeys).
       'note': _slideNotes[_currentNoteKey(slides)] ?? '',
       'zoom': _zoomJson,
@@ -1697,6 +1701,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     if (item is BlankStagingItem && item.media != null) {
       return _editMediaPage(uid, item);
     }
+    if (item is SongStagingItem) return _editStagedSongLyrics(uid, item.song);
 
     final (mainText, subText, extraText, isBible) = switch (item) {
       SongStagingItem(:final song) => (
@@ -1763,6 +1768,35 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
     setState(() {
       _stagingItems[index] = (uid: uid, item: newItem);
+      // 페이지 수가 달라지면 "발표 중 삭제" 표시가 엉뚱한 페이지를 가리킨다.
+      _deletedSlideKeys.removeWhere((k) => k.startsWith('$uid:'));
+      _clampCurrentSlideIndex();
+    });
+    if (_isPresentationOpen) await _sendCurrentSlide();
+  }
+
+  /// 곡은 가사 수정 창(페이지 표)으로 고친다. 언어는 담을 때 확정된 것이라 이름만 보여 준다.
+  Future<void> _editStagedSongLyrics(int uid, PraiseSong song) async {
+    final extra =
+        _style.extraLanguage.isNotEmpty &&
+            _style.extraLanguage != _style.subLanguage
+        ? _style.extraLanguage
+        : (song.extraLyrics.isNotEmpty ? '추가 보조' : '');
+    final result = await showDialog<SongEditResult>(
+      context: context,
+      builder: (_) => LyricsEditorDialog(
+        song: song,
+        subLanguage: _style.subLanguage,
+        extraLanguage: extra,
+        style: _style,
+        contiOnly: true,
+      ),
+    );
+    if (result == null || !mounted) return;
+    final index = _stagingItems.indexWhere((e) => e.uid == uid);
+    if (index == -1) return;
+    setState(() {
+      _stagingItems[index] = (uid: uid, item: SongStagingItem(result.$1));
       // 페이지 수가 달라지면 "발표 중 삭제" 표시가 엉뚱한 페이지를 가리킨다.
       _deletedSlideKeys.removeWhere((k) => k.startsWith('$uid:'));
       _clampCurrentSlideIndex();
@@ -4104,9 +4138,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     await _repository.deleteSongsByIds([id]);
     await _loadSongs();
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('「${song.displayTitle}」을 삭제했습니다.')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('「${song.displayTitle}」을 삭제했습니다.')));
   }
 
   Future<void> _openSongEditor(PraiseSong? song) async {
@@ -8768,7 +8802,11 @@ class _PreviewBox extends StatelessWidget {
         sampleExtraText = extraText;
         titleText = reference;
         isBible = true;
-      case BlankStagingItem(:final mainText, :final englishText, :final extraText):
+      case BlankStagingItem(
+        :final mainText,
+        :final englishText,
+        :final extraText,
+      ):
         sampleText = mainText;
         sampleEnglishText = englishText;
         sampleExtraText = extraText;
@@ -11307,8 +11345,6 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
       imagePath: info.imagePath,
       media: info.media,
       backdrop: _backdropFor(info),
-      // 설교자 화면은 원본만. 설교 페이지의 부제는 언어가 아니라 내용이라 그대로 둔다.
-      originalOnly: !(info.background?.isSermon ?? false),
     );
   }
 

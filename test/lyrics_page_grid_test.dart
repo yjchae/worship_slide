@@ -286,6 +286,28 @@ void main() {
       await tester.pumpAndSettle();
     });
 
+    testWidgets('칸을 눌러도 입력칸이 새로 만들어지지 않는다(한글 조합이 끊기지 않게)', (tester) async {
+      await openDialog(tester);
+      for (final index in [1, 2]) {
+        // 1: 원본(줄 선택 표시가 바뀐다), 2: 보조(칸 도구가 붙는다)
+        final before = tester.state(
+          find.descendant(
+            of: find.byType(TextField).at(index),
+            matching: find.byType(EditableText),
+          ),
+        );
+        await tester.tap(find.byType(TextField).at(index));
+        await tester.pumpAndSettle();
+        final after = tester.state(
+          find.descendant(
+            of: find.byType(TextField).at(index),
+            matching: find.byType(EditableText),
+          ),
+        );
+        expect(identical(before, after), isTrue, reason: '칸 $index');
+      }
+    });
+
     testWidgets('행 메뉴의 커서 위치에서 나누기가 실제로 나눈다', (tester) async {
       await openDialog(tester);
       final cell = find.byType(TextField).at(1); // 1페이지 원본

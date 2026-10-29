@@ -349,9 +349,9 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
     렌더러 네 곳 모두 보조 다음에 같은 방식으로 셋째 블록을 그린다(Dart `SlideTextLayout.bodySpan`, macOS `.extra-text`,
     Windows `slide_.extra`, PPTX `extra_lyrics` 문단). 발표 창은 비율을 모른다 — `SlidePageData.toJson` 이 그 페이지의
     `english_font_size`·`extra_font_size`(pt)를 계산해 싣는다. 그래서 성경 보조 크기도 이제 성경 본문 기준이다(예전엔 찬양 본문 × 0.8)
-  - **설교자 화면(발표 보기)은 원본만** (`SlidePageData.originalOnly`, `_PresenterConsoleState._pageDataFor`): 보조·추가 보조를
-    **투명하게** 그린다 — 빼면 원본 위치가 움직여 '영역 확대'·포인터 좌표가 관객 화면과 어긋난다. 설교 페이지 부제는 내용이라 그대로 보인다.
-    발표 창 JSON 에는 싣지 않는다(관객 화면은 늘 전부)
+  - **휴대폰 화면(싱어·발표자 리모컨)은 원본만** (`_buildSingerViewData(slides, true)` → `_singerWeb.update`): 보조 가사를 뺀다.
+    설교 페이지 부제는 내용이라 그대로 보인다. 앱의 발표 보기·네이티브 싱어 창은 예전처럼 다 보인다
+    (`SlidePageData.originalOnly` 는 남아 있지만 지금은 아무도 켜지 않는다)
   - **넘침 경고(자동 축소 안 함)**: `SlideTextLayout.overflowRatio` 가 미리보기와 같은 글자 배치로 높이를 재서 5.4인치 상자를 넘으면
     발표 보기 썸네일 빨간 테두리·'넘침' 배지, 콘티 목록 '넘침 N', 가사 수정 창 행 경고·미리보기 점선. 미리보기·macOS 는 넘치면
     상자를 줄여 그리고 Windows·PPTX 는 안 줄이므로 화면마다 다르게 깨진다 — 그래서 경고로 알린다. 값은 "약 N%"(발표 창 줄바꿈과 조금 다를 수 있다).

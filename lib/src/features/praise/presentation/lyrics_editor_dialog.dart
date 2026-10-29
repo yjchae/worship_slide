@@ -27,7 +27,13 @@ class LyricsEditorDialog extends StatefulWidget {
     this.subLanguage = PraiseRepository.defaultSubLanguage,
     this.extraLanguage = '',
     required this.style,
+    this.contiOnly = false,
   });
+
+  /// 콘티에 담긴 곡만 고친다(저장된 곡은 그대로). 제목·언어는 못 바꾸고, 보조·추가 보조 칸은
+  /// [song] 의 englishLyrics·extraLyrics 를 [subLanguage]·[extraLanguage] 이름으로 보여 준다.
+  /// 결과는 고친 song 하나(subLyrics 는 비어 있다).
+  final bool contiOnly;
 
   final PraiseSong? song;
 
@@ -57,7 +63,7 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
 
   /// 언어별 저장 형식 글. 원본은 [_original].
   late String _original;
-  late final Map<String, String> _texts;
+  late Map<String, String> _texts;
   late String _subLanguage;
   late String _extraLanguage; // '' = 없음
 
@@ -85,6 +91,18 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
     final song = widget.song;
     _titleController = TextEditingController(text: song?.title ?? '');
     _original = song?.lyrics ?? '';
+    if (widget.contiOnly) {
+      _texts = {
+        widget.subLanguage: song?.englishLyrics ?? '',
+        if (widget.extraLanguage.isNotEmpty)
+          widget.extraLanguage: song?.extraLyrics ?? '',
+      };
+      _subLanguage = widget.subLanguage;
+      _extraLanguage = widget.extraLanguage;
+      _loadGrid();
+      _loadWhole();
+      return;
+    }
     _texts = {
       PraiseRepository.defaultSubLanguage: song?.englishLyrics ?? '',
       for (final language in widget.languages)
@@ -345,6 +363,19 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
     if (title.isEmpty) return;
     _commit();
     final song = widget.song;
+    if (widget.contiOnly && song != null) {
+      Navigator.of(context).pop((
+        song.copyWith(
+          lyrics: _original,
+          englishLyrics: _texts[_subLanguage] ?? '',
+          extraLyrics: _hasExtra
+              ? _texts[_extraLanguage] ?? ''
+              : song.extraLyrics,
+        ),
+        const <String, String>{},
+      ));
+      return;
+    }
     Navigator.of(context).pop((
       PraiseSong(
         id: song?.id,
@@ -433,21 +464,29 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
     return Row(
       children: [
         Text(
-          isNew ? '새 곡 추가' : '가사 수정',
+          widget.contiOnly ? '이 콘티에서만 수정' : (isNew ? '새 곡 추가' : '가사 수정'),
           style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w700),
         ),
         const SizedBox(width: 14),
-        Expanded(
-          child: TextField(
-            controller: _titleController,
-            onChanged: (_) => setState(() {}),
-            decoration: const InputDecoration(
-              labelText: '제목',
-              isDense: true,
-              border: OutlineInputBorder(),
+        if (widget.contiOnly)
+          Expanded(
+            child: Text(
+              '${widget.song?.displayTitle ?? ''} · 저장된 곡은 그대로 두고 이번 콘티에만 적용됩니다',
+              overflow: TextOverflow.ellipsis,
+            ),
+          )
+        else
+          Expanded(
+            child: TextField(
+              controller: _titleController,
+              onChanged: (_) => setState(() {}),
+              decoration: const InputDecoration(
+                labelText: '제목',
+                isDense: true,
+                border: OutlineInputBorder(),
+              ),
             ),
           ),
-        ),
         const SizedBox(width: 14),
         SegmentedButton<_EditorView>(
           showSelectedIcon: false,
@@ -576,6 +615,18 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
     }
     final current = column == 1 ? _subLanguage : _extraLanguage;
     final other = column == 1 ? _extraLanguage : _subLanguage;
+    // 콘티에 담을 때 언어가 이미 정해졌다 — 이름만 보여 준다(바꾸려면 디자인 탭).
+    if (widget.contiOnly) {
+      return Row(
+        children: [
+          dot,
+          const SizedBox(width: 8),
+          label,
+          const SizedBox(width: 8),
+          Flexible(child: Text(current, overflow: TextOverflow.ellipsis)),
+        ],
+      );
+    }
     return Row(
       children: [
         dot,
@@ -627,8 +678,10 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 3),
       padding: const EdgeInsets.symmetric(vertical: 6),
+      // 선택이 바뀌어도 늘 같은 DecoratedBox — 위젯 구조가 바뀌면 입력칸이 새로 만들어져
+      // 한글 조합(IME)이 끊긴다.
       decoration: BoxDecoration(
-        color: selected ? cs.surfaceContainerHigh : null,
+        color: selected ? cs.surfaceContainerHigh : Colors.transparent,
         borderRadius: BorderRadius.circular(AppRadius.panel),
       ),
       child: _tableRow(
@@ -678,7 +731,9 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
     return Padding(
       padding: const EdgeInsets.only(top: 10),
       child: Text(
-        '추가 보조 언어를 고르면\n여기에서 세 번째 줄을 입력합니다.',
+        widget.contiOnly
+            ? '디자인 탭에서 추가 보조 언어를 고른 뒤\n곡을 다시 담으면 세 번째 줄이 생깁니다.'
+            : '추가 보조 언어를 고르면\n여기에서 세 번째 줄을 입력합니다.',
         style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
       ),
     );
@@ -713,8 +768,10 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
       child: TextField(
         controller: _cells[row][column],
         focusNode: _focus[row][column],
+        // 높이가 자라는 칸(maxLines: null)은 macOS 한글 조합이 자모로 갈라진다(설교 페이지 창과 같은 문제).
+        // 줄 수(엔터로만 바뀐다 — 엔터는 조합을 끝낸다)에 맞춘 고정 높이로 둔다.
         minLines: lines,
-        maxLines: null,
+        maxLines: lines,
         keyboardType: TextInputType.multiline,
         style: const TextStyle(fontSize: 14, height: 1.5),
         onChanged: (value) => _onCellChanged(row, column, value),
@@ -740,37 +797,39 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
         ),
       ),
     );
-    if (!focused || column == 0) return field;
     // 언어 한 칸만 한 페이지씩 옮긴다 — 번역이 한 장 앞서거나 밀렸을 때.
+    // 포커스와 상관없이 늘 Column 으로 감싼다(구조가 바뀌면 입력칸이 새로 만들어져 한글 조합이 끊긴다).
     return Column(
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
         field,
-        const SizedBox(height: 4),
-        Wrap(
-          spacing: 4,
-          children: [
-            if (row > 0)
+        if (focused && column != 0) ...[
+          const SizedBox(height: 4),
+          Wrap(
+            spacing: 4,
+            children: [
+              if (row > 0)
+                _cellTool(
+                  Icons.arrow_upward_rounded,
+                  '위로 당기기',
+                  '이 칸부터 아래 ${_columnName(column)} 칸을 한 페이지씩 위로 올립니다',
+                  () => _mutate(
+                    () => _grid.pullUp(row, column),
+                    focus: (row: row - 1, column: column),
+                  ),
+                ),
               _cellTool(
-                Icons.arrow_upward_rounded,
-                '위로 당기기',
-                '이 칸부터 아래 ${_columnName(column)} 칸을 한 페이지씩 위로 올립니다',
+                Icons.arrow_downward_rounded,
+                '아래로 밀기',
+                '이 칸부터 아래 ${_columnName(column)} 칸을 한 페이지씩 내립니다',
                 () => _mutate(
-                  () => _grid.pullUp(row, column),
-                  focus: (row: row - 1, column: column),
+                  () => _grid.pushDown(row, column),
+                  focus: (row: row + 1, column: column),
                 ),
               ),
-            _cellTool(
-              Icons.arrow_downward_rounded,
-              '아래로 밀기',
-              '이 칸부터 아래 ${_columnName(column)} 칸을 한 페이지씩 내립니다',
-              () => _mutate(
-                () => _grid.pushDown(row, column),
-                focus: (row: row + 1, column: column),
-              ),
-            ),
-          ],
-        ),
+            ],
+          ),
+        ],
       ],
     );
   }
@@ -1031,7 +1090,9 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
         ),
         const SizedBox(width: 8),
         FilledButton(
-          onPressed: _titleController.text.trim().isEmpty ? null : _save,
+          onPressed: !widget.contiOnly && _titleController.text.trim().isEmpty
+              ? null
+              : _save,
           child: Text(isNew ? '추가' : '저장'),
         ),
       ],
