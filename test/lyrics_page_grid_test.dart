@@ -159,6 +159,22 @@ void main() {
       );
     });
 
+    test('보조 블록 앞 틈(본문 × 0.4)까지 더해 잰다 — 발표 창 높이와 맞게', () {
+      SlidePageData one({String sub = ''}) => SlidePageData(
+        mainText: '가',
+        englishText: sub,
+        isBible: false,
+        pageIndex: 0,
+        totalPages: 1,
+        style: style,
+      );
+      final added =
+          SlideTextLayout.overflowRatio(one(sub: 'a')) -
+          SlideTextLayout.overflowRatio(one());
+      // 보조 한 줄(24pt × 1.3) + 틈(30pt × 0.4), 상자 높이 5.4인치 = 388.8pt.
+      expect(added, closeTo((24 * 1.3 + 30 * 0.4) / 388.8, 0.01));
+    });
+
     test('표시 값은 5% 단위', () {
       expect(SlideTextLayout.overflowLabel(1.12), '약 110%');
       expect(SlideTextLayout.overflowLabel(1.13), '약 115%');
@@ -268,6 +284,19 @@ void main() {
 
       await tester.tap(find.text('저장'));
       await tester.pumpAndSettle();
+    });
+
+    testWidgets('붙여 넣은 뒤 다른 칸을 고치면 되돌리기가 닫힌다(고친 것을 지우지 않게)', (tester) async {
+      await openDialog(tester);
+      final cells = find.byType(TextField);
+      await tester.enterText(cells.at(6), 'A\n\nB\n\nC');
+      await tester.pumpAndSettle();
+      expect(find.text('되돌리기'), findsOneWidget);
+
+      await tester.enterText(find.byType(TextField).at(1), '고친 1절');
+      await tester.pumpAndSettle();
+      expect(find.text('되돌리기'), findsNothing);
+      expect(find.text('고친 1절'), findsOneWidget);
     });
 
     testWidgets('화면을 PNG 로 남긴다(디자인 확인용)', (tester) async {

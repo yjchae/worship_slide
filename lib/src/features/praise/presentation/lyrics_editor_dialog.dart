@@ -230,19 +230,20 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
     if (RegExp(r'\n[ \t]*\n').hasMatch(text.replaceAll('\r\n', '\n'))) {
       final pieces = _grid.splitCell(row, column);
       setState(() {
-        if (pieces >= 3) {
-          _undo = (
-            before: before,
-            message:
-                '${_columnName(column)} 칸에 붙여 넣은 가사를 빈 줄마다 나눠 '
-                '${row + 1}~${row + pieces}페이지에 넣었습니다.',
-          );
-        }
+        // 되돌리기는 바로 앞 붙여 넣기만 — 그 뒤에 고친 것까지 지우지 않게 다른 입력이 오면 닫는다.
+        _undo = pieces >= 3
+            ? (
+                before: before,
+                message:
+                    '${_columnName(column)} 칸에 붙여 넣은 가사를 빈 줄마다 나눠 '
+                    '${row + 1}~${row + pieces}페이지에 넣었습니다.',
+              )
+            : null;
         _rebuildCells(focus: (row: row + pieces - 1, column: column));
       });
       return;
     }
-    setState(() {}); // 행 높이·넘침 표시를 다시 잰다
+    setState(() => _undo = null); // 행 높이·넘침 표시도 다시 잰다
   }
 
   void _mutate(void Function() change, {({int row, int column})? focus}) {

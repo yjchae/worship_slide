@@ -501,12 +501,16 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   }
 
   Future<void> _updateStyle(ExportStyle style) async {
-    final languageChanged =
-        style.subLanguage != _style.subLanguage ||
-        style.extraLanguage != _style.extraLanguage;
+    final subChanged = style.subLanguage != _style.subLanguage;
+    final extraChanged = style.extraLanguage != _style.extraLanguage;
     setState(() => _style = style);
     await _styleStore.save(style);
-    if (languageChanged) await _reapplySubLanguage();
+    if (subChanged || extraChanged) {
+      await _reapplySubLanguage(
+        subChanged: subChanged,
+        extraChanged: extraChanged,
+      );
+    }
     await _sendCurrentSlide();
   }
 
@@ -532,7 +536,12 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   /// 언어를 바꿨을 때 이미 담아 둔 곡들의 보조 가사를 다시 입힌다.
   /// 본문(한글) 가사는 슬라이드에서 고쳤을 수 있으므로 그대로 둔다.
-  Future<void> _reapplySubLanguage() async {
+  /// 바뀐 언어 칸에서 원본 페이지를 못 찾은 페이지(이 콘티에서 고친 페이지)는 비운다 —
+  /// 옛 언어 글이 남지 않게. 바뀌지 않은 칸은 그대로 둔다(콘티에서 고친 번역 보존).
+  Future<void> _reapplySubLanguage({
+    required bool subChanged,
+    required bool extraChanged,
+  }) async {
     final updated = <(int, StagingItem)>[];
     for (var i = 0; i < _stagingItems.length; i++) {
       final item = _stagingItems[i].item;
@@ -551,14 +560,20 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       // 추가 보조가 원본보다 길면 장 수만으로는 통째인지 모르므로 원본 가사도 본다.
       final whole =
           item.song.lyrics == base.lyrics || mine.length == full.length;
-      final newSub = whole
+      final newSub = !subChanged
+          ? item.song.englishLyrics
+          : whole
           ? sub
           : encodePages(
-              mine.map((m) => byMain[m.korean]?.english ?? m.english),
+              mine.map((m) => byMain[m.korean]?.english ?? ''),
             );
-      final newExtra = whole
+      final newExtra = !extraChanged
+          ? item.song.extraLyrics
+          : whole
           ? extra
-          : encodePages(mine.map((m) => byMain[m.korean]?.extra ?? m.extra));
+          : encodePages(
+              mine.map((m) => byMain[m.korean]?.extra ?? ''),
+            );
       if (newSub == item.song.englishLyrics &&
           newExtra == item.song.extraLyrics) {
         continue;
@@ -573,7 +588,16 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     if (updated.isEmpty || !mounted) return;
     setState(() {
       for (final (index, item) in updated) {
-        _stagingItems[index] = (uid: _stagingItems[index].uid, item: item);
+        final entry = _stagingItems[index];
+        // 번역이 원본보다 길면 장 수가 바뀐다 — 메모·지운 표시·자동 여백 메모를 새 끝에 맞춘다.
+        remapReloadedPages(
+          uid: entry.uid,
+          oldCount: _pageCount(entry.item),
+          newCount: _pageCount(item),
+          deletedKeys: _deletedSlideKeys,
+          notes: _slideNotes,
+        );
+        _stagingItems[index] = (uid: entry.uid, item: item);
       }
       _clampCurrentSlideIndex();
     });
@@ -738,7 +762,6 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     final counts = <int, int>{};
     for (var i = 0; i < slides.length; i++) {
       final slide = slides[i];
-      if (slide.isBlank && slide.mainText.isEmpty) continue;
       final page = SlidePageData(
         mainText: slide.mainText,
         englishText: slide.englishText,
@@ -2023,10 +2046,12 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                   result.title,
                   result.subtitle,
                 ].where((t) => t.isNotEmpty).join('\n'),
+                extraText: item.extraText,
               )
             : BlankStagingItem(
                 mainText: result.title,
                 englishText: result.subtitle,
+                extraText: item.extraText,
               ),
       );
       if (design == null) {

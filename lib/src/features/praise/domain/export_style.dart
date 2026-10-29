@@ -150,7 +150,7 @@ class ExportStyle {
   /// 본문 아래 보조 줄(영어 가사·성경 보조 역본·설교 부제) 글자 크기.
   /// null 이면 본문의 0.8 배(렌더러 네 곳의 원래 규칙). 설교 제목 페이지만 따로 정한다.
   final double? englishFontSize;
-  double get effectiveEnglishFontSize => englishFontSize ?? fontSize * 0.8;
+  double get effectiveEnglishFontSize => subFontSizeFor(isBible: false);
 
   /// 곡/성경 제목 세로 미세 조정 (인치, + = 아래로)
   final double titleOffsetY;

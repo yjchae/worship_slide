@@ -94,18 +94,28 @@ class SlideTextLayout {
       textAlign: textAlign(data),
       textDirection: TextDirection.ltr,
     )..layout(maxWidth: lyricsBoxW * 72);
-    final ratio = painter.height / (lyricsBoxH * 72);
+    // 발표 창은 보조·추가 보조 블록 앞에 틈을 둔다(macOS margin-top 0.4em, Windows 본문 크기 × 0.4).
+    // 미리보기 글자 배치엔 없지만 실제 화면 높이엔 들어가므로 더 큰 쪽(본문 × 0.4)으로 더해 잰다.
+    final blocks = (showsSub(data) ? 1 : 0) + (showsExtra(data) ? 1 : 0);
+    final bodyFontSize = data.isBible
+        ? data.style.bibleFontSize
+        : data.style.fontSize;
+    final height = painter.height + blocks * bodyFontSize * _blockGap;
     painter.dispose();
-    return ratio;
+    return height / (lyricsBoxH * 72);
   }
 
-  static final Map<String, double> _overflowCache = {};
+  /// 발표 창(Windows)의 보조 블록 앞 틈 = 본문 글자 크기 × 이 값.
+  static const double _blockGap = 0.4;
+
+  static final Map<int, double> _overflowCache = {};
 
   /// [overflowRatio] 를 페이지 글자·스타일로 기억해 둔다(썸네일 수백 장을 다시 재지 않게).
   static double cachedOverflowRatio(SlidePageData data) {
     if (data.imagePath != null) return 0;
     final style = data.style;
-    final key = [
+    // 글자를 이어 붙인 문자열 대신 해시 — 큰 콘티를 다시 그릴 때마다 긴 문자열을 만들지 않게.
+    final key = Object.hashAll([
       data.isBible,
       data.mainText,
       data.englishText,
@@ -117,7 +127,7 @@ class SlideTextLayout {
       style.extraFontSizeFor(isBible: data.isBible),
       style.includeEnglishLyrics,
       style.includeExtraLyrics,
-    ].join('\u0000');
+    ]);
     if (_overflowCache.length > 2000) _overflowCache.clear();
     return _overflowCache[key] ??= overflowRatio(data);
   }
