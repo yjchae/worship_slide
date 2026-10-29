@@ -78,6 +78,19 @@ enum HorizontalPosition {
   final String label;
 }
 
+/// 보조·추가 보조 글자 크기 비율(본문 대비). 0.8 은 렌더러 네 곳의 예전 규칙(본문 × 0.8)과 같다.
+const kDefaultSubFontRatio = 0.8;
+const kDefaultExtraFontRatio = 0.7;
+const kMinFontRatio = 0.3;
+const kMaxFontRatio = 1.5;
+
+double clampFontRatio(double value) =>
+    value.clamp(kMinFontRatio, kMaxFontRatio).toDouble();
+
+/// 저장된 비율을 읽는다. 없거나 숫자가 아니면 [fallback].
+double parseFontRatio(Object? value, double fallback) =>
+    value is num ? clampFontRatio(value.toDouble()) : fallback;
+
 class ExportStyle {
   const ExportStyle({
     required this.fontSize,
@@ -112,6 +125,14 @@ class ExportStyle {
     this.englishFontSize,
     this.mediaFadeIn = 1.0,
     this.mediaFadeOut = 2.0,
+    this.extraLanguage = '',
+    this.bibleExtraVersion = '',
+    this.includeExtraLyrics = true,
+    this.extraTextColor = const Color(0xFF80DEEA),
+    this.subFontRatio = kDefaultSubFontRatio,
+    this.extraFontRatio = kDefaultExtraFontRatio,
+    this.bibleSubFontRatio = kDefaultSubFontRatio,
+    this.bibleExtraFontRatio = kDefaultExtraFontRatio,
   });
 
   final double fontSize;
@@ -164,6 +185,35 @@ class ExportStyle {
   final double mediaFadeIn;
   final double mediaFadeOut;
 
+  // ── 추가 보조 언어(관객 화면 세 번째 줄) ──────────────────────────────
+
+  /// 찬양 추가 보조 가사로 쓸 언어. 빈 문자열이면 없음. [subLanguage] 와 같은 방식으로
+  /// 담을 때 이미 extra 칸에 들어가 있으므로 렌더러는 이 값을 보지 않는다.
+  final String extraLanguage;
+
+  /// 성경 본문 아래 세 번째로 띄울 역본. 빈 문자열이면 없음.
+  final String bibleExtraVersion;
+
+  /// 추가 보조 줄 표시. 찬양·성경이 같이 쓴다([includeEnglishLyrics] 와 같은 방식).
+  final bool includeExtraLyrics;
+  final Color extraTextColor;
+
+  /// 보조·추가 보조 글자 크기 = 본문 크기 × 비율. 찬양과 성경이 따로다.
+  /// 렌더러는 비율이 아니라 [subFontSizeFor]·[extraFontSizeFor] 로 계산한 pt 를 받는다.
+  final double subFontRatio;
+  final double extraFontRatio;
+  final double bibleSubFontRatio;
+  final double bibleExtraFontRatio;
+
+  /// 보조 줄 글자 크기(pt). 설교 부제처럼 [englishFontSize] 를 정했으면 그 값이 이긴다.
+  double subFontSizeFor({required bool isBible}) =>
+      englishFontSize ??
+      (isBible ? bibleFontSize * bibleSubFontRatio : fontSize * subFontRatio);
+
+  /// 추가 보조 줄 글자 크기(pt).
+  double extraFontSizeFor({required bool isBible}) =>
+      isBible ? bibleFontSize * bibleExtraFontRatio : fontSize * extraFontRatio;
+
   Map<String, dynamic> toJson() {
     return {
       'font_size': fontSize,
@@ -198,6 +248,14 @@ class ExportStyle {
       if (englishFontSize != null) 'english_font_size': englishFontSize,
       'media_fade_in': mediaFadeIn,
       'media_fade_out': mediaFadeOut,
+      'extra_language': extraLanguage,
+      'bible_extra_version': bibleExtraVersion,
+      'include_extra_lyrics': includeExtraLyrics,
+      'extra_text_color': colorToHex(extraTextColor),
+      'sub_font_ratio': subFontRatio,
+      'extra_font_ratio': extraFontRatio,
+      'bible_sub_font_ratio': bibleSubFontRatio,
+      'bible_extra_font_ratio': bibleExtraFontRatio,
     };
   }
 
@@ -277,6 +335,29 @@ class ExportStyle {
       englishFontSize: (json['english_font_size'] as num?)?.toDouble(),
       mediaFadeIn: (json['media_fade_in'] as num?)?.toDouble() ?? 1.0,
       mediaFadeOut: (json['media_fade_out'] as num?)?.toDouble() ?? 2.0,
+      extraLanguage: (json['extra_language'] as String?) ?? '',
+      bibleExtraVersion: (json['bible_extra_version'] as String?) ?? '',
+      includeExtraLyrics: (json['include_extra_lyrics'] as bool?) ?? true,
+      extraTextColor: parseHexColor(
+        json['extra_text_color'] as String?,
+        const Color(0xFF80DEEA),
+      ),
+      subFontRatio: parseFontRatio(
+        json['sub_font_ratio'],
+        kDefaultSubFontRatio,
+      ),
+      extraFontRatio: parseFontRatio(
+        json['extra_font_ratio'],
+        kDefaultExtraFontRatio,
+      ),
+      bibleSubFontRatio: parseFontRatio(
+        json['bible_sub_font_ratio'],
+        kDefaultSubFontRatio,
+      ),
+      bibleExtraFontRatio: parseFontRatio(
+        json['bible_extra_font_ratio'],
+        kDefaultExtraFontRatio,
+      ),
     );
   }
 
@@ -313,6 +394,14 @@ class ExportStyle {
     Object? englishFontSize = _sentinel,
     double? mediaFadeIn,
     double? mediaFadeOut,
+    String? extraLanguage,
+    String? bibleExtraVersion,
+    bool? includeExtraLyrics,
+    Color? extraTextColor,
+    double? subFontRatio,
+    double? extraFontRatio,
+    double? bibleSubFontRatio,
+    double? bibleExtraFontRatio,
   }) {
     return ExportStyle(
       fontSize: fontSize ?? this.fontSize,
@@ -359,6 +448,18 @@ class ExportStyle {
           : (englishFontSize as num?)?.toDouble(),
       mediaFadeIn: mediaFadeIn ?? this.mediaFadeIn,
       mediaFadeOut: mediaFadeOut ?? this.mediaFadeOut,
+      extraLanguage: extraLanguage ?? this.extraLanguage,
+      bibleExtraVersion: bibleExtraVersion ?? this.bibleExtraVersion,
+      includeExtraLyrics: includeExtraLyrics ?? this.includeExtraLyrics,
+      extraTextColor: extraTextColor ?? this.extraTextColor,
+      subFontRatio: clampFontRatio(subFontRatio ?? this.subFontRatio),
+      extraFontRatio: clampFontRatio(extraFontRatio ?? this.extraFontRatio),
+      bibleSubFontRatio: clampFontRatio(
+        bibleSubFontRatio ?? this.bibleSubFontRatio,
+      ),
+      bibleExtraFontRatio: clampFontRatio(
+        bibleExtraFontRatio ?? this.bibleExtraFontRatio,
+      ),
     );
   }
 

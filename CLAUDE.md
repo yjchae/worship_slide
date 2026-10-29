@@ -22,6 +22,7 @@ flutter test test/drive_sync_store_test.dart # 구글 드라이브 저장소(가
 flutter test test/db_backup_test.dart # 스키마 올리기 전 DB 자동 백업
 flutter test test/bible_search_test.dart # 성경 본문 검색(띄어쓰기 무시·범위·강조·페이지 나누기)
 flutter test test/move_pages_test.dart # 발표 보기 페이지 옮기기·나누기
+flutter test test/extra_language_test.dart # 추가 보조 언어(세 번째 줄) 페이지·콘티 저장·스타일
 python3 python/test_render.py    # render 명령 self-check (LibreOffice 없으면 skip)
 python3 python/test_animation.py # 애니메이션 단계 펼치기 self-check (LibreOffice 불필요)
 python3 python/test_export_background.py # 항목별 배경 오버라이드 self-check (LibreOffice 불필요)
@@ -52,7 +53,7 @@ lib/
   src/app_colors.dart                -- 앱 화면 색·둥글기 토큰 (슬라이드·발표 창·PPTX 색과 무관)
   src/features/praise/
     data/
-      praise_database.dart           -- SQLite 스키마 + 마이그레이션 (현재 version 17)
+      praise_database.dart           -- SQLite 스키마 + 마이그레이션 (현재 version 18)
       praise_repository.dart         -- 곡 CRUD (searchSongs, replaceAllSongs, deleteSongsByIds ...)
       worship_conti_repository.dart  -- 콘티 저장/불러오기 (곡 가사 스냅샷까지 함께 보관)
       sync_snapshot.dart             -- 찬양 동기화 파일 모양: SyncSnapshot(PC 한 대분) · SyncSong · SyncTranslation
@@ -328,7 +329,17 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
     역본마다 책 이름이 다르므로(창세기/Genesis) `mapBookName` 이 이름 → 정경 순서 index 순으로
     짝을 찾는다. 권 수가 다르면 포기하고 보조 본문 없이 담는다
   - `subLanguage`·`bibleSubVersion` 은 `ExportStyle` 에 얹혀 `export_style.json` 에 저장된다.
-    렌더러는 둘 다 읽지 않는다 (담을 때 이미 결정되어 있다)
+    렌더러는 둘 다 읽지 않는다 (담을 때 이미 결정되어 있다). `ExportStyleStore.load` 가 예전엔 이 두 키를
+    안 읽어서 다시 켜면 '영어'·'없음'으로 돌아갔다 — 새 키를 더하면 `ExportStyle.fromJson` 과 스토어 **두 곳**에 다 넣는다
+  - **추가 보조 언어 (관객 화면 세 번째 줄, 진행 중 — `planning/trilingual-display/plan.md`)**: 보조 칸 옆에
+    고정 칸 하나를 더 둔다(`List` 로 일반화하지 않음). 곡 `PraiseSong.extraLyrics`(DB `praise_songs` 엔 없음, 콘티 스냅샷 전용),
+    성경·빈 페이지 `extraText`, 슬라이드 `SlidePageData.extraText`(JSON `extra_text`). 콘티 저장은
+    `worship_conti_items.song_extra_lyrics`·`bible_extra_text`·`blank_extra_text`(DB version 18).
+    `pairedPages` 는 `LyricsPage`(korean·english·extra) — 곡을 고치거나 나눌 때는 `copyWith`·`_songWithPages` 로 만들어
+    추가 칸을 빠뜨리지 않는다. 언어는 `ExportStyle.extraLanguage`·`bibleExtraVersion`(기본 '' = 없음)을 담을 때 입힌다
+    (`_withSubLyrics`·`_reapplySubLanguage`, 성경은 `_loadOtherVersionVerses` + `versesText`). 보조와 같은 언어는 담지 않는다.
+    글자 크기는 본문 × 비율(`sub/extra_font_ratio`, 성경은 `bible_*`) — `subFontSizeFor`·`extraFontSizeFor`, 설교 부제
+    `englishFontSize` 가 이긴다. 싱어 화면에는 보내지 않는다. 렌더러 네 곳은 아직 추가 줄을 그리지 않는다(2단계)
   - **켜기/끄기**는 리본 찬양 탭 '보조 언어'·성경 탭 '보조 역본' 줄의 스위치 = `includeEnglishLyrics`
     (`include_english_lyrics`). 렌더러 네 곳이 원래부터 읽는 값이라 담긴 보조 가사는 그대로 두고 표시만 끈다.
     값이 하나라 두 탭 스위치가 같이 움직인다

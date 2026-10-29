@@ -132,3 +132,13 @@ List<List<BibleVerse>> bibleVersePages(List<BibleVerse> verses, int perPage) {
   }
   return pages;
 }
+
+/// 다른 역본(보조·추가 역본) 본문을 [page] 의 절 순서대로 `절. 본문` 줄로 잇는다.
+/// 그 역본에 없는 절은 뺀다. [texts] 가 null(역본을 안 골랐거나 못 찾음)이면 빈 문자열.
+String versesText(List<BibleVerse> page, Map<int, String>? texts) {
+  if (texts == null) return '';
+  return page
+      .where((v) => texts.containsKey(v.verse))
+      .map((v) => '${v.verse}. ${texts[v.verse]}')
+      .join('\n');
+}

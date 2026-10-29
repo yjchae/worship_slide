@@ -11,6 +11,7 @@ class SlidePageData {
   const SlidePageData({
     required this.mainText,
     required this.englishText,
+    this.extraText = '',
     this.title,
     required this.isBible,
     required this.pageIndex,
@@ -24,6 +25,9 @@ class SlidePageData {
 
   final String mainText;
   final String englishText;
+
+  /// 추가 보조 줄(관객 화면 세 번째 줄). 싱어 화면에는 보내지 않는다.
+  final String extraText;
   final String? title;
   final bool isBible;
 
@@ -57,6 +61,7 @@ class SlidePageData {
   Map<String, dynamic> toJson() => {
     'main_text': mainText,
     'english_text': englishText,
+    'extra_text': extraText,
     'title': title,
     'is_bible': isBible,
     'page_index': pageIndex,
@@ -79,6 +84,7 @@ class SlidePageData {
     return SlidePageData(
       mainText: (json['main_text'] as String?) ?? '',
       englishText: (json['english_text'] as String?) ?? '',
+      extraText: (json['extra_text'] as String?) ?? '',
       title: json['title'] as String?,
       isBible: (json['is_bible'] as bool?) ?? false,
       pageIndex: (json['page_index'] as int?) ?? 0,
@@ -95,6 +101,7 @@ class SlidePageData {
   SlidePageData withBackdrop(SlideBackdrop? value) => SlidePageData(
     mainText: mainText,
     englishText: englishText,
+    extraText: extraText,
     title: title,
     isBible: isBible,
     pageIndex: pageIndex,

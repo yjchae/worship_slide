@@ -1,3 +1,10 @@
+/// 곡 한 페이지의 언어별 가사: 원본 · 보조 · 추가 보조.
+typedef LyricsPage = ({String korean, String english, String extra});
+
+extension LyricsPageX on LyricsPage {
+  bool get isEmptyPage => korean.isEmpty && english.isEmpty && extra.isEmpty;
+}
+
 class PraiseSong {
   const PraiseSong({
     required this.id,
@@ -5,6 +12,7 @@ class PraiseSong {
     required this.title,
     required this.lyrics,
     required this.englishLyrics,
+    this.extraLyrics = '',
   });
 
   final int? id;
@@ -12,6 +20,55 @@ class PraiseSong {
   final String title;
   final String lyrics;
   final String englishLyrics;
+
+  /// 추가 보조 언어 가사(관객 화면 세 번째 줄). DB(praise_songs)에는 없고 콘티 스냅샷에만
+  /// 담긴다 — 곡을 콘티에 담을 때 고른 언어 가사가 들어온다([englishLyrics] 와 같은 방식).
+  final String extraLyrics;
+
+  /// 바꾸지 않은 칸은 그대로 둔다. 칸을 하나씩 다시 적으면 [extraLyrics] 를 빠뜨리기 쉽다.
+  PraiseSong copyWith({
+    String? title,
+    String? lyrics,
+    String? englishLyrics,
+    String? extraLyrics,
+  }) {
+    return PraiseSong(
+      id: id,
+      fileName: fileName,
+      title: title ?? this.title,
+      lyrics: lyrics ?? this.lyrics,
+      englishLyrics: englishLyrics ?? this.englishLyrics,
+      extraLyrics: extraLyrics ?? this.extraLyrics,
+    );
+  }
+
+  /// 페이지별 [원본, 보조, 추가 보조] 가사. 세 언어 중 가장 긴 쪽에 맞추고 빈 칸은 ''.
+  /// 끝에 세 칸이 모두 빈 페이지는 뗀다.
+  List<LyricsPage> get pairedPages {
+    final ks = _parsePages(lyrics);
+    final es = _parsePages(englishLyrics);
+    final xs = _parsePages(extraLyrics);
+    final len = [
+      ks.length,
+      es.length,
+      xs.length,
+    ].reduce((a, b) => a > b ? a : b);
+    String at(List<String> list, int i) => i < list.length ? list[i] : '';
+    final result = <LyricsPage>[
+      for (var i = 0; i < len; i++)
+        (korean: at(ks, i), english: at(es, i), extra: at(xs, i)),
+    ];
+    while (result.isNotEmpty && result.last.isEmptyPage) {
+      result.removeLast();
+    }
+    return result;
+  }
+
+  List<String> get pages => pairedPages.map((p) => p.korean).toList();
+
+  List<String> get englishPages => pairedPages.map((p) => p.english).toList();
+
+  List<String> get extraPages => pairedPages.map((p) => p.extra).toList();
 
   // 페이지 구분자: \n\n (빈 줄 1개).
   // 앞쪽 \n\n = 빈 페이지. 예) '\n\n\n\n가사' → ['', '', '가사'].
@@ -23,28 +80,6 @@ class PraiseSong {
         .toList();
     return pages;
   }
-
-  List<({String korean, String english})> get pairedPages {
-    final ks = _parsePages(lyrics);
-    final es = _parsePages(englishLyrics);
-    final len = ks.length > es.length ? ks.length : es.length;
-    final result = <({String korean, String english})>[];
-    for (var i = 0; i < len; i++) {
-      final k = i < ks.length ? ks[i] : '';
-      final e = i < es.length ? es[i] : '';
-      result.add((korean: k, english: e));
-    }
-    while (result.isNotEmpty) {
-      final last = result.last;
-      if (last.korean.isNotEmpty || last.english.isNotEmpty) break;
-      result.removeLast();
-    }
-    return result;
-  }
-
-  List<String> get pages => pairedPages.map((p) => p.korean).toList();
-
-  List<String> get englishPages => pairedPages.map((p) => p.english).toList();
 
   Map<String, Object?> toMap() {
     return {

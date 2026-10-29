@@ -113,6 +113,7 @@ class WorshipContiRepository {
             'bible_text': null,
             'song_lyrics': item.song.lyrics,
             'song_english_lyrics': item.song.englishLyrics,
+            'song_extra_lyrics': item.song.extraLyrics,
           };
         } else if (item is BibleStagingItem) {
           row = {
@@ -123,6 +124,7 @@ class WorshipContiRepository {
             'bible_reference': item.reference,
             'bible_text': item.text,
             'bible_sub_text': item.subText,
+            'bible_extra_text': item.extraText,
           };
         } else if (item is ImageStagingItem) {
           row = {
@@ -146,6 +148,7 @@ class WorshipContiRepository {
             'bible_text': null,
             'blank_text': item.mainText,
             'blank_english_text': item.englishText,
+            'blank_extra_text': item.extraText,
             'media': SlideMedia.encode(item.media),
           };
         } else {
@@ -224,6 +227,7 @@ class WorshipContiRepository {
         final songId = row['song_id'] as int?;
         final storedLyrics = row['song_lyrics'] as String?;
         final storedEnglishLyrics = row['song_english_lyrics'] as String?;
+        final storedExtraLyrics = row['song_extra_lyrics'] as String? ?? '';
         final storedTitle = row['song_title'] as String? ?? '';
         PraiseSong? baseSong = songId != null ? songMap[songId] : null;
         if (baseSong == null && storedLyrics == null) {
@@ -237,6 +241,7 @@ class WorshipContiRepository {
                 title: storedTitle,
                 lyrics: storedLyrics!,
                 englishLyrics: storedEnglishLyrics ?? '',
+                extraLyrics: storedExtraLyrics,
               )
             : (storedLyrics != null
                   ? PraiseSong(
@@ -245,6 +250,7 @@ class WorshipContiRepository {
                       title: baseSong.title,
                       lyrics: storedLyrics,
                       englishLyrics: storedEnglishLyrics ?? '',
+                      extraLyrics: storedExtraLyrics,
                     )
                   : baseSong);
         result.add((uid: uid++, item: SongStagingItem(song)));
@@ -258,6 +264,7 @@ class WorshipContiRepository {
             reference: ref,
             text: text,
             subText: row['bible_sub_text'] as String? ?? '',
+            extraText: row['bible_extra_text'] as String? ?? '',
           ),
         ));
       } else if (type == 'image') {
@@ -284,6 +291,7 @@ class WorshipContiRepository {
           item: BlankStagingItem(
             mainText: row['blank_text'] as String? ?? '',
             englishText: row['blank_english_text'] as String? ?? '',
+            extraText: row['blank_extra_text'] as String? ?? '',
             media: SlideMedia.decode(row['media']),
           ),
         ));

@@ -67,6 +67,7 @@ class _SlideInfo {
     required this.stagingUid,
     required this.mainText,
     required this.englishText,
+    this.extraText = '',
     required this.title,
     required this.isBible,
     required this.pageIndexInItem,
@@ -79,6 +80,8 @@ class _SlideInfo {
   final int stagingUid;
   final String mainText;
   final String englishText;
+  // 추가 보조 줄(관객 화면 세 번째 줄).
+  final String extraText;
   final String? title;
   final bool isBible;
   final int pageIndexInItem; // 해당 아이템(곡/성경) 내의 페이지 인덱스
@@ -491,7 +494,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   }
 
   Future<void> _updateStyle(ExportStyle style) async {
-    final languageChanged = style.subLanguage != _style.subLanguage;
+    final languageChanged =
+        style.subLanguage != _style.subLanguage ||
+        style.extraLanguage != _style.extraLanguage;
     setState(() => _style = style);
     await _styleStore.save(style);
     if (languageChanged) await _reapplySubLanguage();
@@ -506,14 +511,16 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   Future<PraiseSong> _withSubLyrics(PraiseSong song) async {
     final sub = await _repository.subLyricsFor(song, _style.subLanguage);
-    if (sub == song.englishLyrics) return song;
-    return PraiseSong(
-      id: song.id,
-      fileName: song.fileName,
-      title: song.title,
-      lyrics: song.lyrics,
-      englishLyrics: sub,
-    );
+    final extra = await _extraLyricsFor(song);
+    if (sub == song.englishLyrics && extra == song.extraLyrics) return song;
+    return song.copyWith(englishLyrics: sub, extraLyrics: extra);
+  }
+
+  /// 추가 보조 언어 가사. 언어를 안 골랐거나 보조와 같은 언어면 빈 문자열.
+  Future<String> _extraLyricsFor(PraiseSong song) async {
+    final language = _style.extraLanguage;
+    if (language.isEmpty || language == _style.subLanguage) return '';
+    return _repository.subLyricsFor(song, language);
   }
 
   /// 언어를 바꿨을 때 이미 담아 둔 곡들의 보조 가사를 다시 입힌다.
@@ -527,30 +534,32 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       if (matches.isEmpty) continue;
       final base = matches.first;
       final sub = await _repository.subLyricsFor(base, _style.subLanguage);
-      final full = PraiseSong(
-        id: base.id,
-        fileName: base.fileName,
-        title: base.title,
-        lyrics: base.lyrics,
-        englishLyrics: sub,
-      ).pairedPages;
+      final extra = await _extraLyricsFor(base);
+      final full = base
+          .copyWith(englishLyrics: sub, extraLyrics: extra)
+          .pairedPages;
       final mine = item.song.pairedPages;
       // 곡을 나누거나 일부만 복사한 항목은 같은 가사 페이지를 찾아 그 번역만 입힌다.
-      final byMain = {for (final f in full) f.korean: f.english};
-      final newSub = mine.length == full.length
+      final byMain = {for (final f in full) f.korean: f};
+      // 추가 보조가 원본보다 길면 장 수만으로는 통째인지 모르므로 원본 가사도 본다.
+      final whole =
+          item.song.lyrics == base.lyrics || mine.length == full.length;
+      final newSub = whole
           ? sub
-          : encodePages(mine.map((m) => byMain[m.korean] ?? m.english));
-      if (newSub == item.song.englishLyrics) continue;
+          : encodePages(
+              mine.map((m) => byMain[m.korean]?.english ?? m.english),
+            );
+      final newExtra = whole
+          ? extra
+          : encodePages(mine.map((m) => byMain[m.korean]?.extra ?? m.extra));
+      if (newSub == item.song.englishLyrics &&
+          newExtra == item.song.extraLyrics) {
+        continue;
+      }
       updated.add((
         i,
         SongStagingItem(
-          PraiseSong(
-            id: item.song.id,
-            fileName: item.song.fileName,
-            title: item.song.title,
-            lyrics: item.song.lyrics,
-            englishLyrics: newSub,
-          ),
+          item.song.copyWith(englishLyrics: newSub, extraLyrics: newExtra),
         ),
       ));
     }
@@ -607,6 +616,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
             stagingUid: entry.uid,
             mainText: item.mainText,
             englishText: item.englishText,
+            extraText: item.extraText,
             title: null,
             isBible: false,
             pageIndexInItem: 0,
@@ -624,6 +634,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
               stagingUid: entry.uid,
               mainText: pairs[j].korean,
               englishText: pairs[j].english,
+              extraText: pairs[j].extra,
               title: song.displayTitle,
               isBible: false,
               pageIndexInItem: j,
@@ -683,6 +694,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
             stagingUid: entry.uid,
             mainText: item.text,
             englishText: item.subText,
+            extraText: item.extraText,
             title: item.reference,
             isBible: true,
             pageIndexInItem: 0,
@@ -737,6 +749,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     return SlidePageData(
       mainText: slide?.mainText ?? '',
       englishText: slide?.englishText ?? '',
+      extraText: slide?.extraText ?? '',
       title: slide?.title,
       isBible: slide?.isBible ?? false,
       pageIndex: index,
@@ -1521,28 +1534,26 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       final pairs = List.of(song.pairedPages);
 
       if (info.pageIndexInItem < pairs.length) {
-        pairs[info.pageIndexInItem] = (korean: newMain, english: newEnglish);
+        pairs[info.pageIndexInItem] = (
+          korean: newMain,
+          english: newEnglish,
+          extra: pairs[info.pageIndexInItem].extra,
+        );
       }
 
-      newItem = SongStagingItem(
-        PraiseSong(
-          id: song.id,
-          fileName: song.fileName,
-          title: song.title,
-          lyrics: encodePages(pairs.map((p) => p.korean)),
-          englishLyrics: encodePages(pairs.map((p) => p.english)),
-        ),
-      );
+      newItem = SongStagingItem(_songWithPages(song, pairs));
     } else if (item is BibleStagingItem) {
       newItem = BibleStagingItem(
         reference: item.reference,
         text: newMain,
         subText: newEnglish,
+        extraText: item.extraText,
       );
     } else if (item is BlankStagingItem) {
       newItem = BlankStagingItem(
         mainText: newMain,
         englishText: newEnglish,
+        extraText: item.extraText,
         media: item.media,
       );
     } else {
@@ -1602,22 +1613,21 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
     final StagingItem newItem = switch (item) {
       SongStagingItem(:final song) => SongStagingItem(
-        PraiseSong(
-          id: song.id,
-          fileName: song.fileName,
-          title: song.title,
+        song.copyWith(
           lyrics: normalizeEditableLyrics(newMain),
           englishLyrics: normalizeEditableLyrics(newSub),
         ),
       ),
-      BibleStagingItem(:final reference) => BibleStagingItem(
+      BibleStagingItem(:final reference, :final extraText) => BibleStagingItem(
         reference: reference,
         text: newMain,
         subText: newSub,
+        extraText: extraText,
       ),
-      BlankStagingItem(:final media) => BlankStagingItem(
+      BlankStagingItem(:final media, :final extraText) => BlankStagingItem(
         mainText: newMain,
         englishText: newSub,
+        extraText: extraText,
         media: media,
       ),
       _ => item,
@@ -2042,6 +2052,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         item: BlankStagingItem(
           mainText: result.text,
           englishText: item.englishText,
+          extraText: item.extraText,
           media: result.media,
         ),
       );
@@ -2541,16 +2552,12 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     return _stagingItems.indexWhere((e) => e.uid == parts.last.first);
   }
 
-  static PraiseSong _songWithPages(
-    PraiseSong song,
-    List<({String korean, String english})> pages,
-  ) => PraiseSong(
-    id: song.id,
-    fileName: song.fileName,
-    title: song.title,
-    lyrics: encodePages(pages.map((p) => p.korean)),
-    englishLyrics: encodePages(pages.map((p) => p.english)),
-  );
+  static PraiseSong _songWithPages(PraiseSong song, List<LyricsPage> pages) =>
+      song.copyWith(
+        lyrics: encodePages(pages.map((p) => p.korean)),
+        englishLyrics: encodePages(pages.map((p) => p.english)),
+        extraLyrics: encodePages(pages.map((p) => p.extra)),
+      );
 
   /// 콘티 항목 하나의 배경만 따로 지정한다(헌금송만 다른 배경 등).
   /// 다이얼로그에서 "전역 배경 사용"으로 되돌리면 오버라이드가 지워진다.
@@ -4300,6 +4307,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               bibleDataRevision: _bibleDataRevision,
                               onAddBibleItem: _addBibleItem,
                               bibleSubVersion: _style.bibleSubVersion,
+                              bibleExtraVersion: _style.bibleExtraVersion,
                               onCollapse: () =>
                                   setState(() => _isSearchCollapsed = true),
                               searchInTitle: _searchInTitle,
@@ -5534,6 +5542,7 @@ class _SearchAndBiblePanel extends StatefulWidget {
     required this.bibleDataRevision,
     required this.onAddBibleItem,
     required this.bibleSubVersion,
+    this.bibleExtraVersion = '',
     required this.onCollapse,
     required this.searchInTitle,
     required this.searchInLyrics,
@@ -5554,6 +5563,7 @@ class _SearchAndBiblePanel extends StatefulWidget {
   final int bibleDataRevision;
   final void Function(BibleStagingItem) onAddBibleItem;
   final String bibleSubVersion;
+  final String bibleExtraVersion;
   final VoidCallback onCollapse;
   final bool searchInTitle;
   final bool searchInLyrics;
@@ -5635,6 +5645,7 @@ class _SearchAndBiblePanelState extends State<_SearchAndBiblePanel>
                   bibleDataRevision: widget.bibleDataRevision,
                   onAddItem: widget.onAddBibleItem,
                   subVersion: widget.bibleSubVersion,
+                  extraVersion: widget.bibleExtraVersion,
                 ),
               ],
             ),
@@ -5909,6 +5920,7 @@ class _BibleSearchPanel extends StatefulWidget {
     required this.bibleDataRevision,
     required this.onAddItem,
     required this.subVersion,
+    this.extraVersion = '',
   });
 
   final BibleRepository bibleRepository;
@@ -5918,6 +5930,9 @@ class _BibleSearchPanel extends StatefulWidget {
 
   /// 본문 아래 함께 담을 보조 역본. 빈 문자열이면 담지 않는다.
   final String subVersion;
+
+  /// 보조 역본 아래 세 번째로 담을 추가 역본. 빈 문자열이면 담지 않는다.
+  final String extraVersion;
 
   @override
   State<_BibleSearchPanel> createState() => _BibleSearchPanelState();
@@ -6333,19 +6348,28 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
     // 본문 검색에서는 여러 책·장을 같이 고를 수 있다. 페이지는 한 장 안에서만 만든다.
     final pages = bibleVersePages(selected, _versesPerPage);
 
-    // 보조 역본 본문을 절 번호로 찾아 쓸 수 있게 장(章)마다 한 번씩 통째로 읽는다.
+    // 보조·추가 역본 본문을 절 번호로 찾아 쓸 수 있게 장(章)마다 한 번씩 통째로 읽는다.
     final subTextsByChapter = <(String, int), Map<int, String>?>{};
+    final extraTextsByChapter = <(String, int), Map<int, String>?>{};
     for (final page in pages) {
       final first = page.first;
       final key = (first.bookName, first.chapter);
       if (!subTextsByChapter.containsKey(key)) {
-        subTextsByChapter[key] = await _loadSubVerses(
+        subTextsByChapter[key] = await _loadOtherVersionVerses(
+          widget.subVersion,
           version,
           first.bookName,
           first.chapter,
         );
+        extraTextsByChapter[key] = widget.extraVersion == widget.subVersion
+            ? null
+            : await _loadOtherVersionVerses(
+                widget.extraVersion,
+                version,
+                first.bookName,
+                first.chapter,
+              );
       }
-      final subTexts = subTextsByChapter[key];
 
       final verseNums = page.map((v) => v.verse).toList();
       final ref = _buildReference(
@@ -6355,14 +6379,13 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
         verseNums,
       );
       final text = page.map((v) => '${v.verse}. ${v.text}').join('\n');
-      final subText = subTexts == null
-          ? ''
-          : page
-                .where((v) => subTexts.containsKey(v.verse))
-                .map((v) => '${v.verse}. ${subTexts[v.verse]}')
-                .join('\n');
       widget.onAddItem(
-        BibleStagingItem(reference: ref, text: text, subText: subText),
+        BibleStagingItem(
+          reference: ref,
+          text: text,
+          subText: versesText(page, subTextsByChapter[key]),
+          extraText: versesText(page, extraTextsByChapter[key]),
+        ),
       );
     }
     if (!mounted) return;
@@ -6373,13 +6396,14 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
     ).showSnackBar(SnackBar(content: Text('${pages.length}페이지 추가됨')));
   }
 
-  /// 보조 역본의 같은 장을 {절 번호: 본문} 으로. 못 찾으면 null.
-  Future<Map<int, String>?> _loadSubVerses(
+  /// 다른 역본([sub], 보조·추가 역본)의 같은 장을 {절 번호: 본문} 으로.
+  /// 고르지 않았거나 본문과 같은 역본이거나 못 찾으면 null.
+  Future<Map<int, String>?> _loadOtherVersionVerses(
+    String sub,
     String version,
     String bookName,
     int chapter,
   ) async {
-    final sub = widget.subVersion;
     if (sub.isEmpty || sub == version) return null;
     final book = await widget.bibleRepository.mapBookName(
       bookName: bookName,
@@ -8678,7 +8702,7 @@ List<({StagingItem item, List<int> from})> itemsFromPages(
   switch (item) {
     case SongStagingItem(:final song):
       final all = song.pairedPages;
-      bool isEmpty(int j) => all[j].korean.isEmpty && all[j].english.isEmpty;
+      bool isEmpty(int j) => all[j].isEmptyPage;
       var end = pages.length;
       while (end > 0 && isEmpty(pages[end - 1])) {
         end--;
@@ -11016,6 +11040,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
     return SlidePageData(
       mainText: info.mainText,
       englishText: info.englishText,
+      extraText: info.extraText,
       title: info.title,
       isBible: info.isBible,
       pageIndex: i,
