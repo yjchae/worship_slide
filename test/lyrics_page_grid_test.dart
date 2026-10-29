@@ -286,6 +286,24 @@ void main() {
       await tester.pumpAndSettle();
     });
 
+    testWidgets('행 메뉴의 커서 위치에서 나누기가 실제로 나눈다', (tester) async {
+      await openDialog(tester);
+      final cell = find.byType(TextField).at(1); // 1페이지 원본
+      await tester.tap(cell);
+      await tester.pumpAndSettle();
+      final field = tester.widget<TextField>(cell);
+      field.controller!.selection = const TextSelection.collapsed(offset: 6);
+      await tester.pump();
+
+      await tester.tap(find.byTooltip('페이지 메뉴').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('커서 위치에서 나누기  (Ctrl/⌘+Enter)'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('주님의 사랑'), findsOneWidget);
+      expect(find.text('넓고 깊어\n나의 삶을 감싸 주시네'), findsOneWidget);
+    });
+
     testWidgets('붙여 넣은 뒤 다른 칸을 고치면 되돌리기가 닫힌다(고친 것을 지우지 않게)', (tester) async {
       await openDialog(tester);
       final cells = find.byType(TextField);

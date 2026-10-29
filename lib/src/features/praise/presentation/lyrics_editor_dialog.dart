@@ -265,12 +265,26 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
   }
 
   void _splitAtCursor() {
+    final target = _cursorTarget();
+    if (target != null) _splitAt(target);
+  }
+
+  /// 지금 커서가 있는 칸과 위치. 커서가 없으면 null.
+  ({int row, int column, int offset})? _cursorTarget() {
     final focused = _focused;
-    if (focused == null) return;
+    if (focused == null) return null;
     final offset = _cells[focused.row][focused.column].selection.baseOffset;
+    return (
+      row: focused.row,
+      column: focused.column,
+      offset: offset < 0 ? 0 : offset,
+    );
+  }
+
+  void _splitAt(({int row, int column, int offset}) target) {
     _mutate(
-      () => _grid.splitAt(focused.row, focused.column, offset < 0 ? 0 : offset),
-      focus: (row: focused.row + 1, column: focused.column),
+      () => _grid.splitAt(target.row, target.column, target.offset),
+      focus: (row: target.row + 1, column: target.column),
     );
   }
 
@@ -788,45 +802,53 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
       tooltip: '페이지 메뉴',
       icon: const Icon(Icons.more_vert_rounded, size: 18),
       onSelected: (action) => action(),
-      itemBuilder: (context) => [
-        PopupMenuItem(
-          value: () =>
-              _mutate(() => _grid.insertRow(row), focus: (row: row, column: 0)),
-          child: const Text('위에 페이지 넣기'),
-        ),
-        PopupMenuItem(
-          value: () => _mutate(
-            () => _grid.insertRow(row + 1),
-            focus: (row: row + 1, column: 0),
+      // 메뉴가 열리면 입력칸이 포커스를 잃어 _focused 가 비므로, 나눌 칸·위치는 열 때 잡아 둔다.
+      itemBuilder: (context) {
+        final target = _cursorTarget();
+        return [
+          PopupMenuItem(
+            value: () => _mutate(
+              () => _grid.insertRow(row),
+              focus: (row: row, column: 0),
+            ),
+            child: const Text('위에 페이지 넣기'),
           ),
-          child: const Text('아래에 페이지 넣기'),
-        ),
-        PopupMenuItem(
-          enabled: row + 1 < _grid.length,
-          value: () => _mutate(
-            () => _grid.mergeWithNext(row),
-            focus: (row: row, column: 0),
+          PopupMenuItem(
+            value: () => _mutate(
+              () => _grid.insertRow(row + 1),
+              focus: (row: row + 1, column: 0),
+            ),
+            child: const Text('아래에 페이지 넣기'),
           ),
-          child: const Text('다음 페이지와 합치기'),
-        ),
-        PopupMenuItem(
-          enabled: _focused?.row == row,
-          value: _splitAtCursor,
-          child: const Text('커서 위치에서 나누기  (Ctrl/⌘+Enter)'),
-        ),
-        const PopupMenuDivider(),
-        PopupMenuItem(
-          value: () => _mutate(() => _grid.clearRow(row)),
-          child: const Text('빈 페이지로 만들기'),
-        ),
-        PopupMenuItem(
-          value: () => _mutate(() => _grid.removeRow(row)),
-          child: Text(
-            '페이지 지우기 (세 칸 모두)',
-            style: TextStyle(color: Theme.of(context).colorScheme.error),
+          PopupMenuItem(
+            enabled: row + 1 < _grid.length,
+            value: () => _mutate(
+              () => _grid.mergeWithNext(row),
+              focus: (row: row, column: 0),
+            ),
+            child: const Text('다음 페이지와 합치기'),
           ),
-        ),
-      ],
+          PopupMenuItem(
+            enabled: target?.row == row,
+            value: () {
+              if (target != null) _splitAt(target);
+            },
+            child: const Text('커서 위치에서 나누기  (Ctrl/⌘+Enter)'),
+          ),
+          const PopupMenuDivider(),
+          PopupMenuItem(
+            value: () => _mutate(() => _grid.clearRow(row)),
+            child: const Text('빈 페이지로 만들기'),
+          ),
+          PopupMenuItem(
+            value: () => _mutate(() => _grid.removeRow(row)),
+            child: Text(
+              '페이지 지우기 (세 칸 모두)',
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ),
+        ];
+      },
     );
   }
 

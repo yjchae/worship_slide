@@ -108,14 +108,14 @@ class SlideTextLayout {
   /// 발표 창(Windows)의 보조 블록 앞 틈 = 본문 글자 크기 × 이 값.
   static const double _blockGap = 0.4;
 
-  static final Map<int, double> _overflowCache = {};
+  static final Map<Record, double> _overflowCache = {};
 
   /// [overflowRatio] 를 페이지 글자·스타일로 기억해 둔다(썸네일 수백 장을 다시 재지 않게).
   static double cachedOverflowRatio(SlidePageData data) {
     if (data.imagePath != null) return 0;
     final style = data.style;
-    // 글자를 이어 붙인 문자열 대신 해시 — 큰 콘티를 다시 그릴 때마다 긴 문자열을 만들지 않게.
-    final key = Object.hashAll([
+    // 값 묶음(record)을 키로 — 긴 문자열을 새로 만들지 않고, 해시가 겹쳐도 값 비교로 가린다.
+    final key = (
       data.isBible,
       data.mainText,
       data.englishText,
@@ -127,7 +127,7 @@ class SlideTextLayout {
       style.extraFontSizeFor(isBible: data.isBible),
       style.includeEnglishLyrics,
       style.includeExtraLyrics,
-    ]);
+    );
     if (_overflowCache.length > 2000) _overflowCache.clear();
     return _overflowCache[key] ??= overflowRatio(data);
   }

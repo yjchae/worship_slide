@@ -344,4 +344,34 @@ void main() {
       );
     });
   });
+
+  group('번역 때문에 장 수가 바뀔 때', () {
+    test('앞 페이지의 지운 표시·메모는 그대로, 자동 여백 것만 새 끝으로', () {
+      final deleted = {'7:2', '7:5'}; // 2쪽 지움 + 5장 곡 뒤 여백 지움
+      final notes = {'7:1': '천천히', '7:5': '여백 메모'};
+      remapTrailingPages(
+        uid: 7,
+        oldCount: 5,
+        newCount: 6,
+        deletedKeys: deleted,
+        notes: notes,
+      );
+      expect(deleted, {'7:2', '7:6'}); // 지운 2쪽이 되살아나지 않는다
+      expect(notes, {'7:1': '천천히', '7:6': '여백 메모'});
+    });
+
+    test('줄면 범위 밖 표시는 버린다', () {
+      final deleted = {'7:5', '7:6'};
+      final notes = {'7:5': '없어질 쪽', '7:6': '여백 메모'};
+      remapTrailingPages(
+        uid: 7,
+        oldCount: 6,
+        newCount: 5,
+        deletedKeys: deleted,
+        notes: notes,
+      );
+      expect(deleted, {'7:5'});
+      expect(notes, {'7:5': '여백 메모'});
+    });
+  });
 }

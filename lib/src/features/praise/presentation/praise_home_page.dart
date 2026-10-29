@@ -501,8 +501,12 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   }
 
   Future<void> _updateStyle(ExportStyle style) async {
+    // 추가 보조가 보조와 같은 언어면 추가 보조는 없는 것(_extraLyricsFor)이라 그 값으로 비교한다 —
+    // 보조만 바꿔도 추가 보조가 비거나 다시 채워질 수 있다.
+    String effectiveExtra(ExportStyle s) =>
+        s.extraLanguage == s.subLanguage ? '' : s.extraLanguage;
     final subChanged = style.subLanguage != _style.subLanguage;
-    final extraChanged = style.extraLanguage != _style.extraLanguage;
+    final extraChanged = effectiveExtra(style) != effectiveExtra(_style);
     setState(() => _style = style);
     await _styleStore.save(style);
     if (subChanged || extraChanged) {
@@ -549,8 +553,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       final matches = _songs.where((s) => s.id == item.song.id);
       if (matches.isEmpty) continue;
       final base = matches.first;
-      final sub = await _repository.subLyricsFor(base, _style.subLanguage);
-      final extra = await _extraLyricsFor(base);
+      // 바뀐 언어만 읽는다(안 바뀐 칸은 아래에서 지금 값을 그대로 쓴다).
+      final sub = subChanged
+          ? await _repository.subLyricsFor(base, _style.subLanguage)
+          : item.song.englishLyrics;
+      final extra = extraChanged
+          ? await _extraLyricsFor(base)
+          : item.song.extraLyrics;
       final full = base
           .copyWith(englishLyrics: sub, extraLyrics: extra)
           .pairedPages;
@@ -586,11 +595,17 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       ));
     }
     if (updated.isEmpty || !mounted) return;
+    // 보던 슬라이드는 번호가 아니라 (항목, 페이지)로 다시 찾는다 — 앞 곡 장 수가 바뀌어도 관객 화면이 안 넘어가게.
+    final slides = _allSlides;
+    final current = _currentSlideIndex < slides.length
+        ? slides[_currentSlideIndex]
+        : null;
     setState(() {
       for (final (index, item) in updated) {
         final entry = _stagingItems[index];
-        // 번역이 원본보다 길면 장 수가 바뀐다 — 메모·지운 표시·자동 여백 메모를 새 끝에 맞춘다.
-        remapReloadedPages(
+        // 번역이 원본보다 길면 장 수가 바뀐다. 앞 페이지 번호는 그대로라 지운 표시·메모는 두고
+        // 자동 여백 것만 새 끝으로 옮긴다.
+        remapTrailingPages(
           uid: entry.uid,
           oldCount: _pageCount(entry.item),
           newCount: _pageCount(item),
@@ -598,6 +613,16 @@ class _PraiseHomePageState extends State<PraiseHomePage>
           notes: _slideNotes,
         );
         _stagingItems[index] = (uid: entry.uid, item: item);
+      }
+      if (current != null) {
+        final found = _allSlides.indexWhere(
+          (s) =>
+              s.stagingUid == current.stagingUid &&
+              s.isAutoSpacer == current.isAutoSpacer &&
+              (current.isAutoSpacer ||
+                  s.pageIndexInItem == current.pageIndexInItem),
+        );
+        if (found >= 0) _currentSlideIndex = found;
       }
       _clampCurrentSlideIndex();
     });
@@ -758,6 +783,29 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   /// 항목 uid → 가사 상자를 넘는 페이지 수(콘티 목록의 '넘침 N'). 재는 값은 기억해 두므로
   /// 다시 그릴 때마다 TextPainter 를 돌리지 않는다.
   Map<int, int> _overflowCounts() {
+    // 다시 그릴 때마다 모든 페이지를 재지 않게, 넘침에 영향을 주는 것이 그대로면 지난 값을 쓴다.
+    // 항목·배경은 바뀔 때 새 객체로 갈아 끼우므로 identity 로 충분하다.
+    final signature = Object.hash(
+      identityHashCode(_style),
+      Object.hashAll([
+        for (final e in _stagingItems) ...[e.uid, identityHashCode(e.item)],
+      ]),
+      Object.hashAllUnordered([
+        for (final e in _itemBackgrounds.entries)
+          Object.hash(e.key, identityHashCode(e.value)),
+      ]),
+      Object.hashAllUnordered(_deletedSlideKeys),
+      Object.hashAllUnordered(_noSpacerUids),
+    );
+    if (signature == _overflowSignature) return _overflowCountsMemo;
+    _overflowSignature = signature;
+    return _overflowCountsMemo = _measureOverflowCounts();
+  }
+
+  int? _overflowSignature;
+  Map<int, int> _overflowCountsMemo = const {};
+
+  Map<int, int> _measureOverflowCounts() {
     final slides = _allSlides;
     final counts = <int, int>{};
     for (var i = 0; i < slides.length; i++) {
@@ -1980,6 +2028,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   Future<_SermonPageResult?> _showSermonDialog({
     String title = '',
     String subtitle = '',
+    String extraText = '',
     SlideBackground? design,
   }) {
     var initial =
@@ -1993,6 +2042,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       builder: (_) => _SermonPageDialog(
         initialTitle: title,
         initialSubtitle: subtitle,
+        extraText: extraText,
         initialDesign: initial,
         canRevert: design != null,
         globalStyle: _style,
@@ -2029,6 +2079,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     final result = await _showSermonDialog(
       title: item.mainText,
       subtitle: item.englishText,
+      extraText: item.extraText,
       design: _itemBackgrounds[uid],
     );
     if (result == null || !mounted) return;
@@ -8986,6 +9037,29 @@ bool remapReloadedPages({
   return restored;
 }
 
+/// 번역 때문에 곡 [uid] 의 장 수가 [oldCount] → [newCount] 로 바뀔 때. 번역은 끝에만 붙거나 빠지므로
+/// 앞 페이지 번호는 그대로다 — 지운 표시·메모는 두고([remapReloadedPages] 와 달리 풀지 않는다),
+/// 자동 여백(`uid:장수`) 것만 새 끝으로 옮기고 줄어든 범위 밖 것은 버린다.
+@visibleForTesting
+void remapTrailingPages({
+  required int uid,
+  required int oldCount,
+  required int newCount,
+  required Set<String> deletedKeys,
+  required Map<String, String> notes,
+}) {
+  if (oldCount == newCount) return;
+  String key(int page) => '$uid:$page';
+  final spacerDeleted = deletedKeys.remove(key(oldCount));
+  final spacerNote = notes.remove(key(oldCount));
+  for (var j = newCount; j < oldCount; j++) {
+    deletedKeys.remove(key(j));
+    notes.remove(key(j));
+  }
+  if (spacerDeleted) deletedKeys.add(key(newCount));
+  if (spacerNote != null) notes[key(newCount)] = spacerNote;
+}
+
 /// [item] 의 [pages](원래 페이지 번호, 오름차순)만 담은 항목들. 나누기·복사·옮기기가 같이 쓴다.
 /// 곡 끝의 빈 페이지는 가사로 담으면 사라지므로 빈 페이지 항목으로 뗀다(가사가 하나도 없으면
 /// 전부 빈 페이지 항목). [from] 은 각 항목에 들어간 원래 페이지 번호.
@@ -10070,6 +10144,7 @@ class _SermonPageDialog extends StatefulWidget {
   const _SermonPageDialog({
     required this.initialTitle,
     required this.initialSubtitle,
+    this.extraText = '',
     required this.initialDesign,
     required this.canRevert,
     required this.globalStyle,
@@ -10079,6 +10154,9 @@ class _SermonPageDialog extends StatefulWidget {
 
   final String initialTitle;
   final String initialSubtitle;
+
+  /// 페이지에 이미 든 추가 보조 줄. 이 창에서 고치지는 않고 미리보기에만 그린다.
+  final String extraText;
   final SlideBackground initialDesign;
   final bool canRevert;
   final ExportStyle globalStyle;
@@ -10193,6 +10271,7 @@ class _SermonPageDialogState extends State<_SermonPageDialog> {
                   previewItem: BlankStagingItem(
                     mainText: _titleNow.isEmpty ? '설교 주제' : _titleNow,
                     englishText: _subtitleNow,
+                    extraText: widget.extraText,
                   ),
                 ),
               ),
@@ -11115,7 +11194,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
         SlideSearchScope.title =>
           slide.pageIndexInItem == 0 && norm(slide.title ?? '').contains(q),
         SlideSearchScope.lyrics => norm(
-          '${slide.mainText} ${slide.englishText}',
+          '${slide.mainText} ${slide.englishText} ${slide.extraText}',
         ).contains(q),
       };
     }
