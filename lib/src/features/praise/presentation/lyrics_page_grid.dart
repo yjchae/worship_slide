@@ -108,6 +108,16 @@ class LyricsPageGrid {
     _rows.insert(row, List.filled(columnCount, '', growable: true));
   }
 
+  /// [row] 앞에 복사해 둔 행들(세 칸씩)을 통째로 넣는다. 그 자리가 빈 한 행뿐이면(새 곡) 그 행을 대신한다.
+  void insertRows(int row, List<List<String>> rows) {
+    if (rows.isEmpty) return;
+    if (_rows.length == 1 && isBlankRow(0)) _rows.clear();
+    _rows.insertAll(row.clamp(0, _rows.length), [
+      for (final r in rows)
+        [for (var c = 0; c < columnCount; c++) c < r.length ? r[c] : ''],
+    ]);
+  }
+
   /// 행을 지운다(세 칸 모두). 마지막 한 행은 비우기만 한다.
   void removeRow(int row) {
     if (_rows.length == 1) {

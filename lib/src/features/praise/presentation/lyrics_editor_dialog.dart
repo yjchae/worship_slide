@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../app_colors.dart';
+import '../data/claude_translator.dart';
 import '../data/praise_repository.dart';
 import '../domain/export_style.dart';
 import '../domain/praise_song.dart';
@@ -73,6 +74,16 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
   ({int row, int column})? _focused;
   int _selectedRow = 0;
 
+  /// 페이지 번호를 눌러 고른 행들(복사용). Shift = 범위, ⌘/Ctrl = 하나씩.
+  final Set<int> _pickedRows = {};
+  int? _pickAnchor;
+
+  /// 세 언어째 복사한 페이지들. 창을 닫아도 남아 다른 곡에 붙여 넣을 수 있다.
+  static List<List<String>> _pageClipboard = const [];
+
+  /// 페이지를 고르면 입력칸 대신 표가 포커스를 받아 ⌘/Ctrl+C·V 를 페이지 복사·붙여 넣기로 쓴다.
+  final FocusNode _tableFocus = FocusNode(debugLabel: 'lyrics table');
+
   /// '통째로' 보기 입력칸(원본·보조·추가 보조).
   final List<TextEditingController> _whole = List.generate(
     LyricsPageGrid.columnCount,
@@ -84,6 +95,7 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
 
   bool _previewSub = true;
   bool _previewExtra = true;
+  bool _translating = false;
 
   @override
   void initState() {
@@ -125,6 +137,7 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
   @override
   void dispose() {
     _titleController.dispose();
+    _tableFocus.dispose();
     _disposeCells();
     for (final c in _whole) {
       c.dispose();
@@ -214,6 +227,8 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
         ],
     ];
     _selectedRow = _selectedRow.clamp(0, _grid.length - 1);
+    _pickedRows.clear(); // 행 번호가 바뀌었으니 고른 것도 푼다
+    _pickAnchor = null;
     if (focus == null) return;
     final row = focus.row.clamp(0, _grid.length - 1);
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -306,6 +321,89 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
     );
   }
 
+  void _pickRow(int row) {
+    final keyboard = HardwareKeyboard.instance;
+    _tableFocus.requestFocus();
+    setState(() {
+      final anchor = _pickAnchor;
+      if (keyboard.isShiftPressed && anchor != null) {
+        _pickedRows
+          ..clear()
+          ..addAll([
+            for (
+              var r = anchor < row ? anchor : row;
+              r <= (anchor < row ? row : anchor);
+              r++
+            )
+              r,
+          ]);
+        return;
+      }
+      if (keyboard.isMetaPressed || keyboard.isControlPressed) {
+        if (!_pickedRows.remove(row)) _pickedRows.add(row);
+      } else {
+        _pickedRows
+          ..clear()
+          ..add(row);
+      }
+      _pickAnchor = row;
+    });
+  }
+
+  /// [row] 가 고른 행 안이면 고른 행 전부, 아니면 그 행만 (세 언어째) 복사한다.
+  void _copyRows(int row) {
+    final rows = _pickedRows.contains(row)
+        ? (_pickedRows.toList()..sort())
+        : [row];
+    _pageClipboard = [for (final r in rows) _grid.row(r)];
+    setState(() {});
+  }
+
+  /// 표에 포커스가 있을 때(입력칸 밖) ⌘/Ctrl+C = 고른 페이지 복사, ⌘/Ctrl+V = 고른 페이지 아래에 붙여 넣기.
+  /// 입력칸 안에서는 평소처럼 글자 복사·붙여 넣기다.
+  KeyEventResult _handleTableKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final keyboard = HardwareKeyboard.instance;
+    if (!keyboard.isMetaPressed && !keyboard.isControlPressed) {
+      return KeyEventResult.ignored;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.keyC && _pickedRows.isNotEmpty) {
+      _copyRows(_pickedRows.first);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.keyV &&
+        _pageClipboard.isNotEmpty) {
+      final at = _pickedRows.isEmpty
+          ? _selectedRow + 1
+          : _pickedRows.reduce((a, b) => a > b ? a : b) + 1;
+      _pasteRows(at, keepTableFocus: true);
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  /// [keepTableFocus] 면 입력칸으로 커서를 옮기지 않고 붙여 넣은 페이지를 골라 둔다(⌘V 를 이어 누르면 그 뒤에 또 붙는다).
+  void _pasteRows(int at, {bool keepTableFocus = false}) {
+    final before = _grid.copy();
+    final count = _pageClipboard.length;
+    setState(() {
+      _grid.insertRows(at, _pageClipboard);
+      final first = at.clamp(0, _grid.length - count);
+      _undo = (
+        before: before,
+        message: '복사한 $count페이지를 ${first + 1}페이지부터 넣었습니다.',
+      );
+      if (keepTableFocus) {
+        _rebuildCells();
+        _pickedRows.addAll([for (var r = first; r < first + count; r++) r]);
+        _pickAnchor = first;
+        _selectedRow = first;
+      } else {
+        _rebuildCells(focus: (row: first, column: 0));
+      }
+    });
+  }
+
   String _columnName(int column) => switch (column) {
     0 => '원본',
     1 => '보조',
@@ -339,6 +437,93 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
     final other = column == 1 ? _extraLanguage : _subLanguage;
     if (language == other) return;
     _switchLanguage(column, language);
+  }
+
+  // ── 번역 · 변환 (Claude) ───────────────────────────────────────────────
+
+  /// 원본 페이지마다 보조·추가 보조 칸을 채운다. 언어 이름에 '발음' 이 들면 발음을 영어 글자로,
+  /// 아니면 그 언어로 번역한다. 이미 채운 칸이 있으면 빈 칸만 채울지 묻는다.
+  Future<void> _translate() async {
+    setState(_commit);
+    final grid = LyricsPageGrid.fromTexts(_columnTexts);
+    final columns = [1, if (_hasExtra) 2];
+    final hasFilled = [
+      for (final c in columns)
+        for (var r = 0; r < grid.length; r++)
+          if (grid.cell(r, 0).trim().isNotEmpty &&
+              grid.cell(r, c).trim().isNotEmpty)
+            r,
+    ].isNotEmpty;
+    var overwrite = false;
+    if (hasFilled) {
+      final choice = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('번역·변환'),
+          content: const Text('이미 입력된 페이지가 있습니다. 어떻게 할까요?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('취소'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('빈 페이지만 채우기'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('모두 다시 채우기'),
+            ),
+          ],
+        ),
+      );
+      if (choice == null || !mounted) return;
+      overwrite = choice;
+    }
+    final languages = {1: _subLanguage, if (_hasExtra) 2: _extraLanguage};
+    final pages = [for (var r = 0; r < grid.length; r++) grid.cell(r, 0)];
+
+    setState(() => _translating = true);
+    try {
+      final results = await Future.wait([
+        for (final c in columns)
+          ClaudeTranslator.translatePages(pages, languages[c]!),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        for (var i = 0; i < columns.length; i++) {
+          final c = columns[i];
+          for (var r = 0; r < grid.length; r++) {
+            final text = results[i][r];
+            if (text.isEmpty) continue;
+            if (overwrite || grid.cell(r, c).trim().isEmpty) {
+              grid.setCell(r, c, text);
+            }
+          }
+        }
+        _storeColumnTexts(grid.toTexts());
+        _undo = null;
+        _loadGrid();
+        _loadWhole();
+      });
+    } catch (e) {
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('번역·변환 실패'),
+          content: Text('$e'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('닫기'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _translating = false);
+    }
   }
 
   // ── 보기 · 저장 ────────────────────────────────────────────────────────
@@ -488,6 +673,23 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
             ),
           ),
         const SizedBox(width: 14),
+        Tooltip(
+          message:
+              '원본 가사로 보조·추가 보조 칸을 채웁니다 (Claude).\n'
+              "언어 이름에 '발음'이 들어 있으면 한글 발음을 영어 글자로, 아니면 그 언어로 번역합니다.",
+          child: OutlinedButton.icon(
+            onPressed: _translating ? null : _translate,
+            icon: _translating
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.translate_rounded, size: 18),
+            label: Text(_translating ? '번역 중…' : '번역·변환'),
+          ),
+        ),
+        const SizedBox(width: 14),
         SegmentedButton<_EditorView>(
           showSelectedIcon: false,
           segments: const [
@@ -529,44 +731,48 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
   // ── 페이지 표 ──────────────────────────────────────────────────────────
 
   Widget _buildTable(ColorScheme cs) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _tableRow(
-          leading: const SizedBox.shrink(),
-          cells: [
-            _columnHeader(cs, 0),
-            _columnHeader(cs, 1),
-            _columnHeader(cs, 2),
-          ],
-          trailing: const SizedBox.shrink(),
-          crossAxisAlignment: CrossAxisAlignment.center,
-        ),
-        const SizedBox(height: 6),
-        Divider(height: 1, color: cs.outlineVariant),
-        Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.only(top: 4, bottom: 8),
-            itemCount: _grid.length + 1,
-            itemBuilder: (context, row) => row == _grid.length
-                ? Padding(
-                    padding: const EdgeInsets.only(top: 8),
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: OutlinedButton.icon(
-                        onPressed: () => _mutate(
-                          () => _grid.insertRow(_grid.length),
-                          focus: (row: _grid.length, column: 0),
-                        ),
-                        icon: const Icon(Icons.add_rounded, size: 18),
-                        label: const Text('페이지 추가'),
-                      ),
-                    ),
-                  )
-                : _buildPageRow(cs, row),
+    return Focus(
+      focusNode: _tableFocus,
+      onKeyEvent: _handleTableKey,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _tableRow(
+            leading: const SizedBox.shrink(),
+            cells: [
+              _columnHeader(cs, 0),
+              _columnHeader(cs, 1),
+              _columnHeader(cs, 2),
+            ],
+            trailing: const SizedBox.shrink(),
+            crossAxisAlignment: CrossAxisAlignment.center,
           ),
-        ),
-      ],
+          const SizedBox(height: 6),
+          Divider(height: 1, color: cs.outlineVariant),
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.only(top: 4, bottom: 8),
+              itemCount: _grid.length + 1,
+              itemBuilder: (context, row) => row == _grid.length
+                  ? Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: OutlinedButton.icon(
+                          onPressed: () => _mutate(
+                            () => _grid.insertRow(_grid.length),
+                            focus: (row: _grid.length, column: 0),
+                          ),
+                          icon: const Icon(Icons.add_rounded, size: 18),
+                          label: const Text('페이지 추가'),
+                        ),
+                      ),
+                    )
+                  : _buildPageRow(cs, row),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -667,6 +873,7 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
 
   Widget _buildPageRow(ColorScheme cs, int row) {
     final selected = row == _selectedRow;
+    final picked = _pickedRows.contains(row);
     final blank = _grid.isBlankRow(row);
     final ratio = _overflowAt(row);
     final overflow = ratio > SlideTextLayout.overflowThreshold;
@@ -681,7 +888,11 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
       // 선택이 바뀌어도 늘 같은 DecoratedBox — 위젯 구조가 바뀌면 입력칸이 새로 만들어져
       // 한글 조합(IME)이 끊긴다.
       decoration: BoxDecoration(
-        color: selected ? cs.surfaceContainerHigh : Colors.transparent,
+        color: picked
+            ? cs.secondaryContainer
+            : selected
+            ? cs.surfaceContainerHigh
+            : Colors.transparent,
         borderRadius: BorderRadius.circular(AppRadius.panel),
       ),
       child: _tableRow(
@@ -689,13 +900,28 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
           padding: const EdgeInsets.only(top: 10),
           child: Column(
             children: [
-              Text(
-                '${row + 1}',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontWeight: FontWeight.w700,
-                  color: selected ? cs.primary : cs.onSurfaceVariant,
-                  fontFeatures: const [FontFeature.tabularFigures()],
+              Tooltip(
+                message:
+                    '눌러서 페이지 고르기 (Shift = 범위, ⌘/Ctrl = 하나씩)\n'
+                    '고른 뒤 ⌘/Ctrl+C·V 또는 ⋮ 메뉴로 세 언어째 복사·붙여 넣기',
+                waitDuration: const Duration(milliseconds: 600),
+                child: InkWell(
+                  onTap: () => _pickRow(row),
+                  borderRadius: BorderRadius.circular(6),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 2),
+                    child: Text(
+                      '${row + 1}',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: selected || picked
+                            ? cs.primary
+                            : cs.onSurfaceVariant,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ),
                 ),
               ),
               if (overflow)
@@ -864,7 +1090,32 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
       // 메뉴가 열리면 입력칸이 포커스를 잃어 _focused 가 비므로, 나눌 칸·위치는 열 때 잡아 둔다.
       itemBuilder: (context) {
         final target = _cursorTarget();
+        final copyCount = _pickedRows.contains(row) ? _pickedRows.length : 1;
+        final pasteCount = _pageClipboard.length;
         return [
+          PopupMenuItem(
+            value: () => _copyRows(row),
+            child: Text(
+              copyCount > 1
+                  ? '고른 $copyCount페이지 복사 (모든 언어)'
+                  : '이 페이지 복사 (모든 언어)',
+            ),
+          ),
+          PopupMenuItem(
+            enabled: pasteCount > 0,
+            value: () => _pasteRows(row + 1),
+            child: Text(
+              pasteCount > 0 ? '아래에 붙여 넣기 ($pasteCount페이지)' : '아래에 붙여 넣기',
+            ),
+          ),
+          PopupMenuItem(
+            enabled: pasteCount > 0,
+            value: () => _pasteRows(row),
+            child: Text(
+              pasteCount > 0 ? '위에 붙여 넣기 ($pasteCount페이지)' : '위에 붙여 넣기',
+            ),
+          ),
+          const PopupMenuDivider(),
           PopupMenuItem(
             value: () => _mutate(
               () => _grid.insertRow(row),

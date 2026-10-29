@@ -39,6 +39,24 @@ void main() {
       expect(g.isBlankRow(0), isFalse); // 보조 B1 이 0번 행에 있다
     });
 
+    test('복사한 행을 세 언어째 끼워 넣는다(빈 표면 그 자리를 대신한다)', () {
+      final g = grid('A1\n\nA2', 'B1\n\nB2', 'C1');
+      g.insertRows(1, [g.row(0), g.row(1)]);
+      expect(rowsOf(g), [
+        ['A1', 'B1', 'C1'],
+        ['A1', 'B1', 'C1'],
+        ['A2', 'B2', ''],
+        ['A2', 'B2', ''],
+      ]);
+      final empty = grid('', '');
+      empty.insertRows(1, [
+        ['X', 'Y'],
+      ]);
+      expect(rowsOf(empty), [
+        ['X', 'Y', ''],
+      ]);
+    });
+
     test('빈 글이어도 한 행은 있다', () {
       expect(grid('', '').length, 1);
     });
