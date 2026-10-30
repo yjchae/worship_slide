@@ -59,6 +59,59 @@ void main() {
     });
   });
 
+  group('parseContiText 리뷰 수정', () {
+    test('번호 줄 사이 번호 없는 -> 이어 부르기 줄도 곡이다', () {
+      final entries = parseContiText(
+        '1. 아침에 주의 인자하심을 F\n-> 주의 인자하심 G\n2. 생수의 강이 G',
+      );
+      expect(entries.map((e) => e.titles.first), [
+        '아침에 주의 인자하심을',
+        '주의 인자하심',
+        '생수의 강이',
+      ]);
+      expect(entries.map((e) => e.number), [1, null, 2]);
+    });
+
+    test('날짜·시각 줄은 번호 줄이 아니다', () {
+      final entries = parseContiText(
+        '11.01 (주일) 예배 콘티\n7:30 리허설\n1. 생수의 강이 G\n2. 신부의 노래 G',
+      );
+      expect(entries.map((e) => e.number), [1, 2]);
+    });
+
+    test('숫자로 시작하는 제목 하나가 번호 모드를 켜지 않는다', () {
+      final entries = parseContiText('생수의 강이\n7 Days\n신부의 노래');
+      expect(entries.map((e) => e.titles.first), [
+        '생수의 강이',
+        '7 Days',
+        '신부의 노래',
+      ]);
+    });
+
+    test('번호 목록 안 숫자 제목은 그대로 남는다', () {
+      expect(parseContiText('1. 10000 Reasons G').single.titles, ['10000 Reasons']);
+    });
+
+    test('(or …) 가 조처럼 보이는 낱말로 끝나도 괄호가 깨지지 않는다', () {
+      final entry = parseContiText('1. 주님 (or Here I Am)').single;
+      expect(entry.titles, ['주님', 'Here I Am']);
+      expect(entry.key, '');
+    });
+
+    test('꺾쇠 뒤에 글이 더 붙은 머리말도 뺀다', () {
+      expect(
+        parseContiText('<11.01 주일 콘티> 인도 홍길동\n생수의 강이').map((e) => e.titles.first),
+        ['생수의 강이'],
+      );
+    });
+
+    test('자모가 풀린(NFD) 글도 합쳐서 읽는다', () {
+      // '강' = ᄀ(1100) ᅡ(1161) ᆼ(11BC)
+      final nfd = String.fromCharCodes([0x1100, 0x1161, 0x11BC]);
+      expect(normalizeSongTitle('생수의 $nfd이'), normalizeSongTitle('생수의 강이'));
+    });
+  });
+
   group('ContiSongMatcher', () {
     final songs = [
       _song(1, '아침에 주의 인자하심을'),
@@ -102,6 +155,22 @@ void main() {
       final m = matchLine('1. 없는 찬양 제목 G');
       expect(m.candidates, isEmpty);
       expect(m.kind, isNull);
+    });
+
+    test('NFD 제목의 곡도 찾는다', () {
+      final nfdTitle = '생수의 ${String.fromCharCodes([0x1100, 0x1161, 0x11BC])}이';
+      final m = ContiSongMatcher([_song(9, nfdTitle)]).match(
+        parseContiText('1. 생수의 강이 G').single,
+      );
+      expect(m.candidates.map((s) => s.id), [9]);
+    });
+
+    test('build 는 다른 isolate 에서 만들어도 같은 결과를 준다', () async {
+      final built = await ContiSongMatcher.build(songs);
+      expect(
+        built.match(parseContiText('5. 신부의 노래 G').single).candidates.map((s) => s.id),
+        [4, 5],
+      );
     });
 
     test('직접 찾기는 제목·가사 둘 다 본다', () {

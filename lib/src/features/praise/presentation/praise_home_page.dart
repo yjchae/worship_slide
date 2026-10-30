@@ -2211,16 +2211,38 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     );
     if (songs == null || songs.isEmpty) return;
     // 보조 언어를 다 입힌 뒤 한 번에 넣는다 — 중간에 그리면 순서대로 하나씩 늘어나 보인다.
-    final staged = [for (final song in songs) await _withSubLyrics(song)];
+    // 보조 가사를 못 읽은 곡(DB 잠김 등)도 원본 가사로는 담는다. 고른 곡을 통째로 잃지 않게.
+    final staged = <PraiseSong>[];
+    var noSubLyrics = 0;
+    for (final song in songs) {
+      try {
+        staged.add(await _withSubLyrics(song));
+      } catch (e, st) {
+        AppLogger.instance.error(
+          '[conti-text] 보조 가사 읽기 실패: ${song.title}',
+          e,
+          st,
+        );
+        staged.add(song);
+        noSubLyrics++;
+      }
+    }
     if (!mounted) return;
     setState(() {
       for (final song in staged) {
         _stagingItems.add((uid: _nextUid++, item: SongStagingItem(song)));
       }
     });
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text('${staged.length}곡을 콘티에 담았습니다.')));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          noSubLyrics == 0
+              ? '${staged.length}곡을 콘티에 담았습니다.'
+              : '${staged.length}곡을 콘티에 담았습니다. '
+                    '$noSubLyrics곡은 보조 가사를 읽지 못해 원본 가사만 담았습니다.',
+        ),
+      ),
+    );
   }
 
   void _addBibleItem(BibleStagingItem item) {

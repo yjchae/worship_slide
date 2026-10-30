@@ -1,3 +1,6 @@
+import 'dart:isolate';
+
+import '../../bible/domain/bible_voice_parse.dart' show composeHangul;
 import 'praise_song.dart';
 
 /// 붙여 넣은 콘티 글의 한 줄 = 곡 하나.
@@ -26,45 +29,57 @@ class ContiTextEntry {
 
 /// 콘티 글 전체를 곡 줄로 나눈다.
 ///
-/// - `<11.01 (주일) 예배 콘티>` 처럼 꺾쇠로 감싼 줄은 머리말이라 뺀다
-/// - 번호 줄(`1.`·`1)`·`1 `)이 하나라도 있으면 번호 줄만 곡으로 본다(설명 줄 섞임 대비)
+/// - `<11.01 (주일) 예배 콘티>` 처럼 꺾쇠로 시작하는 머리말 줄은 뺀다(꺾쇠 뒤에 글이 더 붙어도)
+/// - 번호 줄(`1.`·`1)`, 또는 `1 제목` 이 두 줄 이상)이 있으면 번호 줄과 `->` 로 시작하는
+///   이어 부르기 줄만 곡으로 본다(설명 줄 섞임 대비)
 /// - 번호 줄이 없으면 빈 줄·머리말이 아닌 모든 줄을 곡으로 본다
 /// - 제목 앞 `->`·`→`·`=>`·`-`·`•` 는 뗀다(이어 부르기 표시)
 List<ContiTextEntry> parseContiText(String text) {
-  final lines = text
+  final lines = composeHangul(text)
       .split(RegExp(r'\r?\n'))
       .map((l) => l.trim())
       .where((l) => l.isNotEmpty && !_headerLine.hasMatch(l))
       .toList();
-  final numbered = [
-    for (final l in lines)
-      if (_numberedLine.firstMatch(l) case final m?) (line: l, match: m),
-  ];
+
+  // '1 제목' 꼴은 '7 Days' 같은 숫자 제목과 헷갈리므로 두 줄 이상일 때만 번호로 본다.
+  final punctNumbered = lines.where(_punctNumberedLine.hasMatch).length;
+  final spaceNumbered = lines.where(_spaceNumberedLine.hasMatch).length;
+  final numberedMode = punctNumbered > 0 || spaceNumbered >= 2;
 
   final entries = <ContiTextEntry>[];
-  if (numbered.isNotEmpty) {
-    for (final (:line, :match) in numbered) {
-      final entry = _parseBody(line, match.group(2)!, int.parse(match.group(1)!));
-      if (entry != null) entries.add(entry);
+  for (final line in lines) {
+    final ContiTextEntry? entry;
+    if (!numberedMode) {
+      entry = _parseBody(line, line, null);
+    } else if ((_punctNumberedLine.firstMatch(line) ??
+            _spaceNumberedLine.firstMatch(line))
+        case final m?) {
+      entry = _parseBody(line, m.group(2)!, int.parse(m.group(1)!));
+    } else if (_continuationLine.hasMatch(line)) {
+      // 번호 없이 '-> 곡' 으로 적은 이어 부르기 곡
+      entry = _parseBody(line, line, null);
+    } else {
+      entry = null;
     }
-  } else {
-    for (final line in lines) {
-      final entry = _parseBody(line, line, null);
-      if (entry != null) entries.add(entry);
-    }
+    if (entry != null) entries.add(entry);
   }
   return entries;
 }
 
-final _headerLine = RegExp(r'^[<〈《\[].*[>〉》\]]$');
-final _numberedLine = RegExp(r'^(\d{1,2})\s*(?:[.)．:]\s*|\s+)(.*)$');
+final _headerLine = RegExp(r'^[<〈《\[][^>〉》\]]*[>〉》\]]');
+// '1.'·'1)' 뒤에 숫자가 오면 번호가 아니다('11.01' 날짜). ':' 는 시각('7:30')이라 받지 않는다.
+final _punctNumberedLine = RegExp(r'^(\d{1,2})\s*[.)．]\s*(?!\d)(.+)$');
+final _spaceNumberedLine = RegExp(r'^(\d{1,2})\s+(?!\d)(.+)$');
+final _continuationLine = RegExp(r'^(?:->|→|=>|⇒)');
 final _leadingMarks = RegExp(r'^(?:->|→|=>|⇒|-|•|·|\*)+\s*');
 
 // 조 하나: C, F#, Bb, Ebm, A♭ … / 조 바꿈: F-G, G→A, D/E
 const _keyUnit = r'[A-G](?:#|b|♯|♭)?m?';
+const _keyChain = '$_keyUnit(?:\\s*(?:-|~|→|->|/|>)\\s*$_keyUnit)*';
 // 대소문자를 가린다 — 'G' 는 조지만 영어 제목 끝 낱말('a', 'be')은 조가 아니다.
+// 괄호는 짝이 맞을 때만 — '(or Here I Am)' 의 ')' 를 조와 같이 떼면 대신 부를 곡이 깨진다.
 final _trailingKey = RegExp(
-  '\\s+\\(?(?:[Kk]ey\\s*)?($_keyUnit(?:\\s*(?:-|~|→|->|/|>)\\s*$_keyUnit)*)\\)?\\s*\$',
+  '\\s+(?:\\(\\s*(?:[Kk]ey\\s*)?($_keyChain)\\s*\\)|(?:[Kk]ey\\s*)?($_keyChain))\\s*\$',
 );
 final _orAlternative = RegExp(r'\(\s*(?:or|또는|혹은)\s+([^()]+)\)', caseSensitive: false);
 
@@ -75,7 +90,7 @@ ContiTextEntry? _parseBody(String line, String body, int? number) {
   final keyMatch = _trailingKey.firstMatch(rest);
   // 'Bb' 만 남는 줄(제목 없이 조만)이면 조로 보지 않는다.
   if (keyMatch != null && keyMatch.start > 0) {
-    key = keyMatch.group(1)!;
+    key = keyMatch.group(1) ?? keyMatch.group(2)!;
     rest = rest.substring(0, keyMatch.start).trim();
   }
 
@@ -93,10 +108,13 @@ ContiTextEntry? _parseBody(String line, String body, int? number) {
 
 // ── 곡 찾기 ─────────────────────────────────────────────────────────────
 
-/// 제목 비교용: 소문자 + 글자·숫자만 (띄어쓰기·문장부호 무시).
+/// 제목 비교용: 한글 자모 합치기(NFD → NFC) + 소문자 + 글자·숫자만 (띄어쓰기·문장부호 무시).
 /// '갈 길을 밝히 보이시니!' 와 '갈길을밝히보이시니' 가 같아진다.
-String normalizeSongTitle(String title) =>
-    title.toLowerCase().replaceAll(RegExp(r'[^\p{L}\p{N}]', unicode: true), '');
+String normalizeSongTitle(String title) => composeHangul(
+  title,
+).toLowerCase().replaceAll(_nonWord, '');
+
+final _nonWord = RegExp(r'[^\p{L}\p{N}]', unicode: true);
 
 /// 괄호 안을 뺀 제목. '신부의 노래 (주님 다시 오실 때까지)' → '신부의 노래'
 String _withoutParens(String title) =>
@@ -129,15 +147,16 @@ class ContiSongMatcher {
             song: s,
             full: normalizeSongTitle(s.displayTitle),
             bare: normalizeSongTitle(_withoutParens(s.displayTitle)),
+            lyrics: normalizeSongTitle(s.lyrics),
           ),
       ];
 
-  final List<({PraiseSong song, String full, String bare})> _songs;
+  /// 곡이 수천 곡이면 가사 정규화가 화면을 멈출 만큼 걸려서 다른 isolate 에서 만든다.
+  static Future<ContiSongMatcher> build(List<PraiseSong> songs) =>
+      Isolate.run(() => ContiSongMatcher(songs));
 
-  /// 손으로 찾기용 정규화한 가사. 처음 찾을 때 한 번만 만든다(글자마다 수천 곡을 다시 정규화하지 않게).
-  late final List<String> _lyrics = [
-    for (final s in _songs) normalizeSongTitle(s.song.lyrics),
-  ];
+  /// 정규화한 제목(full)·괄호 뺀 제목(bare)·가사(손으로 찾기용)를 미리 만들어 둔다.
+  final List<_SongKey> _songs;
 
   /// 부분 일치로 보려면 짧은 쪽이 이만큼은 돼야 한다('주' 하나로 수백 곡이 걸리지 않게).
   static const _minPartialLength = 3;
@@ -157,7 +176,7 @@ class ContiSongMatcher {
         if (i == 0 && entry.key.isNotEmpty) '${entry.titles[i]} ${entry.key}',
       ];
       final exact = <PraiseSong>[];
-      final partial = <PraiseSong>[];
+      final partial = <_SongKey>[];
       for (final title in variants) {
         _collect(title, exact, partial);
       }
@@ -177,7 +196,7 @@ class ContiSongMatcher {
     );
   }
 
-  void _collect(String title, List<PraiseSong> exact, List<PraiseSong> partial) {
+  void _collect(String title, List<PraiseSong> exact, List<_SongKey> partial) {
     final full = normalizeSongTitle(title);
     final bare = normalizeSongTitle(_withoutParens(title));
     if (bare.isEmpty && full.isEmpty) return;
@@ -188,16 +207,17 @@ class ContiSongMatcher {
       if (isExact) {
         exact.add(s.song);
       } else if (_partial(s.bare, bare) || _partial(s.full, full)) {
-        partial.add(s.song);
+        partial.add(s);
       }
     }
   }
 
-  /// 길이가 비슷한(덜 붙은) 제목부터.
-  static List<PraiseSong> _byLengthGap(List<PraiseSong> songs, String title) {
+  /// 길이가 비슷한(덜 붙은) 제목부터. 정규화한 제목은 미리 만들어 둔 것을 쓴다.
+  static List<PraiseSong> _byLengthGap(List<_SongKey> songs, String title) {
     final length = normalizeSongTitle(title).length;
-    int gap(PraiseSong s) => (normalizeSongTitle(s.displayTitle).length - length).abs();
-    return _unique(songs)..sort((a, b) => gap(a).compareTo(gap(b)));
+    int gap(_SongKey s) => (s.full.length - length).abs();
+    final sorted = [...songs]..sort((a, b) => gap(a).compareTo(gap(b)));
+    return _unique([for (final s in sorted) s.song]);
   }
 
   /// 손으로 찾기: 제목(띄어쓰기 무시) 또는 가사에 검색어가 든 곡.
@@ -205,8 +225,8 @@ class ContiSongMatcher {
     final q = normalizeSongTitle(query);
     if (q.isEmpty) return const [];
     return [
-      for (var i = 0; i < _songs.length; i++)
-        if (_songs[i].full.contains(q) || _lyrics[i].contains(q)) _songs[i].song,
+      for (final s in _songs)
+        if (s.full.contains(q) || s.lyrics.contains(q)) s.song,
     ];
   }
 
@@ -226,3 +246,5 @@ class ContiSongMatcher {
     ];
   }
 }
+
+typedef _SongKey = ({PraiseSong song, String full, String bare, String lyrics});

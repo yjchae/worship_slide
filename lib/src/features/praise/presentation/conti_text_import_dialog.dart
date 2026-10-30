@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../../app_colors.dart';
@@ -32,8 +34,12 @@ class _Row {
   _Row(this.entry, ContiSongMatch match)
     : kind = match.kind,
       candidates = [...match.candidates],
-      // 후보가 하나면 바로 고르고, 없으면 건너뛴다. 여럿이면 사용자가 고른다.
-      chosen = match.candidates.length == 1 ? match.candidates.first : null,
+      // 똑같은 제목 곡이 하나면 바로 고르고, 없으면 건너뛴다. 여럿이거나 비슷한 제목뿐이면
+      // 사용자가 고른다 — 비슷한 제목을 미리 골라 두면 엉뚱한 곡이 확인 없이 담긴다.
+      chosen =
+          match.kind == ContiMatchKind.exact && match.candidates.length == 1
+          ? match.candidates.first
+          : null,
       skipped = match.candidates.isEmpty;
 
   final ContiTextEntry entry;
@@ -71,7 +77,7 @@ class _ContiTextImportDialogState extends State<ContiTextImportDialog> {
       _error = null;
     });
     try {
-      _matcher ??= ContiSongMatcher(await widget.loadSongs());
+      _matcher ??= await ContiSongMatcher.build(await widget.loadSongs());
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -197,7 +203,7 @@ class _ContiTextImportDialogState extends State<ContiTextImportDialog> {
         const SizedBox(height: 6),
         Text(
           pending > 0
-              ? '같은 제목 곡이 여럿인 줄이 $pending개 있습니다. 담을 곡을 골라 주세요.'
+              ? '골라야 할 줄이 $pending개 있습니다(같은 제목이 여럿이거나 비슷한 제목). 담을 곡을 골라 주세요.'
               : '확인했으면 담기를 누르세요. 콘티 맨 끝에 순서대로 담깁니다.',
           style: TextStyle(
             fontSize: 13,
@@ -479,6 +485,8 @@ class _SongSearchDialog extends StatefulWidget {
 class _SongSearchDialogState extends State<_SongSearchDialog> {
   late final _query = TextEditingController(text: widget.initialQuery);
   late List<PraiseSong> _results = widget.matcher.search(widget.initialQuery);
+  Timer? _debounce;
+  String _lastQuery = '';
 
   /// 결과가 너무 많으면 앞쪽만 그린다(한두 글자 검색).
   static const _maxShown = 100;
@@ -486,15 +494,23 @@ class _SongSearchDialogState extends State<_SongSearchDialog> {
   @override
   void initState() {
     super.initState();
+    _lastQuery = _query.text;
     // 한글 조합 중에도 결과가 따라오게 onChanged 대신 listener 로 받는다.
+    // 곡이 수천 곡이면 가사까지 훑는 데 시간이 들어 입력이 멈출 때까지 잠깐 기다린다.
     _query.addListener(() {
-      final results = widget.matcher.search(_query.text);
-      if (mounted) setState(() => _results = results);
+      if (_query.text == _lastQuery) return; // 커서만 움직인 경우
+      _lastQuery = _query.text;
+      _debounce?.cancel();
+      _debounce = Timer(const Duration(milliseconds: 200), () {
+        final results = widget.matcher.search(_query.text);
+        if (mounted) setState(() => _results = results);
+      });
     });
   }
 
   @override
   void dispose() {
+    _debounce?.cancel();
     _query.dispose();
     super.dispose();
   }
