@@ -23,6 +23,7 @@ flutter test test/db_backup_test.dart # 스키마 올리기 전 DB 자동 백업
 flutter test test/bible_search_test.dart # 성경 본문 검색(띄어쓰기 무시·범위·강조·페이지 나누기)
 flutter test test/bible_voice_parse_test.dart # 성경 음성 검색: 말 → 역본·책·장·절 (한글 수사·범위·이어 말하기·SRGS 문법)
 flutter test test/move_pages_test.dart # 발표 보기 페이지 옮기기·나누기
+flutter test test/conti_text_parse_test.dart # 콘티 한번에 넣기: 콘티 글 → 번호·제목·조·(or 곡) + 곡 찾기
 flutter test test/extra_language_test.dart # 추가 보조 언어(세 번째 줄) 페이지·콘티 저장·스타일·설교자 화면
 flutter test test/lyrics_page_grid_test.dart # 가사 수정 창 페이지 표·넘침 측정 (LYRICS_EDITOR_SHOT=경로 면 창을 PNG 로)
 python3 python/test_render.py    # render 명령 self-check (LibreOffice 없으면 skip)
@@ -88,6 +89,7 @@ lib/
       offering_design.dart           -- OfferingDesign (헌금송 배경·계좌·색·크기·띠 높낮이)
       staging_item.dart              -- sealed StagingItem: Song / Bible / Image / Blank
       worship_conti.dart             -- 콘티 모델
+      conti_text_parse.dart          -- 콘티 글 파싱(parseContiText) + 제목으로 곡 찾기(ContiSongMatcher, 띄어쓰기·문장부호 무시)
     presentation/
       praise_home_page.dart          -- 단일 화면(약 12,400줄). 검색·성경·디자인·콘티·발표 제어 전부 여기
       slide_page_data.dart           -- 발표 창에 보낼 한 페이지의 JSON 표현
@@ -95,6 +97,7 @@ lib/
       slide_render_view.dart         -- 미리보기/썸네일용 Flutter 슬라이드 렌더러 (textOnly = 가사 PNG 굽기용)
       slide_text_layout.dart         -- 가사 상자 글자(원본→보조→추가 보조) + 넘침 측정. 렌더러와 넘침 경고가 같이 쓴다
       lyrics_editor_dialog.dart      -- 가사 수정 창: 페이지 표(좌 원본·가운데 보조·우 추가 보조) / 통째로
+      conti_text_import_dialog.dart  -- 콘티 한번에 넣기: 콘티 글 붙여 넣기 → 줄마다 찾은 곡 확인(같은 제목 여럿이면 고르기) → 콘티 끝에 담기
       lyrics_page_grid.dart          -- 페이지 표 순수 모델(나누기·밀기·당기기·합치기) + 가사 페이지 형식 함수
       (data/claude_translator.dart  -- 가사 수정 창 '번역·변환': 원본 페이지 → 로컬 Claude Code CLI(`claude -p --json-schema`, API 키 없음)로 보조·추가 보조 칸 채우기.
                                         언어 이름에 '발음'이 들면 로마자 발음, 아니면 번역. claude 가 깔려 있고 로그인된 PC 에서만 된다)
@@ -330,6 +333,16 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   확신도 Medium 미만은 버린다. 한국어 음성 언어 팩이 필요하다. 켜기·끄기는 한 번에 하나씩(`State::op`), 늦은 켜기는 뒤 요청이 있으면 건너뛴다.
   macOS 는 입력 장치가 바뀌면(`AVAudioEngineConfigurationChange`) 새 장치로 다시 켜고, 없으면(샘플레이트 0) 켜지 않는다 — 그대로 `installTap` 하면 잡을 수 없는 예외로 앱이 죽는다. C++ 은 오류 코드만 보내고 한글 안내는 `SpeechListener._describe`.
   **실제 음성 인식은 사람이 말해 봐야 확인된다**(Windows 는 PR CI 컴파일만)
+- **콘티 한번에 넣기** (예배 콘티 머리줄의 목록+ 버튼, `ContiTextImportDialog`): 단톡방에 올리는 콘티 글을 붙여 넣으면 줄마다 곡을 찾아 콘티 끝에 담는다.
+  `<…>` 로 시작하는 머리말 줄은 빼고(꺾쇠 뒤에 글이 붙어도), 번호 줄이 있으면 번호 줄 + 번호 없이 `->`·`→` 로 시작하는 이어 부르기 줄만 곡이다.
+  번호는 `1.`·`1)` 꼴(뒤에 숫자가 오면 날짜 `11.01` 이라 아님, `:` 는 시각이라 안 받음)이거나 `1 제목` 꼴이 **두 줄 이상**일 때만 — `7 Days` 같은 제목 하나가 번호 모드를 켜지 않게.
+  끝의 조(`F`·`Bb`·`F#m`·`F-G`·`(Key Bb)`, 대소문자 가림 — 영어 제목 끝 낱말 보호, 괄호는 짝이 맞을 때만)와 앞의 `->` 는 떼고,
+  `(or 다른 곡)` 은 후보로 같이 찾는다. 제목 비교는 한글 자모 합치기(`composeHangul`, NFD 복사 대비) + 소문자 + 글자·숫자만(`normalizeSongTitle`), 괄호 안을 뺀 제목도 본다.
+  똑같은 제목이 없을 때만 부분 일치(짧은 쪽 3자 이상, 제목마다 8곡까지).
+  **똑같은 제목 곡이 딱 하나일 때만 미리 고른다** — 같은 제목이 여럿이거나 비슷한 제목뿐이면 고를 때까지 '담기'를 막는다(비슷한 제목을 미리 고르면 엉뚱한 곡이 확인 없이 담겼다).
+  후보마다 첫 가사·쪽 수·파일 이름을 보이고 마우스를 올리면 가사 앞부분. 없으면 건너뛴다('직접 찾기' = 제목·가사 검색, 입력이 0.2초 멈추면 찾는다).
+  정규화한 제목·가사는 `ContiSongMatcher.build`(`Isolate.run`)가 한 번에 만든다(곡 수천 곡이면 화면이 멈췄다).
+  담을 때는 `_withSubLyrics` 를 거친다(더블클릭 담기와 같다). 보조 가사를 못 읽은 곡은 원본 가사로 담고 알린다(`app.log` `[conti-text]`)
 - **DB 갱신** (`replaceAllSongs`): 전체 삭제 후 재삽입 (증분 갱신 아님)
 - **폴더 다시 가져오기** (`addNewSongs`): 같은 제목에 원본 가사까지 같으면 건너뛰고, 원본+보조 가사의 줄 모음
   (순서 무시)이 같으면 나누기 규칙만 바뀐 것으로 보고 **기존 곡을 고친다**(새 곡을 만들지 않는다). 나머지는 새로 넣는다

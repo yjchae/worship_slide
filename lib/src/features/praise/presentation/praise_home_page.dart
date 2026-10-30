@@ -62,6 +62,7 @@ import 'slide_page_data.dart';
 import 'slide_render_view.dart';
 import 'slide_text_layout.dart';
 import 'cloud_conti_dialog.dart';
+import 'conti_text_import_dialog.dart';
 import 'sync_dialog.dart';
 
 class PraiseHomePage extends StatefulWidget {
@@ -2200,6 +2201,48 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     setState(() {
       _stagingItems.add((uid: _nextUid++, item: SongStagingItem(staged)));
     });
+  }
+
+  /// '콘티 한번에 넣기': 콘티 글을 붙여 넣어 줄마다 찾은 곡을 콘티 맨 끝에 순서대로 담는다.
+  Future<void> _importContiText() async {
+    final songs = await ContiTextImportDialog.show(
+      context,
+      loadSongs: () => _repository.searchSongs(''),
+    );
+    if (songs == null || songs.isEmpty) return;
+    // 보조 언어를 다 입힌 뒤 한 번에 넣는다 — 중간에 그리면 순서대로 하나씩 늘어나 보인다.
+    // 보조 가사를 못 읽은 곡(DB 잠김 등)도 원본 가사로는 담는다. 고른 곡을 통째로 잃지 않게.
+    final staged = <PraiseSong>[];
+    var noSubLyrics = 0;
+    for (final song in songs) {
+      try {
+        staged.add(await _withSubLyrics(song));
+      } catch (e, st) {
+        AppLogger.instance.error(
+          '[conti-text] 보조 가사 읽기 실패: ${song.title}',
+          e,
+          st,
+        );
+        staged.add(song);
+        noSubLyrics++;
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      for (final song in staged) {
+        _stagingItems.add((uid: _nextUid++, item: SongStagingItem(song)));
+      }
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          noSubLyrics == 0
+              ? '${staged.length}곡을 콘티에 담았습니다.'
+              : '${staged.length}곡을 콘티에 담았습니다. '
+                    '$noSubLyrics곡은 보조 가사를 읽지 못해 원본 가사만 담았습니다.',
+        ),
+      ),
+    );
   }
 
   void _addBibleItem(BibleStagingItem item) {
@@ -4802,6 +4845,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               onReorder: _onStagingReorder,
                               onRemove: _removeFromStaging,
                               onDropSong: _addSongToStaging,
+                              onImportText: _importContiText,
                               isCollapsed: _isStagingCollapsed,
                               onToggleCollapsed: () => setState(
                                 () =>
@@ -5773,6 +5817,7 @@ class _StagingPanel extends StatelessWidget {
     required this.onReorder,
     required this.onRemove,
     required this.onDropSong,
+    required this.onImportText,
     required this.onSelect,
     required this.isCollapsed,
     required this.onToggleCollapsed,
@@ -5800,6 +5845,8 @@ class _StagingPanel extends StatelessWidget {
   final void Function(int uid) onRemove;
   // 찬양 검색 목록에서 끌어 온 곡 (콘티 맨 끝에 담는다)
   final ValueChanged<PraiseSong> onDropSong;
+  // 콘티 글을 붙여 넣어 곡을 한꺼번에 담기
+  final VoidCallback onImportText;
   final ValueChanged<int> onSelect;
   final bool isCollapsed;
   final VoidCallback onToggleCollapsed;
@@ -5903,6 +5950,13 @@ class _StagingPanel extends StatelessWidget {
                   iconColor: cs.onSurfaceVariant,
                   onSelected: onAddBlank,
                   itemBuilder: (_) => _addPageMenuItems,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.playlist_add_rounded, size: 18),
+                  tooltip: '콘티 한번에 넣기 (콘티 글 붙여 넣기)',
+                  style: compactIcon,
+                  color: cs.onSurfaceVariant,
+                  onPressed: onImportText,
                 ),
                 IconButton(
                   icon: const Icon(Icons.save_outlined, size: 18),
