@@ -224,4 +224,42 @@ void main() {
       );
     });
   });
+
+  group('parseBibleReference (담은 성경 항목에 역본 다시 입히기)', () {
+    const versions = ['개역개정', '개역 한글', 'KJV'];
+
+    test('연속 범위·한 절·띄엄띄엄 절', () {
+      final ref = parseBibleReference('개역개정 요한복음 3:16-18', versions);
+      expect(ref?.version, '개역개정');
+      expect(ref?.book, '요한복음');
+      expect(ref?.chapter, 3);
+      expect(ref?.verses, [16, 17, 18]);
+      expect(parseBibleReference('KJV John 3:16', versions)?.verses, [16]);
+      expect(parseBibleReference('개역개정 시편 23:1,3,5', versions)?.verses, [
+        1,
+        3,
+        5,
+      ]);
+    });
+
+    test('역본·책 이름에 공백이 있어도 된다', () {
+      final ref = parseBibleReference('개역 한글 아가 2:1', versions);
+      expect(ref?.version, '개역 한글');
+      expect(ref?.book, '아가');
+      final kjv = parseBibleReference('KJV 1 John 4:9', versions);
+      expect(kjv?.book, '1 John');
+      expect(kjv?.chapter, 4);
+    });
+
+    test('모르는 역본·모양이 다르면 null', () {
+      expect(parseBibleReference('NIV John 3:16', versions), isNull);
+      expect(parseBibleReference('개역개정 요한복음', versions), isNull);
+      expect(parseBibleReference('개역개정 요한복음 3:18-16', versions), isNull);
+    });
+
+    test('verseNumbersText 는 그 역본에 있는 절만 잇는다', () {
+      expect(verseNumbersText([16, 17], {16: 'For God'}), '16. For God');
+      expect(verseNumbersText([16], null), '');
+    });
+  });
 }
