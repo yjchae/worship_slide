@@ -1,0 +1,112 @@
+import 'package:flutter_test/flutter_test.dart';
+import 'package:worship_slides/src/features/praise/domain/conti_text_parse.dart';
+import 'package:worship_slides/src/features/praise/domain/praise_song.dart';
+
+PraiseSong _song(int id, String title, {String lyrics = '가사'}) => PraiseSong(
+  id: id,
+  fileName: '$title.pptx',
+  title: title,
+  lyrics: lyrics,
+  englishLyrics: '',
+);
+
+void main() {
+  group('parseContiText', () {
+    test('예시 콘티: 머리말은 빼고 번호·제목·조·대신 부를 곡을 나눈다', () {
+      final entries = parseContiText('''
+<11.01 (주일) 예배 콘티>
+
+1. 아침에 주의 인자하심을 F
+2. 갈길을 밝히 보이시니(or 죄에서 자유를 얻게 함은) G
+3. 나의 반석이신 하나님 G
+4. 생수의 강이 G
+5. 신부의 노래 G
+6. -> 그날에 예수 주 다시오셔서 G
+''');
+      expect(entries.map((e) => e.number), [1, 2, 3, 4, 5, 6]);
+      expect(entries[0].titles, ['아침에 주의 인자하심을']);
+      expect(entries[0].key, 'F');
+      expect(entries[1].titles, ['갈길을 밝히 보이시니', '죄에서 자유를 얻게 함은']);
+      expect(entries[1].key, 'G');
+      expect(entries[5].titles, ['그날에 예수 주 다시오셔서']);
+    });
+
+    test('조 표기: 반음·단조·조 바꿈·Key 괄호, 영어 제목 끝 낱말은 조가 아니다', () {
+      final entries = parseContiText('''
+1) How great is our God (Key Bb)
+2 10000 Reasons F-G
+3. 주 은혜임을 F#m
+4. Way Maker
+''');
+      expect(entries[0].titles, ['How great is our God']);
+      expect(entries[0].key, 'Bb');
+      expect(entries[1].titles, ['10000 Reasons']);
+      expect(entries[1].key, 'F-G');
+      expect(entries[2].key, 'F#m');
+      expect(entries[3].titles, ['Way Maker']);
+      expect(entries[3].key, '');
+    });
+
+    test('번호 줄이 있으면 설명 줄은 빼고, 없으면 모든 줄을 곡으로 본다', () {
+      expect(
+        parseContiText('인도: 홍길동\n1. 생수의 강이 G\n(헌금송 뒤)').map((e) => e.titles.first),
+        ['생수의 강이'],
+      );
+      expect(
+        parseContiText('생수의 강이 G\n신부의 노래').map((e) => e.titles.first),
+        ['생수의 강이', '신부의 노래'],
+      );
+    });
+  });
+
+  group('ContiSongMatcher', () {
+    final songs = [
+      _song(1, '아침에 주의 인자하심을'),
+      _song(2, '갈 길을 밝히 보이시니'),
+      _song(3, '죄에서 자유를 얻게 함은'),
+      _song(4, '신부의 노래', lyrics: '첫 번째 신부의 노래'),
+      _song(5, '신부의 노래', lyrics: '두 번째 신부의 노래'),
+      _song(6, '그날에 예수 주 다시 오셔서 (와이드 스크린)'),
+      _song(7, 'Here I Am'),
+    ];
+    final matcher = ContiSongMatcher(songs);
+    ContiSongMatch matchLine(String line) => matcher.match(parseContiText(line).single);
+
+    test('띄어쓰기를 무시하고 똑같은 제목을 찾는다', () {
+      final m = matchLine('1. 아침에 주의 인자하심을 F');
+      expect(m.kind, ContiMatchKind.exact);
+      expect(m.candidates.map((s) => s.id), [1]);
+      expect(matchLine('6. -> 그날에 예수 주 다시오셔서 G').candidates.map((s) => s.id), [6]);
+    });
+
+    test('같은 제목 곡이 여럿이면 모두 후보로 준다', () {
+      expect(matchLine('5. 신부의 노래 G').candidates.map((s) => s.id), [4, 5]);
+    });
+
+    test('(or …) 대신 부를 곡도 후보에 넣는다', () {
+      final m = matchLine('2. 갈길을 밝히 보이시니(or 죄에서 자유를 얻게 함은) G');
+      expect(m.candidates.map((s) => s.id), [2, 3]);
+    });
+
+    test('제목 일부만 적었으면 비슷한 제목으로 찾는다', () {
+      final m = matchLine('1. 아침에 주의 G');
+      expect(m.kind, ContiMatchKind.partial);
+      expect(m.candidates.map((s) => s.id), [1]);
+    });
+
+    test('조로 떼어진 제목 끝 낱말도 붙여 맞춘다', () {
+      expect(matchLine('1. Here I Am').candidates.map((s) => s.id), [7]);
+    });
+
+    test('없는 곡은 후보가 없다', () {
+      final m = matchLine('1. 없는 찬양 제목 G');
+      expect(m.candidates, isEmpty);
+      expect(m.kind, isNull);
+    });
+
+    test('직접 찾기는 제목·가사 둘 다 본다', () {
+      expect(matcher.search('두번째').map((s) => s.id), [5]);
+      expect(matcher.search('갈길').map((s) => s.id), [2]);
+    });
+  });
+}
