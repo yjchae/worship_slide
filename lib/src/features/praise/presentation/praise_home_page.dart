@@ -701,12 +701,17 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     required bool extraChanged,
   }) async {
     final updated = <(int, StagingItem)>[];
+    // 기준 곡은 검색 결과(_songs)가 아니라 DB 에서 id 로 읽는다 — 검색어에 따라 다시 입히는 곡이 달라지면 안 된다.
+    final library = await _repository.songsByIds([
+      for (final e in _stagingItems)
+        if (e.item case SongStagingItem(:final song) when song.id != null)
+          song.id!,
+    ]);
     for (var i = 0; i < _stagingItems.length; i++) {
       final item = _stagingItems[i].item;
       if (item is! SongStagingItem) continue;
-      final matches = _songs.where((s) => s.id == item.song.id);
-      if (matches.isEmpty) continue;
-      final base = matches.first;
+      final base = library[item.song.id];
+      if (base == null) continue;
       // 바뀐 언어만 읽는다(안 바뀐 칸은 아래에서 지금 값을 그대로 쓴다).
       final sub = subChanged
           ? await _repository.subLyricsFor(base, _style.subLanguage)
@@ -4328,6 +4333,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
       final message = choice.overwrite
           ? '"${choice.name}" 콘티를 덮어썼습니다.'
+          : saved != null
+          ? '"${choice.name}" 새 콘티로 저장했습니다. 저장본은 그대로입니다.'
           : '"${choice.name}" 콘티를 저장했습니다.';
       final messenger = ScaffoldMessenger.of(context);
       // 연달아 저장해도 10초짜리 스낵바가 줄 서지 않게. 올리는 중 표시는 그대로 둔다.
@@ -4954,35 +4961,104 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       });
     }
     await _loadSubLanguages();
-    if (edited.id != null && mounted) {
-      _replaceStagedSong(await _withSubLyrics(edited));
-    }
     await _loadSongs();
+    // 라이브러리 곡을 고쳐도 작업 콘티에는 저절로 번지지 않는다 — 물어보고 바꾼다.
+    // 실제로 바뀐 게 없으면(열었다 그냥 저장) 묻지 않는다.
+    if (song != null &&
+        edited.id != null &&
+        mounted &&
+        songEditChanged(
+          before: song,
+          edited: edited,
+          oldTranslations: translations,
+          newSubLyrics: subLyrics,
+          defaultSubLanguage: PraiseRepository.defaultSubLanguage,
+        )) {
+      await _offerStagedSongUpdate(song, edited);
+    }
   }
 
-  void _replaceStagedSong(PraiseSong updatedSong) {
-    final updatedId = updatedSong.id;
-    if (updatedId == null) return;
-    var replaced = false;
+  /// 원본 곡을 고친 뒤, 콘티에 같은 곡이 담겨 있으면 그 항목들도 바꿀지 묻는다(기본 = 그대로 두기).
+  /// 곡 전체를 담은 항목(원본 가사가 고치기 전 라이브러리 가사와 같음)만 바꾼다 —
+  /// 나누거나 일부만 담은 항목, 콘티에서 가사를 고친 항목은 건너뛰고 몇 개인지 알린다.
+  Future<void> _offerStagedSongUpdate(
+    PraiseSong before,
+    PraiseSong edited,
+  ) async {
+    final id = edited.id;
+    if (id == null) return;
+    final plan = stagedSongUpdatePlan(
+      _stagingItems,
+      songId: id,
+      before: before,
+    );
+    if (plan.targets.isEmpty) return;
+    final replace = await showDialog<bool>(
+      context: context,
+      builder: (_) => StagedSongUpdateDialog(
+        count: plan.targets.length,
+        skipped: plan.skipped,
+      ),
+    );
+    if (replace != true || !mounted) return;
+    final updatedSong = await _withSubLyrics(edited);
+    if (!mounted) return;
+    // 보던 슬라이드는 번호가 아니라 (항목, 페이지)로 다시 찾는다 — 관객 화면이 다른 장으로 넘어가지 않게.
+    final slides = _allSlides;
+    final current = slides.isEmpty
+        ? null
+        : slides[_currentSlideIndex.clamp(0, slides.length - 1)];
+    // 묻는 사이 항목이 빠지거나 고쳐졌을 수 있어 대상을 다시 계산한다.
+    final targets = stagedSongUpdatePlan(
+      _stagingItems,
+      songId: id,
+      before: before,
+    ).targets.where(plan.targets.contains).toSet();
+    final newItem = SongStagingItem(updatedSong);
+    var replaced = 0;
     setState(() {
       for (var i = 0; i < _stagingItems.length; i++) {
         final entry = _stagingItems[i];
-        final item = entry.item;
-        if (item is SongStagingItem && item.song.id == updatedId) {
-          _stagingItems[i] = (
-            uid: entry.uid,
-            item: SongStagingItem(updatedSong),
+        if (!targets.contains(entry.uid)) continue;
+        // 장 수가 같으면 지운 표시·메모를 그대로 두고, 다르면 그 항목의 지운 표시를 풀고
+        // 범위 밖 메모만 버린다. 자동 여백 표시·메모는 새 끝으로 옮긴다.
+        remapReloadedPages(
+          uid: entry.uid,
+          oldCount: _pageCount(entry.item),
+          newCount: _pageCount(newItem),
+          deletedKeys: _deletedSlideKeys,
+          notes: _slideNotes,
+        );
+        _stagingItems[i] = (uid: entry.uid, item: newItem);
+        replaced++;
+      }
+      if (current != null && replaced > 0) {
+        final now = _allSlides;
+        var found = now.indexWhere(
+          (s) =>
+              s.stagingUid == current.stagingUid &&
+              s.isAutoSpacer == current.isAutoSpacer &&
+              (current.isAutoSpacer ||
+                  s.pageIndexInItem == current.pageIndexInItem),
+        );
+        // 장 수가 줄어 그 페이지가 없어졌으면 그 항목의 마지막 페이지로.
+        if (found < 0) {
+          found = now.lastIndexWhere(
+            (s) => s.stagingUid == current.stagingUid && !s.isAutoSpacer,
           );
-          replaced = true;
         }
+        if (found >= 0) _currentSlideIndex = found;
       }
-      if (replaced) {
-        _clampCurrentSlideIndex();
-      }
+      if (replaced > 0) _clampCurrentSlideIndex();
     });
-    if (replaced) {
-      _sendCurrentSlide();
-    }
+    if (replaced > 0 && _isPresentationOpen) await _sendCurrentSlide();
+    if (!mounted) return;
+    final note = plan.skipped > 0
+        ? ' (라이브러리 가사와 다른 항목 ${plan.skipped}개는 그대로)'
+        : '';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('콘티 항목 $replaced개를 고친 가사로 바꿨습니다.$note')),
+    );
   }
 
   void _openUrl(String url) {
@@ -9901,6 +9977,88 @@ class _SheetLyricsDialogState extends State<_SheetLyricsDialog> {
 
 // ── 곡 편집 다이얼로그 ─────────────────────────────────────────────────
 
+/// 원본 곡(라이브러리)을 고친 뒤 콘티의 같은 곡 항목 중 바꿀 대상과 건너뛸 수.
+/// 대상 = 곡 전체를 담은 항목(원본 가사가 고치기 전 라이브러리 가사 [before] 와 같음).
+/// 나누었거나 콘티에서 가사를 고친 항목은 [skipped] 로만 센다.
+@visibleForTesting
+({List<int> targets, int skipped}) stagedSongUpdatePlan(
+  List<({int uid, StagingItem item})> items, {
+  required int songId,
+  required PraiseSong before,
+}) {
+  final targets = <int>[];
+  var skipped = 0;
+  for (final entry in items) {
+    final item = entry.item;
+    if (item is! SongStagingItem || item.song.id != songId) continue;
+    if (item.song.lyrics == before.lyrics) {
+      targets.add(entry.uid);
+    } else {
+      skipped++;
+    }
+  }
+  return (targets: targets, skipped: skipped);
+}
+
+/// 곡 편집 창에서 실제로 바뀐 게 있는지. 제목·원본·기본 보조(영어) 가사와,
+/// 저장한 다른 언어 번역([newSubLyrics])이 기존 번역([oldTranslations])과 모두 같으면 false.
+@visibleForTesting
+bool songEditChanged({
+  required PraiseSong before,
+  required PraiseSong edited,
+  required Map<String, String> oldTranslations,
+  required Map<String, String> newSubLyrics,
+  required String defaultSubLanguage,
+}) {
+  if (before.title != edited.title ||
+      before.lyrics != edited.lyrics ||
+      before.englishLyrics != edited.englishLyrics) {
+    return true;
+  }
+  for (final entry in newSubLyrics.entries) {
+    if (entry.key == defaultSubLanguage) continue;
+    if ((oldTranslations[entry.key] ?? '') != entry.value) return true;
+  }
+  return false;
+}
+
+/// 원본 곡을 고친 뒤 '콘티에 담긴 같은 곡도 바꿀까요?' 창. true = 콘티도 바꾸기.
+/// 기본(autofocus, Enter)은 '그대로 두기'다 — 콘티는 명시적으로만 바뀐다.
+@visibleForTesting
+class StagedSongUpdateDialog extends StatelessWidget {
+  const StagedSongUpdateDialog({
+    super.key,
+    required this.count,
+    this.skipped = 0,
+  });
+
+  final int count;
+  final int skipped;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('콘티에 담긴 곡도 바꿀까요?'),
+      content: Text(
+        '콘티에 담긴 이 곡 $count개 항목도 고친 가사로 바꿀까요?\n'
+        '(콘티에서만 고친 가사는 사라집니다)'
+        '${skipped > 0 ? '\n\n라이브러리 가사와 다른 항목 $skipped개(나누었거나 콘티에서 고친 항목)는 그대로 둡니다.' : ''}',
+      ),
+      actions: [
+        OutlinedButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('콘티도 바꾸기'),
+        ),
+        FilledButton(
+          autofocus: true,
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('그대로 두기'),
+        ),
+      ],
+    );
+  }
+}
+
 /// 원본을 다시 구워 PPT 항목 [uid] 의 장 수가 [oldCount] → [newCount] 로 바뀔 때
 /// 지운 페이지 표시(`uid:페이지`)와 메모를 맞춘다. 지운 페이지 표시가 풀렸으면 true.
 ///
@@ -13524,7 +13682,8 @@ class _TextPromptDialogState extends State<_TextPromptDialog> {
 }
 
 /// 콘티 저장 창. 고른 이름과 덮어쓰기 여부를 돌려준다(취소면 null).
-/// [saved] 가 있으면 그 저장본을 덮어쓸 수 있고, 경고가 있으면 Enter 로는 덮어쓰지 않는다.
+/// Enter·주 버튼은 언제나 '새 콘티로 저장'이다. [saved] 가 있으면 '덮어쓰기' 버튼으로만
+/// 그 저장본을 덮어쓰고, 누르면 한 번 더 확인한다(되돌릴 수 없어서). 경고가 있으면 그 버튼을 더 낮춘다.
 @visibleForTesting
 class SaveContiDialog extends StatefulWidget {
   const SaveContiDialog({
@@ -13565,9 +13724,37 @@ class _SaveContiDialogState extends State<SaveContiDialog> {
   void _pop({required bool overwrite}) =>
       Navigator.of(context).pop((name: _name, overwrite: overwrite));
 
+  // Enter 는 저장본이 있어도 새 콘티로 저장한다 — 덮어쓰기는 버튼을 눌렀을 때만.
   void _submit() {
-    if (_name.isEmpty || _warned) return;
-    _pop(overwrite: widget.saved != null);
+    if (_name.isEmpty) return;
+    _pop(overwrite: false);
+  }
+
+  Future<void> _confirmOverwrite() async {
+    final saved = widget.saved;
+    if (saved == null || _name.isEmpty) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('저장본 덮어쓰기'),
+        content: Text(
+          '「${saved.name}」 저장본을 지금 내용으로 바꿉니다. 되돌릴 수 없습니다.'
+          '${_name != saved.name ? '\n저장본 이름도 바뀝니다 → 「$_name」' : ''}',
+        ),
+        actions: [
+          TextButton(
+            autofocus: true,
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('덮어쓰기'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true && mounted) _pop(overwrite: true);
   }
 
   Widget _notice(IconData icon, String text) {
@@ -13643,6 +13830,12 @@ class _SaveContiDialogState extends State<SaveContiDialog> {
                 '새 콘티로 저장하면 저장본은 그대로 남습니다.',
                 style: infoStyle,
               ),
+              // Enter 는 새 콘티로 저장이라, 이름이 같으면 같은 이름 콘티가 둘이 된다.
+              if (_name == saved.name)
+                _notice(
+                  Icons.info_outline_rounded,
+                  '같은 이름의 콘티가 하나 더 생깁니다. 저장본을 바꾸려면 \'덮어쓰기\'를 누르세요.',
+                ),
               if (widget.savedChanged)
                 _notice(
                   Icons.warning_amber_rounded,
@@ -13673,21 +13866,21 @@ class _SaveContiDialogState extends State<SaveContiDialog> {
             child: const Text('저장'),
           )
         else ...[
-          OutlinedButton(
-            onPressed: enabled ? () => _pop(overwrite: false) : null,
-            child: const Text('새 콘티로 저장'),
-          ),
-          // 경고가 있으면 Enter 가 막히므로 주 버튼처럼 보이지 않게 낮춘다.
+          // 덮어쓰기는 보조 버튼이다. 경고가 있으면 테두리도 없는 버튼으로 더 낮춘다.
           if (_warned)
-            OutlinedButton(
-              onPressed: enabled ? () => _pop(overwrite: true) : null,
+            TextButton(
+              onPressed: enabled ? _confirmOverwrite : null,
               child: const Text('덮어쓰기'),
             )
           else
-            FilledButton(
-              onPressed: enabled ? () => _pop(overwrite: true) : null,
+            OutlinedButton(
+              onPressed: enabled ? _confirmOverwrite : null,
               child: const Text('덮어쓰기'),
             ),
+          FilledButton(
+            onPressed: enabled ? () => _pop(overwrite: false) : null,
+            child: const Text('새 콘티로 저장'),
+          ),
         ],
       ],
     );

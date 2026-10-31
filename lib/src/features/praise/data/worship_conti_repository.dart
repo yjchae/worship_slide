@@ -290,7 +290,9 @@ class WorshipContiRepository {
                   ? PraiseSong(
                       id: baseSong.id,
                       fileName: baseSong.fileName,
-                      title: baseSong.title,
+                      title: storedTitle.isNotEmpty
+                          ? storedTitle
+                          : baseSong.title,
                       lyrics: storedLyrics,
                       englishLyrics: storedEnglishLyrics ?? '',
                       extraLyrics: storedExtraLyrics,

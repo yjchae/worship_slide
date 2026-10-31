@@ -16,7 +16,7 @@ class PraiseDatabase {
   static final PraiseDatabase instance = PraiseDatabase._();
 
   /// 지금 앱의 DB 스키마 버전. 올리면 [upgradePraiseSchema] 에 단계를 더한다.
-  static const schemaVersion = 18;
+  static const schemaVersion = 19;
   Database? _database;
 
   // 실행 파일 옆 폴더: macOS는 .app/Contents/MacOS/exe 이므로 3단계 위
@@ -543,6 +543,49 @@ Future<void> upgradePraiseSchema(DatabaseExecutor db, int oldVersion) async {
         'ALTER TABLE worship_conti_items ADD COLUMN $column TEXT',
       );
     }
+  }
+  if (oldVersion < 19) {
+    // 스냅샷이 빈 옛 곡 항목을 지금 곡으로 굳힌다. 불러올 때 라이브러리 곡을 따라가지 않게.
+    await freezeContiSongSnapshots(db);
+  }
+}
+
+/// 곡 항목 중 스냅샷 칸(제목·가사·영어 가사·uid)이 빈 행을 그 곡의 지금 값으로 채운다.
+Future<void> freezeContiSongSnapshots(DatabaseExecutor db) async {
+  final columns = {
+    for (final c in await db.rawQuery('PRAGMA table_info(worship_conti_items)'))
+      c['name'] as String,
+  };
+  if (!columns.containsAll(const ['item_type', 'song_id'])) return;
+  const songExists = '''EXISTS (SELECT 1 FROM praise_songs s
+                    WHERE s.id = worship_conti_items.song_id)''';
+  // 영어 가사를 가사보다 먼저 본다: 가사 스냅샷이 이미 있던 행은 예전 불러오기처럼 '' 로 둔다.
+  // 지금 영어 가사를 채우면 옛 원본 가사와 새 보조 가사가 섞인다.
+  if (columns.containsAll(const ['song_lyrics', 'song_english_lyrics'])) {
+    await db.execute('''
+      UPDATE worship_conti_items
+      SET song_english_lyrics = CASE
+        WHEN song_lyrics IS NOT NULL THEN ''
+        ELSE (SELECT s.english_lyrics FROM praise_songs s
+              WHERE s.id = worship_conti_items.song_id)
+      END
+      WHERE item_type = 'song' AND song_english_lyrics IS NULL
+        AND (song_lyrics IS NOT NULL OR (song_id IS NOT NULL AND $songExists))
+    ''');
+  }
+  for (final (column, source) in const [
+    ('song_title', 'title'),
+    ('song_lyrics', 'lyrics'),
+    ('song_uid', 'uid'),
+  ]) {
+    if (!columns.contains(column)) continue;
+    await db.execute('''
+      UPDATE worship_conti_items
+      SET $column = (SELECT s.$source FROM praise_songs s
+                     WHERE s.id = worship_conti_items.song_id)
+      WHERE item_type = 'song' AND song_id IS NOT NULL AND $column IS NULL
+        AND $songExists
+    ''');
   }
 }
 

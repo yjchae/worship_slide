@@ -58,7 +58,7 @@ lib/
   src/app_colors.dart                -- 앱 화면 색·둥글기 토큰 (슬라이드·발표 창·PPTX 색과 무관)
   src/features/praise/
     data/
-      praise_database.dart           -- SQLite 스키마 + 마이그레이션 (현재 version 18)
+      praise_database.dart           -- SQLite 스키마 + 마이그레이션 (현재 version 19)
       praise_repository.dart         -- 곡 CRUD (searchSongs, replaceAllSongs, deleteSongsByIds ...)
       worship_conti_repository.dart  -- 콘티 저장/불러오기 (곡 가사 스냅샷까지 함께 보관)
       sync_snapshot.dart             -- 찬양 동기화 파일 모양: SyncSnapshot(PC 한 대분) · SyncSong · SyncTranslation
@@ -305,6 +305,8 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
     id·uid 는 그대로라 다시 올리면 같은 클라우드 파일이 바뀐다. 그래서 `worship_contis.created_at` 은 **'마지막 저장 시각'**이다(`max(지금, 옛값+1)`, 처음 만든 날은 남지 않는다) — 목록 정렬과
     클라우드 판 비교에 쓴다. 값이 같으면 같은 판, 크고 작음은 시계 차이로 틀릴 수 있다. 이 PC 에 없는 곡의 `song_uid` 는 옛 항목에서 제목으로 되살린다. 올리기는 여전히 손으로 한다.
     올리기 전 확인은 `SyncService.cloudConti(uid)` — 목록과 달리 읽기 실패를 던진다(못 읽은 것을 '없음'으로 보면 다른 PC 판을 묻지 않고 덮어쓴다)
+    저장 창은 Enter·주 버튼이 늘 '새 콘티로 저장'이다. 저장본 덮어쓰기는 '덮어쓰기' 버튼 + 확인창을 거칠 때만이다(`SaveContiDialog`).
+    이름이 같으면 같은 이름 콘티가 하나 더 생긴다고 안내한다
   - **끊기**: 구글 드라이브 요청은 모두 `abortTrigger` 를 단다(`DriveSyncStore._abortable`). 받는 쪽은 조각 사이 30초가 멎으면,
     요청 하나가 10분(`maxRequest`)을 넘으면 끊는다 — 올리기(PUT)는 본문을 다 보낸 뒤에야 응답이 와서 30초 제한을 못 건다.
     손으로는 '동기화 취소'·콘티 올리기 버튼(올리는 중에 누름)·클라우드 창의 X 가 `SyncService.cancel` → 진행 중 요청을 **모두** 끊는다.
@@ -354,6 +356,13 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   (순서 무시)이 같으면 나누기 규칙만 바뀐 것으로 보고 **기존 곡을 고친다**(새 곡을 만들지 않는다). 나머지는 새로 넣는다
 - **콘티 저장 시 가사 스냅샷**: 곡 id만이 아니라 당시 가사(`song_lyrics`)까지 저장한다.
   나중에 곡을 지우거나 다시 임포트해도 저장한 콘티가 깨지지 않는다
+  불러올 때 제목도 저장 당시 제목(`song_title`)을 쓴다 — 동기화로 라이브러리 제목이 바뀌어도 콘티는 안 바뀐다.
+  스냅샷이 빈 옛 행은 version 19 에서 그때 곡으로 굳혔다(`freezeContiSongSnapshots`). 가사 스냅샷만 있고 영어 칸이 빈 행은
+  영어를 '' 로 둔다(예전 불러오기와 같게 — 지금 영어 가사를 넣으면 옛 원본과 새 보조가 섞인다).
+  찬양 동기화는 콘티 행(`worship_conti_items`)을 건드리지 않는다.
+  원본(라이브러리) 곡을 고쳐도 작업 콘티는 저절로 안 바뀐다 — 곡 전체를 담은 항목(가사가 고치기 전 원본과 같은 것)이 있으면
+  '콘티도 바꿀까요'를 묻고 기본은 그대로 두기다(`_offerStagedSongUpdate`). 바꾸면 보던 페이지는 (항목, 페이지)로 다시 찾는다.
+  보조 언어 다시 입히기의 기준 곡은 검색 결과가 아니라 DB 에서 id 로 읽는다(`PraiseRepository.songsByIds`)
 - **새 콘티** (예배 콘티 머리줄, `_newConti`): 확인 후 담긴 항목만 비운다(`_replaceConti`, 불러오기와 같은 초기화). 저장한 콘티는 그대로고 발표 중에는 막는다
 - **콘티 불러오기 뒤에 붙이기** (`_appendConti`): 항목이 있으면 취소·뒤에 붙이기·교체를 묻는다. 붙이기는 불러온 항목·메모·배경·여백 없음을 맨 끝에 더할 뿐이라 기존 항목 표시·원본 감시·보던 페이지·저장본 연결(`_linkedConti`)이 그대로고, 빠진 항목 수는 `_linkedMissing` 에 더한다. 발표 중에도 된다(관객 화면은 그대로, 싱어 '다음'만 갱신)
 - **콘티 파일 내보내기/가져오기** (`.wsconti`, 다른 PC 로 옮기기): 불러오기 다이얼로그의 항목별 내보내기 버튼 /

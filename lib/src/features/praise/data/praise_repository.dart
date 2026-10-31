@@ -278,6 +278,28 @@ class PraiseRepository {
     return rows.map(PraiseSong.fromMap).toList();
   }
 
+  /// id 로 곡을 읽는다(검색 결과와 상관없이). 없는 id 는 결과에 없다.
+  Future<Map<int, PraiseSong>> songsByIds(Iterable<int> ids) async {
+    final list = ids.toSet().toList();
+    if (list.isEmpty) return const {};
+    final db = await _databaseProvider.database;
+    final result = <int, PraiseSong>{};
+    // SQLite 인자 상한(999)을 넘지 않게 나눠 읽는다.
+    for (var start = 0; start < list.length; start += 500) {
+      final chunk = list.sublist(start, (start + 500).clamp(0, list.length));
+      final rows = await db.query(
+        'praise_songs',
+        where: 'id IN (${List.filled(chunk.length, '?').join(',')})',
+        whereArgs: chunk,
+      );
+      for (final row in rows) {
+        final song = PraiseSong.fromMap(row);
+        if (song.id != null) result[song.id!] = song;
+      }
+    }
+    return result;
+  }
+
   Future<void> insertSong(PraiseSong song) async {
     final db = await _databaseProvider.database;
     await db.insert('praise_songs', _newSongRow(song, _now()));
