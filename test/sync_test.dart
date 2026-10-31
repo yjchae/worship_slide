@@ -885,6 +885,106 @@ void main() {
       await a.contis.importContiFile(out);
       expect(await a.contis.listContis(), hasLength(2));
     });
+
+    group('덮어쓴 최종본 올리기', () {
+      /// [pc] 의 콘티를 말씀 [text] 한 항목을 덧붙여 덮어쓰고 지금 정보를 돌려준다.
+      Future<WorshipConti> overwrite(
+        _Pc pc,
+        String uid,
+        String name,
+        String text,
+      ) async {
+        final old = (await pc.contis.contisByUid())[uid]!;
+        final loaded = await pc.contis.loadConti(old.id, 1);
+        await pc.contis.saveConti(name, [
+          ...loaded.items,
+          (uid: 99, item: BibleStagingItem(reference: '요 3:16', text: text)),
+        ], overwriteUid: uid);
+        return (await pc.contis.contisByUid())[uid]!;
+      }
+
+      test('A 가 덮어써 다시 올리면 클라우드는 하나이고 B 가 같은 판을 받는다', () async {
+        final a = await newPc('A');
+        final b = await newPc('B');
+        final first = await saveSample(a);
+        await a.sync.uploadConti(first);
+
+        final latest = await overwrite(a, first.uid!, '최종본', '말씀');
+        expect(latest.createdAt.isAfter(first.createdAt), isTrue);
+        await a.sync.uploadConti(latest);
+
+        final cloud = (await b.sync.listCloudContis()).cloud.single;
+        expect(cloud.uid, first.uid);
+        expect(cloud.name, '최종본');
+        expect(cloud.itemCount, 3);
+        expect(cloud.createdAt, latest.createdAt);
+
+        await b.sync.downloadConti(cloud);
+        final local = (await b.contis.listContis()).single;
+        expect(local.uid, first.uid);
+        expect(local.createdAt, latest.createdAt);
+      });
+
+      test('B 가 받아 덮어써 올리면 파일은 하나이고 A 쪽에서 내 판이 아니다', () async {
+        final a = await newPc('A');
+        final b = await newPc('B');
+        final first = await saveSample(a);
+        await a.sync.uploadConti(first);
+        final uid = first.uid!;
+        await a.sync.uploadConti(await overwrite(a, uid, 'A 판', 'A'));
+        await b.sync.downloadConti(
+          (await b.sync.listCloudContis()).cloud.single,
+        );
+
+        await b.sync.uploadConti(await overwrite(b, uid, 'B 판', 'B'));
+
+        final files = Directory(p.join(shared, syncDirName))
+            .listSync()
+            .map((f) => p.basename(f.path))
+            .where((n) => n.startsWith(ContiCloudRepository.prefix));
+        expect(files, hasLength(2)); // 콘티 파일 + 정보 파일
+        final cloud = (await a.sync.listCloudContis()).cloud.single;
+        expect(cloud.name, 'B 판');
+        expect(cloud.uploadedBy, isNot('A'));
+      });
+
+      test('이 PC 에 없는 곡도 덮어쓴 뒤 다른 PC 에서 곡에 다시 이어진다', () async {
+        final a = await newPc('A');
+        final b = await newPc('B');
+        final first = await saveSample(a);
+        await a.sync.uploadConti(first);
+        await b.sync.downloadConti(
+          (await b.sync.listCloudContis()).cloud.single,
+        );
+        expect(await b.songs(), isEmpty);
+
+        await b.sync.uploadConti(await overwrite(b, first.uid!, 'B 판', '말씀'));
+
+        final id = await a.sync.downloadConti(
+          (await a.sync.listCloudContis()).cloud.single,
+        );
+        final item = (await a.contis.loadConti(id, 1)).items.first.item;
+        expect((item as SongStagingItem).song.id, (await a.songs()).single.id);
+      });
+
+      test('cloudConti: 없으면 null, 다른 콘티가 읽혀도 그 파일을 못 읽으면 던진다', () async {
+        final a = await newPc('A');
+        final conti = await saveSample(a);
+        expect(await a.sync.cloudConti(conti.uid!), isNull);
+        await a.sync.uploadConti(conti);
+        expect((await a.sync.cloudConti(conti.uid!))!.uploadedBy, 'A');
+
+        final other = 'b' * 32;
+        File(
+          p.join(shared, syncDirName, ContiCloudRepository.infoName(other)),
+        ).writeAsBytesSync([0xff, 0xfe]); // UTF-8 로 못 읽는다
+        expect((await a.sync.listCloudContis()).cloud, hasLength(1));
+        await expectLater(
+          a.sync.cloudConti(other),
+          throwsA(isA<FileSystemException>()),
+        );
+      });
+    });
   });
 
   group('수동 동기화 리뷰', () {

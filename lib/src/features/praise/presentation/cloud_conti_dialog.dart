@@ -83,13 +83,25 @@ class _CloudContiDialogState extends State<CloudContiDialog> {
       ) ==
       true;
 
+  bool _isLocalNewer(CloudConti conti) =>
+      _local[conti.uid]?.createdAt.isAfter(conti.createdAt) ?? false;
+
+  /// 같은 콘티의 두 판이 다를 때만 어느 쪽이 새로운지. `created_at` 이 마지막 저장 시각이다.
+  String? _newerLabel(CloudConti conti) {
+    if (_isLocalNewer(conti)) return '이 PC 판이 더 새로움(안 올림)';
+    final isCloudNewer =
+        _local[conti.uid]?.createdAt.isBefore(conti.createdAt) ?? false;
+    return isCloudNewer ? '클라우드 판이 더 새로움' : null;
+  }
+
   Future<void> _download(CloudConti conti) async {
     if (_local.containsKey(conti.uid) &&
         !await _confirm(
           '다시 받기',
           '"${conti.name}" 은(는) 이미 이 PC 에 있습니다. 클라우드의 것으로 바꿀까요?\n'
               '이 PC 의 콘티는 지워지고, 클라우드 판에는 없는 동영상·음악 파일 페이지와 '
-              "'원본 열어 수정' 연결이 빠집니다.",
+              "'원본 열어 수정' 연결이 빠집니다."
+              '${_isLocalNewer(conti) ? '\n\n이 PC 판이 더 새롭습니다. 올리지 않은 수정이 사라집니다.' : ''}',
           '바꾸기',
         )) {
       return;
@@ -177,21 +189,36 @@ class _CloudContiDialogState extends State<CloudContiDialog> {
                   final mine =
                       have && conti.uploadedBy == widget.service.deviceName;
                   final busy = _busy.contains(conti.uid);
+                  final newer = _newerLabel(conti);
                   return ListTile(
                     title: Text(
                       conti.name,
                       style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
-                    subtitle: Text(
-                      '${formatContiDate(conti.createdAt)} · ${conti.itemCount}개 · '
-                      '${conti.uploadedBy.isEmpty ? '' : '${conti.uploadedBy} 가 '}'
-                      '${formatContiDate(conti.uploadedAt)} 올림'
-                      '${mine
-                          ? ' · 이 PC 가 올림'
-                          : have
-                          ? ' · 이 PC 에 있음'
-                          : ''}',
-                      style: const TextStyle(fontSize: 12),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${formatContiDate(conti.createdAt)} · ${conti.itemCount}개 · '
+                          '${conti.uploadedBy.isEmpty ? '' : '${conti.uploadedBy} 가 '}'
+                          '${formatContiDate(conti.uploadedAt)} 올림'
+                          '${mine
+                              ? ' · 이 PC 가 올림'
+                              : have
+                              ? ' · 이 PC 에 있음'
+                              : ''}',
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                        if (newer != null)
+                          Text(
+                            newer,
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: cs.onSurface,
+                            ),
+                          ),
+                      ],
                     ),
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,

@@ -341,6 +341,10 @@ class SyncService {
     );
   }
 
+  /// 클라우드에 올라가 있는 그 콘티의 정보(없으면 null). 못 읽으면 던진다.
+  Future<CloudConti?> cloudConti(String uid) async =>
+      _cloud.find(await _requireStore(), uid);
+
   Future<void> uploadConti(WorshipConti conti) async =>
       _cloud.upload(await _requireStore(), conti, deviceName: _deviceName);
 

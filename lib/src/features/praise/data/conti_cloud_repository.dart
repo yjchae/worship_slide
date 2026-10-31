@@ -117,6 +117,23 @@ class ContiCloudRepository {
       ..sort((a, b) => b.uploadedAt.compareTo(a.uploadedAt));
   }
 
+  /// 클라우드에 있는 그 콘티의 정보. 없거나 정보 파일이 깨졌으면 null.
+  /// [list] 와 달리 읽기 실패를 던진다 — 못 읽은 것을 "없음"으로 보면 올리기 전 확인을 건너뛴다.
+  Future<CloudConti?> find(SyncStore store, String uid) async {
+    final name = infoName(uid);
+    final found = (await store.list()).where((e) => e.name == name).toList()
+      ..sort((a, b) => b.modified.compareTo(a.modified));
+    if (found.isEmpty) return null;
+    try {
+      final info = CloudConti.fromJson(
+        jsonDecode(await store.read(found.first)),
+      );
+      return info?.uid == uid ? info : null;
+    } on FormatException {
+      return null;
+    }
+  }
+
   /// 이 PC 의 콘티를 올린다(같은 콘티가 이미 있으면 덮어쓴다).
   Future<void> upload(
     SyncStore store,

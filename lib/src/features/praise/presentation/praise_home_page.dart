@@ -350,6 +350,12 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   int _importSavedCount = 0;
   String? _importStatusText;
   ExportStyle _style = _defaultStyle;
+  // 작업 중인 콘티가 이어진 저장본(불러온·저장한 시점의 스냅샷). id 는 다시 받으면 바뀌므로 uid 로만 찾는다.
+  WorshipConti? _linkedConti;
+  // 불러올 때 빠진 항목 수. 덮어쓰면 저장본에서도 사라지므로 저장 창이 경고한다.
+  int _linkedMissing = 0;
+  // 저장 스낵바에서 시작한 올리기가 도는 중(겹쳐 시작하지 않게).
+  bool _isUploadingSaved = false;
 
   // 발표 모드
   int _currentSlideIndex = 0;
@@ -4255,39 +4261,70 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   // ── 예배 콘티 저장/불러오기 ──────────────────────────────────────────
 
   Future<void> _saveConti() async {
-    if (_stagingItems.isEmpty) {
+    if (_effectiveStagingItems.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('저장할 항목이 없습니다. 찬양이나 성경 본문을 먼저 선택해 주세요.')),
       );
       return;
     }
 
-    final now = DateTime.now();
-    final defaultName =
-        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} 예배';
-    final name = await showDialog<String>(
-      context: context,
-      builder: (ctx) => _TextPromptDialog(
-        title: '예배 콘티 저장',
-        label: '콘티 이름',
-        initialValue: defaultName,
-      ),
-    );
-
-    if (name == null || name.isEmpty || !mounted) return;
-
     try {
-      await _contiRepository.saveConti(
-        name,
+      final linked = _linkedConti;
+      final saved = linked == null
+          ? null
+          : (await _contiRepository.contisByUid())[linked.uid];
+      if (!mounted) return;
+
+      final now = DateTime.now();
+      final defaultName =
+          '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} 예배';
+      final choice = await showDialog<({String name, bool overwrite})>(
+        context: context,
+        builder: (ctx) => SaveContiDialog(
+          initialName: saved?.name ?? linked?.name ?? defaultName,
+          saved: saved,
+          savedDeleted: linked != null && saved == null,
+          savedChanged: saved != null && saved.createdAt != linked!.createdAt,
+          missingCount: _linkedMissing,
+        ),
+      );
+      if (choice == null || !mounted) return;
+
+      final id = await _contiRepository.saveConti(
+        choice.name,
         _effectiveStagingItems,
         notes: _effectiveSlideNotes,
         backgrounds: _itemBackgrounds,
         noSpacerUids: _noSpacerUids,
+        overwriteUid: choice.overwrite ? linked!.uid : null,
       );
+      final uid = await _contiRepository.contiUid(id);
+      final fresh = (await _contiRepository.contisByUid())[uid];
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('"$name" 콘티를 저장했습니다.')));
+      setState(() {
+        _linkedConti = fresh;
+        _linkedMissing = 0;
+      });
+
+      final message = choice.overwrite
+          ? '"${choice.name}" 콘티를 덮어썼습니다.'
+          : '"${choice.name}" 콘티를 저장했습니다.';
+      final messenger = ScaffoldMessenger.of(context);
+      // 연달아 저장해도 10초짜리 스낵바가 줄 서지 않게. 올리는 중 표시는 그대로 둔다.
+      if (!_isUploadingSaved) messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        _sync.status.value.enabled
+            ? SnackBar(
+                content: Text(message),
+                duration: const Duration(seconds: 10),
+                persist: false,
+                action: SnackBarAction(
+                  label: '클라우드에 올리기',
+                  onPressed: () => _uploadSavedConti(uid),
+                ),
+              )
+            : SnackBar(content: Text(message)),
+      );
     } catch (error, stack) {
       await AppLogger.instance.error('콘티 저장 실패', error, stack);
       if (!mounted) return;
@@ -4364,11 +4401,14 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   }
 
   /// 작업 중인 콘티를 [items] 로 통째로 바꾼다. 저장한 콘티는 건드리지 않는다.
+  /// [linked] 가 없으면(새 콘티) 저장본과의 연결이 끊긴다.
   void _replaceConti(
     List<({int uid, StagingItem item})> items, {
     Set<int> noSpacerUids = const {},
     Map<String, String> notes = const {},
     Map<int, SlideBackground> backgrounds = const {},
+    WorshipConti? linked,
+    int missing = 0,
   }) {
     // 불러온 콘티의 원본은 '원본 열어 수정' 을 누르기 전까지 지켜보지 않는다.
     _sourceWatcher.unwatchAll();
@@ -4390,6 +4430,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       _nextUid += items.length;
       _previewStagingUid = items.isEmpty ? null : items.first.uid;
       _currentSlideIndex = 0;
+      _linkedConti = linked;
+      _linkedMissing = missing;
     });
   }
 
@@ -4471,6 +4513,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     }
 
     final result = await _contiRepository.loadConti(selected.id, _nextUid);
+    // uid 가 없는 옛 행도 여기서 받아 둔다.
+    final linkedUid = await _contiRepository.contiUid(selected.id);
+    final linked = (await _contiRepository.contisByUid())[linkedUid];
     if (!mounted) return;
 
     _replaceConti(
@@ -4478,6 +4523,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       noSpacerUids: result.noSpacerUids,
       notes: result.notes,
       backgrounds: result.backgrounds,
+      linked: linked,
+      missing: result.missingCount,
     );
     unawaited(_restoreOfferingBackgrounds());
 
@@ -4547,13 +4594,137 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     );
   }
 
-  /// 콘티를 클라우드에 올린다. 실패하면 이유를 담아 던진다(콘티 목록 창이 보여 준다).
-  Future<void> _uploadContiToCloud(WorshipConti conti) async {
+  /// 콘티를 클라우드에 올린다. 다른 PC 가 올린 다른 판을 묻고 안 바꾸면 false.
+  /// 실패하면 이유를 담아 던진다(콘티 목록 창이 보여 준다).
+  /// [onUploading] 은 실제 올리기 바로 앞에 부른다 — 그 전에 누른 취소는 올리기가 시작되며 풀린다.
+  Future<bool> _uploadContiToCloud(
+    WorshipConti conti, {
+    VoidCallback? onUploading,
+  }) async {
     try {
+      final cloud = await _sync.cloudConti(
+        await _contiRepository.contiUid(conti.id),
+      );
+      if (cloud != null &&
+          cloud.uploadedBy != _sync.deviceName &&
+          cloud.createdAt != conti.createdAt) {
+        if (!mounted) return false;
+        final pc = cloud.uploadedBy.isEmpty ? '다른 PC' : cloud.uploadedBy;
+        final replace = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('클라우드 판 바꾸기'),
+            content: Text(
+              '"${conti.name}" 의 클라우드 판은 $pc 가 '
+              '${formatContiDate(cloud.uploadedAt)}에 올렸습니다.\n'
+              '이 PC 판으로 바꿀까요? 클라우드의 이전 판은 남지 않습니다.'
+              '${cloud.createdAt.isAfter(conti.createdAt) ? '\n\n클라우드 판이 더 새롭습니다. 바꾸면 그 PC 의 수정이 사라집니다.' : ''}',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('취소'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text('바꾸기'),
+              ),
+            ],
+          ),
+        );
+        if (replace != true) return false;
+      }
+      onUploading?.call();
       await _sync.uploadConti(conti);
+      return true;
     } catch (error, stack) {
       await AppLogger.instance.error('콘티 올리기 실패', error, stack);
       rethrow;
+    }
+  }
+
+  /// 저장 스낵바의 '클라우드에 올리기'. 누른 순간의 최신 저장본을 올린다.
+  Future<void> _uploadSavedConti(String uid) async {
+    if (_isUploadingSaved) {
+      _showSnack('이미 올리는 중입니다.', replace: false);
+      return;
+    }
+    _isUploadingSaved = true;
+    final messenger = ScaffoldMessenger.of(context);
+    void finish(SnackBar bar) => messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(bar);
+
+    // 취소 버튼은 실제 올리기가 시작돼야 나온다. 스낵바를 갈아 끼우면 앞 스낵바가
+    // 끝까지 안 사라져 줄이 꼬이므로 한 장을 끝까지 쓴다.
+    final cancellable = ValueNotifier(false);
+    try {
+      final conti = (await _contiRepository.contisByUid())[uid];
+      if (conti == null) {
+        finish(const SnackBar(content: Text('저장본이 지워져 올리지 못했습니다.')));
+        return;
+      }
+      // 끝날 때까지 남는 스낵바가 줄 뒤에 갇히면 영영 안 닫히므로 맨 앞에 띄운다.
+      messenger
+        ..clearSnackBars()
+        ..removeCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                Expanded(child: Text('"${conti.name}" 콘티를 클라우드에 올리는 중입니다.')),
+                ValueListenableBuilder<bool>(
+                  valueListenable: cancellable,
+                  builder: (context, canCancel, _) => canCancel
+                      ? TextButton(
+                          style: TextButton.styleFrom(
+                            foregroundColor: Theme.of(
+                              context,
+                            ).colorScheme.onInverseSurface,
+                          ),
+                          onPressed: _sync.cancel,
+                          child: const Text('취소'),
+                        )
+                      : const SizedBox.shrink(),
+                ),
+              ],
+            ),
+            persist: true,
+            dismissDirection: DismissDirection.none,
+          ),
+        );
+      final done = await _uploadContiToCloud(
+        conti,
+        onUploading: () => cancellable.value = true,
+      );
+      finish(
+        SnackBar(
+          content: Text(
+            done ? '"${conti.name}" 콘티를 클라우드에 올렸습니다.' : '올리기를 취소했습니다.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (isCancelled(error)) {
+        finish(const SnackBar(content: Text('올리기를 취소했습니다.')));
+      } else {
+        finish(
+          SnackBar(
+            content: Text(
+              '클라우드에 올리지 못했습니다: '
+              '${error is FileSystemException ? error.message : error}',
+            ),
+            duration: const Duration(seconds: 10),
+            persist: false,
+            action: SnackBarAction(
+              label: '다시 올리기',
+              onPressed: () => _uploadSavedConti(uid),
+            ),
+          ),
+        );
+      }
+    } finally {
+      _isUploadingSaved = false;
     }
   }
 
@@ -4898,6 +5069,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                                 () =>
                                     _isStagingCollapsed = !_isStagingCollapsed,
                               ),
+                              contiName: _linkedConti?.name,
                               onNewConti: _newConti,
                               onSaveConti: _saveConti,
                               onLoadConti: _loadContiDialog,
@@ -5874,9 +6046,13 @@ class _StagingPanel extends StatelessWidget {
     required this.onLoadConti,
     required this.onAddBlank,
     this.overflowCounts = const {},
+    this.contiName,
   });
 
   final List<({int uid, StagingItem item})> stagingItems;
+
+  /// 이어진 저장본 이름. 없으면 머리줄 보조 줄이 없다.
+  final String? contiName;
 
   /// 항목 uid → 가사 상자를 넘는 페이지 수. 0 인 항목은 없다.
   final Map<int, int> overflowCounts;
@@ -6039,6 +6215,16 @@ class _StagingPanel extends StatelessWidget {
                 ),
               ],
             ),
+            if (contiName != null)
+              Tooltip(
+                message: contiName,
+                child: Text(
+                  '저장본: $contiName',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+                ),
+              ),
             const SizedBox(height: 12),
             Expanded(
               child: stagingItems.isEmpty
@@ -10101,7 +10287,7 @@ class _ContiListDialog extends StatefulWidget {
   final Future<List<WorshipConti>?> Function() onImport;
 
   /// 동기화 접속 키를 넣었을 때만 — 콘티를 클라우드에 올리기 / 클라우드 콘티 목록 열기.
-  final Future<void> Function(WorshipConti)? onUploadToCloud;
+  final Future<bool> Function(WorshipConti)? onUploadToCloud;
   final VoidCallback? onOpenCloud;
 
   /// 올리는 중인 것을 끊는다(오래 걸리면 손으로).
@@ -10121,8 +10307,8 @@ class _ContiListDialogState extends State<_ContiListDialog> {
   Future<void> _upload(WorshipConti conti) async {
     setState(() => _uploading.add(conti.id));
     try {
-      await widget.onUploadToCloud!(conti);
-      if (mounted) setState(() => _uploaded.add(conti.id));
+      final done = await widget.onUploadToCloud!(conti);
+      if (done && mounted) setState(() => _uploaded.add(conti.id));
     } catch (error) {
       if (!mounted || isCancelled(error)) return;
       await showDialog<void>(
@@ -13124,6 +13310,177 @@ class _TextPromptDialogState extends State<_TextPromptDialog> {
           child: const Text('취소'),
         ),
         FilledButton(onPressed: _submit, child: const Text('저장')),
+      ],
+    );
+  }
+}
+
+/// 콘티 저장 창. 고른 이름과 덮어쓰기 여부를 돌려준다(취소면 null).
+/// [saved] 가 있으면 그 저장본을 덮어쓸 수 있고, 경고가 있으면 Enter 로는 덮어쓰지 않는다.
+@visibleForTesting
+class SaveContiDialog extends StatefulWidget {
+  const SaveContiDialog({
+    super.key,
+    required this.initialName,
+    this.saved,
+    this.savedDeleted = false,
+    this.savedChanged = false,
+    this.missingCount = 0,
+  });
+
+  final String initialName;
+  final WorshipConti? saved;
+  final bool savedDeleted;
+  final bool savedChanged;
+  final int missingCount;
+
+  @override
+  State<SaveContiDialog> createState() => _SaveContiDialogState();
+}
+
+class _SaveContiDialogState extends State<SaveContiDialog> {
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.initialName,
+  );
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  String get _name => _controller.text.trim();
+
+  bool get _warned =>
+      widget.saved != null && (widget.savedChanged || widget.missingCount > 0);
+
+  void _pop({required bool overwrite}) =>
+      Navigator.of(context).pop((name: _name, overwrite: overwrite));
+
+  void _submit() {
+    if (_name.isEmpty || _warned) return;
+    _pop(overwrite: widget.saved != null);
+  }
+
+  Widget _notice(IconData icon, String text) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Semantics(
+        liveRegion: true,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: cs.tertiaryContainer,
+            borderRadius: BorderRadius.circular(AppRadius.control),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(icon, size: 16, color: cs.onTertiaryContainer),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  text,
+                  style: TextStyle(fontSize: 12, color: cs.onTertiaryContainer),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final saved = widget.saved;
+    final infoStyle = TextStyle(
+      fontSize: 12,
+      color: Theme.of(context).colorScheme.onSurfaceVariant,
+    );
+    final enabled = _name.isNotEmpty;
+    return AlertDialog(
+      title: const Text('예배 콘티 저장'),
+      scrollable: true,
+      content: SizedBox(
+        width: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: _controller,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: '콘티 이름',
+                border: OutlineInputBorder(),
+              ),
+              onChanged: (_) => setState(() {}),
+              // onSubmitted 가 아니다 — 그쪽은 Enter 를 막아도 입력칸 포커스가 빠진다.
+              onEditingComplete: _submit,
+            ),
+            if (saved != null) ...[
+              const SizedBox(height: 12),
+              Text(
+                '저장본: "${saved.name}" · ${formatContiDate(saved.createdAt)} · '
+                '${saved.itemCount}개',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: infoStyle,
+              ),
+              Text(
+                '덮어쓰면 저장본이 지금 내용으로 바뀌고 되돌릴 수 없습니다. '
+                '새 콘티로 저장하면 저장본은 그대로 남습니다.',
+                style: infoStyle,
+              ),
+              if (widget.savedChanged)
+                _notice(
+                  Icons.warning_amber_rounded,
+                  '불러온 뒤 저장본이 바뀌었습니다. 덮어쓰면 그 내용이 사라집니다.',
+                ),
+              if (widget.missingCount > 0)
+                _notice(
+                  Icons.warning_amber_rounded,
+                  '불러올 때 ${widget.missingCount}개 항목이 빠졌습니다. '
+                  '덮어쓰면 저장본에서도 영구히 사라집니다.',
+                ),
+            ] else if (widget.savedDeleted)
+              _notice(
+                Icons.info_outline_rounded,
+                '불러온 저장본이 지워져 덮어쓸 수 없습니다. 새 콘티로 저장합니다.',
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('취소'),
+        ),
+        if (saved == null)
+          FilledButton(
+            onPressed: enabled ? () => _pop(overwrite: false) : null,
+            child: const Text('저장'),
+          )
+        else ...[
+          OutlinedButton(
+            onPressed: enabled ? () => _pop(overwrite: false) : null,
+            child: const Text('새 콘티로 저장'),
+          ),
+          // 경고가 있으면 Enter 가 막히므로 주 버튼처럼 보이지 않게 낮춘다.
+          if (_warned)
+            OutlinedButton(
+              onPressed: enabled ? () => _pop(overwrite: true) : null,
+              child: const Text('덮어쓰기'),
+            )
+          else
+            FilledButton(
+              onPressed: enabled ? () => _pop(overwrite: true) : null,
+              child: const Text('덮어쓰기'),
+            ),
+        ],
       ],
     );
   }

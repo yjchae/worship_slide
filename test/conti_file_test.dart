@@ -14,19 +14,24 @@ import 'package:worship_slides/src/features/praise/domain/staging_item.dart';
 void main() {
   setUpAll(sqfliteFfiInit);
 
-  Future<WorshipContiRepository> freshRepository() async {
+  Future<Database> freshDatabase() async {
     final db = await databaseFactoryFfi.openDatabase(
       inMemoryDatabasePath,
       options: OpenDatabaseOptions(singleInstance: false),
     );
     addTearDown(db.close);
     await createPraiseSchema(db);
-    return WorshipContiRepository(
-      database: PraiseDatabase.forTesting(db),
-      // 단위 테스트엔 Application Support 가 없다.
-      supportDirectory: () async => Directory.systemTemp,
-    );
+    return db;
   }
+
+  WorshipContiRepository repositoryOn(Database db) => WorshipContiRepository(
+    database: PraiseDatabase.forTesting(db),
+    // 단위 테스트엔 Application Support 가 없다.
+    supportDirectory: () async => Directory.systemTemp,
+  );
+
+  Future<WorshipContiRepository> freshRepository() async =>
+      repositoryOn(await freshDatabase());
 
   test('이미지·배경·곡 제목까지 다른 DB 로 옮겨진다', () async {
     final tmp = await Directory.systemTemp.createTemp('conti_file_test');
@@ -102,5 +107,101 @@ void main() {
       ..writeAsStringSync('{"a":1}');
     final repo = await freshRepository();
     expect(repo.importContiFile(file.path), throwsFormatException);
+  });
+
+  group('덮어쓰기 저장', () {
+    ({int uid, StagingItem item}) bible(int uid, String text) =>
+        (uid: uid, item: BibleStagingItem(reference: '요 3:16', text: text));
+
+    Future<List<String>> texts(WorshipContiRepository repo, int id) async => [
+      for (final e in (await repo.loadConti(id, 1)).items)
+        (e.item as BibleStagingItem).text,
+    ];
+
+    test('id·uid 는 그대로이고 이름·항목만 바뀐다', () async {
+      final repo = await freshRepository();
+      final id = await repo.saveConti('옛 이름', [bible(1, '옛'), bible(2, '옛2')]);
+      final uid = (await repo.listContis()).single.uid!;
+
+      final saved = await repo.saveConti('새 이름', [
+        bible(1, '새'),
+      ], overwriteUid: uid);
+
+      expect(saved, id);
+      final conti = (await repo.listContis()).single;
+      expect(conti.id, id);
+      expect(conti.uid, uid);
+      expect(conti.name, '새 이름');
+      expect(conti.itemCount, 1);
+      expect(await texts(repo, id), ['새']);
+    });
+
+    test('시각이 늘 커져 목록 맨 앞에 온다(옛값이 미래여도)', () async {
+      final db = await freshDatabase();
+      final repo = repositoryOn(db);
+      final first = await repo.saveConti('먼저', [bible(1, '가')]);
+      final second = await repo.saveConti('나중', [bible(1, '나')]);
+      final future = DateTime.now().millisecondsSinceEpoch + 86400000;
+      await db.update(
+        'worship_contis',
+        {'created_at': future},
+        where: 'id = ?',
+        whereArgs: [first],
+      );
+      await db.update(
+        'worship_contis',
+        {'created_at': future + 5},
+        where: 'id = ?',
+        whereArgs: [second],
+      );
+      final uid = await repo.contiUid(first);
+
+      await repo.saveConti('먼저', [bible(1, '다')], overwriteUid: uid);
+      expect(
+        (await repo.contisByUid())[uid]!.createdAt.millisecondsSinceEpoch,
+        future + 1,
+      );
+
+      await repo.saveConti('나중', [
+        bible(1, '라'),
+      ], overwriteUid: await repo.contiUid(second));
+      final list = await repo.listContis();
+      expect(list.first.id, second);
+      expect(list.first.createdAt.millisecondsSinceEpoch, future + 6);
+    });
+
+    test('항목을 넣다 실패하면 옛 이름·시각·항목이 그대로다', () async {
+      final db = await freshDatabase();
+      final repo = repositoryOn(db);
+      final id = await repo.saveConti('옛 이름', [bible(1, '옛')]);
+      final before = (await repo.listContis()).single;
+      await db.execute('''
+        CREATE TRIGGER fail_insert BEFORE INSERT ON worship_conti_items
+        WHEN NEW.bible_text = '실패'
+        BEGIN SELECT RAISE(ABORT, 'test'); END
+      ''');
+
+      await expectLater(
+        repo.saveConti('새 이름', [
+          bible(1, '새'),
+          bible(2, '실패'),
+        ], overwriteUid: before.uid),
+        throwsA(anything),
+      );
+
+      final after = (await repo.listContis()).single;
+      expect(after.name, '옛 이름');
+      expect(after.createdAt, before.createdAt);
+      expect(await texts(repo, id), ['옛']);
+    });
+
+    test('없는 uid 면 실패하고 새 콘티를 만들지 않는다', () async {
+      final repo = await freshRepository();
+      await expectLater(
+        repo.saveConti('새', [bible(1, '가')], overwriteUid: 'a' * 32),
+        throwsStateError,
+      );
+      expect(await repo.listContis(), isEmpty);
+    });
   });
 }

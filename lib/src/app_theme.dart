@@ -373,6 +373,7 @@ ThemeData _theme(ColorScheme cs, Color canvas) {
       behavior: SnackBarBehavior.floating,
       backgroundColor: cs.inverseSurface,
       contentTextStyle: TextStyle(fontSize: 13, color: cs.onInverseSurface),
+      actionTextColor: cs.onInverseSurface,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(AppRadius.panel),
       ),

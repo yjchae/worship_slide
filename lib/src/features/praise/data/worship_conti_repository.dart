@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:math';
 
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -68,12 +69,17 @@ class WorshipContiRepository {
   /// 가져온 콘티의 이미지를 풀 곳의 바탕(Application Support). 테스트가 바꾼다.
   final Future<Directory> Function() _supportDirectory;
 
+  /// 콘티를 저장한다. 반환값은 콘티 id.
+  ///
+  /// [overwriteUid] 를 주면 새로 만들지 않고 그 콘티의 이름·항목을 바꾼다(id·uid 는 그대로). 없는 uid 면
+  /// [StateError]. `created_at` 은 '마지막 저장 시각'이 된다 — 시계가 앞선 PC 에서 받은 콘티도 앞으로만 간다.
   Future<int> saveConti(
     String name,
     List<({int uid, StagingItem item})> stagingItems, {
     Map<String, String> notes = const {},
     Map<int, SlideBackground> backgrounds = const {},
     Set<int> noSpacerUids = const {},
+    String? overwriteUid,
   }) async {
     final db = await _db.database;
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -93,11 +99,48 @@ class WorshipContiRepository {
           ))
             if (r['uid'] != null) r['id'] as int: r['uid'] as String,
       };
-      final contiId = await txn.insert('worship_contis', {
-        'name': name,
-        'created_at': now,
-        'uid': newSongUid(),
-      });
+      final int contiId;
+      // 이 PC 에 없는 곡은 songUids 에 없다 — 옛 항목의 uid 를 지키지 않으면 다른 PC 에서 곡에 못 잇는다.
+      final oldSongUids = <String, String>{};
+      if (overwriteUid == null) {
+        contiId = await txn.insert('worship_contis', {
+          'name': name,
+          'created_at': now,
+          'uid': newSongUid(),
+        });
+      } else {
+        final old = await txn.query(
+          'worship_contis',
+          columns: ['id', 'created_at'],
+          where: 'uid = ?',
+          whereArgs: [overwriteUid],
+        );
+        if (old.isEmpty) throw StateError('덮어쓸 콘티를 찾을 수 없습니다.');
+        contiId = old.first['id'] as int;
+        await txn.update(
+          'worship_contis',
+          {
+            'name': name,
+            'created_at': max(now, (old.first['created_at'] as int) + 1),
+          },
+          where: 'id = ?',
+          whereArgs: [contiId],
+        );
+        for (final r in await txn.query(
+          'worship_conti_items',
+          columns: ['song_title', 'song_uid'],
+          where:
+              'conti_id = ? AND song_title IS NOT NULL AND song_uid IS NOT NULL',
+          whereArgs: [contiId],
+        )) {
+          oldSongUids[r['song_title'] as String] = r['song_uid'] as String;
+        }
+        await txn.delete(
+          'worship_conti_items',
+          where: 'conti_id = ?',
+          whereArgs: [contiId],
+        );
+      }
       for (var i = 0; i < stagingItems.length; i++) {
         final item = stagingItems[i].item;
         final Map<String, Object?> row;
@@ -107,7 +150,7 @@ class WorshipContiRepository {
             'position': i,
             'item_type': 'song',
             'song_id': item.song.id,
-            'song_uid': songUids[item.song.id],
+            'song_uid': songUids[item.song.id] ?? oldSongUids[item.song.title],
             'song_title': item.song.title,
             'bible_reference': null,
             'bible_text': null,
