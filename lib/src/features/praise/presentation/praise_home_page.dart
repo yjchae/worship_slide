@@ -4363,6 +4363,68 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     }
   }
 
+  /// 작업 중인 콘티를 [items] 로 통째로 바꾼다. 저장한 콘티는 건드리지 않는다.
+  void _replaceConti(
+    List<({int uid, StagingItem item})> items, {
+    Set<int> noSpacerUids = const {},
+    Map<String, String> notes = const {},
+    Map<int, SlideBackground> backgrounds = const {},
+  }) {
+    // 불러온 콘티의 원본은 '원본 열어 수정' 을 누르기 전까지 지켜보지 않는다.
+    _sourceWatcher.unwatchAll();
+    setState(() {
+      _stagingItems
+        ..clear()
+        ..addAll(items);
+      _deletedSlideKeys.clear();
+      _noSpacerUids
+        ..clear()
+        ..addAll(noSpacerUids);
+      _mediaGroups.clear();
+      _slideNotes
+        ..clear()
+        ..addAll(notes);
+      _itemBackgrounds
+        ..clear()
+        ..addAll(backgrounds);
+      _nextUid += items.length;
+      _previewStagingUid = items.isEmpty ? null : items.first.uid;
+      _currentSlideIndex = 0;
+    });
+  }
+
+  /// '새 콘티' 버튼: 담긴 항목을 한 번에 비운다. 관객 화면이 끊기지 않게 발표 중에는 막는다.
+  Future<void> _newConti() async {
+    if (_isPresentationOpen) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('발표 중에는 새 콘티를 만들 수 없습니다. 발표를 끝낸 뒤 눌러 주세요.')),
+      );
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('새 콘티'),
+        content: Text(
+          '담긴 ${_stagingItems.length}개 항목을 모두 지울까요?\n'
+          '저장하지 않은 내용은 사라집니다. 저장한 콘티는 그대로 남습니다.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('새 콘티'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    _replaceConti(const []);
+  }
+
   Future<void> _loadContiDialog() async {
     final contis = await _contiRepository.listContis();
     if (!mounted) return;
@@ -4411,27 +4473,12 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     final result = await _contiRepository.loadConti(selected.id, _nextUid);
     if (!mounted) return;
 
-    // 불러온 콘티의 원본은 '원본 열어 수정' 을 누르기 전까지 지켜보지 않는다.
-    _sourceWatcher.unwatchAll();
-    setState(() {
-      _stagingItems
-        ..clear()
-        ..addAll(result.items);
-      _deletedSlideKeys.clear();
-      _noSpacerUids
-        ..clear()
-        ..addAll(result.noSpacerUids);
-      _mediaGroups.clear();
-      _slideNotes
-        ..clear()
-        ..addAll(result.notes);
-      _itemBackgrounds
-        ..clear()
-        ..addAll(result.backgrounds);
-      _nextUid += result.items.length;
-      _previewStagingUid = result.items.isEmpty ? null : result.items.first.uid;
-      _currentSlideIndex = 0;
-    });
+    _replaceConti(
+      result.items,
+      noSpacerUids: result.noSpacerUids,
+      notes: result.notes,
+      backgrounds: result.backgrounds,
+    );
     unawaited(_restoreOfferingBackgrounds());
 
     if (result.missingCount > 0) {
@@ -4851,6 +4898,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                                 () =>
                                     _isStagingCollapsed = !_isStagingCollapsed,
                               ),
+                              onNewConti: _newConti,
                               onSaveConti: _saveConti,
                               onLoadConti: _loadContiDialog,
                               onAddBlank: (kind) => _addPage(
@@ -5821,6 +5869,7 @@ class _StagingPanel extends StatelessWidget {
     required this.onSelect,
     required this.isCollapsed,
     required this.onToggleCollapsed,
+    required this.onNewConti,
     required this.onSaveConti,
     required this.onLoadConti,
     required this.onAddBlank,
@@ -5850,6 +5899,7 @@ class _StagingPanel extends StatelessWidget {
   final ValueChanged<int> onSelect;
   final bool isCollapsed;
   final VoidCallback onToggleCollapsed;
+  final VoidCallback onNewConti;
   final VoidCallback onSaveConti;
   final VoidCallback onLoadConti;
   final ValueChanged<_AddPageKind> onAddBlank;
@@ -5957,6 +6007,13 @@ class _StagingPanel extends StatelessWidget {
                   style: compactIcon,
                   color: cs.onSurfaceVariant,
                   onPressed: onImportText,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.note_add_outlined, size: 18),
+                  tooltip: '새 콘티 (담긴 항목 모두 지우기)',
+                  style: compactIcon,
+                  color: cs.onSurfaceVariant,
+                  onPressed: stagingItems.isEmpty ? null : onNewConti,
                 ),
                 IconButton(
                   icon: const Icon(Icons.save_outlined, size: 18),

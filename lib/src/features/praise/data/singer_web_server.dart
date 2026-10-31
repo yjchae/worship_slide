@@ -98,6 +98,12 @@ class SingerWebServer {
     _token = newToken();
     _remoteToken = newToken();
     try {
+      // 다른 프로그램이 127.0.0.1 로만 잡고 있어도 0.0.0.0 bind 는 성공한다(macOS). 그러면
+      // 터널(127.0.0.1 로 붙는다)이 그 프로그램으로 가므로 127.0.0.1 도 비었는지 먼저 본다.
+      await (await ServerSocket.bind(
+        InternetAddress.loopbackIPv4,
+        preferredPort,
+      )).close();
       _server = await HttpServer.bind(InternetAddress.anyIPv4, preferredPort);
     } on SocketException {
       // 다른 프로그램이 쓰고 있으면 아무 빈 포트나.

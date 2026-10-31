@@ -125,9 +125,42 @@ void main() {
     );
   });
 
+  test('다른 프로그램이 127.0.0.1:8765 만 잡고 있으면 다른 포트로 켠다 (터널이 그쪽으로 새지 않게)', () async {
+    ServerSocket? holder;
+    try {
+      holder = await ServerSocket.bind(
+        InternetAddress.loopbackIPv4,
+        SingerWebServer.preferredPort,
+      );
+      addTearDown(holder.close);
+    } on SocketException {
+      // 이미 누가 잡고 있으면 그대로 시험이 된다.
+    }
+    final server = SingerWebServer();
+    addTearDown(server.stop);
+    await server.start();
+    expect(server.port, isNot(SingerWebServer.preferredPort));
+    final client = HttpClient();
+    addTearDown(() => client.close(force: true));
+    final res = await (await client.getUrl(
+      Uri.parse('http://127.0.0.1:${server.port}/'),
+    )).close();
+    expect(res.statusCode, 403); // 키 없음 = 우리 서버가 받았다
+    await res.drain<void>();
+  });
+
   test('끄고 바로 켜도, 두 번 켜도 서버는 하나이고 이전 이미지는 남지 않는다', () async {
     final server = SingerWebServer();
     addTearDown(server.stop);
+    var portTaken = false;
+    try {
+      await (await ServerSocket.bind(
+        InternetAddress.loopbackIPv4,
+        SingerWebServer.preferredPort,
+      )).close();
+    } on SocketException {
+      portTaken = true;
+    }
     await server.start();
     final img = File('${Directory.systemTemp.createTempSync().path}/p.png')
       ..writeAsBytesSync([1]);
@@ -139,7 +172,8 @@ void main() {
     unawaited(server.start());
     await server.start();
     expect(server.isRunning, isTrue);
-    expect(server.port, SingerWebServer.preferredPort);
+    // 이 PC 의 다른 프로그램이 8765 를 쓰고 있으면 다른 포트로 켜지는 게 맞다.
+    if (!portTaken) expect(server.port, SingerWebServer.preferredPort);
     expect(server.running.value, isTrue);
     final k = Uri.parse(server.urlFor('127.0.0.1')).queryParameters['k'];
     final client = HttpClient();

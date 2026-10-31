@@ -40,7 +40,8 @@ class ClaudeTranslator {
               'easy for English speakers to sing along). Do NOT translate the meaning.'
         : 'Translate each Korean worship-song lyric page into $language. '
               'Keep it natural, singable and faithful to Christian worship '
-              'vocabulary used by $language-speaking churches.';
+              'vocabulary used by $language-speaking churches. '
+              'In Indonesian, always write 하나님 as Tuhan, never Allah.';
     final Process process;
     try {
       // 작업 폴더는 임시 폴더 — 프로젝트의 CLAUDE.md 같은 걸 읽어 들이지 않게.
