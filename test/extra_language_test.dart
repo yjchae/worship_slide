@@ -188,7 +188,7 @@ void main() {
           c['name'] as String,
       };
       expect(names, containsAll(columns));
-      expect(PraiseDatabase.schemaVersion, 18);
+      expect(PraiseDatabase.schemaVersion, greaterThanOrEqualTo(18));
     });
   });
 

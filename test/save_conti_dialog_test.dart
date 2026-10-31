@@ -60,13 +60,35 @@ void main() {
     expect(result.value, (name: '2026-10-31 예배', overwrite: false));
   });
 
-  testWidgets('연결됨: 저장본 정보가 보이고 Enter 는 덮어쓰기다', (tester) async {
+  // 덮어쓰기 버튼 → 확인 창의 '덮어쓰기'(마지막 것)를 누른다.
+  Future<void> confirmOverwrite(WidgetTester tester) async {
+    await tester.tap(find.text('덮어쓰기'));
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('「지난주 예배」 저장본을 지금 내용으로 바꿉니다. 되돌릴 수 없습니다.'),
+      findsOneWidget,
+    );
+    await tester.tap(find.widgetWithText(FilledButton, '덮어쓰기'));
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('Enter 는 저장본이 있어도 새 콘티로 저장', (tester) async {
     final result = await open(
       tester,
       SaveContiDialog(initialName: saved.name, saved: saved),
     );
-    expect(find.widgetWithText(FilledButton, '덮어쓰기'), findsOneWidget);
-    expect(find.widgetWithText(OutlinedButton, '새 콘티로 저장'), findsOneWidget);
+    await tester.enterText(find.byType(TextField), '  새 이름 ');
+    await pressEnter(tester);
+    expect(result.value, (name: '새 이름', overwrite: false));
+  });
+
+  testWidgets('연결됨: 주 버튼은 새 콘티로 저장, 덮어쓰기는 확인 뒤에만', (tester) async {
+    final result = await open(
+      tester,
+      SaveContiDialog(initialName: saved.name, saved: saved),
+    );
+    expect(find.widgetWithText(OutlinedButton, '덮어쓰기'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, '새 콘티로 저장'), findsOneWidget);
     expect(find.text('저장본: "지난주 예배" · 2026-10-25 09:30 · 7개'), findsOneWidget);
     // 버튼 세 개가 한 줄에 들어간다.
     expect(
@@ -74,12 +96,22 @@ void main() {
       tester.getCenter(find.text('덮어쓰기')).dy,
     );
 
+    // 확인 창에서 취소하면 저장 창으로 돌아온다.
+    await tester.tap(find.text('덮어쓰기'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('취소').last);
+    await tester.pumpAndSettle();
+    expect(find.byType(SaveContiDialog), findsOneWidget);
+    expect(result.value, '열림');
+
     await tester.enterText(find.byType(TextField), '  새 이름 ');
-    await pressEnter(tester);
+    await tester.pump();
+    await confirmOverwrite(tester);
+    // (이름을 바꿨으므로 확인창에 새 이름 안내가 있었다 — 아래 별도 테스트에서 본다.)
     expect(result.value, (name: '새 이름', overwrite: true));
   });
 
-  testWidgets('경고가 있으면 주 버튼이 없고 Enter 로 닫히지 않는다', (tester) async {
+  testWidgets('경고가 있으면 덮어쓰기가 더 낮아지고 Enter 는 새 콘티로 저장', (tester) async {
     final result = await open(
       tester,
       SaveContiDialog(
@@ -94,15 +126,25 @@ void main() {
       find.text('불러올 때 2개 항목이 빠졌습니다. 덮어쓰면 저장본에서도 영구히 사라집니다.'),
       findsOneWidget,
     );
-    expect(find.byType(FilledButton), findsNothing);
+    expect(find.widgetWithText(TextButton, '덮어쓰기'), findsOneWidget);
+    expect(find.widgetWithText(OutlinedButton, '덮어쓰기'), findsNothing);
+    expect(find.widgetWithText(FilledButton, '새 콘티로 저장'), findsOneWidget);
 
-    await pressEnter(tester);
-    expect(find.byType(SaveContiDialog), findsOneWidget);
-    expect(result.value, '열림');
-
-    await tester.tap(find.text('덮어쓰기'));
-    await tester.pumpAndSettle();
+    await confirmOverwrite(tester);
     expect(result.value, (name: saved.name, overwrite: true));
+  });
+
+  testWidgets('경고가 있어도 Enter 는 새 콘티로 저장', (tester) async {
+    final result = await open(
+      tester,
+      SaveContiDialog(
+        initialName: saved.name,
+        saved: saved,
+        savedChanged: true,
+      ),
+    );
+    await pressEnter(tester);
+    expect(result.value, (name: saved.name, overwrite: false));
   });
 
   testWidgets('저장본이 지워지면 안내와 저장만 있고 경고는 없다', (tester) async {
@@ -126,9 +168,12 @@ void main() {
     await open(tester, SaveContiDialog(initialName: saved.name, saved: saved));
     await tester.enterText(find.byType(TextField), '   ');
     await tester.pump();
-    expect(enabled(tester, find.widgetWithText(FilledButton, '덮어쓰기')), isFalse);
     expect(
-      enabled(tester, find.widgetWithText(OutlinedButton, '새 콘티로 저장')),
+      enabled(tester, find.widgetWithText(OutlinedButton, '덮어쓰기')),
+      isFalse,
+    );
+    expect(
+      enabled(tester, find.widgetWithText(FilledButton, '새 콘티로 저장')),
       isFalse,
     );
     await pressEnter(tester);
@@ -181,5 +226,29 @@ void main() {
     await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     expect(keys, isEmpty);
+  });
+
+  testWidgets('이름이 저장본과 같으면 같은 이름 콘티가 생긴다고 알린다', (tester) async {
+    await open(tester, SaveContiDialog(initialName: saved.name, saved: saved));
+    const note = "같은 이름의 콘티가 하나 더 생깁니다. 저장본을 바꾸려면 '덮어쓰기'를 누르세요.";
+    expect(find.text(note), findsOneWidget);
+    await tester.enterText(find.byType(TextField), '다른 이름');
+    await tester.pump();
+    expect(find.text(note), findsNothing);
+  });
+
+  testWidgets('이름을 바꿔 덮어쓰면 확인창에 새 이름을 알린다', (tester) async {
+    await open(tester, SaveContiDialog(initialName: saved.name, saved: saved));
+    await tester.tap(find.text('덮어쓰기'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('저장본 이름도 바뀝니다'), findsNothing);
+    await tester.tap(find.text('취소').last);
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField), '새 이름');
+    await tester.pump();
+    await tester.tap(find.text('덮어쓰기'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('저장본 이름도 바뀝니다 → 「새 이름」'), findsOneWidget);
   });
 }
