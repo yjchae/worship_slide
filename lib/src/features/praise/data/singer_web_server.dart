@@ -19,7 +19,7 @@ import 'package:flutter/foundation.dart';
 /// **발표자 리모컨**: 같은 페이지를 리모컨 키(`?k=` 가 [remoteToken])로 열면 넘기기·확대·블랙아웃 제스처가 켜진다.
 /// - `POST /control?action=next|prev&from=<보던 쪽>` / `action=blackout&on=0|1` / `action=zoom&on&x&y&size`
 ///   → [onControl] 을 부르고 바뀐 상태 JSON 을 돌려준다
-/// - 리모컨에만 가는 값(`note`·`zoom`, [remoteOnlyKeys])은 싱어 키로 받는 쪽에서 뺀다.
+/// - 리모컨에만 가는 값(`note`·`zoom`·`message`, [remoteOnlyKeys])은 싱어 키로 받는 쪽에서 뺀다.
 ///   싱어 QR 을 단체방에 돌려도 그 키로는 넘기지도, 발표자 메모를 보지도 못한다
 ///
 /// **바깥 망 주소**: cloudflared 가 깔려 있으면 Cloudflare 임시 터널(`*.trycloudflare.com`, 계정 불필요)을
@@ -39,7 +39,7 @@ class SingerWebServer {
   String? _lastRemoteJson; // 리모컨용(메모·확대 포함)
   final _remoteClients = <HttpResponse>{};
 
-  static const remoteOnlyKeys = ['note', 'zoom'];
+  static const remoteOnlyKeys = ['note', 'zoom', 'message'];
 
   // 경과 시간(clock.elapsed_ms)은 흐르는 동안 매번 달라서 저장한 JSON 에서 빼 두고, 보낼 때
   // 그 순간 값으로 맨 앞에 붙인다(`{"clock_ms":N,...`). 늦게 연 휴대폰도 맞는 시간을 받는다.
@@ -361,7 +361,7 @@ class SingerWebServer {
     final json = jsonEncode(public);
     if (remoteJson == _lastRemoteJson) return;
     _lastRemoteJson = remoteJson;
-    // 메모·확대만 바뀌었으면 싱어 쪽엔 보내지 않는다.
+    // 메모·확대·메시지만 바뀌었으면 싱어 쪽엔 보내지 않는다.
     final singerChanged = json != _lastJson;
     _lastJson = json;
     _broadcast(
@@ -615,7 +615,7 @@ const singerPageHtml =
   #next .sub{color:#b8a25a;}
   .placeholder{color:#59626e;font-size:3vh;font-weight:600;}
   img{max-width:100%;max-height:100%;object-fit:contain;display:block;}
-  #note,#bar,#flash{display:none;}
+  #message,#note,#bar,#flash{display:none;}
   body.remote{touch-action:none;overscroll-behavior:none;-webkit-user-select:none;user-select:none;
     -webkit-touch-callout:none;}
   .remote #current .stage{padding:0;}
@@ -624,6 +624,10 @@ const singerPageHtml =
     font-size:2.3vh;line-height:1.4;color:#e6e9ee;background:#1a1f26;border-left:3px solid #ffd54f;
     border-radius:.8vh;padding:1vh 3vw;}
   .remote #note:empty{display:none;}
+  .remote #message{display:block;flex:none;max-height:30vh;overflow:auto;touch-action:pan-y;white-space:pre-wrap;
+    overflow-wrap:anywhere;font-size:3.4vh;font-weight:700;line-height:1.35;color:#000;background:#fff;
+    border-radius:.8vh;padding:1.2vh 3vw;}
+  .remote #message:empty{display:none;}
   .remote #bar{display:flex;flex:none;}
   #black{flex:1;position:relative;overflow:hidden;border:1px solid #3a424d;border-radius:1vh;background:#1b2028;
     color:#e6e9ee;font:inherit;font-size:2.2vh;font-weight:700;padding:1.6vh 0;}
@@ -636,6 +640,7 @@ const singerPageHtml =
   #flash.r{right:0;background:linear-gradient(to left,rgba(255,213,79,.45),transparent);}
   #flash.show{opacity:1;transition:none;}
 </style></head><body>
+  <div id="message"></div>
   <header><span id="title"></span><span id="badge"></span><span id="clock"></span><span id="page"></span>
     <button id="layout"></button></header>
   <div id="panes">
@@ -763,7 +768,7 @@ function render(d){
   if(d.blackout){ badge.textContent='관객 화면 꺼짐'; badge.className='badge'; }
   var nt=next&&next.title; document.getElementById('label').textContent=
     (nt && nt!==cur.title) ? '다음 · '+nt : '다음';
-  // 메모·확대만 바뀌었으면 다시 채우지 않는다(이미지를 다시 받느라 깜빡이지 않게).
+  // 메모·확대·메시지만 바뀌었으면 다시 채우지 않는다(이미지를 다시 받느라 깜빡이지 않게).
   var pages=JSON.stringify([d.current,next]);
   if(pages!==lastPages){
     lastPages=pages;
@@ -827,6 +832,8 @@ function renderRemote(d){
   var note=document.getElementById('note');
   // 메모가 생기거나 없어지면 다음 페이지 칸 높이가 바뀌므로 글자 크기를 다시 맞춘다.
   if(note.textContent!==(d.note||'')){ note.textContent=d.note||''; fitAll(); }
+  var message=document.getElementById('message');
+  if(message.textContent!==(d.message||'')){ message.textContent=d.message||''; message.scrollTop=0; fitAll(); }
   var b=document.getElementById('black');
   b.classList.toggle('on',!!d.blackout); // 길게 누르는 중(hold)은 그대로 둔다
   b.firstChild.textContent=d.blackout?'화면 켜기 (길게 누르기)':'화면 끄기 (길게 누르기)';
@@ -896,12 +903,14 @@ function begin(e, keep){
   var f=slideFrame(box), r={left:b.left+box.clientLeft+f.x, top:b.top+box.clientTop+f.y, width:f.w, height:f.h};
   g={n:p.length, t0:keep?keep.t0:Date.now(), sx:keep?keep.sx:m.x, sy:keep?keep.sy:m.y,
     moved:keep?keep.moved:false, multi:(keep&&keep.multi)||p.length>1, zoomed:keep?keep.zoomed:false,
-    onNote:keep?keep.onNote:!!e.target.closest('#note'),
+    onNote:keep?keep.onNote:!!e.target.closest('#note,#message'),
+    onMessage:keep?keep.onMessage:!!e.target.closest('#message'),
     r:r, mx:m.x, my:m.y, lx:m.x, ly:m.y, d0:spread(p), z0:{x:zoom.on?zoom.x:0, y:zoom.on?zoom.y:0, size:zoom.on?zoom.size:1}};
 }
 if(REMOTE){
   // 메모칸 위는 위아래 밀기를 브라우저에 맡긴다(긴 메모 스크롤). 좌우 밀기는 그대로 넘기기.
-  function own(e){ if(!e.target.closest('#note')) e.preventDefault(); }
+  // 메시지 칸도 같고, 스크롤하다 넘어가지 않게 좌우 밀기까지 막는다.
+  function own(e){ if(!e.target.closest('#note,#message')) e.preventDefault(); }
   document.addEventListener('touchstart',function(e){
     if(e.target.closest('#bar,#layout,#split')) return;
     own(e);
@@ -938,7 +947,7 @@ if(REMOTE){
       else if(g.lx>w*0.78) go(1);
       else if(Date.now()-lastTap<320 && zoom.on){ zoom={on:false,x:0,y:0,size:1}; showZoom(); sendZoom(); buzz(); lastTap=0; }
       else lastTap=Date.now();
-    }else if(!g.multi && dt<600 && Math.abs(dx)>60 && Math.abs(dx)>1.5*Math.abs(dy)){
+    }else if(!g.multi && !g.onMessage && dt<600 && Math.abs(dx)>60 && Math.abs(dx)>1.5*Math.abs(dy)){
       go(dx<0?1:-1);
     }
     g=null;

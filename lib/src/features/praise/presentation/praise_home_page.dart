@@ -152,6 +152,9 @@ class _VoiceState {
   );
 }
 
+/// 저장한 콘티를 불러오는 방식: 작업 콘티 뒤에 붙이기 / 통째로 교체.
+enum _ContiLoadMode { append, replace }
+
 /// 음성 넣기 직전(또는 직후) 콘티 상태. `_insertItemsAfterSlide` 가 곡·PPT 를 나누며 바꾸는 것만 담는다.
 class _VoiceUndo {
   _VoiceUndo.capture(_PraiseHomePageState s)
@@ -313,6 +316,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   // 최상위 탭: 0 편집(콘티·검색·디자인), 1 발표 보기
   late final TabController _mainTabController;
   final Map<String, String> _slideNotes = {};
+  // 발표자 휴대폰(리모컨)에 띄운 메시지. 페이지와 무관하고 콘티에 저장하지 않는다.
+  String _presenterMessage = '';
   // 콘티 항목별 배경 오버라이드. 키는 항목 uid. 없는 항목은 전역 배경을 쓴다.
   // (헌금송만 다른 배경으로 띄우는 등 "일부만 다르게" 하기 위한 것)
   final Map<int, SlideBackground> _itemBackgrounds = {};
@@ -421,6 +426,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     super.initState();
     // 일시정지·리셋·목표를 바꾸면 싱어 화면(네이티브·휴대폰)도 바로 맞춘다.
     _presenterView.timer.addListener(_sendSingerView);
+    _singerWeb.running.addListener(_clearMessageIfServerOff);
     _exitListener = AppLifecycleListener(
       onExitRequested: () async {
         // 무슨 일이 있어도 앱은 닫혀야 한다.
@@ -496,6 +502,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _speech.stop();
     _voice.dispose();
     _presenterView.timer.removeListener(_sendSingerView);
+    _singerWeb.running.removeListener(_clearMessageIfServerOff);
     _presenterView.timer.dispose();
     _exitListener.dispose();
     _mediaPlayback.dispose();
@@ -1413,7 +1420,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                     if (remote) ...[
                       Text(
                         '좌우로 밀기·화면 양쪽 끝 누르기 = 페이지 넘기기, 두 손가락 벌리기 = 확대(관객 화면도 같이),\n'
-                        '두 번 누르기 = 확대 풀기, \'화면 끄기\' 길게 누르기 = 블랙아웃. 발표자 메모도 보입니다.\n'
+                        '두 번 누르기 = 확대 풀기, \'화면 끄기\' 길게 누르기 = 블랙아웃. 발표자 메모와 보낸 메시지도 보입니다.\n'
                         '이 QR 은 발표를 조작할 수 있으니 발표자만 찍으세요.',
                         style: TextStyle(
                           color: Theme.of(context).colorScheme.error,
@@ -1632,6 +1639,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       // 리모컨에만 간다(SingerWebServer.remoteOnlyKeys).
       'note': _slideNotes[_currentNoteKey(slides)] ?? '',
       'zoom': _zoomJson,
+      'message': _presenterMessage,
     });
     if (!_isSingerOpen) return;
     final encoded = _singerDedupeKey(json);
@@ -1641,6 +1649,18 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       // 보낸 게 확인된 뒤에만 기록한다. 실패하면 다음 갱신 때 다시 보낸다.
       _lastSingerJson = encoded;
     } catch (_) {}
+  }
+
+  void _setPresenterMessage(String message) {
+    setState(() => _presenterMessage = message);
+    _sendSingerView();
+  }
+
+  // 발표를 끝내면 서버도 꺼지므로 여기 한 곳에서 비운다. 발표 중에 서버만 꺼도 받을 곳이 없어 같이 비운다.
+  void _clearMessageIfServerOff() {
+    if (!_singerWeb.running.value && _presenterMessage.isNotEmpty) {
+      setState(() => _presenterMessage = '');
+    }
   }
 
   // 확대 영역 판을 PC 를 끄는 동안(마우스 움직임마다)·메모를 칠 때(글자마다) 리모컨 갱신을 묶어서 보낸다.
@@ -4439,7 +4459,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   Future<void> _newConti() async {
     if (_isPresentationOpen) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('발표 중에는 새 콘티를 만들 수 없습니다. 발표를 끝낸 뒤 눌러 주세요.')),
+        const SnackBar(
+          content: Text('발표 중에는 새 콘티를 만들 수 없습니다. 발표를 끝낸 뒤 눌러 주세요.'),
+        ),
       );
       return;
     }
@@ -4467,6 +4489,45 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _replaceConti(const []);
   }
 
+  /// [conti] 의 항목을 작업 콘티 맨 끝에 붙인다. 기존 항목의 표시·원본 감시, 보던 페이지,
+  /// 저장본 연결은 그대로다(모든 키가 항목 uid 라 끝에 더하기만 하면 된다).
+  Future<void> _appendConti(WorshipConti conti) async {
+    // 읽는 사이 음성 넣기 등이 uid 를 쓰면 겹치므로 그때는 다시 읽는다.
+    int startUid;
+    LoadContiResult result;
+    do {
+      startUid = _nextUid;
+      result = await _contiRepository.loadConti(conti.id, startUid);
+    } while (startUid != _nextUid);
+    if (!mounted) return;
+
+    setState(() {
+      _stagingItems.addAll(result.items);
+      _noSpacerUids.addAll(result.noSpacerUids);
+      _slideNotes.addAll(result.notes);
+      _itemBackgrounds.addAll(result.backgrounds);
+      // loadConti 는 실제로 담은 항목에만 uid 를 쓴다.
+      _nextUid += result.items.length;
+      _linkedMissing += result.missingCount;
+    });
+    unawaited(_restoreOfferingBackgrounds());
+    // 다음 페이지가 바뀌었을 수 있다(싱어 화면의 '다음').
+    _sendCurrentSlide();
+
+    final skipped = result.missingCount > 0
+        ? ' (${result.missingCount}개 항목은 DB에서 삭제되어 제외됨)'
+        : '';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          result.items.isEmpty
+              ? '"${conti.name}" 콘티에 붙일 항목이 없습니다.$skipped'
+              : '"${conti.name}" 콘티를 뒤에 붙였습니다.$skipped',
+        ),
+      ),
+    );
+  }
+
   Future<void> _loadContiDialog() async {
     final contis = await _contiRepository.listContis();
     if (!mounted) return;
@@ -4489,27 +4550,37 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     );
     if (selected == null || !mounted) return;
 
+    // 담긴 항목이 없으면 지울 것도 없으니 묻지 않고 불러온다.
     if (_stagingItems.isNotEmpty) {
-      final replace = await showDialog<bool>(
+      final mode = await showDialog<_ContiLoadMode>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('현재 콘티 교체'),
+          title: const Text('콘티 불러오기'),
           content: Text(
-            '현재 선택된 ${_stagingItems.length}개 항목을 지우고 "${selected.name}" 콘티를 불러올까요?',
+            '현재 콘티의 ${_stagingItems.length}개 항목 뒤에 "${selected.name}" 콘티를 붙일까요?\n'
+            '교체하면 현재 항목은 지워집니다.',
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.of(ctx).pop(false),
+              onPressed: () => Navigator.of(ctx).pop(),
               child: const Text('취소'),
             ),
+            OutlinedButton(
+              onPressed: () => Navigator.of(ctx).pop(_ContiLoadMode.append),
+              child: const Text('뒤에 붙이기'),
+            ),
             FilledButton(
-              onPressed: () => Navigator.of(ctx).pop(true),
+              onPressed: () => Navigator.of(ctx).pop(_ContiLoadMode.replace),
               child: const Text('교체'),
             ),
           ],
         ),
       );
-      if (replace != true || !mounted) return;
+      if (mode == null || !mounted) return;
+      if (mode == _ContiLoadMode.append) {
+        await _appendConti(selected);
+        return;
+      }
     }
 
     final result = await _contiRepository.loadConti(selected.id, _nextUid);
@@ -5120,6 +5191,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                                 // 휴대폰 리모컨 메모도 바뀌게.
                                 _scheduleRemoteSync();
                               },
+                              presenterMessage: _presenterMessage,
+                              onPresenterMessageChanged: _setPresenterMessage,
+                              mobileServerRunning: _singerWeb.running,
                               onSlideSelected: _goToSlide,
                               onSlideEdit: _editSlide,
                               onSlideDelete: _deleteSlide,
@@ -7203,7 +7277,13 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
   String? _matchingBook(String value) {
     final normalized = value.toLowerCase();
     for (final book in _bookNames) {
-      if (book.toLowerCase() == normalized) return book;
+      final label = bibleBookLabel(book, _bookNames).toLowerCase();
+      // 한글 이름만 쳐도(창세기) 그 책이다: 'kejadian (창세기)' 의 괄호 안.
+      if (book.toLowerCase() == normalized ||
+          label == normalized ||
+          label.endsWith(' ($normalized)')) {
+        return book;
+      }
     }
     return null;
   }
@@ -7714,9 +7794,13 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
               final query = textEditingValue.text.trim().toLowerCase();
               if (query.isEmpty) return _bookNames;
               return _bookNames.where(
-                (book) => book.toLowerCase().contains(query),
+                (book) => bibleBookLabel(
+                  book,
+                  _bookNames,
+                ).toLowerCase().contains(query),
               );
             },
+            displayStringForOption: (book) => bibleBookLabel(book, _bookNames),
             onSelected: (book) {
               _bookController.text = book;
               setState(() => _selectedBook = book);
@@ -7864,7 +7948,12 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
                 ),
               ),
               items: _bookNames
-                  .map((b) => DropdownMenuItem(value: b, child: Text(b)))
+                  .map(
+                    (b) => DropdownMenuItem(
+                      value: b,
+                      child: Text(bibleBookLabel(b, _bookNames)),
+                    ),
+                  )
                   .toList(),
               onChanged: (book) {
                 if (book == null || book == _scopeBook) return;
@@ -11547,6 +11636,9 @@ class _PresenterConsole extends StatefulWidget {
     required this.isBlackout,
     required this.notes,
     required this.onNoteChanged,
+    required this.presenterMessage,
+    required this.onPresenterMessageChanged,
+    required this.mobileServerRunning,
     required this.onSlideSelected,
     required this.onSlideEdit,
     required this.onSlideDelete,
@@ -11592,6 +11684,9 @@ class _PresenterConsole extends StatefulWidget {
   // 부모 콜백을 부르면 썸네일마다 _allSlides 를 다시 계산하게 된다.
   final Map<String, String> notes;
   final void Function(String key, String note) onNoteChanged;
+  final String presenterMessage;
+  final ValueChanged<String> onPresenterMessageChanged;
+  final ValueListenable<bool> mobileServerRunning;
   final ValueChanged<int> onSlideSelected;
   final ValueChanged<int> onSlideEdit;
   final ValueChanged<int> onSlideDelete;
@@ -11638,6 +11733,8 @@ class _PresenterConsole extends StatefulWidget {
 
 class _PresenterConsoleState extends State<_PresenterConsole> {
   final _noteController = TextEditingController();
+  final _messageController = TextEditingController();
+  final _messageFocus = FocusNode();
   final _stripScrollController = ScrollController();
   final _gridScrollController = ScrollController();
   final _searchController = TextEditingController();
@@ -11694,6 +11791,9 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
     super.didUpdateWidget(oldWidget);
     // 콘티를 재정렬하면 인덱스·개수는 그대로여도 슬라이드가 바뀐다. 키 비교는 안에서 한다.
     _syncNote();
+    if (oldWidget.isPresentationOpen && !widget.isPresentationOpen) {
+      _messageController.clear(); // 쓰다 만 메시지가 다음 발표에 남지 않게
+    }
     if (oldWidget.slides.length != widget.slides.length) {
       _marked.clear();
       _markAnchor = null;
@@ -11721,6 +11821,8 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
   @override
   void dispose() {
     _noteController.dispose();
+    _messageController.dispose();
+    _messageFocus.dispose();
     _stripScrollController.dispose();
     _gridScrollController.dispose();
     HardwareKeyboard.instance.removeHandler(_handleFindKey);
@@ -12551,6 +12653,10 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
           const SizedBox(height: 14),
           _pointerBox(cs),
           const SizedBox(height: 14),
+          _sectionLabel(cs, '발표자에게 메시지'),
+          const SizedBox(height: 6),
+          _messageBox(cs),
+          const SizedBox(height: 14),
           _sectionLabel(cs, '발표 메모'),
           const SizedBox(height: 6),
           _noteBox(cs),
@@ -12649,6 +12755,108 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
         border: const OutlineInputBorder(),
       ),
       onChanged: (v) => widget.onNoteChanged(_noteKey, v),
+    );
+  }
+
+  // 보낸 뒤 포커스를 빼야 ←/→ 발표 단축키가 다시 먹는다.
+  void _sendMessage() {
+    final text = _messageController.text.trim();
+    _messageFocus.unfocus();
+    if (text.isEmpty) return;
+    widget.onPresenterMessageChanged(text);
+    _messageController.clear();
+  }
+
+  void _clearMessage() {
+    _messageFocus.unfocus();
+    _messageController.clear();
+    widget.onPresenterMessageChanged('');
+  }
+
+  Widget _messageBox(ColorScheme cs) {
+    final sent = widget.presenterMessage;
+    return ValueListenableBuilder<bool>(
+      valueListenable: widget.mobileServerRunning,
+      builder: (context, running, _) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 한글 조합 중에는 onChanged 가 안 불리므로 컨트롤러를 듣는다.
+          ValueListenableBuilder<TextEditingValue>(
+            valueListenable: _messageController,
+            builder: (context, value, _) {
+              final hasDraft = value.text.trim().isNotEmpty;
+              final buttonStyle = TextButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: const Size(0, 34),
+                textStyle: const TextStyle(fontSize: 12),
+              );
+              return Row(
+                children: [
+                  Expanded(
+                    child: CallbackShortcuts(
+                      // ESC 는 입력칸에서 빠져나오기만.
+                      bindings: {
+                        const SingleActivator(LogicalKeyboardKey.escape):
+                            _messageFocus.unfocus,
+                      },
+                      child: TextField(
+                        controller: _messageController,
+                        focusNode: _messageFocus,
+                        enabled: running,
+                        textInputAction: TextInputAction.send,
+                        style: const TextStyle(fontSize: 12),
+                        decoration: const InputDecoration(
+                          isDense: true,
+                          hintText: '리모컨 휴대폰에 띄울 글',
+                          border: OutlineInputBorder(),
+                        ),
+                        onSubmitted: (_) => _sendMessage(),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  TextButton(
+                    style: buttonStyle,
+                    onPressed: running && hasDraft ? _sendMessage : null,
+                    child: const Text('보내기'),
+                  ),
+                  TextButton(
+                    style: buttonStyle,
+                    onPressed: running && (hasDraft || sent.isNotEmpty)
+                        ? _clearMessage
+                        : null,
+                    child: const Text('지우기'),
+                  ),
+                ],
+              );
+            },
+          ),
+          if (!running) ...[
+            const SizedBox(height: 4),
+            Text(
+              '휴대폰 화면이 꺼져 있습니다. 발표 중 툴바의 휴대폰 버튼으로 켜면 보낼 수 있습니다.',
+              style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+            ),
+          ] else if (sent.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: cs.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(AppRadius.control),
+              ),
+              child: Text(
+                '휴대폰에 표시 중: $sent',
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 12, color: cs.onSurface),
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 

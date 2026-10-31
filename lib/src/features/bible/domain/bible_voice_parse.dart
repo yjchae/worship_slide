@@ -15,6 +15,15 @@ const bibleCanonKorean = [
   '베드로후서', '요한일서', '요한이서', '요한삼서', '유다서', '요한계시록',
 ];
 
+/// 책 고르는 칸에 보일 이름. 외국어 역본은 한글 이름을 붙인다: `Kejadian (창세기)`.
+/// [books] 는 그 역본의 책 목록(정경 순서). 66권이 아니거나 이미 한글이면 그대로 준다.
+String bibleBookLabel(String book, List<String> books) {
+  final index = books.indexOf(book);
+  if (books.length != bibleCanonKorean.length || index < 0) return book;
+  if (RegExp(r'[\u1100-\u11FF\uAC00-\uD7A3]').hasMatch(book)) return book;
+  return '$book (${bibleCanonKorean[index]})';
+}
+
 /// 말로 흔히 하는(또는 인식기가 흔히 적는) 다른 이름 → 정경 번호.
 const _bookAliases = {
   '사무엘서상': 8,

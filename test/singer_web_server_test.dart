@@ -125,6 +125,68 @@ void main() {
     );
   });
 
+  test('메시지는 리모컨에만 가고, 메시지만 바뀌면 싱어 쪽엔 보내지 않는다', () async {
+    final server = SingerWebServer();
+    await server.start();
+    addTearDown(server.stop);
+    final base = 'http://127.0.0.1:${server.port}';
+    final singerK = Uri.parse(server.urlFor('127.0.0.1')).queryParameters['k'];
+    final remoteK = Uri.parse(
+      server.urlFor('127.0.0.1', remote: true),
+    ).queryParameters['k'];
+    final client = HttpClient();
+    addTearDown(() => client.close(force: true));
+    Future<HttpClientResponse> get(String path) async =>
+        (await client.getUrl(Uri.parse('$base$path'))).close();
+    Future<Map<String, dynamic>> state(String? k) async =>
+        jsonDecode(
+              await (await get('/state?k=$k')).transform(utf8.decoder).join(),
+            )
+            as Map<String, dynamic>;
+
+    // SSE 로 받은 data 줄을 모은다. 붙자마자 지금 값을 받으면(늦게 접속) 그것도 들어온다.
+    Future<List<Map<String, dynamic>>> listen(String? k) async {
+      final got = <Map<String, dynamic>>[];
+      (await get('/events?k=$k')).transform(utf8.decoder).listen((chunk) {
+        for (final line in chunk.split('\n')) {
+          if (line.startsWith('data: ')) {
+            got.add(jsonDecode(line.substring(6)) as Map<String, dynamic>);
+          }
+        }
+      }, onError: (_) {}); // 끝날 때 서버를 끄면 연결이 끊긴다
+      return got;
+    }
+
+    final page = {
+      'current': {'main_text': '주의 인자'},
+      'page_number': 1,
+      'total_pages': 3,
+      'note': '',
+      'zoom': {'on': false},
+    };
+    server.update({...page, 'message': ''});
+    final singerEvents = await listen(singerK);
+    final remoteEvents = await listen(remoteK);
+    await pumpEventQueue(times: 50);
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(singerEvents, hasLength(1));
+    expect(remoteEvents, hasLength(1));
+
+    server.update({...page, 'message': '2절 반복'});
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(remoteEvents, hasLength(2));
+    expect(remoteEvents.last['message'], '2절 반복');
+    expect(singerEvents, hasLength(1));
+    expect(singerEvents.single.containsKey('message'), isFalse);
+
+    // 폴링·늦게 붙은 휴대폰도 같다.
+    expect((await state(remoteK))['message'], '2절 반복');
+    expect((await state(singerK)).containsKey('message'), isFalse);
+    final late = await listen(remoteK);
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(late.single['message'], '2절 반복');
+  });
+
   test('다른 프로그램이 127.0.0.1:8765 만 잡고 있으면 다른 포트로 켠다 (터널이 그쪽으로 새지 않게)', () async {
     ServerSocket? holder;
     try {

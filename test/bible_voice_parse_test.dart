@@ -16,6 +16,14 @@ String? parse(String text) {
 }
 
 void main() {
+  test('책 이름 표시: 외국어 66권만 한글을 붙인다', () {
+    final indo = List.generate(66, (i) => 'Book$i');
+    expect(bibleBookLabel('Book0', indo), 'Book0 (창세기)');
+    expect(bibleBookLabel('Book65', indo), 'Book65 (요한계시록)');
+    expect(bibleBookLabel('시편', bibleCanonKorean), '시편');
+    expect(bibleBookLabel('Book0', const ['Book0']), 'Book0');
+  });
+
   test('사용자가 정한 말하기 방식', () {
     expect(parse('다니엘 3장1절 에서 10절'), '- 다니엘 3:1-10');
     expect(parse('다니엘 3장 1절에서 10절'), '- 다니엘 3:1-10');

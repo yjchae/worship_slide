@@ -200,10 +200,12 @@ macOS `didChangeScreenParametersNotification` + `NSScreen.displayID`, Windows `W
     블랙아웃도 토글이 아니라 `on=0|1` 원하는 상태를 보낸다
   - 확대는 발표 보기 '영역 확대'(`_zoomCenter`·`_zoomScale`·`_sendZoom`) 그대로다. 휴대폰의 현재 페이지 칸은 비율이 자유롭고, 그 안에 가운데로 맞춘 **16:9 틀**(`slideFrame`)
     좌표 = 슬라이드 좌표. 단 가사 페이지는 휴대폰이 디자인 없이 글자만 그리므로 확대 위치가 실제 슬라이드 배치와 조금 다를 수 있다(PPT 이미지는 정확)
+  - **발표자에게 메시지**: 발표 보기 '발표자에게 메시지' 칸에서 '보내기'(Enter)를 누를 때만 나간다(`_presenterMessage`, 페이지와 무관, 콘티에 저장 안 함). 입력칸은 서버(`SingerWebServer.running`)가 켜져 있을 때만 쓸 수 있고, 서버가 꺼지면(발표 종료 포함) 비운다.
+    `message` 는 `remoteOnlyKeys` 라 싱어 키·네이티브 싱어 창에는 안 간다. 리모컨 화면 맨 위 흰 띠(`#message`)에 뜨고, 여기서 시작한 터치는 확대도 넘기기도 안 한다(좌우 밀기까지 막는 점이 `#note` 와 다르다)
   - 휴대폰 페이지(싱어·리모컨 공통) 머리줄의 '좌우/위아래' 버튼으로 현재·다음 페이지 배치를 바꾼다. 휴대폰마다 `localStorage`(`singer_layout`)에 기억한다.
     현재·다음 사이 막대(`#split`)를 끌면 비율이 바뀐다(현재 몫 0.3~0.85, 기본 0.65, `singer_split`). 아이폰 가로 노치에 안 잘리게 좌우도 `safe-area-inset` 만큼 띄운다.
     다음 페이지 글자는 현재 페이지 글자의 0.75 배를 넘지 않는다(`fitAll`) — 짧은 다음 가사가 현재보다 크게 보이지 않게
-  - `note`·`zoom` 은 `_sendSingerView` 가 얹고, 서버가 싱어 키 쪽에서는 뺀다(`remoteOnlyKeys`) — 싱어 QR 로는 메모를 못 본다
+  - `note`·`zoom`·`message` 는 `_sendSingerView` 가 얹고, 서버가 싱어 키 쪽에서는 뺀다(`remoteOnlyKeys`) — 싱어 QR 로는 메모를 못 본다
 
 ### Python (`python/ppt_tool.py`, 약 3,100줄)
 
@@ -353,6 +355,7 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
 - **콘티 저장 시 가사 스냅샷**: 곡 id만이 아니라 당시 가사(`song_lyrics`)까지 저장한다.
   나중에 곡을 지우거나 다시 임포트해도 저장한 콘티가 깨지지 않는다
 - **새 콘티** (예배 콘티 머리줄, `_newConti`): 확인 후 담긴 항목만 비운다(`_replaceConti`, 불러오기와 같은 초기화). 저장한 콘티는 그대로고 발표 중에는 막는다
+- **콘티 불러오기 뒤에 붙이기** (`_appendConti`): 항목이 있으면 취소·뒤에 붙이기·교체를 묻는다. 붙이기는 불러온 항목·메모·배경·여백 없음을 맨 끝에 더할 뿐이라 기존 항목 표시·원본 감시·보던 페이지·저장본 연결(`_linkedConti`)이 그대로고, 빠진 항목 수는 `_linkedMissing` 에 더한다. 발표 중에도 된다(관객 화면은 그대로, 싱어 '다음'만 갱신)
 - **콘티 파일 내보내기/가져오기** (`.wsconti`, 다른 PC 로 옮기기): 불러오기 다이얼로그의 항목별 내보내기 버튼 /
   "파일에서 가져오기". `exportContiFile` 이 DB 행을 그대로 JSON 에 담고, 행이 가리키는 이미지(PPT 페이지·항목 배경·
   헌금송 PNG 와 그 원본)는 base64 로 같이 넣어 경로 자리를 키로 바꾼다. `importContiFile` 은
