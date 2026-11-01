@@ -452,10 +452,15 @@ def has_restricted_embedded_fonts(pptx_path):
         return False
 
 
+class LibreOfficeMissing(RuntimeError):
+    def __init__(self):
+        super().__init__("LibreOffice 실행 파일을 찾지 못했습니다.")
+
+
 def convert_ppt_group_to_pptx(source_paths, output_dir):
     libreoffice = get_libreoffice_executable()
     if libreoffice is None:
-        raise RuntimeError("LibreOffice 실행 파일을 찾지 못했습니다.")
+        raise LibreOfficeMissing()
 
     subprocess.run(
         [
@@ -1367,7 +1372,7 @@ def _convert_to_pdf(source_path, output_dir, on_powerpoint_failed=None):
 
     libreoffice = get_libreoffice_executable()
     if libreoffice is None:
-        raise RuntimeError("LibreOffice 실행 파일을 찾지 못했습니다.")
+        raise LibreOfficeMissing()
 
     subprocess.run(
         [
@@ -1537,6 +1542,9 @@ def render_presentation_images(file_path, expand_animation=True):
         shutil.rmtree(target_dir, ignore_errors=True)
         target_dir.parent.mkdir(parents=True, exist_ok=True)
         os.replace(staging_dir, target_dir)
+    except LibreOfficeMissing:
+        # 위 검사를 지나도 온다 — PowerPoint 는 있는데 그 파일을 못 구운 경우(심은 글꼴 제한·변환 실패).
+        return {"error": "libreoffice_missing"}
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
         shutil.rmtree(staging_dir, ignore_errors=True)
