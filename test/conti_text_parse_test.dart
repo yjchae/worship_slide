@@ -88,6 +88,32 @@ void main() {
       ]);
     });
 
+    test('번호 뒤 한두 자리 숫자로 시작하는 제목도 번호 줄이다', () {
+      final entries = parseContiText('1 7 Days\n2 10 Thousand Reasons G');
+      expect(entries.map((e) => e.number), [1, 2]);
+      expect(entries.map((e) => e.titles.first), ['7 Days', '10 Thousand Reasons']);
+      expect(entries[1].key, 'G');
+    });
+
+    test('숫자만 있는 줄과 날짜는 번호 줄이 아니다', () {
+      final entries = parseContiText(
+        '11 01\n11  01\n11.01\n1. 생수의 강이 G\n2. 신부의 노래 G',
+      );
+      expect(entries.map((e) => e.number), [1, 2]);
+    });
+
+    test('숫자만 있는 줄은 두 줄이어도 번호 모드를 켜지 않는다', () {
+      final entries = parseContiText('11 01\n11 08\n생수의 강이');
+      expect(entries.map((e) => e.number), [null, null, null]);
+      expect(entries.map((e) => e.titles.first), ['11 01', '11 08', '생수의 강이']);
+    });
+
+    test('7 Days 하나만 있는 글은 번호 모드를 켜지 않는다', () {
+      final entry = parseContiText('7 Days').single;
+      expect(entry.number, isNull);
+      expect(entry.titles, ['7 Days']);
+    });
+
     test('번호 목록 안 숫자 제목은 그대로 남는다', () {
       expect(parseContiText('1. 10000 Reasons G').single.titles, ['10000 Reasons']);
     });

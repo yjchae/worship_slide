@@ -69,7 +69,8 @@ List<ContiTextEntry> parseContiText(String text) {
 final _headerLine = RegExp(r'^[<〈《\[][^>〉》\]]*[>〉》\]]');
 // '1.'·'1)' 뒤에 숫자가 오면 번호가 아니다('11.01' 날짜). ':' 는 시각('7:30')이라 받지 않는다.
 final _punctNumberedLine = RegExp(r'^(\d{1,2})\s*[.)．]\s*(?!\d)(.+)$');
-final _spaceNumberedLine = RegExp(r'^(\d{1,2})\s+(?!\d)(.+)$');
+// '1 제목' 은 '1 7 Days' 처럼 제목이 숫자로 시작해도 번호다. 뒤가 숫자뿐이면('11 01' 날짜) 아니다.
+final _spaceNumberedLine = RegExp(r'^(\d{1,2})\s+(?![\d\s]+$)(.+)$');
 final _continuationLine = RegExp(r'^(?:->|→|=>|⇒)');
 final _leadingMarks = RegExp(r'^(?:->|→|=>|⇒|-|•|·|\*)+\s*');
 
