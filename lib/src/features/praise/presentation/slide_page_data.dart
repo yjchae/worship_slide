@@ -56,9 +56,8 @@ class SlidePageData {
 
   /// 발표 창이 "같은 미디어"인지 가리는 값(같으면 이어서 재생). 미디어가 없으면 null.
   /// 배경 영상은 항목을 따지지 않는다 — 곡을 둘로 나눠도, 같은 영상 곡이 이어져도 이어서 튼다.
-  String? get mediaKey => media != null
-      ? '${mediaGroup ?? ''}|${media!.key}'
-      : _sentBackdrop?.key;
+  String? get mediaKey =>
+      media != null ? '${mediaGroup ?? ''}|${media!.key}' : _sentBackdrop?.key;
   final int pageIndex;
   final int totalPages;
   final ExportStyle style;
@@ -121,4 +120,33 @@ class SlidePageData {
     backdrop: value,
     originalOnly: originalOnly,
   );
+
+  /// 통역 화면(B)에 보낼 페이지. 소리가 겹치지 않게 미디어·배경 영상은 빼고, 이미지는
+  /// [bImage](`bImagePath` 결과)로 바꾸고, 보조 → 추가 보조 순으로 본문으로 올린다.
+  /// 둘 다 있으면 추가 보조는 그 아래 보조 줄이 된다. 둘 다 없으면 원본 그대로다.
+  /// 설교 제목 페이지([sermon])의 보조 칸은 번역이 아니라 부제라 그대로 둔다.
+  SlidePageData forB(String? bImage, {bool sermon = false}) {
+    final hasSub = englishText.trim().isNotEmpty;
+    final hasExtra = extraText.trim().isNotEmpty;
+    final lift = !sermon && (hasSub || hasExtra);
+    return SlidePageData(
+      mainText: !lift
+          ? mainText
+          : hasSub
+          ? englishText
+          : extraText,
+      englishText: !lift
+          ? englishText
+          : hasSub && hasExtra
+          ? extraText
+          : '',
+      extraText: lift ? '' : extraText,
+      title: title,
+      isBible: isBible,
+      pageIndex: pageIndex,
+      totalPages: totalPages,
+      style: style,
+      imagePath: bImage,
+    );
+  }
 }

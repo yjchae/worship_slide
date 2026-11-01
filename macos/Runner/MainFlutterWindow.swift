@@ -43,7 +43,7 @@ extension NSScreen {
   }
 }
 
-class PresentationWindowController: NSWindowController, NSWindowDelegate {
+class PresentationWindowController: NSWindowController, NSWindowDelegate, WKNavigationDelegate {
   private var webView: WKWebView!
   private var keyMonitor: Any?
   /// 창이 닫힐 때 한 번 호출된다. 창 닫힘을 NotificationCenter 옵저버로 받으면 창마다 하나씩
@@ -51,14 +51,17 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
   var onClose: (() -> Void)?
   /// 미디어 레이어의 재생 위치 JSON(문자열 그대로). 발표 보기 재생바가 받는다.
   var onMediaState: ((String) -> Void)?
+  /// 이 창에 포커스가 있을 때 누른 넘기기 키("next"/"prev"). 통역 화면만 쓴다.
+  var onNavigate: ((String) -> Void)?
 
-  convenience init() {
-    let window = NSWindow(
-      contentRect: NSRect(x: 0, y: 0, width: 1280, height: 720),
-      styleMask: [.titled, .resizable],
-      backing: .buffered,
-      defer: false
-    )
+  convenience init() { self.init(keyable: false) }
+
+  /// keyable: 통역 화면용. 클릭하면 포커스를 받아 Ctrl+F4 로 그 창만 닫을 수 있다(열 때는 안 가져간다).
+  convenience init(keyable: Bool) {
+    let rect = NSRect(x: 0, y: 0, width: 1280, height: 720)
+    let window: NSWindow = keyable
+      ? SingerWindow(contentRect: rect, styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+      : NSWindow(contentRect: rect, styleMask: [.titled, .resizable], backing: .buffered, defer: false)
     window.isReleasedWhenClosed = false
     window.backgroundColor = .black
     window.collectionBehavior = [.fullScreenAuxiliary]
@@ -91,17 +94,22 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
     if let view = mediaView { Self.stopMedia(view) }
     mediaView = nil
     mediaKey = nil
+    removeSubtitle()
     onClose?()
   }
 
   func windowDidResize(_ notification: Notification) {
     layoutMedia()
+    layoutSplit()
   }
 
   func show(on screen: NSScreen? = nil) {
     place(on: screen)
     window?.makeKeyAndOrderFront(nil)
+    watchKeys()
+  }
 
+  func watchKeys() {
     keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
       // 발표 창이 키 윈도우일 때만 여기서 처리한다. 메인 창의 키는 Flutter 로 그대로 넘긴다.
       // 닫기는 Ctrl+F4(118) 만 — ESC 는 잘못 눌러 발표가 꺼지는 일이 잦아서 삼킨다.
@@ -112,6 +120,13 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
         return nil
       }
       if event.keyCode == 53 { return nil }
+      if let navigate = self?.onNavigate {
+        switch event.keyCode {
+        case 124, 125, 49, 121: navigate("next"); return nil  // → ↓ Space PageDown
+        case 123, 126, 116: navigate("prev"); return nil      // ← ↑ PageUp
+        default: break
+        }
+      }
       return event
     }
   }
@@ -350,6 +365,102 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate {
           mediaView?.evaluateJavaScript("window.setBlack&&setBlack(false)", completionHandler: nil)
         }
       }
+    }
+  }
+
+  /// 원하는 상태로 맞춘다(통역 화면은 뒤늦게 열려도 관객 화면과 같아야 해서 토글을 안 쓴다).
+  func setBlackout(_ on: Bool) {
+    if on != _isBlackout { toggleBlackout() }
+  }
+
+  // ── 통역 화면 칸 나누기 ───────────────────────────────────────────────
+  // 창은 모니터 전체 그대로이고 그 안에서 슬라이드 WKWebView 를 칸 크기로 줄인다. 글자 크기가
+  // 100vh·폭이 100% 기준이라 칸이 16:9 면 가사 배치가 관객 화면과 같다. 칸은 Dart bSplitRects 가 정한다.
+
+  private var slideRect: [Double]?  // [x, y, w, h] 0~1, 위가 0
+  private var subRect: [Double]?
+  private var subView: WKWebView?
+  private var subURL: URL?
+
+  func setSplit(slide: [Double], sub: [Double]?, url: String) {
+    slideRect = slide
+    subRect = sub
+    webView.autoresizingMask = []
+    let parsed = URL(string: url)
+    let wanted = sub != nil && ["http", "https"].contains(parsed?.scheme?.lowercased()) ? parsed : nil
+    if wanted != subURL {
+      removeSubtitle()
+      subURL = wanted
+      if let wanted = wanted, let content = window?.contentView {
+        let view = WKWebView(frame: .zero)
+        view.setValue(false, forKey: "drawsBackground")
+        view.navigationDelegate = self
+        view.isHidden = true  // 로드되기 전엔 검정(오류 문구 없이). 창 배경이 비친다.
+        content.addSubview(view)
+        subView = view
+        view.load(URLRequest(url: wanted))
+      }
+    }
+    layoutSplit()
+  }
+
+  private func removeSubtitle() {
+    subView?.navigationDelegate = nil
+    subView?.stopLoading()
+    subView?.removeFromSuperview()
+    subView = nil
+    subURL = nil
+  }
+
+  func layoutSplit() {
+    guard let r = slideRect, r.count == 4, let bounds = window?.contentView?.bounds else { return }
+    func cell(_ c: [Double]) -> NSRect {
+      // Cocoa 는 아래가 0 이다.
+      NSRect(
+        x: c[0] * bounds.width, y: bounds.height - (c[1] + c[3]) * bounds.height,
+        width: c[2] * bounds.width, height: c[3] * bounds.height)
+    }
+    // 해상도가 바뀌어 모니터 비율이 달라져도 슬라이드는 16:9 로 칸 가운데에 둔다.
+    let area = cell(r)
+    let w = min(area.width, area.height * 16 / 9), h = w * 9 / 16
+    webView.frame = NSRect(x: area.midX - w / 2, y: area.midY - h / 2, width: w, height: h)
+    if let s = subRect, s.count == 4 { subView?.frame = cell(s) }
+  }
+
+  func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+    if webView === subView { webView.isHidden = false }
+  }
+
+  // 서버가 뜨는 중이라 오류 페이지를 받은 경우(500 등)도 실패로 친다.
+  // 메인 프레임만 본다. 안쪽 프레임이 실패했다고 자막 페이지 전체를 막지 않는다.
+  func webView(
+    _ webView: WKWebView, decidePolicyFor response: WKNavigationResponse,
+    decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void
+  ) {
+    let status = (response.response as? HTTPURLResponse)?.statusCode ?? 200
+    decisionHandler(response.isForMainFrame && status >= 400 ? .cancel : .allow)
+  }
+
+  func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+    retrySubtitle(webView)
+  }
+
+  func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+    retrySubtitle(webView)
+  }
+
+  func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+    retrySubtitle(webView)
+  }
+
+  /// 자막 서버(stt_translate)는 B 를 연 뒤에 켜질 수 있다. 뜰 때까지 3초마다 다시 본다.
+  /// 읽힌 뒤 서버가 꺼졌다 켜지는 것은 페이지의 웹소켓이 스스로 다시 붙는다.
+  private func retrySubtitle(_ view: WKWebView) {
+    guard view === subView, let url = subURL else { return }
+    view.isHidden = true
+    DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self, weak view] in
+      guard let self = self, let view = view, view === self.subView, url == self.subURL else { return }
+      view.load(URLRequest(url: url))
     }
   }
 
@@ -1292,6 +1403,7 @@ final class BibleSpeechListener {
 class MainFlutterWindow: NSWindow {
   private var presentationController: PresentationWindowController?
   private var singerController: SingerWindowController?
+  private var bController: PresentationWindowController?  // 통역 화면
   private var mainPresentationChannel: FlutterMethodChannel?
   private var speechListener: BibleSpeechListener?
 
@@ -1497,8 +1609,14 @@ class MainFlutterWindow: NSWindow {
           self.singerController = ctrl
           // 고른 모니터가 없으면: 관객 화면도 메인 창 모니터도 아닌 모니터에 전체화면으로.
           // 그런 모니터도 없으면 메인 창 옆에 일반 창으로 띄우고 사용자가 원하는 모니터로 옮긴다.
-          let audience = self.presentationController?.window?.screen
-          let free = NSScreen.screens.first { $0 != self.screen && $0 != audience }
+          // 통역 화면이 쓰는(아직 안 열었어도 고른: avoid_screen) 모니터도 피한다.
+          let screens = NSScreen.screens
+          let avoid = (data?["avoid_screen"] as? Int).flatMap { screens.indices.contains($0) ? screens[$0] : nil }
+          let taken = [
+            self.screen, self.presentationController?.window?.screen,
+            self.bController?.window?.screen, avoid,
+          ]
+          let free = screens.first { !taken.contains($0) }
           ctrl.show(fullScreenOn: chosen ?? free, near: self.screen)
         }
         if let d = data { self.singerController?.update(data: d) }
@@ -1513,6 +1631,61 @@ class MainFlutterWindow: NSWindow {
         // 더 가지만, Dart 쪽은 이미 닫힌 상태라 아무 일도 안 한다.
         self.singerController?.window?.close()
         self.singerController = nil
+        result(nil)
+
+      case "openB":
+        // 메인 창·관객·싱어와 겹치면 열지 않는다. 안내는 Dart 가 오류 코드로 고른다.
+        guard let d = data, let screen = chosen else {
+          result(FlutterError(code: "no_screen", message: "통역 화면 모니터를 찾을 수 없습니다", details: nil))
+          return
+        }
+        let others = [
+          self.screen, self.presentationController?.window?.screen,
+          self.singerController?.window?.screen,
+        ]
+        if others.contains(screen) {
+          result(FlutterError(code: "screen_taken", message: "통역 화면 모니터가 겹칩니다", details: nil))
+          return
+        }
+        let ctrl: PresentationWindowController
+        if let open = self.bController {
+          ctrl = open
+        } else {
+          ctrl = PresentationWindowController(keyable: true)
+          ctrl.onClose = { [weak self] in
+            self?.bController = nil
+            self?.mainPresentationChannel?.invokeMethod("bClosed", arguments: nil)
+          }
+          // 싱어 창과 같은 키 — Dart 는 어느 창에서 눌렀는지 알 필요가 없다.
+          ctrl.onNavigate = { [weak self] direction in
+            self?.mainPresentationChannel?.invokeMethod("singerKey", arguments: direction)
+          }
+          ctrl.watchKeys()
+          self.bController = ctrl
+        }
+        ctrl.setSplit(
+          slide: (d["slide_rect"] as? [NSNumber])?.map { $0.doubleValue } ?? [0, 0, 1, 1],
+          sub: (d["sub_rect"] as? [NSNumber])?.map { $0.doubleValue },
+          url: d["sub_url"] as? String ?? "")
+        ctrl.updatePage(data: d)
+        ctrl.setBlackout(d["blackout"] as? Bool ?? false)
+        ctrl.place(on: screen)  // show 가 아니다 — 메인 창의 키 포커스를 뺏지 않는다.
+        ctrl.layoutSplit()
+        result(nil)
+
+      case "updateB":
+        if let d = data { self.bController?.updatePage(data: d) }
+        result(nil)
+
+      case "blackoutB":
+        self.bController?.setBlackout(data?["on"] as? Bool ?? false)
+        result(nil)
+
+      case "closeB":
+        // Dart 가 닫는 것이라 bClosed 는 보내지 않는다(창에서 직접 닫았을 때만 알린다).
+        self.bController?.onClose = nil
+        self.bController?.window?.close()
+        self.bController = nil
         result(nil)
 
       case "videoThumbnail":

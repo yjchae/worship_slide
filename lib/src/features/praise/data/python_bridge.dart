@@ -132,6 +132,17 @@ class PythonBridge {
     );
   }
 
+  /// 렌더 폴더 [dir] 이 애니메이션을 단계별로 펼쳐 구운 것인지(`meta.json`). 못 읽으면 false.
+  /// 외국어 PPT 연결 때 쪽 수 차이가 애니메이션 때문일 수 있다고 알리는 데만 쓴다.
+  Future<bool> renderAnimated(String dir) async {
+    try {
+      final meta = await File(p.join(dir, 'meta.json')).readAsString();
+      return (jsonDecode(meta) as Map<String, dynamic>)['animated'] == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// 악보(이미지·PDF)에서 오선 아래 가사만 읽어 온다.
   /// 글자가 박힌 PDF 는 OCR 없이 읽는다.
   /// [filePath] 가 null 이면 클립보드의 그림(캡처·복사한 이미지)을 읽는다.

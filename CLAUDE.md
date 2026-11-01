@@ -25,6 +25,7 @@ flutter test test/bible_voice_parse_test.dart # 성경 음성 검색: 말 → �
 flutter test test/move_pages_test.dart # 발표 보기 페이지 옮기기·나누기
 flutter test test/conti_text_parse_test.dart # 콘티 한번에 넣기: 콘티 글 → 번호·제목·조·(or 곡) + 곡 찾기
 flutter test test/extra_language_test.dart # 추가 보조 언어(세 번째 줄) 페이지·콘티 저장·스타일·설교자 화면
+flutter test test/b_screen_test.dart # 통역 화면(B): 칸 계산·폴더 대응표·보조 칸 올리기
 flutter test test/lyrics_page_grid_test.dart # 가사 수정 창 페이지 표·넘침 측정 (LYRICS_EDITOR_SHOT=경로 면 창을 PNG 로)
 python3 python/test_render.py    # render 명령 self-check (LibreOffice 없으면 skip)
 python3 python/test_animation.py # 애니메이션 단계 펼치기 self-check (LibreOffice 불필요)
@@ -74,6 +75,7 @@ lib/
       background_image_library.dart  -- 공통 배경 이미지 모음(등록 = 앱 폴더로 복사). 헌금송·항목 배경이 같이 쓴다
       atomic_file.dart               -- 임시 파일 → 이름 바꾸기 쓰기 (동기화·설정 파일 공용)
       fnv_hash.dart                  -- FNV-1a 16자리 hex (캐시·공유 파일 이름)
+      b_screen_store.dart            -- 통역 화면(B) 설정·폴더 대응표 → b_screen.json, 칸 계산 bSplitRects, bImagePath
       screen_choice_store.dart       -- 발표·싱어 창 모니터 선택 → screen_choice.json
       sermon_design_store.dart       -- 설교 제목 페이지 마지막 디자인 → sermon_design.json
       singer_web_server.dart         -- 휴대폰 싱어·리모컨 HTTP 서버(SSE) + cloudflared 임시 터널
@@ -365,6 +367,14 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   보조 언어 다시 입히기의 기준 곡은 검색 결과가 아니라 DB 에서 id 로 읽는다(`PraiseRepository.songsByIds`)
 - **새 콘티** (예배 콘티 머리줄, `_newConti`): 확인 후 담긴 항목만 비운다(`_replaceConti`, 불러오기와 같은 초기화). 저장한 콘티는 그대로고 발표 중에는 막는다
 - **콘티 불러오기 뒤에 붙이기** (`_appendConti`): 항목이 있으면 취소·뒤에 붙이기·교체를 묻는다. 붙이기는 불러온 항목·메모·배경·여백 없음을 맨 끝에 더할 뿐이라 기존 항목 표시·원본 감시·보던 페이지·저장본 연결(`_linkedConti`)이 그대로고, 빠진 항목 수는 `_linkedMissing` 에 더한다. 발표 중에도 된다(관객 화면은 그대로, 싱어 '다음'만 갱신)
+- **통역 화면 (내부 이름 B, macOS 만, 기획 `.claude-office/work/20261031-2207-split-screen-subtitle/`)**: 앱 하나에서 관객 창과 같이 넘어가는 세 번째 창. 모니터를 직접 골라야 하고(자동 없음) 그 모니터 전체를 차지한 뒤 **창 안에서** 슬라이드 칸과 자막 칸을 나눈다.
+  - 창은 `PresentationWindowController(keyable: true)` 두 번째 인스턴스다. `show` 대신 `place` 라 메인 창 포커스를 뺏지 않는다. 클릭하면 포커스를 받아 Ctrl+F4 로 그 창만 닫히고(`bClosed`), 넘기기 키는 싱어와 같은 `singerKey` 로 간다
+  - 칸은 Dart 순수 함수 `bSplitRects` 가 0~1 비율로 정한다(슬라이드 늘 16:9 + 몫 0.4~0.8, 네이티브 `setSplit`·`layoutSplit`). 해상도가 바뀌면 비율대로 다시 놓고, 모니터 비율까지 바뀌면 칸 가운데 16:9 로 줄인다
+  - 자막 칸은 WKWebView 로 stt_translate 의 `display.html?net` 을 그대로 띄운다. 읽히기 전엔 숨겨서 검정이고 실패(4xx·5xx 포함)하면 3초마다 다시 읽는다. 읽힌 뒤 서버가 꺼졌다 켜지는 것은 그 페이지의 웹소켓이 스스로 다시 붙는다.
+    Info.plist 에 ATS 키는 필요 없다 — ATS 키 없는 번들에서 `127.0.0.1`·`localhost`·사설 IP·`.local` 의 http·ws 가 뜨는 것을 확인했다
+  - 외국어 PPT 는 `b_screen.json` 의 폴더 대응표(A 렌더 폴더 → B 렌더 폴더 + 같은 파일 이름, `bImagePath`)로 잇는다. 슬라이드 번호를 안 써서 지우기·나누기·옮기기가 저절로 맞고, B 에 없는 쪽은 A 페이지가 나간다. DB·콘티 저장 형식은 그대로라 `.wsconti` 로는 안 옮겨 간다. A 를 다시 구워 폴더가 바뀌면 `movePair`
+  - 곡·성경은 `SlidePageData.forB` 가 보조 → 추가 보조 순으로 본문으로 올리고, 둘 다 있으면 추가 보조는 그 아래 보조 줄이 된다(렌더러는 그대로). 설교 부제는 올리지 않는다(`sermon`). 미디어·배경 영상은 빼서 소리가 두 번 나지 않는다. 확대·포인터는 안 따라간다
+  - 블랙아웃 `blackoutB {on}` 은 슬라이드 칸만 끄고 자막은 그대로다. 관객 '자동'·싱어 '자동'과 겹치지 않게 `openB` 가 실제 창 위치로 겹침을 검사하고(`no_screen`·`screen_taken`), `openSingerWindow` 는 `avoid_screen` 을 피한다
 - **콘티 파일 내보내기/가져오기** (`.wsconti`, 다른 PC 로 옮기기): 불러오기 다이얼로그의 항목별 내보내기 버튼 /
   "파일에서 가져오기". `exportContiFile` 이 DB 행을 그대로 JSON 에 담고, 행이 가리키는 이미지(PPT 페이지·항목 배경·
   헌금송 PNG 와 그 원본)는 base64 로 같이 넣어 경로 자리를 키로 바꾼다. `importContiFile` 은
