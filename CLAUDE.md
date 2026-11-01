@@ -745,7 +745,14 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
 
 ## 발표 모드 단축키
 
-`praise_home_page.dart` `_handleKeyEvent` — F5 발표 시작(`_handleStartKey`, 전역 핸들러), →/↓/Space 다음, ←/↑ 이전, 숫자+Enter 해당 슬라이드로 점프, Ctrl+F4 발표 종료(macOS 는 ⌃F4 를 시스템이 가져갈 수 있어 ⌘F4 도. ESC 는 번호 입력 취소만 — 잘못 눌러 꺼지는 사고 방지. macOS·Windows 발표 창도 같다).
+`praise_home_page.dart` `_handleKeyEvent`(발표 `FocusScope` 의 `onKeyEvent`) — F5 발표 시작(`_handleStartKey`, 역시 전역), →/↓/Space 다음, ←/↑ 이전, 숫자+Enter 해당 슬라이드로 점프, B 블랙아웃, Ctrl+F4 발표 종료(macOS 는 ⌃F4 를 시스템이 가져갈 수 있어 ⌘F4 도. ESC 는 번호 입력 취소만 — 잘못 눌러 꺼지는 사고 방지. macOS·Windows 발표 창도 같다).
+
+받는 조건은 `presenterKeysActive` — 다이얼로그·메뉴가 없고 **발표 중이거나 발표 보기 탭이 보일 때**. 편집 탭에서 발표 전이면 키를 건드리지 않는다.
+발표 전에는 앱 안의 현재 페이지만 옮긴다(썸네일 클릭과 같다). B·Ctrl+F4 는 발표 중에만. 입력칸에 커서가 있으면 글자로 둔다(Ctrl+F4 만 받는다).
+**전역 핸들러로 옮기면 안 된다** — 전역 핸들러가 true 를 돌려줘도 키는 포커스 쪽으로 가서 앱 기본 Shortcuts 가 방향키로 포커스를 옮기고 Space·Enter 로 버튼을 누른다. FocusScope 의 handled 만 이걸 막는다.
+그래서 전역 핸들러(`_pullFocusToPresenter`)는 처리하지 않고 포커스만 맞춘다: 발표 단축키가 눌렸는데 포커스가 스코프 밖이고 입력칸이 아니면 `requestScopeFocus` 후 바로 적용한다. 전역 핸들러가 포커스 전달보다 먼저 돌아서 같은 키가 그대로 처리된다. Tab 같은 다른 키는 건드리지 않는다.
+누르고 있을 때의 반복 키는 동작 없이 삼킨다(한 번만 동작 + 포커스 안 옮겨짐).
+Tab 으로 버튼에 포커스를 둔 채 Space·방향키는 페이지를 넘기고 버튼은 안 눌린다. 번호 입력이 없을 때의 Enter 는 그 버튼을 누른다.
 
 발표 보기 탭에서 Ctrl+F(macOS ⌘F) = 곡 찾기 입력칸으로 (`_PresenterConsoleState._handleFindKey`, 전역 핸들러 —
 콘솔은 IndexedStack 에 늘 살아 있으므로 `isActive` 로 탭이 보일 때만 받는다). 찾기 범위는 입력칸 옆 '제목 | 가사'

@@ -419,7 +419,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     Color(0xFFD1C4E9),
   ];
 
-  // 발표 단축키를 받는 노드. autofocus 로 뺏지 않고 발표를 시작할 때만 가져온다.
+  // 발표 단축키를 받는 노드. autofocus 로 뺏지 않고, 단축키가 눌렸는데 포커스가 밖에 있으면
+  // 그때 가져온다([_pullFocusToPresenter]).
   // Focus 가 아니라 FocusScope 인 이유: 검색창에서 포커스가 빠지면(다른 곳 클릭 등)
   // 포커스가 "가장 가까운 상위 스코프"로 돌아오는데, 그게 이 노드여야 단축키가 계속 먹는다.
   final FocusScopeNode _presentationFocusNode = FocusScopeNode(
@@ -479,6 +480,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _searchController.addListener(_loadSongs);
     _checkForUpdates(isStartup: true);
     HardwareKeyboard.instance.addHandler(_handleStartKey);
+    HardwareKeyboard.instance.addHandler(_pullFocusToPresenter);
     _mainPresentationChannel.setMethodCallHandler((call) async {
       if (!mounted) return null;
       switch (call.method) {
@@ -510,6 +512,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   void _onMainTabChanged() {
     // 성경 음성 검색은 발표 보기에서만 쓴다.
     if (_mainTabController.index != 1 && _voice.value != null) _stopVoice();
+    // 발표 전 번호 입력은 발표 보기에서만 보이므로 탭을 떠나면 버린다.
+    if (!_isPresentationOpen) _slideJumpBuffer = '';
     if (mounted) setState(() {});
   }
 
@@ -528,6 +532,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _repository.onSongsChanged = null;
     _sync.dispose();
     HardwareKeyboard.instance.removeHandler(_handleStartKey);
+    HardwareKeyboard.instance.removeHandler(_pullFocusToPresenter);
     _mainTabController
       ..removeListener(_onMainTabChanged)
       ..dispose();
@@ -1188,6 +1193,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       _presentationFocusNode.requestFocus();
       setState(() {
         _isPresentationOpen = true;
+        // 발표 전에 치다 만 번호가 시작 뒤 Enter 로 관객 화면을 옮기지 않게.
+        _slideJumpBuffer = '';
       });
       _presenterView.timer.start();
       // 발표를 시작하면 발표 보기 탭으로. 편집 탭은 그대로 살아 있다.
@@ -1205,6 +1212,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   void _resetPresentationState() {
     if (_isPresentationOpen) _presenterView.timer.stop();
     _isPresentationOpen = false;
+    _slideJumpBuffer = '';
     _isBOpen = false;
     _isBlackout = false;
     // 발표 창을 닫으면 네이티브 쪽 확대 상태도 함께 사라진다(macOS 는 컨트롤러를
@@ -2443,16 +2451,65 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     return true;
   }
 
+  /// 발표 단축키가 쓰는 키.
+  static final Set<LogicalKeyboardKey> _presenterKeys = {
+    ..._digitKeys.keys,
+    LogicalKeyboardKey.enter,
+    LogicalKeyboardKey.numpadEnter,
+    LogicalKeyboardKey.escape,
+    LogicalKeyboardKey.arrowLeft,
+    LogicalKeyboardKey.arrowRight,
+    LogicalKeyboardKey.arrowUp,
+    LogicalKeyboardKey.arrowDown,
+    LogicalKeyboardKey.space,
+    LogicalKeyboardKey.keyB,
+    LogicalKeyboardKey.f4,
+  };
+
+  bool get _presenterKeysActive => presenterKeysActive(
+    isCurrentRoute: ModalRoute.of(context)?.isCurrent != false,
+    isPresentationOpen: _isPresentationOpen,
+    isPresenterTab: _mainTabController.index == 1,
+  );
+
+  /// 발표 단축키가 눌렸는데 포커스가 발표 FocusScope 밖이면 먼저 가져온다. 키는 여기서 처리하지
+  /// 않는다 — 전역 핸들러의 true 는 앱 기본 Shortcuts(방향키 포커스 이동, Space·Enter 버튼
+  /// 누르기)를 막지 못한다. Flutter 는 전역 핸들러를 다 부른 뒤 포커스 쪽에 키를 보내므로
+  /// 여기서 맞추면 같은 키가 바로 [_handleKeyEvent] 로 간다. 찾기 입력칸 등에 남은 포커스로
+  /// 돌아가지 않게 스코프 자체에 준다(requestScopeFocus).
+  bool _pullFocusToPresenter(KeyEvent event) {
+    if (event is! KeyUpEvent &&
+        _presenterKeys.contains(event.logicalKey) &&
+        !_presentationFocusNode.hasFocus &&
+        !_isTextFieldFocused &&
+        _presenterKeysActive) {
+      _presentationFocusNode.requestScopeFocus();
+      FocusManager.instance.applyFocusChangesIfNeeded();
+    }
+    return false;
+  }
+
+  /// 넘기기·번호 이동·B·발표 종료. 발표 FocusScope 에 걸려 있어 handled 가 앱 기본 Shortcuts 를
+  /// 막는다.
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
-    if (!_isPresentationOpen) return KeyEventResult.ignored;
-    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (event is KeyUpEvent || !_presenterKeysActive) {
+      return KeyEventResult.ignored;
+    }
 
     final key = event.logicalKey;
+
+    // 누르고 있어도 한 번만 동작하되, 반복 키가 기본 Shortcuts 로 가 포커스를 옮기지 않게 삼킨다.
+    if (event is KeyRepeatEvent) {
+      return _presenterKeys.contains(key) && !_isTextFieldFocused
+          ? KeyEventResult.handled
+          : KeyEventResult.ignored;
+    }
 
     // 발표 종료는 Ctrl+F4 만(macOS 는 ⌃F4 를 시스템이 가져가므로 ⌘F4 도). ESC 는 잘못 눌러
     // 발표가 꺼지는 일이 잦아서 번호 입력 취소만 한다. 글자를 안 쓰는 키라 입력칸에 있어도 받는다.
     final keyboard = HardwareKeyboard.instance;
-    if (key == LogicalKeyboardKey.f4 &&
+    if (_isPresentationOpen &&
+        key == LogicalKeyboardKey.f4 &&
         (keyboard.isControlPressed ||
             (Platform.isMacOS && keyboard.isMetaPressed))) {
       _closePresentation();
@@ -2472,9 +2529,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       if (_slideJumpBuffer.isNotEmpty) {
         final target = int.tryParse(_slideJumpBuffer) ?? 0;
         setState(() => _slideJumpBuffer = '');
-        if (target >= 1) {
-          _goToSlide((target - 1).clamp(0, _allSlides.length - 1));
-        }
+        final last = _allSlides.length - 1;
+        if (target >= 1 && last >= 0) _goToSlide((target - 1).clamp(0, last));
         return KeyEventResult.handled;
       }
     }
@@ -2500,7 +2556,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       _prevSlide();
       return KeyEventResult.handled;
     }
-    if (key == LogicalKeyboardKey.keyB) {
+    if (_isPresentationOpen && key == LogicalKeyboardKey.keyB) {
       _toggleBlackout();
       return KeyEventResult.handled;
     }
@@ -5904,12 +5960,20 @@ class _PraiseHomePageState extends State<PraiseHomePage>
             foregroundColor: cs.onErrorContainer,
           ),
         ),
-      ] else
+      ] else ...[
+        if (_slideJumpBuffer.isNotEmpty) ...[
+          Text(
+            '이동 → $_slideJumpBuffer',
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(width: 10),
+        ],
         FilledButton.icon(
           onPressed: slides.isEmpty ? null : _openPresentation,
           icon: const Icon(Icons.play_arrow_rounded, size: 18),
           label: const Text('발표 시작'),
         ),
+      ],
     ];
   }
 }
@@ -5960,6 +6024,15 @@ class _PanelResizeHandle extends StatelessWidget {
     );
   }
 }
+
+/// 발표 단축키를 받을지. 다이얼로그·메뉴가 없고, 발표 중이거나 발표 보기 탭이 보일 때만 받는다.
+/// 편집 탭에서는 발표 전에 키를 가로채지 않는다.
+@visibleForTesting
+bool presenterKeysActive({
+  required bool isCurrentRoute,
+  required bool isPresentationOpen,
+  required bool isPresenterTab,
+}) => isCurrentRoute && (isPresentationOpen || isPresenterTab);
 
 @visibleForTesting
 double clampSplitRatioForLayout({
