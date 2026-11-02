@@ -9,6 +9,7 @@ import '../domain/praise_song.dart';
 import '../domain/slide_background.dart';
 import '../domain/staging_item.dart';
 import 'app_logger.dart';
+import 'background_image_library.dart';
 import 'font_library.dart';
 
 class LibreOfficeMissingException implements Exception {
@@ -141,6 +142,38 @@ class PythonBridge {
     } catch (_) {
       return false;
     }
+  }
+
+  // Windows 클립보드 그림을 받을 임시 폴더(실행마다 하나).
+  Directory? _clipDir;
+
+  /// 클립보드의 그림(캡처·복사한 이미지) 또는 복사한 그림 파일의 경로. 없으면 null.
+  /// 그림은 임시 PNG 라 다음 붙여넣기에 덮어써질 수 있으니 받은 쪽이 바로 복사해 둔다.
+  /// macOS 는 앱이 직접 읽고(`worship_slides/ocr` `clipboardImage`), Windows 는 `ppt_tool clipboard`(Pillow).
+  Future<String?> clipboardImage() async {
+    String? path;
+    if (Platform.isMacOS) {
+      path = await _ocrChannel.invokeMethod<String>('clipboardImage');
+    } else if (Platform.isWindows) {
+      // 실행마다 폴더 하나만 쓴다(붙여넣기마다 새로 만들면 임시 폴더가 쌓인다).
+      final dir = _clipDir ??= await Directory.systemTemp.createTemp(
+        'worship_clip_',
+      );
+      final result = await _runTool([
+        'clipboard',
+        p.join(dir.path, 'clipboard.png'),
+      ]);
+      final json = jsonDecode(result.stdout as String) as Map<String, dynamic>;
+      path = json['path'] as String?;
+    }
+    // macOS 채널은 TIFF·PDF 파일도 준다 — 페이지에 넣을 수 있는 그림만.
+    if (path == null ||
+        !BackgroundImageLibrary.pageImageExtensions.contains(
+          p.extension(path).toLowerCase().replaceFirst('.', ''),
+        )) {
+      return null;
+    }
+    return path;
   }
 
   /// 악보(이미지·PDF)에서 오선 아래 가사만 읽어 온다.

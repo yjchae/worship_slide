@@ -1,9 +1,11 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 
 import 'export_style.dart';
 import 'offering_design.dart';
+import 'page_element.dart';
 
 /// 콘티 항목 하나에만 적용되는 배경.
 ///
@@ -28,6 +30,7 @@ class SlideBackground {
     this.subFontSize,
     this.subTextColor,
     this.isSermon = false,
+    this.pageElements,
   });
 
   /// 이 항목의 배경 색. 이미지가 없거나 파일이 사라졌을 때 그대로 보인다.
@@ -81,6 +84,17 @@ class SlideBackground {
   /// 스위치와 상관없이 보이게 한다. 그 밖에는 콘티 목록 표시와 "배경 수정" 이
   /// 어느 다이얼로그를 열지를 가른다.
   final bool isSermon;
+
+  /// 슬라이드 편집 페이지의 요소(그림·글 상자, 뒤 요소가 위). null 이면 편집 페이지가 아니다.
+  /// 화면에는 이 목록을 `PageComposer` 가 1920x1080 PNG 한 장으로 구워
+  /// 보낸다(`ImageStagingItem`) — 렌더러 네 곳은 이 값을 모른다. JSON `page_elements`(DB `background` 칸).
+  final List<PageElement>? pageElements;
+
+  bool get isFreePage => pageElements != null;
+
+  /// [old] 의 요소 목록을 옮겨 붙인다. '배경' 버튼으로 색·이미지를 바꿔도 요소가 남게.
+  SlideBackground withPageElementsOf(SlideBackground? old) =>
+      copyWith(pageElements: old?.pageElements);
 
   /// 설교 제목 페이지 기본 디자인.
   factory SlideBackground.sermonDefault(ExportStyle style) => SlideBackground(
@@ -136,6 +150,7 @@ class SlideBackground {
     Object? subFontSize = _sentinel,
     Object? subTextColor = _sentinel,
     bool? isSermon,
+    Object? pageElements = _sentinel,
   }) {
     return SlideBackground(
       color: color ?? this.color,
@@ -171,6 +186,9 @@ class SlideBackground {
           ? this.subTextColor
           : subTextColor as Color?,
       isSermon: isSermon ?? this.isSermon,
+      pageElements: identical(pageElements, _sentinel)
+          ? this.pageElements
+          : pageElements as List<PageElement>?,
     );
   }
 
@@ -188,6 +206,8 @@ class SlideBackground {
     if (subFontSize != null) 'english_font_size': subFontSize,
     if (subTextColor != null) 'english_text_color': colorToHex(subTextColor!),
     if (isSermon) 'sermon': true,
+    if (pageElements != null)
+      'page_elements': [for (final e in pageElements!) e.toJson()],
   };
 
   static SlideBackground? fromJson(Map<String, dynamic> json) {
@@ -219,6 +239,9 @@ class SlideBackground {
       subFontSize: subFontSize == null || subFontSize <= 0 ? null : subFontSize,
       subTextColor: tryParseHexColor(json['english_text_color'] as String?),
       isSermon: json['sermon'] == true,
+      pageElements: json['page_elements'] is List
+          ? PageElement.listFromJson(json['page_elements'])
+          : null,
     );
   }
 
@@ -253,10 +276,11 @@ class SlideBackground {
       other.textColor == textColor &&
       other.subFontSize == subFontSize &&
       other.subTextColor == subTextColor &&
-      other.isSermon == isSermon;
+      other.isSermon == isSermon &&
+      listEquals(other.pageElements, pageElements);
 
   @override
-  int get hashCode => Object.hash(
+  int get hashCode => Object.hashAll([
     color,
     imagePath,
     videoPath,
@@ -270,7 +294,8 @@ class SlideBackground {
     subFontSize,
     subTextColor,
     isSermon,
-  );
+    pageElements == null ? null : Object.hashAll(pageElements!),
+  ]);
 
   static const Object _sentinel = Object();
 }

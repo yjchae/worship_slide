@@ -31,7 +31,6 @@ import '../data/offering_background_composer.dart';
 import '../data/offering_design_store.dart';
 import '../data/sermon_design_store.dart';
 import '../data/background_image_library.dart';
-import '../data/font_library.dart';
 import '../data/libreoffice_installer.dart';
 import '../data/praise_repository.dart';
 import '../data/python_bridge.dart';
@@ -45,6 +44,7 @@ import '../data/worship_conti_repository.dart';
 import '../domain/worship_conti.dart';
 import '../domain/export_style.dart';
 import '../domain/offering_design.dart';
+import '../domain/page_element.dart';
 import '../domain/praise_song.dart';
 import '../domain/slide_background.dart';
 import '../domain/slide_media.dart';
@@ -57,11 +57,14 @@ import 'lyrics_overlay_renderer.dart';
 import 'lyrics_page_grid.dart';
 import 'offering_dialog.dart';
 import 'offering_overlay_painter.dart';
+import 'page_canvas.dart';
+import 'page_editor_dialog.dart';
 import 'presentation_timer.dart';
 import 'singer_view_data.dart';
 import 'slide_backdrop.dart';
 import 'slide_page_data.dart';
 import 'slide_render_view.dart';
+import 'style_fields.dart';
 import 'slide_text_layout.dart';
 import 'cloud_conti_dialog.dart';
 import 'conti_text_import_dialog.dart';
@@ -2152,6 +2155,11 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     final slides = _allSlides;
     if (slideIndex >= slides.length) return;
     final info = slides[slideIndex];
+    if (info.imagePath != null &&
+        !info.isAutoSpacer &&
+        _isFreePage(info.stagingUid)) {
+      return _editFreePage(info.stagingUid);
+    }
     if (info.imagePath != null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('가져온 PPT 슬라이드는 내용을 수정할 수 없습니다.')),
@@ -2259,7 +2267,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     final index = _stagingItems.indexWhere((e) => e.uid == uid);
     if (index == -1) return;
     final item = _stagingItems[index].item;
-    if (item is ImageStagingItem) return;
+    if (item is ImageStagingItem) {
+      if (_isFreePage(uid)) await _editFreePage(uid);
+      return;
+    }
     if (item is BlankStagingItem && item.media != null) {
       return _editMediaPage(uid, item);
     }
@@ -2817,6 +2828,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       await onBlank();
     } else if (kind == _AddPageKind.sermon) {
       await _addSermonPage(insertAt);
+    } else if (kind == _AddPageKind.free) {
+      await _addFreePage(insertAt);
     } else if (media != null) {
       final result = await _showMediaDialog(kind: media);
       if (result == null || !mounted) return;
@@ -2830,6 +2843,132 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       });
       await _sendCurrentSlide();
     }
+  }
+
+  // ── 슬라이드 편집 페이지 ──────────────────────────────────────────────
+  //
+  // 그림·글 상자 목록(SlideBackground.pageElements)을 PageComposer 가 PNG 한 장으로 구워
+  // ImageStagingItem 으로 넣는다(sourceName = 페이지 이름). 화면·PPTX·저장은 PPT 이미지 길 그대로.
+
+  bool _isFreePage(int uid) => _itemBackgrounds[uid]?.isFreePage == true;
+
+  Future<String> _composeFreePage(SlideBackground background) =>
+      const PageComposer().compose(
+        elements: background.pageElements!,
+        background: background,
+        style: _style,
+      );
+
+  Future<PageEditorResult?> _showPageEditor({
+    String name = '',
+    required SlideBackground background,
+  }) {
+    return showDialog<PageEditorResult>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => PageEditorDialog(
+        name: name,
+        elements: background.pageElements,
+        background: background,
+        style: _style,
+        compose: (elements) =>
+            _composeFreePage(background.copyWith(pageElements: elements)),
+        readClipboardImage: _pythonBridge.clipboardImage,
+      ),
+    );
+  }
+
+  Future<void> _addFreePage(int Function() insertAt) async {
+    final background = SlideBackground.fromStyle(_style);
+    final result = await _showPageEditor(background: background);
+    if (result == null || !mounted) return;
+    final uid = _nextUid++;
+    setState(() {
+      _stagingItems.insert(insertAt(), (
+        uid: uid,
+        item: ImageStagingItem(
+          sourceName: result.name,
+          imagePaths: [result.imagePath],
+        ),
+      ));
+      _itemBackgrounds[uid] = background.copyWith(
+        pageElements: result.elements,
+      );
+      _previewStagingUid = uid;
+    });
+    await _sendCurrentSlide();
+  }
+
+  /// 편집 페이지를 다시 연다. uid 는 그대로라 메모·여백 설정이 남고 장 수도 늘 1장이다.
+  Future<void> _editFreePage(int uid) async {
+    final item = _stagingItems.where((e) => e.uid == uid).firstOrNull?.item;
+    final background = _itemBackgrounds[uid];
+    if (item is! ImageStagingItem || background?.isFreePage != true) return;
+    final result = await _showPageEditor(
+      name: item.sourceName,
+      background: background!,
+    );
+    if (result == null || !mounted) return;
+    final index = _stagingItems.indexWhere((e) => e.uid == uid);
+    if (index < 0) return;
+    setState(() {
+      _stagingItems[index] = (
+        uid: uid,
+        item: ImageStagingItem(
+          sourceName: result.name,
+          imagePaths: [result.imagePath],
+        ),
+      );
+      _itemBackgrounds[uid] = (_itemBackgrounds[uid] ?? background).copyWith(
+        pageElements: result.elements,
+      );
+      _previewStagingUid = uid;
+    });
+    await _sendCurrentSlide();
+  }
+
+  /// 편집 페이지 [uid] 의 PNG 를 바꾼다(이름·uid 그대로).
+  void _setFreePageImage(int uid, String path) {
+    final index = _stagingItems.indexWhere((e) => e.uid == uid);
+    final item = index < 0 ? null : _stagingItems[index].item;
+    if (item is! ImageStagingItem) return;
+    _stagingItems[index] = (
+      uid: uid,
+      item: ImageStagingItem(sourceName: item.sourceName, imagePaths: [path]),
+    );
+  }
+
+  /// 불러온 콘티의 편집 페이지 PNG 가 없으면(지웠거나 다른 PC) 요소 목록으로 다시 굽는다.
+  /// 글꼴은 main 에서 FontLibrary.load 로 이미 올라와 있다.
+  Future<void> _restoreFreePages() async {
+    final missing = [
+      for (final entry in _stagingItems)
+        if (entry.item case ImageStagingItem(:final imagePaths)
+            when _isFreePage(entry.uid) &&
+                (imagePaths.isEmpty || !File(imagePaths.first).existsSync()))
+          entry.uid,
+    ];
+    if (missing.isEmpty) return;
+    final restored = <int, (SlideBackground, String)>{};
+    for (final uid in missing) {
+      final background = _itemBackgrounds[uid];
+      if (background == null) continue;
+      try {
+        restored[uid] = (background, await _composeFreePage(background));
+      } catch (e, st) {
+        await AppLogger.instance.error('[page] 편집 페이지 다시 굽기 실패', e, st);
+      }
+    }
+    // 굽는 사이 고쳤거나(배경이 새 객체) 지운 항목은 옛 그림으로 덮지 않는다.
+    // 항목이 없으면 _setFreePageImage 가 건너뛴다.
+    restored.removeWhere(
+      (uid, value) => !identical(_itemBackgrounds[uid], value.$1),
+    );
+    if (!mounted || restored.isEmpty) return;
+    setState(
+      () => restored.forEach((uid, value) => _setFreePageImage(uid, value.$2)),
+    );
+    await _sendCurrentSlide();
   }
 
   Future<({SlideMedia media, String text})?> _showMediaDialog({
@@ -3647,6 +3786,31 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     );
     if (result == null || !mounted) return;
 
+    final old = _itemBackgrounds[uid];
+    if (old?.isFreePage == true) {
+      // 편집 페이지: 색·그림만 바꾸고 요소는 남긴 채 다시 굽는다.
+      // '전역 배경 사용'이면 지금 전역 배경을 복사해 고정한다(설교 페이지와 같다).
+      final background =
+          (result.background ?? SlideBackground.fromStyle(_style))
+              .withPageElementsOf(old);
+      final String path;
+      try {
+        path = await _composeFreePage(background);
+      } catch (e, st) {
+        await AppLogger.instance.error('[page] 편집 페이지 배경 굽기 실패', e, st);
+        _showSnack('페이지 그림을 만들지 못했습니다. 다시 시도해 주세요.');
+        return;
+      }
+      if (!mounted) return;
+      setState(() {
+        _itemBackgrounds[uid] = background;
+        _setFreePageImage(uid, path);
+        _previewStagingUid = uid;
+      });
+      await _sendCurrentSlide();
+      return;
+    }
+
     setState(() {
       if (result.background == null) {
         _itemBackgrounds.remove(uid);
@@ -4069,7 +4233,16 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       }
 
       if (current != null) {
-        _currentSlideIndex = _findSlideAfterReload(current, newCount, path);
+        _currentSlideIndex = _findSlideAfterReload(
+          current,
+          newCount,
+          reloaded: _stagingItems.any(
+            (e) =>
+                e.uid == current.stagingUid &&
+                e.item is ImageStagingItem &&
+                (e.item as ImageStagingItem).sourcePath == path,
+          ),
+        );
       }
       _clampCurrentSlideIndex();
       _bConfig = bConfig;
@@ -4091,15 +4264,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   }
 
   /// 다시 불러오기 전에 보던 슬라이드 [before] 가 지금 몇 번째인지.
-  /// 다시 구운 항목 안이었으면 같은 페이지(줄었으면 마지막 페이지), 여백이었으면 여백으로 간다.
-  int _findSlideAfterReload(_SlideInfo before, int newCount, String path) {
+  /// 다시 구운([reloaded]) 항목 안이었으면 같은 페이지(줄었으면 마지막 페이지), 여백이었으면 여백으로 간다.
+  int _findSlideAfterReload(
+    _SlideInfo before,
+    int newCount, {
+    required bool reloaded,
+  }) {
     final slides = _allSlides;
-    final reloaded = _stagingItems.any(
-      (e) =>
-          e.uid == before.stagingUid &&
-          e.item is ImageStagingItem &&
-          (e.item as ImageStagingItem).sourcePath == path,
-    );
     final page = !reloaded || before.isAutoSpacer
         ? before.pageIndexInItem
         : before.pageIndexInItem.clamp(0, newCount - 1);
@@ -4922,6 +5093,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       _linkedMissing += result.missingCount;
     });
     unawaited(_restoreOfferingBackgrounds());
+    unawaited(_restoreFreePages());
     // 다음 페이지가 바뀌었을 수 있다(싱어 화면의 '다음').
     _sendCurrentSlide();
 
@@ -5009,6 +5181,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       missing: result.missingCount,
     );
     unawaited(_restoreOfferingBackgrounds());
+    unawaited(_restoreFreePages());
 
     if (result.missingCount > 0) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -6937,6 +7110,24 @@ class _StagingPanel extends StatelessWidget {
                         final cs = Theme.of(context).colorScheme;
                         final isSelected = entry.uid == selectedUid;
                         final background = backgrounds[entry.uid];
+                        final isFreePage =
+                            item is ImageStagingItem &&
+                            background?.isFreePage == true;
+                        // 편집 페이지 둘째 줄 = 글 상자 글, 없으면 그림 수.
+                        final elements = isFreePage
+                            ? background!.pageElements!
+                            : const <PageElement>[];
+                        final texts = [
+                          for (final e in elements)
+                            if (e is PageTextElement &&
+                                e.text.trim().isNotEmpty)
+                              e.text.trim().replaceAll('\n', ' '),
+                        ];
+                        final previewText = !isFreePage
+                            ? item.previewText
+                            : texts.isNotEmpty
+                            ? texts.join(' · ')
+                            : '그림 ${elements.whereType<PageImageElement>().length}장';
                         return Material(
                           key: ValueKey(entry.uid),
                           color: isSelected
@@ -6995,7 +7186,9 @@ class _StagingPanel extends StatelessWidget {
                                                 },
                                               ),
                                             if (item is ImageStagingItem)
-                                              const _KindTag('이미지'),
+                                              _KindTag(
+                                                isFreePage ? '편집' : '이미지',
+                                              ),
                                             if (_bPairOf(item) case final pair?)
                                               Tooltip(
                                                 message:
@@ -7004,7 +7197,9 @@ class _StagingPanel extends StatelessWidget {
                                                     '외국어 ${pair.bCount}장',
                                                 child: const _KindTag('외국어'),
                                               ),
-                                            if (background != null)
+                                            // 편집 페이지는 늘 배경을 갖고 있어 표시가 뜻이 없다.
+                                            if (background != null &&
+                                                !isFreePage)
                                               _BackgroundBadge(
                                                 background: background,
                                               ),
@@ -7050,9 +7245,9 @@ class _StagingPanel extends StatelessWidget {
                                               ),
                                           ],
                                         ),
-                                        if (item.previewText.isNotEmpty)
+                                        if (previewText.isNotEmpty)
                                           Text(
-                                            item.previewText,
+                                            previewText,
                                             maxLines: 1,
                                             overflow: TextOverflow.ellipsis,
                                             style: TextStyle(
@@ -7064,9 +7259,20 @@ class _StagingPanel extends StatelessWidget {
                                     ),
                                   ),
                                   if (item is ImageStagingItem &&
+                                      !isFreePage &&
                                       (item.sourcePath != null ||
                                           Platform.isMacOS))
                                     _pptMenu(entry.uid, item, compactIcon),
+                                  if (isFreePage)
+                                    IconButton(
+                                      icon: const Icon(
+                                        Icons.edit_note_rounded,
+                                        size: 20,
+                                      ),
+                                      tooltip: '슬라이드 편집 페이지 수정',
+                                      style: compactIcon,
+                                      onPressed: () => onEditText(entry.uid),
+                                    ),
                                   // 버튼이 여럿이라 기본 48px 탭 타깃이면 제목이 밀린다.
                                   if (item is! ImageStagingItem)
                                     IconButton(
@@ -8647,11 +8853,6 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
 
 // ── DesignPanel ───────────────────────────────────────────────────────────
 
-// 색 입력 다이얼로그(리본·항목 배경)가 같이 쓰는 hex 입력 규칙.
-final TextInputFormatter _hexInputFormatter = FilteringTextInputFormatter.allow(
-  RegExp(r'[0-9a-fA-F#]'),
-);
-
 /// 리본 탭. 찬양/성경은 콘티에서 고른 항목(발표 보기에서는 현재 슬라이드)에 따라
 /// 자동으로 전환된다.
 enum _RibbonTab {
@@ -8897,7 +9098,7 @@ class _DesignRibbonState extends State<_DesignRibbon> {
           _column([
             _PropertyRow(
               label: '폰트',
-              child: _FontFamilyPicker(
+              child: FontFamilyPicker(
                 selected: _style.fontFamily,
                 onChanged: (family) =>
                     _update(_style.copyWith(fontFamily: family)),
@@ -8912,7 +9113,7 @@ class _DesignRibbonState extends State<_DesignRibbon> {
           _column([
             _PropertyRow(
               label: '배경 색',
-              child: _ColorField(
+              child: ColorField(
                 dialogTitle: '배경 색상',
                 color: _style.backgroundColor,
                 colors: widget.swatches,
@@ -9004,7 +9205,7 @@ class _DesignRibbonState extends State<_DesignRibbon> {
               child: Row(
                 children: [
                   Expanded(
-                    child: _ColorField(
+                    child: ColorField(
                       caption: '원본',
                       dialogTitle: '원본 가사 색상',
                       color: _style.textColor,
@@ -9014,7 +9215,7 @@ class _DesignRibbonState extends State<_DesignRibbon> {
                   ),
                   const SizedBox(width: 6),
                   Expanded(
-                    child: _ColorField(
+                    child: ColorField(
                       caption: '보조',
                       dialogTitle: '보조 언어 가사 색상',
                       color: _style.englishTextColor,
@@ -9133,7 +9334,7 @@ class _DesignRibbonState extends State<_DesignRibbon> {
               child: Row(
                 children: [
                   Expanded(
-                    child: _ColorField(
+                    child: ColorField(
                       caption: '본문',
                       dialogTitle: '본문 색상',
                       color: _style.bibleTextColor,
@@ -9145,7 +9346,7 @@ class _DesignRibbonState extends State<_DesignRibbon> {
                   const SizedBox(width: 6),
                   // 보조·추가 색은 찬양과 같은 값이다(렌더러가 한 키로 읽는다).
                   Expanded(
-                    child: _ColorField(
+                    child: ColorField(
                       caption: '보조',
                       dialogTitle: '보조 역본 색상 (찬양과 공통)',
                       color: _style.englishTextColor,
@@ -9362,7 +9563,7 @@ class _DesignRibbonState extends State<_DesignRibbon> {
 
   /// 추가 보조 색(찬양·성경 공통).
   Widget _extraColorField() {
-    return _ColorField(
+    return ColorField(
       caption: '추가',
       dialogTitle: '추가 보조 색상 (찬양·성경 공통)',
       color: _style.extraTextColor,
@@ -9439,7 +9640,7 @@ class _DesignRibbonState extends State<_DesignRibbon> {
           lockable(
             _PropertyRow(
               label: '색상',
-              child: _ColorField(
+              child: ColorField(
                 dialogTitle: '제목 색상',
                 color: color,
                 colors: widget.textSwatches,
@@ -9600,109 +9801,6 @@ class _PropertyRow extends StatelessWidget {
         ],
       ),
     );
-  }
-}
-
-/// 테두리 있는 한 줄짜리 입력 칸 모양. 색·폰트·이미지 선택기가 같이 쓴다.
-class _FieldBox extends StatelessWidget {
-  const _FieldBox({required this.child, this.onTap});
-
-  final Widget child;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final radius = BorderRadius.circular(AppRadius.control);
-    return Material(
-      color: cs.surface,
-      shape: RoundedRectangleBorder(
-        borderRadius: radius,
-        side: BorderSide(color: cs.outlineVariant),
-      ),
-      child: InkWell(
-        borderRadius: radius,
-        onTap: onTap,
-        child: SizedBox(
-          height: 30,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: child,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// 색 견본 + hex. 누르면 hex 입력 다이얼로그를 연다.
-class _ColorField extends StatelessWidget {
-  const _ColorField({
-    required this.dialogTitle,
-    required this.color,
-    required this.colors,
-    required this.onSelected,
-    this.caption,
-  });
-
-  final String dialogTitle;
-
-  /// 있으면 hex 대신 이 짧은 이름을 보여 준다(한 줄에 색 두 개를 놓을 때). hex 는 툴팁으로.
-  final String? caption;
-  final Color color;
-  final List<Color> colors;
-  final ValueChanged<Color> onSelected;
-
-  Future<void> _open(BuildContext context) async {
-    final selected = await showDialog<Color>(
-      context: context,
-      builder: (context) => _HexColorDialog(
-        title: dialogTitle,
-        initialColor: color,
-        colors: colors,
-        inputFormatter: _hexInputFormatter,
-      ),
-    );
-    if (selected != null) onSelected(selected);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final field = _FieldBox(
-      onTap: () => _open(context),
-      child: Row(
-        children: [
-          Container(
-            width: 18,
-            height: 18,
-            decoration: BoxDecoration(
-              color: color,
-              borderRadius: BorderRadius.circular(AppRadius.control),
-              border: Border.all(color: Theme.of(context).dividerColor),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              caption ?? colorToHex(color),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 12,
-                color: cs.onSurface,
-                fontFeatures: const [FontFeature.tabularFigures()],
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          if (caption == null)
-            Icon(Icons.palette_outlined, size: 15, color: cs.onSurfaceVariant),
-        ],
-      ),
-    );
-    if (caption == null) return field;
-    return Tooltip(message: '$dialogTitle ${colorToHex(color)}', child: field);
   }
 }
 
@@ -10025,184 +10123,6 @@ class _HintText extends StatelessWidget {
       style: Theme.of(context).textTheme.bodySmall?.copyWith(
         color: Theme.of(context).colorScheme.onSurfaceVariant,
       ),
-    );
-  }
-}
-
-class _HexColorDialog extends StatefulWidget {
-  const _HexColorDialog({
-    required this.title,
-    required this.initialColor,
-    required this.colors,
-    required this.inputFormatter,
-  });
-
-  final String title;
-  final Color initialColor;
-  final List<Color> colors;
-  final TextInputFormatter inputFormatter;
-
-  @override
-  State<_HexColorDialog> createState() => _HexColorDialogState();
-}
-
-class _HexColorDialogState extends State<_HexColorDialog> {
-  late final TextEditingController _controller;
-  bool _hasError = false;
-
-  static final List<Color> _fullPalette = _buildFullPalette();
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = TextEditingController(text: colorToHex(widget.initialColor));
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  void _submit() {
-    final color = tryParseHexColor(_controller.text);
-    if (color == null) {
-      setState(() => _hasError = true);
-      return;
-    }
-    Navigator.of(context).pop(color);
-  }
-
-  void _selectColor(Color color) {
-    _controller.text = colorToHex(color);
-    Navigator.of(context).pop(color);
-  }
-
-  static List<Color> _buildFullPalette() {
-    const hues = <double>[
-      0,
-      15,
-      30,
-      45,
-      60,
-      90,
-      120,
-      150,
-      180,
-      210,
-      240,
-      270,
-      300,
-      330,
-    ];
-    const values = <double>[0.95, 0.78, 0.62, 0.46];
-    const saturations = <double>[0.28, 0.52, 0.76, 1.0];
-    final colors = <Color>[
-      const Color(0xFFFFFFFF),
-      const Color(0xFFEDEDED),
-      const Color(0xFFC8C8C8),
-      const Color(0xFF8A8A8A),
-      const Color(0xFF4A4A4A),
-      const Color(0xFF000000),
-    ];
-
-    for (final hue in hues) {
-      for (final value in values) {
-        for (final saturation in saturations) {
-          colors.add(HSVColor.fromAHSV(1, hue, saturation, value).toColor());
-        }
-      }
-    }
-    return colors;
-  }
-
-  Widget _paletteGrid(
-    BuildContext context, {
-    required List<Color> colors,
-    required double size,
-    required double spacing,
-  }) {
-    return Wrap(
-      spacing: spacing,
-      runSpacing: spacing,
-      children: colors.map((color) {
-        final selected = color.toARGB32() == widget.initialColor.toARGB32();
-        return Tooltip(
-          message: colorToHex(color),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(999),
-            onTap: () => _selectColor(color),
-            child: Container(
-              width: size,
-              height: size,
-              decoration: BoxDecoration(
-                color: color,
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: selected
-                      ? Theme.of(context).colorScheme.primary
-                      : Theme.of(context).dividerColor,
-                  width: selected ? 3 : 1,
-                ),
-              ),
-            ),
-          ),
-        );
-      }).toList(),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(widget.title),
-      content: SizedBox(
-        width: 360,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _paletteGrid(
-                context,
-                colors: widget.colors,
-                size: 34,
-                spacing: 10,
-              ),
-              const SizedBox(height: 18),
-              Text('전체 색상', style: Theme.of(context).textTheme.labelMedium),
-              const SizedBox(height: 10),
-              _paletteGrid(context, colors: _fullPalette, size: 18, spacing: 5),
-              const SizedBox(height: 18),
-              TextField(
-                controller: _controller,
-                autofocus: false,
-                decoration: InputDecoration(
-                  labelText: 'HEX 색상',
-                  hintText: '#FFFFFF',
-                  errorText: _hasError ? '#RRGGBB 형식으로 입력해 주세요.' : null,
-                  border: const OutlineInputBorder(),
-                ),
-                inputFormatters: [
-                  widget.inputFormatter,
-                  LengthLimitingTextInputFormatter(7),
-                ],
-                onChanged: (_) {
-                  if (_hasError) setState(() => _hasError = false);
-                },
-                onSubmitted: (_) => _submit(),
-              ),
-            ],
-          ),
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('취소'),
-        ),
-        FilledButton(onPressed: _submit, child: const Text('적용')),
-      ],
     );
   }
 }
@@ -11392,77 +11312,6 @@ class _LogViewerDialog extends StatelessWidget {
   }
 }
 
-// ── _FontFamilyPicker ─────────────────────────────────────────────────────
-
-class _FontFamilyPicker extends StatelessWidget {
-  const _FontFamilyPicker({required this.selected, required this.onChanged});
-
-  final String selected;
-  final ValueChanged<String> onChanged;
-
-  static const _bundled = [
-    ('Pretendard', 'Pretendard'),
-    ('NanumGothic', '나눔고딕'),
-    ('NanumMyeongjo', '나눔명조'),
-  ];
-
-  List<(String, String)> get _fonts => [
-    ..._bundled,
-    for (final f in FontLibrary.fonts) (f.family, f.displayName),
-  ];
-
-  String get _displayName =>
-      _fonts.firstWhere((f) => f.$1 == selected, orElse: () => _fonts.first).$2;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return PopupMenuButton<String>(
-      offset: const Offset(0, 4),
-      onSelected: onChanged,
-      itemBuilder: (_) => _fonts
-          .map(
-            (f) => PopupMenuItem(
-              value: f.$1,
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(f.$2, style: TextStyle(fontFamily: f.$1)),
-                  ),
-                  if (f.$1 == selected)
-                    Icon(Icons.check_rounded, size: 16, color: cs.primary),
-                ],
-              ),
-            ),
-          )
-          .toList(),
-      child: _FieldBox(
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                _displayName,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontFamily: selected,
-                  fontSize: 13,
-                  color: cs.onSurface,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-            Icon(
-              Icons.expand_more_rounded,
-              size: 16,
-              color: cs.onSurfaceVariant,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 // ── _BackgroundImagePicker ────────────────────────────────────────────────
 
 class _BackgroundImagePicker extends StatelessWidget {
@@ -11517,7 +11366,7 @@ class _BackgroundImagePicker extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final hasImage = imagePath != null;
 
-    return _FieldBox(
+    return FieldBox(
       onTap: () => _pick(context),
       child: Row(
         children: [
@@ -11597,7 +11446,7 @@ class _BackgroundVideoButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return _FieldBox(
+    return FieldBox(
       onTap: () => _open(context),
       child: Row(
         children: [
@@ -11628,7 +11477,7 @@ class _OfferingDesignButton extends StatelessWidget {
     final account = design.accountLine;
     return Tooltip(
       message: '헌금송 디자인 등록',
-      child: _FieldBox(
+      child: FieldBox(
         onTap: onPressed,
         child: Row(
           children: [
@@ -11716,6 +11565,7 @@ class _BackgroundBadge extends StatelessWidget {
 enum _AddPageKind {
   blank,
   sermon,
+  free,
   video,
   audio,
   youtube;
@@ -11744,6 +11594,15 @@ const List<PopupMenuEntry<_AddPageKind>> _addPageMenuItems = [
       leading: Icon(Icons.title_rounded),
       title: Text('설교 제목 페이지'),
       subtitle: Text('글꼴·배경·색·크기를 따로 정합니다'),
+      dense: true,
+    ),
+  ),
+  PopupMenuItem(
+    value: _AddPageKind.free,
+    child: ListTile(
+      leading: Icon(Icons.dashboard_customize_outlined),
+      title: Text('슬라이드 편집 페이지'),
+      subtitle: Text('그림·글 상자를 원하는 자리·크기로 놓습니다'),
       dense: true,
     ),
   ),
@@ -11849,11 +11708,11 @@ class _SermonPageDialogState extends State<_SermonPageDialog> {
 
   Future<Color?> _pickColor(String title, Color initial) => showDialog<Color>(
     context: context,
-    builder: (ctx) => _HexColorDialog(
+    builder: (ctx) => HexColorDialog(
       title: title,
       initialColor: initial,
       colors: widget.swatches,
-      inputFormatter: _hexInputFormatter,
+      inputFormatter: hexInputFormatter,
     ),
   );
 
@@ -11956,7 +11815,7 @@ class _SermonPageDialogState extends State<_SermonPageDialog> {
               ),
               Text('글꼴', style: labelStyle),
               const SizedBox(height: 6),
-              _FontFamilyPicker(
+              FontFamilyPicker(
                 selected: _style.fontFamily,
                 onChanged: (family) => setState(
                   () => _design = _design.copyWith(fontFamily: family),
@@ -12111,11 +11970,11 @@ class _ItemBackgroundDialogState extends State<_ItemBackgroundDialog> {
   Future<void> _pickColor() async {
     final selected = await showDialog<Color>(
       context: context,
-      builder: (ctx) => _HexColorDialog(
+      builder: (ctx) => HexColorDialog(
         title: '이 항목의 배경 색상',
         initialColor: _background.color,
         colors: widget.swatches,
-        inputFormatter: _hexInputFormatter,
+        inputFormatter: hexInputFormatter,
       ),
     );
     if (selected != null && mounted) {

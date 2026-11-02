@@ -26,6 +26,8 @@ flutter test test/move_pages_test.dart # 발표 보기 페이지 옮기기·나�
 flutter test test/conti_text_parse_test.dart # 콘티 한번에 넣기: 콘티 글 → 번호·제목·조·(or 곡) + 곡 찾기
 flutter test test/extra_language_test.dart # 추가 보조 언어(세 번째 줄) 페이지·콘티 저장·스타일·설교자 화면
 flutter test test/b_screen_test.dart # 통역 화면(B): 칸 계산·폴더 대응표·보조 칸 올리기
+flutter test test/page_image_test.dart # 슬라이드 편집 페이지: 요소 JSON·clamp·배경 page_elements·.wsconti 경로·화면 밖 PNG 굽기
+flutter test test/page_editor_test.dart # 슬라이드 편집 창: 손잡이 크기 계산·되돌리기·자동 이름
 flutter test test/lyrics_page_grid_test.dart # 가사 수정 창 페이지 표·넘침 측정 (LYRICS_EDITOR_SHOT=경로 면 창을 PNG 로)
 python3 python/test_render.py    # render 명령 self-check (LibreOffice 없으면 skip)
 python3 python/test_animation.py # 애니메이션 단계 펼치기 self-check (LibreOffice 불필요)
@@ -36,6 +38,7 @@ python3 python/test_export_extra.py      # 추가 보조 언어(셋째 줄) 문�
 python3 python/test_split_language.py    # 한/보조 언어 줄 나누기 self-check (LibreOffice 불필요)
 python3 python/test_sheet_lyrics.py      # 악보 가사 추출 self-check (Tesseract 없으면 OCR 부분만 skip)
 python3 python/test_media.py             # PPT 안 동영상 꺼내기 self-check (LibreOffice 불필요)
+python3 python/test_clipboard.py         # 편집 페이지 클립보드 그림(`clipboard` 명령) self-check
 python3 python/test_eot_font.py [pptx]   # PPT 심은 글꼴(EOT/MTX) 풀기 self-check (pptx 를 주면 실제 글꼴까지 풀어 본다)
 
 # 배포용 전체 빌드 (PyInstaller + Flutter 릴리즈 + dist/ 구성)
@@ -87,7 +90,8 @@ lib/
       slide_media.dart               -- SlideMedia (동영상·음악·유튜브 페이지)
       praise_song.dart               -- PraiseSong; 페이지 구분자는 빈 줄(\n\n)
       export_style.dart              -- ExportStyle (가사/성경 각각의 색·크기·정렬·제목 표시 등)
-      slide_background.dart          -- SlideBackground (콘티 항목 하나만 배경을 다르게)
+      slide_background.dart          -- SlideBackground (콘티 항목 하나만 배경을 다르게, 편집 페이지 요소 page_elements)
+      page_element.dart              -- 슬라이드 편집 페이지 요소 PageElement(그림·글 상자)
       offering_design.dart           -- OfferingDesign (헌금송 배경·계좌·색·크기·띠 높낮이)
       staging_item.dart              -- sealed StagingItem: Song / Bible / Image / Blank
       worship_conti.dart             -- 콘티 모델
@@ -96,6 +100,9 @@ lib/
       praise_home_page.dart          -- 단일 화면(약 12,400줄). 검색·성경·디자인·콘티·발표 제어 전부 여기
       slide_page_data.dart           -- 발표 창에 보낼 한 페이지의 JSON 표현
       singer_view_data.dart          -- 싱어 화면에 보낼 현재+다음 페이지 JSON 표현
+      page_canvas.dart               -- 슬라이드 편집 페이지 PageCanvas(편집 창·굽기 공용) + PageComposer(1920x1080 PNG 굽기·캐시)
+      page_editor_dialog.dart        -- 슬라이드 편집 창 PageEditorDialog: 요소 놓기·손잡이·되돌리기, 창 안에서 compose 콜백으로 굽는다
+      style_fields.dart              -- 공용 입력 부품 FieldBox·ColorField·HexColorDialog·FontFamilyPicker
       slide_render_view.dart         -- 미리보기/썸네일용 Flutter 슬라이드 렌더러 (textOnly = 가사 PNG 굽기용)
       slide_text_layout.dart         -- 가사 상자 글자(원본→보조→추가 보조) + 넘침 측정. 렌더러와 넘침 경고가 같이 쓴다
       lyrics_editor_dialog.dart      -- 가사 수정 창: 페이지 표(좌 원본·가운데 보조·우 추가 보조) / 통째로
@@ -223,6 +230,7 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   (OCR 이 필요한데 Tesseract 가 없으면 `{"error": "tesseract_missing"}`)
 - `sheet <파일 | --clipboard> --ocr-lines <폴더>` — OS 내장 OCR 1단계: 가사 줄 이미지만 잘라 두고
   `{needs_ocr: true, job, images}` (OCR 이 필요 없으면 위와 같은 최종 결과)
+- `clipboard <out.png>` — 클립보드 그림 → `{path}`(복사한 그림 파일이면 그 경로) / `{"error": "clipboard_empty"}`. Windows 편집 페이지 붙여넣기용
 - `sheet-finish <job.json> <ocr.json>` — 2단계: 앱이 읽은 결과(`{경로: [{text, confidence, x, y, w, h}]}`)로 마무리
 
 ## 중요 설계 결정
@@ -526,6 +534,22 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   마지막 디자인은 `sermon_design.json`(`SermonDesignStore`)에 남아 다음 설교 페이지의 시작값이 된다.
   설교 페이지의 '배경' 버튼은 `_SermonPageDialog` 를 열고(일반 빈 페이지로 되돌리기 포함), 헌금송 버튼은 숨긴다.
   PPTX 는 문구가 든 빈 페이지를 한 장의 가사 슬라이드로 그린다(예전엔 빈 페이지 문구가 PPTX 에서 빠졌다)
+- **슬라이드 편집 페이지** (기획 `.claude-office/work/20261102-1953-page-image-title/01-기획서.md`): 그림(파일·클립보드)·글 상자를 원하는 만큼 한 페이지에 놓는다.
+  '새 페이지 추가' 메뉴의 '슬라이드 편집 페이지', 콘티 목록 태그 '편집'.
+  **요소 목록을 저장하고 화면에는 1920x1080 PNG 한 장으로 구워** 기존 PPT 이미지 길로 보낸다 — 렌더러 네 곳(미리보기·macOS·Windows·PPTX)·싱어·통역·확대·포인터는 이 페이지를 모른다.
+  - 요소 `PageElement`(`domain/page_element.dart`, sealed: `PageImageElement(path)` / `PageTextElement(text, fontSize(540pt 기준), color, bold, align, fontFamily)`),
+    `rect` 0~1(`clampRect` = w·h 0.02~2, 슬라이드 안 5% 이상), 뒤 요소가 위. 저장은 항목 배경 JSON `page_elements`(`SlideBackground.pageElements`, 마이그레이션 없음),
+    판별 `isFreePage`. '배경' 버튼으로 색을 바꿔도 `withPageElementsOf` 로 요소를 옮겨 붙이고 다시 굽는다. 틀린 요소는 읽을 때 버린다
+  - 항목은 `ImageStagingItem(imagePaths: [구운 PNG], sourceName: 페이지 이름, sourcePath: null)` — 복사·옮기기·저장·PPTX(그림 한 장)는 손댈 게 없고 옛 앱에서도 보인다
+  - 굽기 `PageComposer.compose`(`presentation/page_canvas.dart`): 편집 창과 같은 `PageCanvas`(1920x1080 논리 크기 + FittedBox, 배경 색 → 배경 그림 cover → 요소,
+    주변 테마·글자 배율 안 탐)를 `renderWidgetToImage` 로. **그림은 미리 디코딩한 `ui.Image`(`PageComposer.loadImages`, 긴 변 2560)** — `Image.file` 은 화면 밖에서 빈칸으로 찍힌다.
+    파일 `page_images/render_<FNV>.png`(키 = 요소 JSON + 배경 색·그림 + 쓰인 파일 수정 시각·크기 + `_renderVersion`), 같으면 다시 안 굽고 옛 파일은 안 지운다. 글꼴(FontLibrary)을 올린 뒤에 굽는다
+  - 그림 원본은 `page_images/`(`BackgroundImageLibrary.pages()`, png·jpg·jpeg·gif·bmp·webp)로 복사. `.wsconti`·클라우드는 `_backgroundPathSlots` 가 그림 요소 경로도 싣고, 못 실은 그림은 받을 때 빠진다
+  - 클립보드 `PythonBridge.clipboardImage()`: macOS `worship_slides/ocr` `clipboardImage`, Windows `ppt_tool clipboard <out.png>`(Pillow, `_grab_clipboard_image` 를 악보 붙여넣기와 같이 씀).
+    복사한 파일이면 그 경로, 그림이면 임시 PNG(다음 붙여넣기에 덮어써지니 바로 복사), 그림 확장자가 아니면 null
+  - 편집 창 `PageEditorDialog`(`presentation/page_editor_dialog.dart`)는 '완료' 때 창 안에서 `compose` 콜백으로 굽고, 실패하면 창을 닫지 않는다. 다시 고쳐도 항목 uid 는 그대로
+  - 콘티 불러오기·뒤에 붙이기 때 구운 PNG 가 없으면 요소 목록으로 다시 굽는다(`_restoreFreePages`, `app.log` `[page]`)
+  - 2차 '이미지 페이지'(`image_rect`·제목 키, 렌더러 네 곳 변경)는 되돌렸다(`SlideBackground.imageRect` 등도 지웠다)
 - **표시용 제목** (`PraiseSong.displayTitle`): 발표 슬라이드 제목·콘티 목록·PPTX 는 '(와이드 스크린)'·'와이드스크린'·오타('와일드스크린',
   '와이드 스크림')·'(와이드)'·'.ppt' 를 뗀 제목을 쓴다. DB 제목은 그대로 둔다 — `song_translations` 가 제목을 키로 쓴다
 - **문단 안 줄바꿈**: 가져오기(`extract_lines_from_shape`)는 run 과 `<a:br>` 만 이어 붙여 `<a:br>` 에서 줄을 나눈다(필드 `<a:fld>` 는 뺀다).

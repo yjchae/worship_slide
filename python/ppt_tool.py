@@ -3287,25 +3287,32 @@ def extract_sheet_music(file_path, out_dir=None):
     print(json.dumps(result, ensure_ascii=True))
 
 
-def extract_clipboard_sheet_music(out_dir=None):
-    """클립보드의 그림(캡처·복사한 이미지)이나 복사한 파일을 악보로 읽는다."""
+def _grab_clipboard_image(suffixes, grab=None):
+    """클립보드에서 그림을 꺼낸다: 복사한 파일 중 [suffixes] 첫 경로(str), 캡처한 그림(PIL Image), 없으면 None."""
     from PIL import Image, ImageGrab
 
-    def extract(path):
-        return export_sheet_lines(path, out_dir) if out_dir else extract_sheet_music_lyrics(path)
-
     try:
-        clip = ImageGrab.grabclipboard()
+        clip = (grab or ImageGrab.grabclipboard)()
     except Exception:  # 클립보드 형식에 따라 OS 쪽에서 실패하기도 한다
         clip = None
     # Finder/탐색기에서 파일을 복사하면 경로 목록이 온다.
     if isinstance(clip, list):
-        paths = [path for path in clip if Path(path).suffix.lower() in _SHEET_SUFFIXES]
-        if not paths:
-            return {"error": "clipboard_empty"}
-        return extract(paths[0])
-    if not isinstance(clip, Image.Image):
+        paths = [path for path in clip if Path(path).suffix.lower() in suffixes]
+        return paths[0] if paths else None
+    return clip if isinstance(clip, Image.Image) else None
+
+
+def extract_clipboard_sheet_music(out_dir=None):
+    """클립보드의 그림(캡처·복사한 이미지)이나 복사한 파일을 악보로 읽는다."""
+
+    def extract(path):
+        return export_sheet_lines(path, out_dir) if out_dir else extract_sheet_music_lyrics(path)
+
+    clip = _grab_clipboard_image(_SHEET_SUFFIXES)
+    if clip is None:
         return {"error": "clipboard_empty"}
+    if isinstance(clip, str):
+        return extract(clip)
 
     work_dir = Path(tempfile.mkdtemp(prefix="praise_sheet_clip_"))
     try:
@@ -3316,9 +3323,30 @@ def extract_clipboard_sheet_music(out_dir=None):
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
+_PAGE_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
+
+
+def clipboard_image(out_path, grab=None):
+    """`clipboard <out.png>`: 편집 페이지에 붙여 넣을 그림. 앱(Windows)이 부른다.
+
+    복사한 그림 파일이면 그 경로, 캡처한 그림이면 [out_path] 에 PNG 로 저장한 경로 → `{"path": …}`.
+    없으면 `{"error": "clipboard_empty"}`.
+    """
+    clip = _grab_clipboard_image(_PAGE_IMAGE_SUFFIXES, grab)
+    if clip is None:
+        return {"error": "clipboard_empty"}
+    if isinstance(clip, str):
+        return {"path": clip}
+    if clip.mode not in ("RGB", "RGBA", "L", "LA", "P"):
+        clip = clip.convert("RGBA")  # CMYK 등은 PNG 로 못 쓴다
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    clip.save(out_path, "PNG")
+    return {"path": str(out_path)}
+
+
 def main():
     if len(sys.argv) < 3:
-        raise SystemExit("usage: ppt_tool.py [import|export|render|sheet|sheet-finish] [payload]")
+        raise SystemExit("usage: ppt_tool.py [import|export|render|sheet|sheet-finish|clipboard] [payload]")
 
     command = sys.argv[1]
     payload = sys.argv[2]
@@ -3343,6 +3371,10 @@ def main():
         if "--ocr-lines" in options and options.index("--ocr-lines") + 1 < len(options):
             out_dir = options[options.index("--ocr-lines") + 1]
         extract_sheet_music(payload, out_dir)
+        return
+
+    if command == "clipboard":
+        print(json.dumps(clipboard_image(payload), ensure_ascii=True))
         return
 
     if command == "sheet-finish":

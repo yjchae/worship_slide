@@ -23,6 +23,25 @@ class BackgroundImageLibrary {
       extensions = videoExtensions,
       isVideo = true;
 
+  /// 슬라이드 편집 페이지에 넣은 그림 원본과 구운 PNG(`render_*.png`) 보관함(`page_images/`).
+  /// 배경 모음 목록에는 안 보인다.
+  const BackgroundImageLibrary.pages()
+    : _folder = pageImagesFolder,
+      extensions = pageImageExtensions,
+      isVideo = false;
+
+  static const String pageImagesFolder = 'page_images';
+
+  /// 편집 페이지 그림은 앱(Flutter)이 PNG 로 구우므로 Flutter 가 읽는 형식이면 된다.
+  static const List<String> pageImageExtensions = [
+    'png',
+    'jpg',
+    'jpeg',
+    'gif',
+    'bmp',
+    'webp',
+  ];
+
   /// PNG/JPG 만 받는다. 미리보기(Flutter)·Windows 발표 창(GDI+)·PPTX 가 모두
   /// 확실히 읽는 형식이 이 둘이다.
   static const List<String> allowedExtensions = ['png', 'jpg', 'jpeg'];
@@ -78,7 +97,11 @@ class BackgroundImageLibrary {
 
     // 같은 이름을 여러 번 등록해도 덮어쓰지 않게 시각을 앞에 붙인다.
     final stamp = DateTime.now().millisecondsSinceEpoch;
-    final target = p.join(dir.path, '${stamp}_${p.basename(sourcePath)}');
+    var target = p.join(dir.path, '${stamp}_${p.basename(sourcePath)}');
+    // 같은 순간에 같은 이름(다른 폴더의 파일)을 여러 장 등록할 때.
+    for (var n = 1; await File(target).exists(); n++) {
+      target = p.join(dir.path, '${stamp}_${n}_${p.basename(sourcePath)}');
+    }
     // 임시 이름(목록에 안 잡히는 확장자)으로 복사한 뒤 바꾼다 — 큰 영상 복사가 중간에
     // 실패해도 잘린 파일이 모음에 뜨지 않게.
     final part = File('$target.part');

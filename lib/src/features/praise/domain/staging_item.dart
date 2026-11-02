@@ -45,6 +45,7 @@ class BibleStagingItem extends StagingItem {
 }
 
 /// 외부 PPT를 페이지별 이미지로 구워 넣은 항목. 디자인 설정을 타지 않고 원본 그대로 표시된다.
+/// '이미지 페이지'(그림 파일을 `page_images/` 에 복사해 넣은 것)도 이 항목이다 — [sourceName] = 페이지 제목.
 class ImageStagingItem extends StagingItem {
   const ImageStagingItem({
     required this.sourceName,
@@ -60,7 +61,7 @@ class ImageStagingItem extends StagingItem {
   final String? sourcePath;
 
   @override
-  String get displayTitle => '[PPT] $sourceName';
+  String get displayTitle => sourceName;
 
   @override
   String get previewText => '${imagePaths.length}장';

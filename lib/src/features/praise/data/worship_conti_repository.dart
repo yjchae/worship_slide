@@ -318,7 +318,11 @@ class WorshipContiRepository {
             .where((path) => path.isNotEmpty)
             .toList();
         // 이미지 캐시가 지워졌으면 항목을 통째로 건너뛴다.
-        if (paths.isEmpty || paths.any((path) => !File(path).existsSync())) {
+        // 단 편집 페이지(배경에 page_elements)는 요소로 다시 구우므로 PNG 가 없어도 넣는다.
+        final freePage =
+            SlideBackground.decode(row['background'])?.isFreePage ?? false;
+        if (paths.isEmpty ||
+            (!freePage && paths.any((path) => !File(path).existsSync()))) {
           missingCount++;
           continue;
         }
@@ -665,11 +669,17 @@ class WorshipContiRepository {
     }
   }
 
-  /// 배경 JSON 안의 경로 칸: 배경 이미지, 헌금송 디자인의 원본 배경.
+  /// 배경 JSON 안의 경로 칸: 배경 이미지, 헌금송 디자인의 원본 배경, 편집 페이지 그림 요소.
+  /// 못 실은 그림 요소는 경로가 null 이 되어 불러올 때 빠진다(`PageElement.fromJson`).
   static List<({String value, void Function(String?) set})>
   _backgroundPathSlots(Map<dynamic, dynamic> json) {
     final offering = json['offering'];
+    final elements = json['page_elements'];
     return [
+      if (elements is List)
+        for (final e in elements)
+          if (e is Map && e['type'] == 'image' && e['path'] is String)
+            (value: e['path'] as String, set: (v) => e['path'] = v),
       if (json['image_path'] is String)
         (
           value: json['image_path'] as String,
