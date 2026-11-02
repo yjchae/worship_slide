@@ -12531,9 +12531,10 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
   // 마지막으로 그린 썸네일 줄 높이(창 크기에 맞춰 줄어든 값). 자동 스크롤이 쓴다.
   double _renderedStripHeight = _defaultStripHeight;
 
-  // 썸네일 아래 번호 줄(26) 을 뺀 높이가 슬라이드 높이다.
+  // 썸네일 아래 번호 줄(26)·가로 스크롤 막대 자리(_stripBarRoom)를 뺀 높이가 슬라이드 높이다.
   static double _thumbWidthFor(double stripHeight) =>
-      (stripHeight - 26) * _thumbAspect;
+      (stripHeight - 26 - _stripBarRoom) * _thumbAspect;
+  static const double _stripBarRoom = 10;
 
   @override
   void initState() {
@@ -13789,71 +13790,105 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
     );
   }
 
+  // 마우스 휠(세로)로도 썸네일 줄을 가로로 넘긴다. 트랙패드 가로 밀기는 원래 된다.
+  void _wheelToStrip(PointerSignalEvent e) {
+    if (e is! PointerScrollEvent || !_stripScrollController.hasClients) return;
+    final d = e.scrollDelta;
+    if (d.dy == 0 || d.dx != 0) return;
+    final pos = _stripScrollController.position;
+    pos.jumpTo((pos.pixels + d.dy).clamp(0.0, pos.maxScrollExtent));
+  }
+
   Widget _thumbList(ColorScheme cs, double thumbW) {
     return _EdgeAutoScroll(
       controller: _stripScrollController,
       axis: Axis.horizontal,
       isActive: _isDragging,
       onPointerEnd: _endDrag,
-      child: ListView.builder(
-        controller: _stripScrollController,
-        scrollDirection: Axis.horizontal,
-        // 오른쪽 여백은 마지막 썸네일의 간격(_stripSpacing)이 대신한다.
-        padding: const EdgeInsets.fromLTRB(_stripPadding, 6, 0, 6),
-        // 폭을 고정해야 멀리 있는 페이지까지의 스크롤 길이가 정확하다. 안 그러면
-        // 아직 안 그린 썸네일 길이를 어림해서 가운데 맞추기가 중간에 멈춘다.
-        itemExtent: thumbW + _stripSpacing,
-        itemCount: widget.slides.length,
-        itemBuilder: (context, i) {
-          final hasNote = (widget.notes[_keyAt(i)] ?? '').isNotEmpty;
-          return Padding(
-            padding: const EdgeInsets.only(right: _stripSpacing),
-            child: _dragDrop(
+      child: Listener(
+        onPointerSignal: _wheelToStrip,
+        child: Scrollbar(
+          controller: _stripScrollController,
+          thumbVisibility: true,
+          interactive: true,
+          thickness: 7,
+          child: ScrollConfiguration(
+            // 자동으로 붙는 기본 스크롤 막대와 겹치지 않게 끈다.
+            behavior: ScrollConfiguration.of(
+              context,
+            ).copyWith(scrollbars: false),
+            child: _thumbListView(cs, thumbW),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _thumbListView(ColorScheme cs, double thumbW) {
+    return ListView.builder(
+      controller: _stripScrollController,
+      scrollDirection: Axis.horizontal,
+      // 오른쪽 여백은 마지막 썸네일의 간격(_stripSpacing)이 대신한다.
+      // 아래 여백에 가로 스크롤 막대가 놓인다.
+      padding: const EdgeInsets.fromLTRB(
+        _stripPadding,
+        6,
+        0,
+        6 + _stripBarRoom,
+      ),
+      // 폭을 고정해야 멀리 있는 페이지까지의 스크롤 길이가 정확하다. 안 그러면
+      // 아직 안 그린 썸네일 길이를 어림해서 가운데 맞추기가 중간에 멈춘다.
+      itemExtent: thumbW + _stripSpacing,
+      itemCount: widget.slides.length,
+      itemBuilder: (context, i) {
+        final hasNote = (widget.notes[_keyAt(i)] ?? '').isNotEmpty;
+        return Padding(
+          padding: const EdgeInsets.only(right: _stripSpacing),
+          child: _dragDrop(
+            i,
+            cs,
+            thumbW,
+            _foundMark(
               i,
               cs,
-              thumbW,
-              _foundMark(
-                i,
-                cs,
-                SizedBox(
-                  width: thumbW,
-                  child: Stack(
-                    children: [
-                      // 편집 탭의 슬라이드 순서와 같은 썸네일. 마우스를 올리면
-                      // 수정·삭제 버튼이 그대로 나온다.
-                      _markedMark(
-                        i,
-                        cs,
-                        _SlideThumbnail(
-                          data: _pageDataFor(i),
-                          bData: _bOverflowDataFor(i),
-                          isSelected: i == widget.currentIndex,
-                          index: i,
-                          isEditable: !widget.slides[i].isAutoSpacer,
-                          onTap: () => _onThumbTap(i),
-                          onEdit: () => widget.onSlideEdit(i),
-                          onDelete: () => widget.onSlideDelete(i),
+              SizedBox(
+                width: thumbW,
+                child: Stack(
+                  children: [
+                    // 편집 탭의 슬라이드 순서와 같은 썸네일. 마우스를 올리면
+                    // 수정·삭제 버튼이 그대로 나온다.
+                    _markedMark(
+                      i,
+                      cs,
+                      _SlideThumbnail(
+                        data: _pageDataFor(i),
+                        bData: _bOverflowDataFor(i),
+                        isSelected: i == widget.currentIndex,
+                        index: i,
+                        isEditable: !widget.slides[i].isAutoSpacer,
+                        onTap: () => _onThumbTap(i),
+                        onEdit: () => widget.onSlideEdit(i),
+                        onDelete: () => widget.onSlideDelete(i),
+                      ),
+                    ),
+                    // 수정/삭제 버튼이 오른쪽 위에 뜨므로 메모 표시는 왼쪽에.
+                    if (hasNote)
+                      Positioned(
+                        top: 3,
+                        left: 3,
+                        child: Icon(
+                          Icons.sticky_note_2_rounded,
+                          size: 12,
+                          color: cs.primary,
                         ),
                       ),
-                      // 수정/삭제 버튼이 오른쪽 위에 뜨므로 메모 표시는 왼쪽에.
-                      if (hasNote)
-                        Positioned(
-                          top: 3,
-                          left: 3,
-                          child: Icon(
-                            Icons.sticky_note_2_rounded,
-                            size: 12,
-                            color: cs.primary,
-                          ),
-                        ),
-                    ],
-                  ),
+                  ],
                 ),
               ),
             ),
-          );
-        },
-      ),
+          ),
+        );
+      },
     );
   }
 }
