@@ -113,12 +113,10 @@ class _SlideInfo {
   final SlideMedia? media;
 }
 
-/// 발표 보기에서 복사·옮기는 콘티 항목 하나: 새 항목 + 배경 + 다음 조각과 여백 없이 이을지
-/// (곡 + 떼어 낸 끝 빈 페이지) + 이 항목에 담긴 원래 페이지들.
+/// 발표 보기에서 복사·옮기는 콘티 항목 하나: 새 항목 + 배경 + 이 항목에 담긴 원래 페이지들.
 typedef _SlidePiece = ({
   StagingItem item,
   SlideBackground? background,
-  bool joinNext,
   List<_SlideInfo> pages,
 });
 
@@ -576,6 +574,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   // 콘티가 하나라도 있으면 발표 맨 앞에 무조건 삽입되는 빈 페이지.
   // 실제 스테이징 항목이 아니므로 uid는 절대 겹치지 않는 -1로 고정.
   static const int _leadingBlankUid = -1;
+
+  /// 슬라이드 하나를 가리키는 키(`uid:페이지:자동여백`). 넣기·옮기기 뒤 보던 페이지를 다시 찾는다.
+  static String _slideInfoKey(_SlideInfo s) =>
+      '${_slideKey(s.stagingUid, s.pageIndexInItem)}:${s.isAutoSpacer}';
 
   /// 항목이 만드는 페이지 수(자동 여백 제외).
   static int _pageCount(StagingItem item) => switch (item) {
@@ -3116,8 +3118,11 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _slideClipboard = copied;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('${picked.length}장을 복사했습니다. ⌘/Ctrl+V 로 붙여 넣으세요.'),
-        duration: const Duration(seconds: 2),
+        content: Text(
+          '${picked.length}장을 복사했습니다. 붙여 넣을 자리를 ⌘/Ctrl+클릭으로 고르면 그 뒤에, '
+          '아니면 현재 페이지 뒤에 ⌘/Ctrl+V 로 붙습니다.',
+        ),
+        duration: const Duration(seconds: 3),
       ),
     );
   }
@@ -3158,8 +3163,6 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         result.add((
           item: pieces[k].item,
           background: _itemBackgrounds[uid],
-          // 한 항목에서 나온 조각(곡 + 끝 빈 페이지)은 여백 없이 잇는다.
-          joinNext: k < pieces.length - 1,
           pages: [for (final j in pieces[k].from) byPage[j]!],
         ));
       }
@@ -3250,22 +3253,38 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     return partUids;
   }
 
-  /// 발표 보기 ⌘/Ctrl+V. 현재 슬라이드 바로 뒤에 넣는다. 현재 위치·관객 화면은 그대로다.
-  void _pasteSlides() {
-    if (_slideClipboard.isEmpty) return;
+  /// 발표 보기 ⌘/Ctrl+V. [afterIndex] 페이지(없으면 현재 슬라이드) 바로 뒤에 넣는다.
+  /// 관객 화면은 보던 페이지 그대로다. 붙여 넣을 게 없으면 false.
+  bool _pasteSlides(int? afterIndex) {
+    if (_slideClipboard.isEmpty) return false;
     final slides = _allSlides;
+    final last = slides.isEmpty ? 0 : slides.length - 1;
+    final target = (afterIndex ?? _currentSlideIndex).clamp(0, last);
+    final current = _currentSlideIndex < slides.length
+        ? slides[_currentSlideIndex]
+        : null;
     late final List<int> uids;
     setState(() {
-      uids = _insertItemsAfterSlide(
-        slides,
-        _currentSlideIndex.clamp(0, slides.isEmpty ? 0 : slides.length - 1),
-        _slideClipboard,
-        {},
-      );
+      final renamed = <String, String>{};
+      uids = _insertItemsAfterSlide(slides, target, _slideClipboard, renamed);
+      // 보던 페이지를 키로 다시 찾는다(나눈 곡·옮겨 간 여백은 [renamed]).
+      if (current != null) {
+        final key = _slideInfoKey(current);
+        final want = renamed[key] ?? key;
+        final found = _allSlides.indexWhere((s) => _slideInfoKey(s) == want);
+        if (found >= 0) {
+          _currentSlideIndex = found;
+        } else if (_currentSlideIndex > target) {
+          // 못 찾으면 늘어난 장 수만큼 민다(넣은 자리 앞은 그대로다).
+          _currentSlideIndex += _allSlides.length - slides.length;
+        }
+        _clampCurrentSlideIndex();
+      }
     });
     _flashInserted(uids, '에 붙여 넣음', '붙여 넣음', Icons.content_paste_rounded);
     // 다음 페이지가 바뀌었을 수 있다(싱어 화면의 '다음').
     _sendCurrentSlide();
+    return true;
   }
 
   // ── 성경 음성 검색 (발표 보기) ─────────────────────────────────────────
@@ -3454,7 +3473,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     setState(() {
       uids = _insertItemsAfterSlide(slides, at, [
         for (final item in items)
-          (item: item, background: null, joinNext: false, pages: const []),
+          (item: item, background: null, pages: const []),
       ], {});
     });
     _voiceChain = (currentKey: currentKey, lastUid: uids.last);
@@ -3530,40 +3549,48 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     // 빈 콘티면 맨 앞에 넣는다.
     final current = slideIndex < slides.length ? slides[slideIndex] : null;
     final at = _stagingItems.indexWhere((e) => e.uid == current?.stagingUid);
-    // 같은 곡(같은 PPT)끼리 맞닿는 자리만 자동 여백을 빼 이어 붙인다. 다른 곡이면 여백을 둔다.
+    // 넣은 자리에는 자동 여백을 새로 두지 않는다: 앞 조각·넣은 항목끼리·뒤 항목 모두 여백 없이 잇는다.
+    // 자동 여백 위에 놓았으면 그 여백 뒤에 넣고 여백은 그대로 둔다.
     final onPage = at >= 0 && !current!.isAutoSpacer;
-    // 원래 다음 항목과 이어져 있던 자리(앞서 곡 중간에 붙여 넣은 자리 등)
-    final wasJoined = onPage && _noSpacerUids.contains(current.stagingUid);
+    // 놓은 페이지 바로 뒤가 그 항목의 자동 여백인지(곡·PPT 끝). 그 여백은 넣은 것 뒤로 옮겨 간다.
+    final hadSpacer =
+        onPage &&
+        slideIndex + 1 < slides.length &&
+        slides[slideIndex + 1].isAutoSpacer &&
+        slides[slideIndex + 1].stagingUid == current.stagingUid;
     final tailAt = onPage
         ? _splitStagingItem(at, current.pageIndexInItem + 1, renamed)
         : null;
     var insertAt = tailAt ?? at + 1;
-    final next = insertAt < _stagingItems.length
-        ? _stagingItems[insertAt].item
-        : null;
-    if (onPage) {
-      // 나눴으면 앞부분의 마지막 조각, 아니면 놓은 페이지의 항목
-      final head = _stagingItems[insertAt - 1];
-      if (_sameSource(head.item, pieces.first.item)) {
-        _noSpacerUids.add(head.uid);
-      } else {
-        _noSpacerUids.remove(head.uid);
-      }
-    }
+    // 나눴으면 앞부분의 마지막 조각, 아니면 놓은 페이지의 항목
+    final headUid = onPage ? _stagingItems[insertAt - 1].uid : null;
+    if (headUid != null) _noSpacerUids.add(headUid);
     final uids = <int>[];
     for (final c in pieces) {
       final uid = _nextUid++;
       uids.add(uid);
       _stagingItems.insert(insertAt++, (uid: uid, item: c.item));
       if (c.background != null) _itemBackgrounds[uid] = c.background!;
-      if (c.joinNext) _noSpacerUids.add(uid);
+      _noSpacerUids.add(uid);
     }
-    // 뒤 항목과 같은 곡·같은 PPT 면 이어 붙인다(나눈 자리·이어져 있던 자리, 또는 여백 뒤 = 그 곡 맨 앞).
-    // 항목 끝(여백 앞)에 놓았으면 사용자가 둔 여백을 그대로 둔다(같은 곡을 다시 부르는 사이 등).
-    if ((tailAt != null || wasJoined || !onPage) &&
-        next != null &&
-        _sameSource(pieces.last.item, next)) {
-      _noSpacerUids.add(uids.last);
+    // 콘티 끝에 넣었으면 마지막 항목은 표시를 푼다 — 끝 항목엔 원래 여백이 없고(화면은 그대로),
+    // 나중에 편집 탭에서 뒤에 담는 곡 앞에는 평소처럼 여백이 붙어야 한다.
+    if (insertAt == _stagingItems.length) _noSpacerUids.remove(uids.last);
+    if (hadSpacer) {
+      // 넣은 마지막 항목이 여백을 그릴 수 없으면(빈 페이지, 말씀 → 말씀) 여백은 앞 항목에 그대로 둔다.
+      final last = pieces.last.item;
+      final next = _stagingItems[insertAt].item;
+      final carries =
+          last is SongStagingItem ||
+          last is ImageStagingItem ||
+          (last is BibleStagingItem && next is! BibleStagingItem);
+      _noSpacerUids.remove(carries ? uids.last : headUid);
+      // 옮겨 간 여백의 새 키 — 관객이 그 여백을 보고 있었으면 옮겨 간 여백으로 다시 찾는다.
+      if (carries) {
+        final spacer = slides[slideIndex + 1];
+        renamed['${_slideKey(spacer.stagingUid, spacer.pageIndexInItem)}:true'] =
+            '${_slideKey(uids.last, _pageCount(last))}:true';
+      }
     }
     return uids;
   }
@@ -3585,8 +3612,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     if (contiguous && afterIndex == pickedIndexes.first - 1) return;
     var movedUids = const <int>[];
 
-    String keyOf(_SlideInfo s) =>
-        '${_slideKey(s.stagingUid, s.pageIndexInItem)}:${s.isAutoSpacer}';
+    const keyOf = _slideInfoKey;
     final pieces = _slidesToPieces(picked);
     final movedKeys = {for (final s in picked) keyOf(s)};
     final currentAt = _currentSlideIndex.clamp(0, slides.length - 1);
@@ -3753,18 +3779,6 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     if (index < 0) return;
     _rebuildItem(index, [_keptPages(uid, moved)], renamed);
   }
-
-  /// 같은 곡(제목)·같은 PPT 파일에서 나온 항목인지. 붙여 넣을 때 여백을 뺄지 정한다.
-  static bool _sameSource(StagingItem a, StagingItem b) => switch ((a, b)) {
-    (SongStagingItem(song: final x), SongStagingItem(song: final y)) =>
-      x.title == y.title,
-    (
-      ImageStagingItem(sourceName: final x),
-      ImageStagingItem(sourceName: final y),
-    ) =>
-      x == y,
-    _ => false,
-  };
 
   /// 항목을 콘티에서 뺀다. 앞 항목의 '여백 없음'은 빠진 항목도 뒤와 이어져 있었을 때만
   /// 남긴다 — 아니면 앞 항목이 엉뚱한 다음 곡과 여백 없이 붙는다.
@@ -12397,7 +12411,9 @@ class _PresenterConsole extends StatefulWidget {
   final ValueChanged<int> onSlideDelete;
   final ValueChanged<List<int>> onSlidesDelete;
   final ValueChanged<List<int>> onSlidesCopy;
-  final VoidCallback onPaste;
+  // 이 페이지(null = 현재 페이지) 바로 뒤에 붙여 넣기
+  // 붙여 넣을 게 없으면 false
+  final bool Function(int? afterIndex) onPaste;
   // 썸네일 끌어 놓기: (옮길 페이지들, 이 페이지 바로 뒤로)
   final void Function(List<int> slideIndexes, int afterIndex) onSlidesMove;
   final ValueChanged<_AddPageKind> onAddPage;
@@ -12643,10 +12659,24 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
       widget.onSlidesCopy(
         _marked.isEmpty ? [widget.currentIndex] : _marked.toList(),
       );
+      // 복사한 뒤엔 고르기를 푼다 — 붙여 넣을 자리를 ⌘/Ctrl+클릭으로 새로 고른다.
+      setState(() {
+        _marked.clear();
+        _markAnchor = null;
+      });
       return true;
     }
     if (withCmd && key == LogicalKeyboardKey.keyV) {
-      widget.onPaste();
+      // 고른 페이지가 있으면 그중 가장 뒤 페이지 뒤에, 없으면 현재 페이지 뒤에 넣는다.
+      final after = _marked.isEmpty
+          ? null
+          : _marked.reduce((a, b) => a > b ? a : b);
+      if (widget.onPaste(after)) {
+        setState(() {
+          _marked.clear();
+          _markAnchor = null;
+        });
+      }
       return true;
     }
     if (_marked.isEmpty) return false;
