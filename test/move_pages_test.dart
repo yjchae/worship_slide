@@ -65,4 +65,14 @@ void main() {
     expect(item.imagePaths, ['1.png', '3.png']);
     expect(item.sourcePath, isNull);
   });
+
+  test('같은 이름 항목 번호: 둘 이상일 때만, 빈 제목은 빼고', () {
+    expect(sameTitleOrdinals(['A', 'B', 'A', '', 'A']), [
+      (n: 1, total: 3),
+      null,
+      (n: 2, total: 3),
+      null,
+      (n: 3, total: 3),
+    ]);
+  });
 }

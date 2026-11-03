@@ -794,6 +794,7 @@ ESC = 고르기 취소, ⌘/Ctrl+C·V = 복사·붙여 넣기(`_handleEditKey`).
 곡·PPT 중간 페이지면 그 항목을 둘로 나눠(`_splitStagingItem`) 사이에 넣는다(앞부분 끝 빈 가사 페이지는 곡에 담으면 사라지므로 빈 페이지 항목으로 뺀다).
 자동 여백은 **같은 곡(제목)·같은 PPT 파일끼리 맞닿는 자리만** 뺀다(`_sameSource`) — 같은 곡 페이지를 붙여 넣으면 이어지고, 다른 곡이면 여백이 생긴다.
 여백 페이지 위에서 붙여 넣으면 여백 뒤에 들어간다. 항목을 빼거나 옮기면(`_removeStagingWhere`, `_onStagingReorder`) 앞 항목의 여백 없음 표시가 정리된다.
+붙여 넣기·끌어 옮기기·음성 넣기로 들어간 페이지(자동 여백 제외)는 8초 동안 테두리+배지로 강조하고 그 자리로 스크롤, 머리줄에 'N~M번에 붙여 넣음'(`_flashInserted`·`_InsertFlash`). 편집 탭 콘티 목록은 같은 이름 항목에 `n/m` 을 붙인다(`sameTitleOrdinals`, 화면 계산·저장 안 함).
 여백 빼기는 지운 페이지 키가 아니라 항목 uid 집합(`_noSpacerUids`, 썸네일에서 자동 여백을 지워도 여기로 간다)이고, 콘티 저장(`worship_conti_items.no_spacer`, DB version 14)·PPTX 내보내기(`no_spacer`)에도 실린다.
 고른 게 없으면 Delete 는 아무것도 안 한다(띄운 페이지 보호).
 **끌어 놓기로 페이지 옮기기** (`_moveSlides`, 썸네일 줄·모든 페이지 격자 공통 `_ThumbDragDrop`): 썸네일을 끌어 다른 썸네일의

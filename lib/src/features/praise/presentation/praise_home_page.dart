@@ -122,6 +122,23 @@ typedef _SlidePiece = ({
   List<_SlideInfo> pages,
 });
 
+/// 발표 보기에서 방금 넣은 페이지 강조. [uids] 항목의 페이지(자동 여백 제외)에 [badge] 를 달고
+/// 머리줄에 [label] 을 띄운다. [seq] 가 바뀌면 콘솔이 첫 강조 페이지로 스크롤한다.
+class _InsertFlash {
+  const _InsertFlash({
+    required this.uids,
+    required this.label,
+    required this.badge,
+    required this.icon,
+    required this.seq,
+  });
+  final Set<int> uids;
+  final String label;
+  final String badge;
+  final IconData icon;
+  final int seq;
+}
+
 /// 발표 보기 성경 음성 검색 상태 줄에 보일 것.
 class _VoiceState {
   const _VoiceState({
@@ -303,6 +320,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   ({String currentKey, int lastUid})? _voiceChain;
   // 마지막 넣기 직전 콘티 상태. 되돌리기 때 곡을 나눈 것까지 되돌린다.
   _VoiceUndo? _voiceUndo;
+  // 발표 보기에서 방금 붙여 넣거나 옮기거나 음성으로 넣은 페이지(8초 강조). seq 가 바뀌면 그 자리로 스크롤한다.
+  _InsertFlash? _insertFlash;
+  Timer? _insertFlashTimer;
+  int _insertFlashSeq = 0;
   final WorshipContiRepository _contiRepository = WorshipContiRepository();
   final TextEditingController _searchController = TextEditingController();
   final UpdateService _updateService = UpdateService();
@@ -522,6 +543,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   @override
   void dispose() {
+    _insertFlashTimer?.cancel();
     _speech.stop();
     _voice.dispose();
     _presenterView.timer.removeListener(_sendSingerView);
@@ -3232,14 +3254,16 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   void _pasteSlides() {
     if (_slideClipboard.isEmpty) return;
     final slides = _allSlides;
+    late final List<int> uids;
     setState(() {
-      _insertItemsAfterSlide(
+      uids = _insertItemsAfterSlide(
         slides,
         _currentSlideIndex.clamp(0, slides.isEmpty ? 0 : slides.length - 1),
         _slideClipboard,
         {},
       );
     });
+    _flashInserted(uids, '에 붙여 넣음', '붙여 넣음', Icons.content_paste_rounded);
     // 다음 페이지가 바뀌었을 수 있다(싱어 화면의 '다음').
     _sendCurrentSlide();
   }
@@ -3434,6 +3458,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       ], {});
     });
     _voiceChain = (currentKey: currentKey, lastUid: uids.last);
+    _flashInserted(uids, '에 음성으로 넣음', '음성', Icons.record_voice_over_rounded);
     _voiceUndo = undo
       ..slideIndex = at
       ..after = _VoiceUndo.capture(this);
@@ -3465,6 +3490,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     final undo = _voiceUndo;
     _voiceUndo = null;
     _voiceChain = null;
+    _clearInsertFlash();
     final before = _allSlides;
     final first = before.indexWhere((s) => uids.contains(s.stagingUid));
     final last = before.lastIndexWhere((s) => uids.contains(s.stagingUid));
@@ -3557,6 +3583,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     final contiguous =
         pickedIndexes.last - pickedIndexes.first == pickedIndexes.length - 1;
     if (contiguous && afterIndex == pickedIndexes.first - 1) return;
+    var movedUids = const <int>[];
 
     String keyOf(_SlideInfo s) =>
         '${_slideKey(s.stagingUid, s.pageIndexInItem)}:${s.isAutoSpacer}';
@@ -3622,6 +3649,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         }
       }
       final uids = _insertItemsAfterSlide(remaining, target, pieces, split);
+      movedUids = uids;
       _pruneSourceWatches();
 
       // 3) 옮긴 페이지의 새 키·메모. 미디어 묶음도 따라가 재생 중인 동영상이 끊기지 않는다.
@@ -3659,7 +3687,47 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         _previewStagingUid = result[_currentSlideIndex].stagingUid;
       }
     });
+    // 번호는 옮긴 뒤 최종 슬라이드 기준이다.
+    _flashInserted(movedUids, '으로 옮김', '옮김', Icons.open_with_rounded);
     _sendCurrentSlide();
+  }
+
+  /// 방금 넣은 항목 [uids] 의 페이지(자동 여백 제외)를 8초 강조하고 머리줄에 'N~M번[verb]' 를 띄운다.
+  /// 강조할 페이지가 없으면 아무것도 안 한다(기존 강조 유지).
+  void _flashInserted(
+    List<int> uids,
+    String verb,
+    String badge,
+    IconData icon,
+  ) {
+    final set = uids.toSet();
+    final slides = _allSlides;
+    final first = slides.indexWhere(
+      (s) => set.contains(s.stagingUid) && !s.isAutoSpacer,
+    );
+    if (first < 0) return;
+    final last = slides.lastIndexWhere(
+      (s) => set.contains(s.stagingUid) && !s.isAutoSpacer,
+    );
+    final range = first == last ? '${first + 1}' : '${first + 1}~${last + 1}';
+    _insertFlashTimer?.cancel();
+    _insertFlashTimer = Timer(const Duration(seconds: 8), _clearInsertFlash);
+    setState(() {
+      _insertFlash = _InsertFlash(
+        uids: set,
+        label: '$range번$verb',
+        badge: badge,
+        icon: icon,
+        seq: ++_insertFlashSeq,
+      );
+    });
+  }
+
+  void _clearInsertFlash() {
+    _insertFlashTimer?.cancel();
+    _insertFlashTimer = null;
+    if (_insertFlash == null || !mounted) return;
+    setState(() => _insertFlash = null);
   }
 
   /// 항목 [uid] 에서 [moved] 페이지를 빼고 남은 페이지(전부 [moved] 아닌 쪽 번호).
@@ -4992,6 +5060,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   }) {
     // 불러온 콘티의 원본은 '원본 열어 수정' 을 누르기 전까지 지켜보지 않는다.
     _sourceWatcher.unwatchAll();
+    _clearInsertFlash();
     setState(() {
       _stagingItems
         ..clear()
@@ -5812,6 +5881,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               style: _style,
                               isPresentationOpen: _isPresentationOpen,
                               isBlackout: _isBlackout,
+                              insertFlash: _insertFlash,
                               notes: _slideNotes,
                               onNoteChanged: (key, note) {
                                 if (key.isEmpty) return;
@@ -6913,6 +6983,10 @@ class _StagingPanel extends StatelessWidget {
   }
 
   Widget _buildCard(BuildContext context, ColorScheme cs) {
+    final ordinals = sameTitleOrdinals([
+      for (final e in stagingItems)
+        e.item is BlankStagingItem ? '' : e.item.displayTitle,
+    ]);
     // 좁은 패널에서도 넘치지 않게 아이콘 버튼 기본 48px 탭 타깃을 32px로 줄인다.
     // (그러지 않으면 저장/불러오기 버튼이 오른쪽으로 잘려 사라진다)
     final compactIcon = IconButton.styleFrom(
@@ -7204,6 +7278,34 @@ class _StagingPanel extends StatelessWidget {
                                                 ),
                                               ),
                                             ),
+                                            if (ordinals[index] case (
+                                              :final n,
+                                              :final total,
+                                            ))
+                                              Tooltip(
+                                                message:
+                                                    '같은 이름 항목 $total개 중 $n번째 '
+                                                    '(나누기·복사로 생길 수 있음)',
+                                                child: Padding(
+                                                  padding:
+                                                      const EdgeInsets.only(
+                                                        left: 4,
+                                                      ),
+                                                  child: Text(
+                                                    '$n/$total',
+                                                    style: TextStyle(
+                                                      fontSize: 11,
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                      color:
+                                                          cs.onSurfaceVariant,
+                                                      fontFeatures: const [
+                                                        FontFeature.tabularFigures(),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
                                             if (overflowCounts[entry.uid]
                                                 case final count?)
                                               _OverflowChip(
@@ -10526,6 +10628,24 @@ void remapTrailingPages({
   if (spacerNote != null) notes[key(newCount)] = spacerNote;
 }
 
+/// 콘티 목록에서 같은 이름 항목(나누기·복사로 생김)을 가르는 번호. 같은 제목이 둘 이상이면
+/// 위에서부터 n/total, 하나뿐이거나 빈 제목이면 null. 저장하지 않고 화면에서만 센다.
+@visibleForTesting
+List<({int n, int total})?> sameTitleOrdinals(List<String> titles) {
+  final total = <String, int>{};
+  for (final t in titles) {
+    if (t.isNotEmpty) total[t] = (total[t] ?? 0) + 1;
+  }
+  final seen = <String, int>{};
+  return [
+    for (final t in titles)
+      if (t.isEmpty || total[t]! < 2)
+        null
+      else
+        (n: seen[t] = (seen[t] ?? 0) + 1, total: total[t]!),
+  ];
+}
+
 /// [item] 의 [pages](원래 페이지 번호, 오름차순)만 담은 항목들. 나누기·복사·옮기기가 같이 쓴다.
 /// 곡 끝의 빈 페이지는 가사로 담으면 사라지므로 빈 페이지 항목으로 뗀다(가사가 하나도 없으면
 /// 전부 빈 페이지 항목). [from] 은 각 항목에 들어간 원래 페이지 번호.
@@ -12212,6 +12332,7 @@ class _PresenterConsole extends StatefulWidget {
     required this.style,
     required this.isPresentationOpen,
     required this.isBlackout,
+    this.insertFlash,
     required this.notes,
     required this.onNoteChanged,
     required this.presenterMessage,
@@ -12262,6 +12383,8 @@ class _PresenterConsole extends StatefulWidget {
   final ExportStyle style;
   final bool isPresentationOpen;
   final bool isBlackout;
+  // 방금 붙여 넣거나 옮기거나 음성으로 넣은 페이지(8초 강조).
+  final _InsertFlash? insertFlash;
   // 메모 키는 부모의 _slideKey(uid, page) 와 같은 형식이라 여기서 바로 만든다.
   // 부모 콜백을 부르면 썸네일마다 _allSlides 를 다시 계산하게 된다.
   final Map<String, String> notes;
@@ -12397,7 +12520,17 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
                 oldWidget.slides[found].pageIndexInItem)) {
       _foundIndex = null;
     }
-    if (oldWidget.currentIndex != widget.currentIndex ||
+    final flash = widget.insertFlash;
+    final flashFirst = flash != null && flash.seq != oldWidget.insertFlash?.seq
+        ? widget.slides.indexWhere((s) => _isInserted(s, flash))
+        : -1;
+    if (flashFirst >= 0) {
+      // 방금 넣은 자리로. 현재 페이지 스크롤이 이걸 덮지 않게 이 프레임은 그쪽을 건너뛴다.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _scrollStripTo(flashFirst);
+        _scrollGridTo(flashFirst);
+      });
+    } else if (oldWidget.currentIndex != widget.currentIndex ||
         oldWidget.slides.length != widget.slides.length) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _scrollStripToCurrent();
@@ -12723,9 +12856,41 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
     _scrollGridTo(found);
   }
 
-  /// 검색으로 찾은 썸네일에 테두리를 두른다.
+  /// 검색으로 찾은 썸네일에 테두리를 두른다. 방금 넣은 페이지 강조([_insertedMark])는 그 바깥에 두른다.
   Widget _foundMark(int i, ColorScheme cs, Widget child) {
-    if (i != _foundIndex) return child;
+    if (i != _foundIndex) return _insertedMark(i, cs, child);
+    return _insertedMark(
+      i,
+      cs,
+      Stack(
+        children: [
+          child,
+          Positioned.fill(
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  border: Border.all(color: cs.tertiary, width: 3),
+                  borderRadius: BorderRadius.circular(AppRadius.control),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static bool _isInserted(_SlideInfo s, _InsertFlash flash) =>
+      !s.isAutoSpacer && flash.uids.contains(s.stagingUid);
+
+  /// 방금 넣은 썸네일에 테두리와 위 가운데 배지('붙여 넣음' 등)를 두른다.
+  Widget _insertedMark(int i, ColorScheme cs, Widget child) {
+    final flash = widget.insertFlash;
+    if (flash == null ||
+        i >= widget.slides.length ||
+        !_isInserted(widget.slides[i], flash)) {
+      return child;
+    }
     return Stack(
       children: [
         child,
@@ -12735,6 +12900,31 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
               decoration: BoxDecoration(
                 border: Border.all(color: cs.tertiary, width: 3),
                 borderRadius: BorderRadius.circular(AppRadius.control),
+              ),
+            ),
+          ),
+        ),
+        Positioned(
+          top: 4,
+          left: 0,
+          right: 0,
+          child: IgnorePointer(
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                decoration: BoxDecoration(
+                  color: cs.tertiary,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  flash.badge,
+                  maxLines: 1,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    color: cs.onTertiary,
+                  ),
+                ),
               ),
             ),
           ),
@@ -13024,6 +13214,46 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
           '${widget.currentIndex + 1} / ${widget.slides.length}',
           style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
         ),
+        if (widget.insertFlash case final flash?) ...[
+          const SizedBox(width: 8),
+          Flexible(
+            child: Semantics(
+              liveRegion: true,
+              label: flash.label,
+              child: ExcludeSemantics(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: cs.tertiaryContainer,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(flash.icon, size: 15, color: cs.onTertiaryContainer),
+                      const SizedBox(width: 6),
+                      Flexible(
+                        child: Text(
+                          flash.label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: cs.onTertiaryContainer,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
         if (_view.showAllPages) ...[
           const SizedBox(width: 16),
           _sectionLabel(cs, '모든 페이지 · ${widget.slides.length}장'),
