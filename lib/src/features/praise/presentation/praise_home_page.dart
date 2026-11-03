@@ -2749,26 +2749,6 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     );
   }
 
-  Future<void> _addSermonPage(int Function() insertAt) async {
-    final result = await _showSermonDialog();
-    final design = result?.design;
-    if (result == null || design == null || !mounted) return;
-    final uid = _nextUid++;
-    setState(() {
-      _stagingItems.insert(insertAt(), (
-        uid: uid,
-        item: BlankStagingItem(
-          mainText: result.title,
-          englishText: result.subtitle,
-        ),
-      ));
-      _itemBackgrounds[uid] = design;
-      _previewStagingUid = uid;
-    });
-    await _rememberSermonDesign(design);
-    await _sendCurrentSlide();
-  }
-
   Future<void> _editSermonPage(int uid) async {
     final entry = _stagingItems.where((e) => e.uid == uid).firstOrNull;
     final item = entry?.item;
@@ -2826,8 +2806,6 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     final media = kind.media;
     if (kind == _AddPageKind.blank) {
       await onBlank();
-    } else if (kind == _AddPageKind.sermon) {
-      await _addSermonPage(insertAt);
     } else if (kind == _AddPageKind.free) {
       await _addFreePage(insertAt);
     } else if (media != null) {
@@ -2871,8 +2849,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         elements: background.pageElements,
         background: background,
         style: _style,
-        compose: (elements) =>
-            _composeFreePage(background.copyWith(pageElements: elements)),
+        compose: (elements, bg) =>
+            _composeFreePage(bg.copyWith(pageElements: elements)),
         readClipboardImage: _pythonBridge.clipboardImage,
       ),
     );
@@ -2891,7 +2869,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
           imagePaths: [result.imagePath],
         ),
       ));
-      _itemBackgrounds[uid] = background.copyWith(
+      _itemBackgrounds[uid] = result.background.copyWith(
         pageElements: result.elements,
       );
       _previewStagingUid = uid;
@@ -2919,7 +2897,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
           imagePaths: [result.imagePath],
         ),
       );
-      _itemBackgrounds[uid] = (_itemBackgrounds[uid] ?? background).copyWith(
+      _itemBackgrounds[uid] = result.background.copyWith(
         pageElements: result.elements,
       );
       _previewStagingUid = uid;
@@ -11564,7 +11542,6 @@ class _BackgroundBadge extends StatelessWidget {
 /// 편집 탭·발표 보기 '새 페이지 추가' 메뉴에서 고르는 페이지 종류.
 enum _AddPageKind {
   blank,
-  sermon,
   free,
   video,
   audio,
@@ -11589,20 +11566,11 @@ const List<PopupMenuEntry<_AddPageKind>> _addPageMenuItems = [
     ),
   ),
   PopupMenuItem(
-    value: _AddPageKind.sermon,
-    child: ListTile(
-      leading: Icon(Icons.title_rounded),
-      title: Text('설교 제목 페이지'),
-      subtitle: Text('글꼴·배경·색·크기를 따로 정합니다'),
-      dense: true,
-    ),
-  ),
-  PopupMenuItem(
     value: _AddPageKind.free,
     child: ListTile(
       leading: Icon(Icons.dashboard_customize_outlined),
       title: Text('슬라이드 편집 페이지'),
-      subtitle: Text('그림·글 상자를 원하는 자리·크기로 놓습니다'),
+      subtitle: Text('설교 제목·광고처럼 글 상자와 그림을 자유롭게 놓습니다'),
       dense: true,
     ),
   ),

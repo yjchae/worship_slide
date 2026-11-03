@@ -120,6 +120,40 @@ void main() {
     );
   });
 
+  test('새 글 상자는 고른(없으면 마지막) 글 상자 꼴을 이어받는다', () {
+    const fancy = PageTextElement(
+      id: 'a',
+      rect: start,
+      fontSize: 72,
+      color: Color(0xFFFFF176),
+      bold: true,
+      align: TextAlign.left,
+      fontFamily: 'NanumMyeongjo',
+    );
+    const plain = PageTextElement(id: 'b', rect: start);
+    final image = PageImageElement(id: 'c', rect: start, path: '/a.png');
+    bool sameLook(PageTextElement x, PageTextElement y) =>
+        x.fontSize == y.fontSize &&
+        x.color == y.color &&
+        x.bold == y.bold &&
+        x.align == y.align &&
+        x.fontFamily == y.fontFamily;
+
+    final picked = newTextBox([fancy, plain], 'a', text: '둘째');
+    expect(sameLook(picked, fancy), isTrue);
+    expect(picked.text, '둘째');
+    expect(picked.id, isNot('a'));
+    // 그림을 골랐거나 미선택이면 마지막 글 상자.
+    expect(sameLook(newTextBox([plain, fancy, image], 'c'), fancy), isTrue);
+    expect(sameLook(newTextBox([plain, fancy], null), fancy), isTrue);
+    // 글 상자가 없으면 기본값.
+    final first = newTextBox([image], null);
+    expect(first.fontSize, PageTextElement.defaultFontSize);
+    expect(first.color, Colors.white);
+    expect(first.align, TextAlign.center);
+    expect(first.fontFamily, PageTextElement.defaultFontFamily);
+  });
+
   testWidgets('새 페이지: 제목 글 상자를 바로 고치고 확인하면 굽고 돌려준다', (tester) async {
     tester.view.physicalSize = const Size(1600, 1000);
     tester.view.devicePixelRatio = 1;
@@ -135,7 +169,7 @@ void main() {
                 context: context,
                 builder: (_) => PageEditorDialog(
                   style: _style,
-                  compose: (elements) async {
+                  compose: (elements, _) async {
                     composed = elements;
                     return '/tmp/render.png';
                   },
@@ -157,7 +191,7 @@ void main() {
     await tester.enterText(field, '광고');
     await tester.pump();
     // 글 상자 하나 더 → 빈 글 상자는 확인 때 빠진다.
-    await tester.tap(find.byTooltip('글 상자 추가'));
+    await tester.tap(find.byTooltip('글 상자 추가 (고른 글 상자와 같은 글꼴·색)'));
     await tester.pump();
     await tester.tap(find.text('확인'));
     await tester.pumpAndSettle();
@@ -188,7 +222,7 @@ void main() {
       MaterialApp(
         home: PageEditorDialog(
           style: _style,
-          compose: (_) async => '/tmp/render.png',
+          compose: (_, _) async => '/tmp/render.png',
           readClipboardImage: () async => throw Exception('ppt_tool 실패'),
         ),
       ),

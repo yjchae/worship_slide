@@ -524,7 +524,8 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
     배경이 불투명 검정이라 페이드 아웃이 슬라이드가 아니라 검정으로 빠진다(macOS 는 투명). 발표 창은 `WS_CLIPCHILDREN`
   - 확대·포인터는 미디어 레이어를 따라가지 않는다(레이어 아래에 그려진다 — 배경 영상 레이어만 예외). PPTX 내보내기는 미디어 페이지를 빈/문구 페이지로 낸다
   - MuPDF 는 경고를 stdout 에 찍어 결과 JSON 을 깨뜨린다(동영상 PPT 의 PDF 'Screen annotations') — render 에서 끈다
-- **설교 제목 페이지**: '새 페이지 추가'(편집 탭 콘티 머리줄·발표 보기 툴바) 메뉴에서 빈 페이지 / 설교 제목 페이지를 고른다.
+- **설교 제목 페이지** (기존 데이터만): '새 페이지 추가' 메뉴에서는 뺐다(기획 `.claude-office/work/20261103-0941-unified-page-editor/`) —
+  새 설교 제목은 슬라이드 편집 페이지(글 상자 여러 개)로 만든다. 이미 있는 설교 페이지·`.wsconti` 는 변환하지 않고 아래처럼 보이고 '배경'·연필로 고친다.
   설교 제목 페이지 = 문구가 든 `BlankStagingItem` + 항목별 배경 오버라이드. `SlideBackground` 에 `fontFamily`·`fontSize`·`textColor`·`isSermon`
   (JSON `font_family`·`font_size`·`text_color`·`sermon`)을 얹었고 `withBackground()`·`_style_for_item` 이 가사 키만 덮어쓴다 —
   DB 스키마는 그대로다. **주제 = 본문(`mainText`), 부제(예: 말씀 구절) = 보조 줄(`englishText`)**. 부제 크기·색은
@@ -535,7 +536,9 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   설교 페이지의 '배경' 버튼은 `_SermonPageDialog` 를 열고(일반 빈 페이지로 되돌리기 포함), 헌금송 버튼은 숨긴다.
   PPTX 는 문구가 든 빈 페이지를 한 장의 가사 슬라이드로 그린다(예전엔 빈 페이지 문구가 PPTX 에서 빠졌다)
 - **슬라이드 편집 페이지** (기획 `.claude-office/work/20261102-1953-page-image-title/01-기획서.md`): 그림(파일·클립보드)·글 상자를 원하는 만큼 한 페이지에 놓는다.
-  '새 페이지 추가' 메뉴의 '슬라이드 편집 페이지', 콘티 목록 태그 '편집'.
+  '새 페이지 추가'(편집 탭 콘티 머리줄·발표 보기 툴바, 메뉴 = 빈 / 슬라이드 편집 / 동영상 / 음악 / 유튜브)의 '슬라이드 편집 페이지', 콘티 목록 태그 '편집'.
+  편집 창에서 아무것도 안 고르면 오른쪽에 '페이지 배경'(색 + 공통 배경 이미지 모음, 새 페이지 시작값 = 전역 배경)이 보이고, 결과 `PageEditorResult.background` 가
+  `_itemBackgrounds` 에 들어가 그 배경으로 굽는다(배경은 되돌리기에 안 넣는다). '글 상자 추가'는 고른(없으면 마지막) 글 상자의 글꼴·크기·색·굵기·정렬을 이어받는다(`newTextBox`).
   **요소 목록을 저장하고 화면에는 1920x1080 PNG 한 장으로 구워** 기존 PPT 이미지 길로 보낸다 — 렌더러 네 곳(미리보기·macOS·Windows·PPTX)·싱어·통역·확대·포인터는 이 페이지를 모른다.
   - 요소 `PageElement`(`domain/page_element.dart`, sealed: `PageImageElement(path)` / `PageTextElement(text, fontSize(540pt 기준), color, bold, align, fontFamily)`),
     `rect` 0~1(`clampRect` = w·h 0.02~2, 슬라이드 안 5% 이상), 뒤 요소가 위. 저장은 항목 배경 JSON `page_elements`(`SlideBackground.pageElements`, 마이그레이션 없음),

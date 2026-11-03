@@ -14,15 +14,44 @@ import '../data/background_image_library.dart';
 import '../domain/export_style.dart';
 import '../domain/page_element.dart';
 import '../domain/slide_background.dart';
+import 'background_image_gallery.dart';
 import 'page_canvas.dart';
 import 'style_fields.dart';
 
-/// 편집 창 결과: 페이지 이름(빈칸이면 자동 이름) + 요소 + 구운 PNG.
+/// 편집 창 결과: 페이지 이름(빈칸이면 자동 이름) + 요소 + 구운 PNG + 페이지 배경.
 typedef PageEditorResult = ({
   String name,
   List<PageElement> elements,
   String imagePath,
+  SlideBackground background,
 });
+
+/// '글 상자 추가' 로 넣을 새 글 상자. 고른 글 상자(없으면 마지막 글 상자)의
+/// 글꼴·크기·색·굵기·정렬을 이어받고, 글 상자가 없으면 기본값이다.
+@visibleForTesting
+PageTextElement newTextBox(
+  List<PageElement> elements,
+  String? selectedId, {
+  String text = '',
+}) {
+  final texts = elements.whereType<PageTextElement>();
+  final from =
+      texts.where((e) => e.id == selectedId).firstOrNull ?? texts.lastOrNull;
+  final box = PageTextElement(
+    id: PageElement.newId(),
+    rect: const Rect.fromLTWH(0.25, 0.4, 0.5, 0.2),
+    text: text,
+  );
+  return from == null
+      ? box
+      : box.copyWith(
+          fontSize: from.fontSize,
+          color: from.color,
+          bold: from.bold,
+          align: from.align,
+          fontFamily: from.fontFamily,
+        );
+}
 
 /// 이름 칸을 비웠을 때 쓰는 이름: 첫 글 상자 첫 줄 → '슬라이드 편집 페이지'.
 String pageAutoName(List<PageElement> elements) {
@@ -198,7 +227,13 @@ class PageEditorDialog extends StatefulWidget {
   final List<PageElement>? elements;
   final SlideBackground? background;
   final ExportStyle style;
-  final Future<String> Function(List<PageElement> elements) compose;
+
+  /// 요소를 [background] 위에 굽는다.
+  final Future<String> Function(
+    List<PageElement> elements,
+    SlideBackground background,
+  )
+  compose;
 
   /// 클립보드 그림 경로(없으면 null). `PythonBridge.clipboardImage`.
   final Future<String?> Function() readClipboardImage;
@@ -209,6 +244,9 @@ class PageEditorDialog extends StatefulWidget {
 
 class _PageEditorDialogState extends State<PageEditorDialog> {
   static const _pageImages = BackgroundImageLibrary.pages();
+
+  /// 페이지 배경 이미지는 리본 '공통' 탭과 같은 공통 모음에서 고른다(`page_images/` 아님).
+  static const _backgroundImages = BackgroundImageLibrary();
   static const _swatches = <(Color, String)>[
     (Color(0xFFFFFFFF), '흰색'),
     (Color(0xFFEDEDED), '밝은 회색'),
@@ -230,6 +268,11 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
         ),
       ];
   late List<PageElement> _elements = _initialElements;
+
+  /// 페이지 배경(색·그림). 되돌리기에는 넣지 않는다.
+  late final SlideBackground _initialBackground =
+      widget.background ?? SlideBackground.fromStyle(widget.style);
+  late SlideBackground _background = _initialBackground;
   late final String _initialName = widget.name == pageAutoName(_initialElements)
       ? ''
       : widget.name;
@@ -244,6 +287,9 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
 
   Map<String, ui.Image> _images = {};
   ui.Image? _backgroundImage;
+
+  /// 배경 그림을 다 읽었는지(읽는 중에는 '파일 없음' 안내를 띄우지 않는다).
+  bool _backgroundLoaded = false;
   String? _selectedId;
   String? _hoverId;
 
@@ -268,6 +314,7 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
       if (!_textFocus.hasFocus) _editSession = false;
     });
     _loadImages();
+    _loadBackgroundImage();
     if (_isNew) {
       _selectedId = _initialElements.first.id;
       _syncFields();
@@ -276,14 +323,9 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
   }
 
   Future<void> _loadImages() async {
-    final bgPath = PageComposer.backgroundOf(
-      widget.background,
-      widget.style,
-    ).imagePath;
     final loaded = await PageComposer.loadImages([
       for (final e in _elements)
         if (e is PageImageElement) e.path,
-      ?bgPath,
     ]);
     if (!mounted) {
       for (final image in loaded.values) {
@@ -291,10 +333,43 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
       }
       return;
     }
+    setState(() => _images = {..._images, ...loaded});
+  }
+
+  /// 지금 배경 그림을 읽는다. 그 사이 배경이 또 바뀌었으면 읽은 것을 버린다.
+  Future<void> _loadBackgroundImage() async {
+    final path = _background.imagePath;
+    final image = path == null || path.isEmpty
+        ? null
+        : (await PageComposer.loadImages([path]))[path];
+    if (!mounted || _background.imagePath != path) {
+      image?.dispose();
+      return;
+    }
+    _disposeAfterFrame(_backgroundImage);
     setState(() {
-      _backgroundImage = bgPath == null ? null : loaded.remove(bgPath);
-      _images = {..._images, ...loaded};
+      _backgroundImage = image;
+      _backgroundLoaded = true;
     });
+  }
+
+  /// 지난 프레임이 아직 그리고 있을 수 있어 다음 프레임 뒤에 놓는다.
+  void _disposeAfterFrame(ui.Image? image) {
+    if (image == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) => image.dispose());
+  }
+
+  void _setBackground(SlideBackground next) {
+    final reload = next.imagePath != _background.imagePath;
+    setState(() {
+      _background = next;
+      if (reload) {
+        _disposeAfterFrame(_backgroundImage);
+        _backgroundImage = null;
+        _backgroundLoaded = false;
+      }
+    });
+    if (reload) _loadBackgroundImage();
   }
 
   @override
@@ -322,6 +397,7 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
 
   bool get _dirty =>
       !listEquals(_elements, _initialElements) ||
+      _background != _initialBackground ||
       _nameController.text.trim() != _initialName;
 
   bool get _inTextField =>
@@ -490,11 +566,7 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
   }
 
   void _addTextBox({String text = ''}) {
-    final box = PageTextElement(
-      id: PageElement.newId(),
-      rect: const Rect.fromLTWH(0.25, 0.4, 0.5, 0.2),
-      text: text,
-    );
+    final box = newTextBox(_elements, _selectedId, text: text);
     _commit([..._elements, box]);
     _select(box.id);
     WidgetsBinding.instance.addPostFrameCallback((_) => _focusText());
@@ -701,7 +773,7 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
       _message = null;
     });
     try {
-      final path = await widget.compose(elements);
+      final path = await widget.compose(elements, _background);
       if (!mounted || !_composing) return;
       Navigator.of(context).pop<PageEditorResult>((
         name: _nameController.text.trim().isEmpty
@@ -709,6 +781,7 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
             : _nameController.text.trim(),
         elements: elements,
         imagePath: path,
+        background: _background,
       ));
     } catch (e, st) {
       await AppLogger.instance.error('[page] 편집 페이지 굽기 실패', e, st);
@@ -841,7 +914,11 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
                     '붙여 넣기 (⌘V / Ctrl+V)',
                     _paste,
                   ),
-            button(Icons.text_fields_rounded, '글 상자 추가', _addTextBox),
+            button(
+              Icons.text_fields_rounded,
+              '글 상자 추가 (고른 글 상자와 같은 글꼴·색)',
+              _addTextBox,
+            ),
             divider(),
             button(
               Icons.copy_all_outlined,
@@ -927,7 +1004,8 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
             child: Text(
               '그림 $images · 글 상자 $texts    '
-              '끌어서 옮기고, 모서리를 끌어 크기를 바꿉니다. Shift: 비율 풀기',
+              '끌어서 옮기고, 모서리를 끌어 크기를 바꿉니다. Shift: 비율 풀기    '
+              '빈 곳 누르기: 페이지 배경',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
@@ -939,7 +1017,6 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
   }
 
   Widget _canvas(ColorScheme cs, Size size) {
-    final bg = PageComposer.backgroundOf(widget.background, widget.style);
     Rect px(Rect r) => Rect.fromLTWH(
       r.left * size.width,
       r.top * size.height,
@@ -971,7 +1048,7 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
               Positioned.fill(
                 child: PageCanvas(
                   elements: _elements,
-                  backgroundColor: bg.color,
+                  backgroundColor: _background.color,
                   backgroundImage: _backgroundImage,
                   images: _images,
                 ),
@@ -1234,12 +1311,56 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
               '요소를 누르면 여기서 고칩니다.',
               style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
             ),
+            ..._backgroundProperties(cs, label),
           ],
           PageTextElement() => _textProperties(cs, e, label),
           PageImageElement() => _imageProperties(cs, e, label),
         },
       ),
     );
+  }
+
+  /// 미선택 패널의 '페이지 배경': 색 + 공통 배경 이미지 모음.
+  List<Widget> _backgroundProperties(ColorScheme cs, TextStyle? label) {
+    final missing =
+        _background.hasImage && _backgroundLoaded && _backgroundImage == null;
+    return [
+      const SizedBox(height: 20),
+      Divider(color: cs.outlineVariant),
+      Text('페이지 배경', style: label),
+      const SizedBox(height: 6),
+      Text('색', style: label),
+      const SizedBox(height: 6),
+      ColorField(
+        dialogTitle: '배경 색',
+        color: _background.color,
+        colors: [for (final (c, _) in _swatches) c],
+        onSelected: (color) =>
+            _setBackground(_background.copyWith(color: color)),
+      ),
+      const SizedBox(height: 12),
+      Text('배경 이미지 (공통 모음)', style: label),
+      const SizedBox(height: 6),
+      BackgroundImageGallery(
+        library: _backgroundImages,
+        selected: _background.hasImage ? _background.imagePath : null,
+        emptyColor: _background.color,
+        onChanged: (path) =>
+            _setBackground(_background.copyWith(imagePath: path)),
+      ),
+      if (missing) ...[
+        const SizedBox(height: 8),
+        Text(
+          "배경 이미지 파일을 찾지 못했습니다. 다른 이미지를 고르거나 '없음'을 눌러 주세요.",
+          style: TextStyle(fontSize: 12, color: cs.error),
+        ),
+      ],
+      const SizedBox(height: 8),
+      Text(
+        '이미지는 화면을 가득 채우게 잘려 들어갑니다.',
+        style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+      ),
+    ];
   }
 
   List<Widget> _textProperties(
