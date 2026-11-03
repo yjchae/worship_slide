@@ -595,8 +595,10 @@ void PresentationChannel::Paint(HDC hdc, RECT cli) const {
   // 상자 크기는 고정이고, 미세 조정이 그 상자를 통째로 민다.
   const double boxH = 5.4;
   double boxTop  = 0.6 + slide_.boxOffsetY;
-  int bodyLeft   = (int)(0.05 * W);
-  int bodyRight  = (int)(0.95 * W);
+  // 성경은 줄이 길어 좌우를 더 쓴다(2%~98%).
+  const double sideMargin = slide_.isBible ? 0.02 : 0.05;
+  int bodyLeft   = (int)(sideMargin * W);
+  int bodyRight  = (int)((1.0 - sideMargin) * W);
   int bodyTop    = (int)(boxTop / 7.5 * H);
   int bodyBottom = (int)((boxTop + boxH) / 7.5 * H);
   int bodyBoxH   = bodyBottom - bodyTop;

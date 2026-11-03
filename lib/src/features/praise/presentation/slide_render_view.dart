@@ -24,8 +24,6 @@ class SlideRenderView extends StatelessWidget {
   static const double _slideH = SlideTextLayout.slideH;
   static const double _lyricsBoxT = SlideTextLayout.lyricsBoxT;
   static const double _lyricsBoxH = SlideTextLayout.lyricsBoxH;
-  static const double _lyricsBoxW = SlideTextLayout.lyricsBoxW;
-  static const double _lyricsBoxL = SlideTextLayout.lyricsBoxL;
   static const double _titleBoxH = 0.55;
   static const double _titlePad = 0.2;
   static const double _titleBoxWSide = _slideW - (_titlePad * 2);
@@ -298,9 +296,9 @@ class SlideRenderView extends StatelessWidget {
                   child: Image.file(backgroundImage, fit: BoxFit.cover),
                 ),
               Positioned(
-                left: w * _lyricsBoxL / _slideW,
+                left: w * SlideTextLayout.boxL(isBible) / _slideW,
                 top: h * bodyBoxTop / _slideH,
-                width: w * _lyricsBoxW / _slideW,
+                width: w * SlideTextLayout.boxW(isBible) / _slideW,
                 height: h * _lyricsBoxH / _slideH,
                 child: Align(
                   alignment: bodyAlignment,
@@ -308,14 +306,15 @@ class SlideRenderView extends StatelessWidget {
                     fit: BoxFit.scaleDown,
                     alignment: bodyAlignment,
                     child: SizedBox(
-                      width: w * _lyricsBoxW / _slideW,
+                      width: w * SlideTextLayout.boxW(isBible) / _slideW,
                       child: DefaultTextStyle(
                         style: const TextStyle(),
                         child: RichText(
                           textAlign: textAlign,
                           text: SlideTextLayout.bodySpan(
                             data,
-                            fontScale: fontScale,
+                            fontScale:
+                                fontScale * SlideTextLayout.fitScale(data),
                             originalOnly: data.originalOnly,
                           ),
                         ),

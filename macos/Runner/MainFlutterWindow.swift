@@ -768,7 +768,7 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate, WKNavi
       body{width:100vw;height:100vh;background:\(bgColor);position:relative;
            overflow:hidden;font-family:'\(fontFamily)',sans-serif;}
       #stage{\(bgImageCSS)}
-      .body-box{position:absolute;left:5%;width:90%;
+      .body-box{position:absolute;left:\(isBible ? 2 : 5)%;width:\(isBible ? 96 : 90)%;
         top:\(String(format:"%.4f",bodyBoxTopPct))%;
         height:\(String(format:"%.4f",bodyBoxHeightPct))%;
         display:flex;flex-direction:column;
@@ -804,9 +804,18 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate, WKNavi
         totalH += box.children[i].offsetHeight;
       }
       if (totalH <= boxH * 1.01) return;
-      var scale = boxH / totalH * 0.97;
-      box.style.transform = 'scale(' + scale + ')';
-      box.style.transformOrigin = '\(justifyContent == "flex-end" ? "bottom" : "top") center';
+      // 상자째 scale 하면 폭까지 줄어 좌우가 빈다 — 글자만 줄여 상자 폭으로 다시 감는다.
+      var kids = Array.prototype.slice.call(box.children);
+      var base = kids.map(function(k){ return parseFloat(getComputedStyle(k).fontSize); });
+      var f = 1;
+      for (var n = 0; n < 60 && totalH > boxH * 1.01; n++) {
+        f *= 0.97;
+        totalH = 0;
+        kids.forEach(function(k, i){
+          k.style.fontSize = (base[i] * f) + 'px';
+          totalH += k.offsetHeight + parseFloat(getComputedStyle(k).marginTop);
+        });
+      }
     });
     </script>
     </body></html>

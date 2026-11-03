@@ -1584,8 +1584,14 @@ _TEXT_ALIGN_MAP = {
     "center": PP_ALIGN.CENTER,
     "right": PP_ALIGN.RIGHT,
 }
-def _lyrics_text_layout(horizontal_position):
+# 성경은 줄이 길어 좌우를 더 쓴다(96%). Dart SlideTextLayout.bibleBoxW 와 같다.
+_BIBLE_BOX_WIDTH = _SLIDE_W * 0.96
+
+
+def _lyrics_text_layout(horizontal_position, is_bible=False):
     text_align = _TEXT_ALIGN_MAP.get(horizontal_position, PP_ALIGN.CENTER)
+    if is_bible:
+        return (_SLIDE_W - _BIBLE_BOX_WIDTH) / 2, _BIBLE_BOX_WIDTH, text_align
     return _LYRICS_BOX_LEFT, _LYRICS_BOX_WIDTH, text_align
 
 
@@ -1878,7 +1884,7 @@ def add_song_slides(prs, song, style, background=None):
         "bible_text_align" if is_bible else "lyrics_text_align", "center"
     )
     lyrics_box_left, lyrics_box_width, lyrics_align = _lyrics_text_layout(
-        lyrics_text_align_str
+        lyrics_text_align_str, is_bible
     )
     if song.get("type") == "blank":
         # 문구 든 빈 페이지는 빈 줄이 있어도 한 장이다(발표 화면 _allSlides 와 같다).

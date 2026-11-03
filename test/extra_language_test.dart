@@ -307,6 +307,22 @@ void main() {
       expect(style['extra_font_size'], closeTo(14, 1e-9));
       expect(style['extra_text_color'], '#80DEEA');
     });
+
+    test('넘치는 성경은 글자만 줄여 상자에 넣는다(폭은 그대로)', () {
+      final verse = List.filled(12, '하나님이 세상을 이처럼 사랑하사').join(' ');
+      final page = SlidePageData(
+        mainText: List.generate(6, (i) => '${i + 1}. $verse').join('\n'),
+        englishText: List.generate(6, (i) => '${i + 1}. $verse').join('\n'),
+        isBible: true,
+        pageIndex: 0,
+        totalPages: 1,
+        style: baseStyle(),
+      );
+      expect(SlideTextLayout.overflowRatio(page), greaterThan(1));
+      final scale = SlideTextLayout.fitScale(page);
+      expect(scale, lessThan(1));
+      expect(scale, greaterThan(0.1));
+    });
   });
 
   group('설교자 화면(원본만)', () {

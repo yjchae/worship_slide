@@ -17,6 +17,11 @@ class SlideTextLayout {
   static const double lyricsBoxW = slideW * 0.9;
   static const double lyricsBoxL = (slideW - lyricsBoxW) / 2;
 
+  /// 성경은 줄이 길어 좌우를 더 쓴다(96%). 발표 창 두 곳·PPTX 도 같은 비율이다.
+  static const double bibleBoxW = slideW * 0.96;
+  static double boxW(bool isBible) => isBible ? bibleBoxW : lyricsBoxW;
+  static double boxL(bool isBible) => (slideW - boxW(isBible)) / 2;
+
   static const double _mainHeight = 1.25;
   static const double _subHeight = 1.3;
 
@@ -84,25 +89,44 @@ class SlideTextLayout {
 
   /// 가사 상자 높이 대비 글자 높이(1.0 초과 = 넘침). PPT 이미지·글자 없는 페이지는 0.
   /// 발표 창(HTML·GDI)·PPTX 의 실제 줄바꿈과 조금 다를 수 있어 화면엔 "약" 으로 낸다.
-  static double overflowRatio(SlidePageData data) {
+  static double overflowRatio(SlidePageData data) => _heightRatio(data, 1);
+
+  /// 글자 크기를 [scale] 배로 했을 때 가사 상자 높이 대비 글자 높이.
+  static double _heightRatio(SlidePageData data, double scale) {
     if (data.imagePath != null) return 0;
     if (data.mainText.isEmpty && !showsSub(data) && !showsExtra(data)) {
       return 0;
     }
     final painter = TextPainter(
-      text: bodySpan(data),
+      text: bodySpan(data, fontScale: scale),
       textAlign: textAlign(data),
       textDirection: TextDirection.ltr,
-    )..layout(maxWidth: lyricsBoxW * 72);
+    )..layout(maxWidth: boxW(data.isBible) * 72);
     // 발표 창은 보조·추가 보조 블록 앞에 틈을 둔다(macOS margin-top 0.4em, Windows 본문 크기 × 0.4).
     // 미리보기 글자 배치엔 없지만 실제 화면 높이엔 들어가므로 더 큰 쪽(본문 × 0.4)으로 더해 잰다.
     final blocks = (showsSub(data) ? 1 : 0) + (showsExtra(data) ? 1 : 0);
     final bodyFontSize = data.isBible
         ? data.style.bibleFontSize
         : data.style.fontSize;
-    final height = painter.height + blocks * bodyFontSize * _blockGap;
+    final height = painter.height + blocks * bodyFontSize * scale * _blockGap;
     painter.dispose();
     return height / (lyricsBoxH * 72);
+  }
+
+  /// 넘치는 페이지를 상자에 넣을 글자 배율(넘치지 않으면 1). 상자째 줄이면 폭까지 줄어
+  /// 좌우가 비므로(성경 두 역본에서 폭 60% 쯤) 글자만 줄여 상자 폭으로 다시 감는다.
+  /// macOS 발표 창도 같은 방식(글자 줄이기)이다.
+  static double fitScale(SlidePageData data) {
+    if (cachedOverflowRatio(data) <= 1) return 1;
+    final key = (_cacheKey(data), 'fit');
+    if (_overflowCache.length > 2000) _overflowCache.clear();
+    return _overflowCache[key] ??= () {
+      var scale = 1.0;
+      for (var i = 0; i < 60 && _heightRatio(data, scale) > 1; i++) {
+        scale *= 0.97;
+      }
+      return scale;
+    }();
   }
 
   /// 발표 창(Windows)의 보조 블록 앞 틈 = 본문 글자 크기 × 이 값.
@@ -113,9 +137,15 @@ class SlideTextLayout {
   /// [overflowRatio] 를 페이지 글자·스타일로 기억해 둔다(썸네일 수백 장을 다시 재지 않게).
   static double cachedOverflowRatio(SlidePageData data) {
     if (data.imagePath != null) return 0;
+    final key = _cacheKey(data);
+    if (_overflowCache.length > 2000) _overflowCache.clear();
+    return _overflowCache[key] ??= overflowRatio(data);
+  }
+
+  static Record _cacheKey(SlidePageData data) {
     final style = data.style;
     // 값 묶음(record)을 키로 — 긴 문자열을 새로 만들지 않고, 해시가 겹쳐도 값 비교로 가린다.
-    final key = (
+    return (
       data.isBible,
       data.mainText,
       data.englishText,
@@ -128,8 +158,6 @@ class SlideTextLayout {
       style.includeEnglishLyrics,
       style.includeExtraLyrics,
     );
-    if (_overflowCache.length > 2000) _overflowCache.clear();
-    return _overflowCache[key] ??= overflowRatio(data);
   }
 
   /// 넘침으로 볼 비율. 측정 오차(글꼴 대체 등)로 경계에서 깜빡이지 않게 조금 여유를 둔다.
