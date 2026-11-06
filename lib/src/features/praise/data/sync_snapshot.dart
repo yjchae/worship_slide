@@ -155,6 +155,62 @@ class SyncTranslation {
   }
 }
 
+/// 곡 하나의 코드 글·원래 조 (§3-8). 곡([SyncSong])과 따로 자기 시각으로 맞춘다 —
+/// 곡 `updated_at`·`contentKey`·`tieKey` 에 코드가 섞이면 옛 앱이 코드 없는 판을 같은 시각으로
+/// 퍼뜨리거나, 코드만 고친 것이 다른 PC 의 가사 수정을 이긴다.
+/// [chordLyrics] null + [updatedAt] > 0 = 코드를 지움.
+class SyncChord {
+  const SyncChord({
+    required this.uid,
+    required this.chordLyrics,
+    required this.chordKey,
+    required this.updatedAt,
+  });
+
+  final String uid;
+  final String? chordLyrics;
+  final String? chordKey;
+  final int updatedAt;
+
+  /// 시각이 같을 때 쓰는 키. 어느 PC 에서도 같은 답이 나온다.
+  String get tieKey => '${chordLyrics ?? ''}\u0000${chordKey ?? ''}';
+
+  bool winsOver(SyncChord other) => updatedAt != other.updatedAt
+      ? updatedAt > other.updatedAt
+      : tieKey.compareTo(other.tieKey) > 0;
+
+  SyncChord withUid(String newUid) => SyncChord(
+    uid: newUid,
+    chordLyrics: chordLyrics,
+    chordKey: chordKey,
+    updatedAt: updatedAt,
+  );
+
+  Map<String, Object?> toJson() => {
+    'uid': uid,
+    'chord_lyrics': chordLyrics,
+    'chord_key': chordKey,
+    'updated_at': updatedAt,
+  };
+
+  static SyncChord? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final uid = _str(raw['uid']);
+    final at = _int(raw['updated_at']);
+    if (uid == null || uid.isEmpty || at == null || at <= 0) return null;
+    // 모양이 틀린 글은 지움으로 읽지 않는다(그 레코드를 버린다).
+    final text = raw['chord_lyrics'];
+    if (text != null && text is! String) return null;
+    final key = raw['chord_key'];
+    return SyncChord(
+      uid: uid,
+      chordLyrics: text is String && text.isNotEmpty ? text : null,
+      chordKey: key is String && key.isNotEmpty ? key : null,
+      updatedAt: at,
+    );
+  }
+}
+
 /// PC 한 대가 공유 폴더에 쓰는 내용 전부. PC 마다 자기 파일 하나만 쓰므로
 /// 두 PC 가 같은 파일을 동시에 고쳐 생기는 충돌(드라이브의 "사본" 파일)이 없다.
 class SyncSnapshot {
@@ -169,6 +225,7 @@ class SyncSnapshot {
     this.deletedContent = const {},
     this.translations = const [],
     this.translationDeleted = const {},
+    this.chords = const [],
   });
 
   static const format = 'worship_slides_song_sync';
@@ -199,6 +256,9 @@ class SyncSnapshot {
   /// 지운 보조 가사 [SyncTranslation.keyOf] → 지운 시각.
   final Map<String, int> translationDeleted;
 
+  /// 곡 코드(§3-8). `chord_updated_at > 0` 인 곡만. 옛 앱은 이 키를 모르고 버린다.
+  final List<SyncChord> chords;
+
   Map<String, Object?> toJson() => {
     'format': format,
     'version': 1,
@@ -220,6 +280,7 @@ class SyncSnapshot {
           'deleted_at': e.value,
         },
     ],
+    'chords': [for (final c in chords) c.toJson()],
   };
 
   static SyncSnapshot? fromJson(Object? raw) {
@@ -229,6 +290,7 @@ class SyncSnapshot {
     final aliases = raw['aliases'];
     final translations = raw['translations'];
     final translationDeleted = raw['translation_deleted'];
+    final chords = raw['chords'];
     return SyncSnapshot(
       deviceId: _str(raw['device_id']) ?? '',
       deviceName: _str(raw['device_name']) ?? '',
@@ -259,6 +321,9 @@ class SyncSnapshot {
               ): (e['deleted_at'] as num)
                   .toInt(),
       },
+      chords: chords is List
+          ? chords.map(SyncChord.fromJson).whereType<SyncChord>().toList()
+          : const [],
     );
   }
 
