@@ -1,5 +1,6 @@
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+import '../domain/chord_lyrics.dart';
 import '../domain/praise_song.dart';
 import 'praise_database.dart';
 import 'sync_snapshot.dart';
@@ -96,6 +97,9 @@ class PraiseRepository {
           'title',
           'lyrics',
           'english_lyrics',
+          'chord_lyrics',
+          'chord_key',
+          'chord_updated_at',
         ],
       );
       String keyOf(Object? title, Object? lyrics, Object? english) =>
@@ -122,6 +126,14 @@ class PraiseRepository {
         if (same != null && same.isNotEmpty) {
           final kept = same.removeLast();
           row['uid'] = kept['uid'] ?? row['uid'];
+          // 코드는 곡 행에 붙어 있어 지우면 같이 사라진다 — 같은 곡이면 옮겨 준다(§3-4).
+          for (final c in const [
+            'chord_lyrics',
+            'chord_key',
+            'chord_updated_at',
+          ]) {
+            if (kept[c] != null) row[c] = kept[c];
+          }
           // 파일 이름만 바뀌었으면 고친 것으로 친다 — 옛 시각이면 다른 PC 의 옛 이름에 진다.
           if (kept['file_name'] == song.fileName) {
             row['updated_at'] = kept['updated_at'] ?? now;
@@ -151,7 +163,14 @@ class PraiseRepository {
       for (final song in songs) {
         final existing = await txn.query(
           'praise_songs',
-          columns: ['id', 'lyrics', 'english_lyrics', 'updated_at'],
+          columns: [
+            'id',
+            'lyrics',
+            'english_lyrics',
+            'updated_at',
+            'chord_lyrics',
+            'chord_updated_at',
+          ],
           where: 'title = ?',
           whereArgs: [song.title],
         );
@@ -173,15 +192,28 @@ class PraiseRepository {
         )) {
           skippedCount += 1;
         } else if (resplit.isNotEmpty) {
+          final row = resplit.first;
+          final values = <String, Object?>{
+            'lyrics': song.lyrics,
+            'english_lyrics': song.englishLyrics,
+            'updated_at': _after(row['updated_at'], now),
+          };
+          // 코드는 확실할 때만 다시 맞춰 저장한다. 아니면 옛 글 그대로(어긋남으로 보인다, §3-5).
+          final chord = row['chord_lyrics'] as String?;
+          if (chord != null && chord.isNotEmpty) {
+            final realigned = realignChords(chord, song.lyrics);
+            if (realigned.confident && realigned.chordText != chord) {
+              values['chord_lyrics'] = realigned.chordText.isEmpty
+                  ? null
+                  : realigned.chordText;
+              values['chord_updated_at'] = _after(row['chord_updated_at'], now);
+            }
+          }
           await txn.update(
             'praise_songs',
-            {
-              'lyrics': song.lyrics,
-              'english_lyrics': song.englishLyrics,
-              'updated_at': _after(resplit.first['updated_at'], now),
-            },
+            values,
             where: 'id = ?',
-            whereArgs: [resplit.first['id']],
+            whereArgs: [row['id']],
           );
           updatedCount += 1;
         } else if (existing.any((row) => row['lyrics'] == song.lyrics)) {
@@ -304,6 +336,45 @@ class PraiseRepository {
     final db = await _databaseProvider.database;
     await db.insert('praise_songs', _newSongRow(song, _now()));
     onSongsChanged?.call();
+  }
+
+  /// 곡의 코드 글·원래 조를 저장한다. **코드를 DB 에 쓰는 길은 이것 하나다**(§3-4) —
+  /// [updateSong]·[insertSong] 은 코드 칸을 모른다. '' 는 null(코드 없음)로 저장한다.
+  /// 바뀐 게 없으면 아무것도 안 한다. 코드 시각만 올리고 곡 `updated_at` 은 그대로다(동기화 §3-8).
+  Future<void> saveChords(
+    int songId, {
+    required String? chordLyrics,
+    required String? chordKey,
+  }) async {
+    final db = await _databaseProvider.database;
+    final text = chordLyrics == null || chordLyrics.isEmpty
+        ? null
+        : chordLyrics;
+    final key = chordKey == null || chordKey.isEmpty ? null : chordKey;
+    final changed = await db.transaction((txn) async {
+      final current = await txn.query(
+        'praise_songs',
+        columns: ['chord_lyrics', 'chord_key', 'chord_updated_at'],
+        where: 'id = ?',
+        whereArgs: [songId],
+        limit: 1,
+      );
+      if (current.isEmpty) return false;
+      final row = current.first;
+      if (row['chord_lyrics'] == text && row['chord_key'] == key) return false;
+      await txn.update(
+        'praise_songs',
+        {
+          'chord_lyrics': text,
+          'chord_key': key,
+          'chord_updated_at': _after(row['chord_updated_at'], _now()),
+        },
+        where: 'id = ?',
+        whereArgs: [songId],
+      );
+      return true;
+    });
+    if (changed) onSongsChanged?.call();
   }
 
   Future<void> updateSong(PraiseSong song) async {
@@ -514,6 +585,9 @@ class PraiseRepository {
             'file_name': row['file_name'],
             'lyrics': row['lyrics'],
             'english_lyrics': row['english_lyrics'] ?? '',
+            if (row['chord_lyrics'] != null)
+              'chord_lyrics': row['chord_lyrics'],
+            if (row['chord_key'] != null) 'chord_key': row['chord_key'],
             'translations': byTitle[row['title']] ?? const {},
           },
       ],
@@ -533,8 +607,18 @@ class PraiseRepository {
     final db = await _databaseProvider.database;
     final now = _now();
     final result = await db.transaction((txn) async {
-      // 정규화한 제목 → (DB 에 있는 실제 제목, 영어 가사가 비었는지)
-      final existing = <String, ({int id, String title, bool noEnglish})>{};
+      // 정규화한 제목 → (DB 에 있는 실제 제목, 영어 가사가 비었는지, 원본 가사, 코드를 단 적 없는지)
+      final existing =
+          <
+            String,
+            ({
+              int id,
+              String title,
+              bool noEnglish,
+              String lyrics,
+              bool noChords,
+            })
+          >{};
       for (final row in await txn.query('praise_songs')) {
         final title = row['title'] as String;
         existing.putIfAbsent(
@@ -545,11 +629,16 @@ class PraiseRepository {
             noEnglish: ((row['english_lyrics'] as String?) ?? '')
                 .trim()
                 .isEmpty,
+            lyrics: row['lyrics'] as String,
+            noChords:
+                row['chord_lyrics'] == null &&
+                ((row['chord_updated_at'] as int?) ?? 0) == 0,
           ),
         );
       }
 
       var added = 0;
+      var chordsAdded = 0;
       var skipped = 0;
       var subLyricsAdded = 0;
       for (final raw in songs) {
@@ -558,6 +647,12 @@ class PraiseRepository {
         final lyrics = raw['lyrics'] as String? ?? '';
         if (title.isEmpty) continue;
         final english = raw['english_lyrics'] as String? ?? '';
+        final rawChord = raw['chord_lyrics'];
+        final chord = rawChord is String && rawChord.isNotEmpty
+            ? rawChord
+            : null;
+        final rawKey = raw['chord_key'];
+        final chordKey = rawKey is String && isKeyName(rawKey) ? rawKey : null;
         final key = normalizeTitle(title);
         final found = existing[key];
 
@@ -570,12 +665,18 @@ class PraiseRepository {
             'english_lyrics': english,
             'uid': newSongUid(),
             'updated_at': now,
+            if (chord != null) 'chord_lyrics': chord,
+            if (chord != null && chordKey != null) 'chord_key': chordKey,
+            if (chord != null) 'chord_updated_at': now,
           });
           existing[key] = (
             id: id,
             title: title,
             noEnglish: english.trim().isEmpty,
+            lyrics: lyrics,
+            noChords: chord == null,
           );
+          if (chord != null) chordsAdded += 1;
           dbTitle = title;
           added += 1;
         } else {
@@ -591,8 +692,29 @@ class PraiseRepository {
               id: found.id,
               title: found.title,
               noEnglish: false,
+              lyrics: found.lyrics,
+              noChords: found.noChords,
             );
             subLyricsAdded += 1;
+          }
+          // 이미 있는 곡의 코드는 덮지 않는다(QA M10). 코드를 단 적 없는 곡에, 가사가 똑같을 때만 채운다.
+          final now2 = existing[key]!;
+          if (chord != null &&
+              now2.noChords &&
+              chordsMatchLyrics(chord, now2.lyrics)) {
+            await txn.rawUpdate(
+              'UPDATE praise_songs SET chord_lyrics = ?, chord_key = ?, '
+              'chord_updated_at = MAX(chord_updated_at + 1, ?) WHERE id = ?',
+              [chord, chordKey, now, found.id],
+            );
+            existing[key] = (
+              id: now2.id,
+              title: now2.title,
+              noEnglish: now2.noEnglish,
+              lyrics: now2.lyrics,
+              noChords: false,
+            );
+            chordsAdded += 1;
           }
         }
 
@@ -615,9 +737,12 @@ class PraiseRepository {
         addedCount: added,
         skippedCount: skipped,
         subLyricsAddedCount: subLyricsAdded,
+        chordsAddedCount: chordsAdded,
       );
     });
-    if (result.addedCount > 0 || result.subLyricsAddedCount > 0) {
+    if (result.addedCount > 0 ||
+        result.subLyricsAddedCount > 0 ||
+        result.chordsAddedCount > 0) {
       onSongsChanged?.call();
     }
     return result;
@@ -644,7 +769,11 @@ class SongBundleImportResult {
     required this.addedCount,
     required this.skippedCount,
     required this.subLyricsAddedCount,
+    this.chordsAddedCount = 0,
   });
+
+  /// 코드를 실어 온 곡 수(새 곡 + 코드가 없던 기존 곡에 채운 것).
+  final int chordsAddedCount;
 
   /// 새로 넣은 곡.
   final int addedCount;
