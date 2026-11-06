@@ -957,7 +957,17 @@ class SingerWindowController: NSWindowController, NSWindowDelegate {
 
   // ── HTML ──────────────────────────────────────────────────────────────
 
-  private func pageHTML(_ page: [String: Any]?, emptyLabel: String) -> String {
+  /// 코드 줄(`chord_lines`)을 JS 에 넣을 JSON 으로. 없으면 nil. Dart 는 '싱어 코드'가 꺼져 있으면 안 싣는다.
+  private func chordLinesJSON(_ page: [String: Any]?) -> String? {
+    guard let page = page, let lines = page["chord_lines"] as? [Any], !lines.isEmpty,
+          JSONSerialization.isValidJSONObject(lines),
+          let data = try? JSONSerialization.data(withJSONObject: lines),
+          let json = String(data: data, encoding: .utf8) else { return nil }
+    // <script> 안에 넣으므로 가사의 '</script>' 가 스크립트를 끝내지 않게.
+    return json.replacingOccurrences(of: "</", with: "<\\/")
+  }
+
+  private func pageHTML(_ page: [String: Any]?, emptyLabel: String, chordSlot: String) -> String {
     guard let page = page else {
       return "<div class=\"placeholder\">\(emptyLabel)</div>"
     }
@@ -967,12 +977,16 @@ class SingerWindowController: NSWindowController, NSWindowDelegate {
       let mime = ext == "jpg" || ext == "jpeg" ? "image/jpeg" : "image/png"
       return "<img src=\"data:\(mime);base64,\(data.base64EncodedString())\">"
     }
+    let sub = htmlEscape((page["english_text"] as? String) ?? "")
+    let subHTML = sub.isEmpty ? "" : "<div class=\"sub\">\(sub)</div>"
+    // 코드 악보: 줄은 스크립트가 chord_lines 로 채운다. 코드만 있는 페이지(관객 화면엔 빈 페이지)도 보인다.
+    if chordLinesJSON(page) != nil {
+      return "<div class=\"fit\"><div class=\"main\" id=\"chords-\(chordSlot)\"></div>\(subHTML)</div>"
+    }
     if (page["is_blank"] as? Bool) ?? false {
       return "<div class=\"placeholder\">빈 화면</div>"
     }
     let main = htmlEscape((page["main_text"] as? String) ?? "")
-    let sub = htmlEscape((page["english_text"] as? String) ?? "")
-    let subHTML = sub.isEmpty ? "" : "<div class=\"sub\">\(sub)</div>"
     return "<div class=\"fit\"><div class=\"main\">\(main)</div>\(subHTML)</div>"
   }
 
@@ -987,6 +1001,12 @@ class SingerWindowController: NSWindowController, NSWindowDelegate {
     // 다음 페이지가 다른 곡·말씀이면 그 제목을 같이 알려 준다.
     let nextLabel = (!nextTitle.isEmpty && nextTitle != title) ? "다음 · \(nextTitle)" : "다음"
     let badge = blackout ? "<span class=\"badge\">관객 화면 꺼짐</span>" : ""
+    // 조를 바꿨을 때만 온다(중립색, 제목 바로 오른쪽 — 시계 경고색과 떨어뜨린다).
+    let keyLabel = htmlEscape((current?["key_label"] as? String) ?? "")
+    let keyBadge = keyLabel.isEmpty ? "" : "<span class=\"key\">\(keyLabel)</span>"
+    let currentChords = chordLinesJSON(current) ?? "null"
+    let nextChords = chordLinesJSON(next) ?? "null"
+    let chordConfig = "{current:\(currentChords),next:\(nextChords)}"
     // 시계·경과 시간. 페이지를 다시 읽은 순간부터 JS 가 이어서 센다(Dart 는 매초 보내지 않는다).
     let clock = lastData["clock"] as? [String: Any]
     let clockShow = (clock?["show"] as? Bool) ?? false
@@ -1003,7 +1023,10 @@ class SingerWindowController: NSWindowController, NSWindowDelegate {
         font-family:-apple-system,'Apple SD Gothic Neo','Pretendard',sans-serif;}
       body{display:flex;flex-direction:column;padding:2.2vh 2.4vw;gap:1.6vh;}
       header{display:flex;align-items:center;gap:1.2vw;font-size:2.6vh;color:#9aa4b1;flex:none;}
-      header .title{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;}
+      header .title{flex:0 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;}
+      header .grow{flex:1;}
+      header .key{flex:none;font-size:2.2vh;font-weight:700;color:#8b95a2;border:1px solid #8b95a2;
+        border-radius:999px;padding:.1em .7em;white-space:nowrap;}
       header .page{font-variant-numeric:tabular-nums;font-weight:700;color:#e6e9ee;}
       header .clock{font-variant-numeric:tabular-nums;font-weight:700;color:#c3cad4;white-space:nowrap;}
       .clock .warn{color:#ffb547;} .clock .over{color:#ff6b6b;}
@@ -1021,14 +1044,55 @@ class SingerWindowController: NSWindowController, NSWindowDelegate {
       .sub{color:#ffd54f;font-size:.78em;margin-top:.45em;}
       .next .main{color:#c3cad4;}
       .next .sub{color:#b8a25a;}
+      .w{white-space:nowrap;}
+      .seg{display:inline-block;text-align:left;}
+      .seg .ch{display:block;font-size:.55em;line-height:1.15;color:#FFA94D;padding-right:.4em;white-space:pre;}
+      .seg .ly{display:block;white-space:pre;}
+      .cl.only{font-size:.55em;line-height:1.15;color:#FFA94D;}
+      .next .seg .ch,.next .cl.only{color:#B07A40;}
       .placeholder{color:#59626e;font-size:3.4vh;font-weight:600;}
       img{max-width:100%;max-height:100%;object-fit:contain;display:block;}
     </style></head><body>
-      <header><span class="title">\(title)</span>\(badge)<span class="clock" id="clock"></span><span class="page">\(pageNumber) / \(totalPages)</span></header>
-      <div class="box current">\(pageHTML(current, emptyLabel: "빈 화면"))</div>
+      <header><span class="title">\(title)</span>\(keyBadge)<span class="grow"></span>\(badge)<span class="clock" id="clock"></span><span class="page">\(pageNumber) / \(totalPages)</span></header>
+      <div class="box current">\(pageHTML(current, emptyLabel: "빈 화면", chordSlot: "current"))</div>
       <div class="label">\(nextLabel)</div>
-      <div class="box next">\(pageHTML(next, emptyLabel: "마지막 페이지"))</div>
+      <div class="box next">\(pageHTML(next, emptyLabel: "마지막 페이지", chordSlot: "next"))</div>
     <script>
+    // 코드 줄 {t, c:[[오프셋, 이름]...]} — 휴대폰 싱어 화면(singer_web_server.dart chordLine)과 같은 규칙.
+    // 오프셋은 t 안 UTF-16 위치라 JS 문자열 그대로 자른다. 낱말(.w)은 줄바꿈하지 않는다.
+    var CHORD_LINES=\(chordConfig);
+    function el(tag, cls, text){ var e=document.createElement(tag); if(cls) e.className=cls;
+      if(text!=null) e.textContent=text; return e; }
+    function chordLine(l){
+      var t=l.t||'', c=l.c||[], d=el('div','cl');
+      if(!t){ d.className='cl only'; d.textContent=c.map(function(p){ return p[1]; }).join('  '); return d; }
+      var at={};
+      c.forEach(function(p){ var o=Math.max(0,Math.min(t.length,p[0])); (at[o]=at[o]||[]).push(p[1]); });
+      var word=null, tgt=null;
+      function newWord(){ word=el('span','w'); d.appendChild(word); }
+      for(var i=0;i<=t.length;i++){
+        if(at[i]){
+          if(!word) newWord();
+          var s=el('span','seg'); s.appendChild(el('span','ch',at[i].join(' ')));
+          tgt=el('span','ly'); s.appendChild(tgt); word.appendChild(s);
+        }
+        if(i===t.length) break;
+        var ch=t.charAt(i);
+        if(ch===' ' && !at[i]){ word=null; tgt=null; d.appendChild(document.createTextNode(' ')); continue; }
+        if(!word){ newWord(); tgt=null; }
+        if(!tgt){ tgt=document.createTextNode(''); word.appendChild(tgt); }
+        if(tgt.nodeType===3) tgt.appendData(ch); else tgt.textContent+=ch;
+      }
+      // 줄 끝 코드처럼 글 없는 조각도 가사 줄 높이를 갖게(폭 없는 공백).
+      Array.prototype.forEach.call(d.querySelectorAll('.ly'),function(e){
+        if(!e.textContent) e.textContent=String.fromCharCode(8203);
+      });
+      return d;
+    }
+    ['current','next'].forEach(function(k){
+      var box=document.getElementById('chords-'+k), lines=CHORD_LINES[k];
+      if(box && lines) lines.forEach(function(l){ box.appendChild(chordLine(l)); });
+    });
     // 상자에 꼭 맞는 가장 큰 글자 크기를 찾는다(이분 탐색). 창 크기가 바뀌면 다시 맞춘다.
     function fitAll(){
       document.querySelectorAll('.box').forEach(function(box){

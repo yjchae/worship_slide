@@ -581,8 +581,14 @@ const singerPageHtml =
     padding:max(2vh,env(safe-area-inset-top)) max(3vw,env(safe-area-inset-right))
       max(2vh,env(safe-area-inset-bottom)) max(3vw,env(safe-area-inset-left));gap:1.4vh;}
   header{display:flex;align-items:center;gap:2vw;font-size:2.4vh;color:#9aa4b1;flex:none;}
-  #title{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;}
+  #title{flex:0 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;}
+  header .grow{flex:1;}
+  /* 조 배지는 중립색, 제목 바로 오른쪽(시계 경고색과 헷갈리지 않게). */
+  #key{flex:none;font-size:2vh;font-weight:700;color:#8b95a2;border:1px solid #8b95a2;border-radius:999px;
+    padding:.1em .7em;white-space:nowrap;}
+  #key:empty{display:none;}
   #page{font-variant-numeric:tabular-nums;font-weight:700;color:#e6e9ee;}
+  #page,#badge,#clock{flex:none;white-space:nowrap;}
   #clock{font-variant-numeric:tabular-nums;font-weight:700;color:#c3cad4;white-space:nowrap;}
   #clock .warn{color:#ffb547;} #clock .over{color:#ff6b6b;}
   .badge{background:#e5484d;color:#fff;border-radius:999px;padding:.2em .8em;font-size:2vh;font-weight:700;}
@@ -605,12 +611,25 @@ const singerPageHtml =
   body.row #panes{flex-direction:row;}
   body.row #split{height:auto;width:3.2vh;cursor:col-resize;}
   body.row #split::before{width:.6vh;min-width:4px;height:12vh;}
-  #layout{flex:none;background:#1b2028;color:#e6e9ee;border:1px solid #3a424d;border-radius:.8vh;
+  #layout,#chords{flex:none;background:#1b2028;color:#e6e9ee;border:1px solid #3a424d;border-radius:.8vh;
     font:inherit;font-size:2vh;font-weight:700;padding:.3em .7em;}
+  #chords.on{color:#FFA94D;border-color:#FFA94D;}
+  #chords.dim{opacity:.45;}
   .fit{width:100%;max-height:100%;text-align:center;line-height:1.3;font-weight:700;}
   .main,.sub{white-space:pre;}
   .wrap .main,.wrap .sub{white-space:pre-wrap;word-break:keep-all;}
   .sub{color:#ffd54f;font-size:.78em;margin-top:.45em;}
+  /* 코드 악보: 코드는 조각(.seg) 위 칸. 조각 폭 = max(가사, 코드 + 0.4em 틈). 줄바꿈은 낱말(.w) 사이 공백에서만. */
+  .w{white-space:nowrap;}
+  .seg{display:inline-block;text-align:left;}
+  .seg .ch{display:block;font-size:.55em;line-height:1.15;color:#FFA94D;padding-right:.4em;white-space:pre;}
+  .seg .ly{display:block;white-space:pre;}
+  .cl.only{font-size:.55em;line-height:1.15;color:#FFA94D;}
+  #next .seg .ch,#next .cl.only{color:#B07A40;}
+  #hint{position:fixed;left:50%;bottom:12vh;transform:translateX(-50%);max-width:90vw;display:none;
+    background:#1a1f26;color:#e6e9ee;border:1px solid #3a424d;border-radius:1vh;padding:1vh 3vw;font-size:2.2vh;
+    font-weight:600;text-align:center;}
+  #hint.show{display:block;}
   #next .main{color:#c3cad4;}
   #next .sub{color:#b8a25a;}
   .placeholder{color:#59626e;font-size:3vh;font-weight:600;}
@@ -641,8 +660,9 @@ const singerPageHtml =
   #flash.show{opacity:1;transition:none;}
 </style></head><body>
   <div id="message"></div>
-  <header><span id="title"></span><span id="badge"></span><span id="clock"></span><span id="page"></span>
-    <button id="layout"></button></header>
+  <header><span id="title"></span><span id="key"></span><span class="grow"></span><span id="badge"></span>
+    <span id="clock"></span><span id="page"></span>
+    <button id="chords">코드</button><button id="layout"></button></header>
   <div id="panes">
     <div class="box" id="current"></div>
     <div id="split"></div>
@@ -651,16 +671,54 @@ const singerPageHtml =
   <div id="note"></div>
   <div id="bar"><button id="black"><span>화면 끄기 (길게 누르기)</span></button></div>
   <div id="flash"></div>
+  <div id="hint"></div>
 <script>
 function el(tag, cls, text){ var e=document.createElement(tag); if(cls) e.className=cls;
   if(text!=null) e.textContent=text; return e; }
 var REMOTE=document.body.classList.contains('remote');
 if(REMOTE) document.title='발표자 리모컨';
+// ── 코드 ── 휴대폰마다 켜고 끈다(기본 끔). 앱은 chord_lines 를 늘 싣고 이 버튼이 정한다.
+var CHORDS=false; try{ CHORDS=localStorage.getItem('singer_chords')==='1'; }catch(_){}
+function hasChords(page){ return !!(page && page.chord_lines && page.chord_lines.length); }
+// 코드 줄 하나 {t, c:[[오프셋, 이름]...]}. 오프셋은 t 안 UTF-16 위치라 JS 문자열 그대로 자른다.
+// 낱말(.w)은 줄바꿈하지 않고, 코드가 붙은 자리부터는 조각(.seg: 위 코드 + 아래 가사)이다.
+function chordLine(l){
+  var t=l.t||'', c=l.c||[], d=el('div','cl');
+  if(!t){ d.className='cl only'; d.textContent=c.map(function(p){ return p[1]; }).join('  '); return d; }
+  var at={};
+  c.forEach(function(p){ var o=Math.max(0,Math.min(t.length,p[0])); (at[o]=at[o]||[]).push(p[1]); });
+  var word=null, tgt=null;
+  function newWord(){ word=el('span','w'); d.appendChild(word); }
+  for(var i=0;i<=t.length;i++){
+    if(at[i]){
+      if(!word) newWord();
+      var s=el('span','seg'); s.appendChild(el('span','ch',at[i].join(' ')));
+      tgt=el('span','ly'); s.appendChild(tgt); word.appendChild(s);
+    }
+    if(i===t.length) break;
+    var ch=t.charAt(i);
+    if(ch===' ' && !at[i]){ word=null; tgt=null; d.appendChild(document.createTextNode(' ')); continue; }
+    if(!word){ newWord(); tgt=null; }
+    if(!tgt){ tgt=document.createTextNode(''); word.appendChild(tgt); }
+    if(tgt.nodeType===3) tgt.appendData(ch); else tgt.textContent+=ch;
+  }
+  // 줄 끝 코드처럼 글 없는 조각도 가사 줄 높이를 갖게(기준선이 맞도록).
+  Array.prototype.forEach.call(d.querySelectorAll('.ly'),function(e){ if(!e.textContent) e.textContent='\u200b'; });
+  return d;
+}
 function fill(box, page, empty){
   box.textContent='';
   var st=el('div','stage'); box.appendChild(st);
   if(!page){ st.appendChild(el('div','placeholder',empty)); return; }
   if(page.image_path){ var img=el('img'); img.src=page.image_path; st.appendChild(img); return; }
+  // 코드만 있는 페이지는 관객 화면엔 빈 페이지지만 여기선 코드가 보인다.
+  if(CHORDS && hasChords(page)){
+    var f=el('div','fit'), m=el('div','main');
+    page.chord_lines.forEach(function(l){ m.appendChild(chordLine(l)); });
+    f.appendChild(m);
+    if(page.english_text) f.appendChild(el('div','sub',page.english_text));
+    st.appendChild(f); return;
+  }
   if(page.is_blank){ st.appendChild(el('div','placeholder','빈 화면')); return; }
   var f=el('div','fit'); f.appendChild(el('div','main',page.main_text||''));
   if(page.english_text) f.appendChild(el('div','sub',page.english_text));
@@ -697,6 +755,23 @@ function setLayout(row){
 document.getElementById('layout').addEventListener('click',function(){
   setLayout(!document.body.classList.contains('row'));
 });
+function showChordButton(){
+  var b=document.getElementById('chords');
+  b.classList.toggle('on',CHORDS);
+  b.textContent='♪ 코드';
+}
+document.getElementById('chords').addEventListener('click',function(){
+  CHORDS=!CHORDS;
+  try{ localStorage.setItem('singer_chords',CHORDS?'1':'0'); }catch(_){}
+  showChordButton();
+  if(lastData){ lastPages=''; render(lastData); }
+});
+showChordButton();
+var hintTimer=null;
+function hint(text){
+  var h=document.getElementById('hint'); h.textContent=text; h.className='show';
+  clearTimeout(hintTimer); hintTimer=setTimeout(function(){ h.className=''; },3500);
+}
 // 현재 페이지 몫(0.3~0.85). 발표 보기의 썸네일 줄 막대처럼 끌어서 바꾸고, 휴대폰마다 기억한다.
 var splitRatio=0.65;
 function setSplit(r){
@@ -759,17 +834,22 @@ function drawClock(){
   if(clk.target>0) box.appendChild(document.createTextNode(' / '+two(Math.floor(clk.target/60000))+':00'));
 }
 setInterval(drawClock,500);
+var lastData=null;
 function render(d){
+  lastData=d;
   renderClock(d.clock);
   var cur=d.current||{}, next=d.next;
   document.getElementById('title').textContent=cur.title||'';
+  document.getElementById('key').textContent=CHORDS?(cur.key_label||''):'';
+  // 현재·다음 둘 다 코드가 없으면 흐리게(누를 수는 있다).
+  document.getElementById('chords').classList.toggle('dim',!hasChords(cur) && !hasChords(next));
   document.getElementById('page').textContent=d.page_number+' / '+d.total_pages;
   var badge=document.getElementById('badge'); badge.textContent=''; badge.className='';
   if(d.blackout){ badge.textContent='관객 화면 꺼짐'; badge.className='badge'; }
   var nt=next&&next.title; document.getElementById('label').textContent=
     (nt && nt!==cur.title) ? '다음 · '+nt : '다음';
   // 메모·확대·메시지만 바뀌었으면 다시 채우지 않는다(이미지를 다시 받느라 깜빡이지 않게).
-  var pages=JSON.stringify([d.current,next]);
+  var pages=JSON.stringify([d.current,next,CHORDS]);
   if(pages!==lastPages){
     lastPages=pages;
     fill(document.getElementById('current'), d.current, '빈 화면');
@@ -867,6 +947,11 @@ function control(q){
     .then(function(t){ if(t) apply(t); })
     .catch(function(){});
 }
+// 코드 줄 때문에 휴대폰 가사 배치가 관객 화면과 더 달라진다 — 처음 한 번만 알린다.
+function chordZoomHint(){
+  try{ if(localStorage.getItem('singer_chord_zoom_hint')) return; localStorage.setItem('singer_chord_zoom_hint','1'); }catch(_){}
+  hint('코드 줄 때문에 확대 위치가 실제 화면과 조금 다를 수 있어요');
+}
 function buzz(){ if(navigator.vibrate) navigator.vibrate(15); }
 var flashTimer=null;
 function go(dir){
@@ -912,7 +997,7 @@ if(REMOTE){
   // 메시지 칸도 같고, 스크롤하다 넘어가지 않게 좌우 밀기까지 막는다.
   function own(e){ if(!e.target.closest('#note,#message')) e.preventDefault(); }
   document.addEventListener('touchstart',function(e){
-    if(e.target.closest('#bar,#layout,#split')) return;
+    if(e.target.closest('#bar,#layout,#chords,#split')) return;
     own(e);
     begin(e,g);
   },{passive:false});
@@ -930,6 +1015,7 @@ if(REMOTE){
     var px=g.z0.x+(g.mx-g.r.left)/g.r.width*g.z0.size, py=g.z0.y+(g.my-g.r.top)/g.r.height*g.z0.size;
     zoom={on:size<0.999, size:size,
       x:clamp(px-(m.x-g.r.left)/g.r.width*size,0,1-size), y:clamp(py-(m.y-g.r.top)/g.r.height*size,0,1-size)};
+    if(!g.zoomed && CHORDS && state && hasChords(state.current)) chordZoomHint();
     g.zoomed=true;
     showZoom(); sendZoom();
   },{passive:false});
