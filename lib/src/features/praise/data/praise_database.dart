@@ -629,6 +629,8 @@ Future<void> freezeContiSongSnapshots(DatabaseExecutor db) async {
 String _migratePageFormat(String stored) {
   if (!stored.contains('###')) return stored;
   final pages = stored.split('###').map((p) => p.trim()).toList();
-  while (pages.isNotEmpty && pages.last.isEmpty) pages.removeLast();
+  while (pages.isNotEmpty && pages.last.isEmpty) {
+    pages.removeLast();
+  }
   return pages.join('\n\n');
 }

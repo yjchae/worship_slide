@@ -665,7 +665,7 @@ class PraiseRepository {
             'english_lyrics': english,
             'uid': newSongUid(),
             'updated_at': now,
-            if (chord != null) 'chord_lyrics': chord,
+            'chord_lyrics': ?chord,
             if (chord != null && chordKey != null) 'chord_key': chordKey,
             if (chord != null) 'chord_updated_at': now,
           });

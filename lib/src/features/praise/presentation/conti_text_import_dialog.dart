@@ -6,6 +6,11 @@ import '../../../app_colors.dart';
 import '../domain/conti_text_parse.dart';
 import '../domain/praise_song.dart';
 
+/// 콘티 한번에 넣기가 돌려줄 곡 하나 + 맞출 조(반음, H4). transpose: 체크 끔·적용 불가면 0.
+/// 담는 쪽은 `pick.song.copyWith(chordTranspose: pick.transpose)` 로 담는다(_withSubLyrics 뒤).
+/// 조 값 계산은 [contiKeyPlan](conti_text_parse.dart). [show] 반환형을 이걸로 바꾸는 일은 F7.
+typedef ContiTextPick = ({PraiseSong song, int transpose});
+
 /// 콘티 글을 붙여 넣으면 줄마다 곡을 찾아 한꺼번에 담는다.
 ///
 /// 1단계: 글 붙여 넣기 → 2단계: 줄마다 찾은 곡 확인. 같은 제목 곡이 여럿이면
