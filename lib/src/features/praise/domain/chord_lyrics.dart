@@ -1223,8 +1223,9 @@ String? chordOverLyricsToInline(String pasted) {
   final isChord = [for (final l in lines) _isChordOnlyLine(l)];
   var pairs = 0;
   for (var i = 0; i + 1 < lines.length; i++) {
-    if (isChord[i] && !isChord[i + 1] && lines[i + 1].trim().isNotEmpty)
+    if (isChord[i] && !isChord[i + 1] && lines[i + 1].trim().isNotEmpty) {
       pairs++;
+    }
   }
   if (pairs < 2) return null;
   final out = <String>[];
