@@ -332,10 +332,12 @@ class PraiseRepository {
     return result;
   }
 
-  Future<void> insertSong(PraiseSong song) async {
+  /// 새 곡을 넣고 그 id 를 돌려준다(코드는 이어서 [saveChords] 로).
+  Future<int> insertSong(PraiseSong song) async {
     final db = await _databaseProvider.database;
-    await db.insert('praise_songs', _newSongRow(song, _now()));
+    final id = await db.insert('praise_songs', _newSongRow(song, _now()));
     onSongsChanged?.call();
+    return id;
   }
 
   /// 곡의 코드 글·원래 조를 저장한다. **코드를 DB 에 쓰는 길은 이것 하나다**(§3-4) —
