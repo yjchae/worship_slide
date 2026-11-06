@@ -196,6 +196,29 @@ def test_bible_unchanged():
     check("문단 안에는 br 이 없다", para_parts(paragraphs[0]), [("run", "첫째 줄")])
 
 
+def test_chord_keys_ignored():
+    print("코드 키는 무시 (관객용 PPTX 에 코드가 안 섞인다)")
+    prs = export([{
+        "type": "song", "title": "찬양",
+        "lyrics": "주 은혜\n놀라워",
+        "english_lyrics": "",
+        # 앱은 이 키들을 보내지 않지만, 와도 무시해야 한다.
+        "chord_lyrics": "[G]주 은혜\n[D]놀라워",
+        "chord_key": "G",
+        "song_transpose": 2,
+        "background": None,
+    }])
+    check("슬라이드 수", len(prs.slides), 1)
+    texts = [
+        shape.text_frame.text
+        for slide in prs.slides
+        for shape in slide.shapes
+        if shape.has_text_frame
+    ]
+    check("가사 그대로", any("주 은혜" in t for t in texts), True)
+    check("대괄호 없음", any("[" in t for t in texts), False)
+
+
 if __name__ == "__main__":
     test_line_breaks()
     test_line_break_keeps_font()
@@ -203,6 +226,7 @@ if __name__ == "__main__":
     test_english_lines()
     test_alignment_kept()
     test_bible_unchanged()
+    test_chord_keys_ignored()
     if _failures:
         print(f"\n{len(_failures)}개 실패: {_failures}")
         raise SystemExit(1)

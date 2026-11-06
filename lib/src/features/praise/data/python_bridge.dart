@@ -315,7 +315,29 @@ class PythonBridge {
     stagingItems,
     required ExportStyle style,
   }) async {
-    final payload = jsonEncode({
+    final payload = exportPayload(
+      outputPath: outputPath,
+      stagingItems: stagingItems,
+      style: style,
+    );
+
+    final result = await _runTool(['export', payload]);
+
+    final json = jsonDecode(result.stdout as String) as Map<String, dynamic>;
+    return json['output_path'] as String;
+  }
+
+  /// `ppt_tool export` 에 넘길 JSON. 곡은 제목·원본·보조·추가 보조 가사만 싣는다 —
+  /// 코드(`chordLyrics` 등)는 관객용 PPTX 에 나가지 않으므로 **싣지 않는다**(테스트로 못 박았다).
+  static String exportPayload({
+    required String outputPath,
+    required List<
+      ({StagingItem item, SlideBackground? background, bool noSpacer})
+    >
+    stagingItems,
+    required ExportStyle style,
+  }) {
+    return jsonEncode({
       'output_path': outputPath,
       'songs': stagingItems.map((entry) {
         final Map<String, dynamic> json = switch (entry.item) {
@@ -375,11 +397,6 @@ class PythonBridge {
         'font_files': FontLibrary.filesFor(style.fontFamily),
       },
     });
-
-    final result = await _runTool(['export', payload]);
-
-    final json = jsonDecode(result.stdout as String) as Map<String, dynamic>;
-    return json['output_path'] as String;
   }
 
   Future<ProcessResult> _runTool(List<String> arguments) async {
