@@ -658,4 +658,55 @@ void main() {
       expect(stripChords(text), '[A] 글자\n\n끝');
     });
   });
+
+  group('편집 창 도우미 (chordMarksIn · chordSlotAt · diatonicChords)', () {
+    test('코드 토큰과 이스케이프 자리', () {
+      final marks = chordMarksIn('[G]주 \\[A]\n은[D]혜');
+      expect(
+        [for (final m in marks) (m.start, m.end, m.kind)],
+        [
+          (0, 3, ChordMarkKind.chord),
+          (5, 7, ChordMarkKind.escape),
+          (11, 14, ChordMarkKind.chord),
+        ],
+      );
+    });
+
+    test('글자 위 자리: 새로 넣을 곳과 이미 있는 코드', () {
+      const page = '[G]주 은[D/F#]혜\n놀라워';
+      final first = chordSlotAt(page, 0, 0)!;
+      expect(first.tokens.single.name, 'G');
+      expect((first.tokens.single.start, first.tokens.single.end), (0, 3));
+      final hye = chordSlotAt(page, 0, 3)!;
+      expect(hye.tokens.single.name, 'D/F#');
+      final eun = chordSlotAt(page, 0, 2)!;
+      expect(eun.tokens, isEmpty);
+      expect(page.substring(eun.insertAt, eun.insertAt + 1), '은');
+      final ra = chordSlotAt(page, 1, 1)!;
+      expect(page.substring(ra.insertAt, ra.insertAt + 1), '라');
+      final end = chordSlotAt(page, 1, 3)!;
+      expect(end.insertAt, page.length);
+      expect(chordSlotAt(page, 5, 0), isNull);
+    });
+
+    test('넣은 결과를 strip 하면 가사가 그대로', () {
+      const page = '주 은혜\n놀라워';
+      final slot = chordSlotAt(page, 1, 2)!;
+      final out = page.replaceRange(slot.insertAt, slot.insertAt, '[Em7]');
+      expect(out, '주 은혜\n놀라[Em7]워');
+      expect(stripChords(out), page);
+    });
+
+    test('코드만 있는 줄은 모든 코드가 한 자리', () {
+      final slot = chordSlotAt('[G] [D]\n주님', 0, 0)!;
+      expect(slot.tokens.map((t) => t.name), ['G', 'D']);
+    });
+
+    test('다이어토닉 7개', () {
+      expect(diatonicChords('G'), ['G', 'Am', 'Bm', 'C', 'D', 'Em', 'F#m7b5']);
+      expect(diatonicChords('F'), ['F', 'Gm', 'Am', 'Bb', 'C', 'Dm', 'Em7b5']);
+      expect(diatonicChords('Em'), ['Em', 'F#m7b5', 'G', 'Am', 'Bm', 'C', 'D']);
+      expect(diatonicChords('H'), isEmpty);
+    });
+  });
 }

@@ -1282,3 +1282,96 @@ String? chordOverLyricsToInline(String pasted) {
   }
   return out.join('\n');
 }
+
+// ── 편집 창 도우미 (S1·S1b) ─────────────────────────────
+
+enum ChordMarkKind { chord, escape }
+
+/// 코드 글 안 칠할 자리(코드 토큰·`\[` 이스케이프). 위치는 [text] 안 UTF-16 범위.
+typedef ChordMark = ({int start, int end, ChordMarkKind kind});
+
+List<ChordMark> chordMarksIn(String text) {
+  final marks = <ChordMark>[];
+  var lineStart = 0;
+  for (final line in text.split('\n')) {
+    for (final p in _scanLine(line)) {
+      if (p.chord != null) {
+        marks.add((
+          start: lineStart + p.start,
+          end: lineStart + p.end,
+          kind: ChordMarkKind.chord,
+        ));
+      } else if (p.end - p.start == 2) {
+        marks.add((
+          start: lineStart + p.start,
+          end: lineStart + p.end,
+          kind: ChordMarkKind.escape,
+        ));
+      }
+    }
+    lineStart += line.length + 1;
+  }
+  return marks;
+}
+
+/// 코드 넣을 자리: [parseChordPage] 의 줄 [line]·위치 [offset] 글자 위.
+/// [insertAt] = 새 토큰을 넣을 코드 글 안 위치, [tokens] = 그 자리에 이미 있는 코드 토큰들(코드 글 안 범위).
+/// 줄 번호가 틀리면 null.
+({int insertAt, List<({int start, int end, String name})> tokens})? chordSlotAt(
+  String chordPage,
+  int line,
+  int offset,
+) {
+  // parseChordPage 는 페이지를 trim 한 뒤 줄로 나눈다 — 같은 기준으로 센다.
+  final lead = chordPage.length - chordPage.trimLeft().length;
+  final lines = chordPage.trim().split('\n');
+  if (line < 0 || line >= lines.length) return null;
+  var lineStart = lead;
+  for (var l = 0; l < line; l++) {
+    lineStart += lines[l].length + 1;
+  }
+  final raw = lines[line];
+  final stripped = _stripLine(raw);
+  final tokens = <({int start, int end, String name})>[];
+  int? insertAt;
+  var pos = 0;
+  for (final p in _scanLine(raw)) {
+    if (p.chord != null) {
+      // 코드만 있는 줄은 모든 코드가 0 자리다.
+      if (pos == offset || stripped.chordOnly) {
+        tokens.add((
+          start: lineStart + p.start,
+          end: lineStart + p.end,
+          name: p.chord!,
+        ));
+        insertAt ??= lineStart + p.start;
+      }
+      continue;
+    }
+    if (pos == offset) {
+      insertAt ??= lineStart + p.start;
+      if (!stripped.chordOnly) break;
+    }
+    pos += p.text.length;
+    if (pos > offset && !stripped.chordOnly) break;
+  }
+  return (insertAt: insertAt ?? lineStart + raw.length, tokens: tokens);
+}
+
+/// 그 조의 다이어토닉 코드 7개(S1b 빠른 버튼). 장조 I ii iii IV V vi vii°(m7b5),
+/// 단조(자연 단음계) i ii°(m7b5) III iv v VI VII. 조 이름이 아니면 빈 목록.
+List<String> diatonicChords(String key) {
+  final k = _parseKey(key);
+  if (k == null) return const [];
+  final root = key.endsWith('m') ? key.substring(0, key.length - 1) : key;
+  const majorSteps = [0, 2, 4, 5, 7, 9, 11];
+  const majorQualities = ['', 'm', 'm', '', '', 'm', 'm7b5'];
+  const minorSteps = [0, 2, 3, 5, 7, 8, 10];
+  const minorQualities = ['m', 'm7b5', '', 'm', 'm', '', ''];
+  final steps = k.minor ? minorSteps : majorSteps;
+  final qualities = k.minor ? minorQualities : majorQualities;
+  return [
+    for (var i = 0; i < 7; i++)
+      '${transposeChordName(root, steps[i], targetKey: key)}${qualities[i]}',
+  ];
+}
