@@ -1,20 +1,9 @@
+import '../domain/lyrics_text.dart';
+
+export '../domain/lyrics_text.dart' show normalizeEditableLyrics;
+
 // 저장 형식이 편집 형식과 동일하므로 변환 불필요.
 String lyricsToEditText(String stored) => stored;
-
-// 편집 텍스트 → 저장 형식 정규화.
-// 규칙: 빈 줄 1개(\n\n) = 페이지 구분, 빈 줄 N개 = 빈 페이지 N-1장.
-// ###, ==== 은 명시적 페이지 구분자로 허용.
-String normalizeEditableLyrics(String raw) {
-  var text = raw.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
-  // ###, ==== → \n\n (주변 줄바꿈 포함 소비)
-  text = text.replaceAll(RegExp(r'\n?[ \t]*(###|====)[ \t]*\n?'), '\n\n');
-  // 분리 → 각 페이지 trim → 후행 빈 페이지 제거 → 재결합
-  final pages = text.split(_pageBreak).map((p) => p.trim()).toList();
-  while (pages.isNotEmpty && pages.last.isEmpty) {
-    pages.removeLast();
-  }
-  return pages.join('\n\n');
-}
 
 // 페이지 목록 → 저장 형식 인코딩.
 String encodePages(Iterable<String> pages) {
