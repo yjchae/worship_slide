@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+import '../domain/chord_lyrics.dart';
 import '../domain/praise_song.dart';
 import '../domain/slide_background.dart';
 import '../domain/slide_media.dart';
@@ -157,6 +158,11 @@ class WorshipContiRepository {
             'song_lyrics': item.song.lyrics,
             'song_english_lyrics': item.song.englishLyrics,
             'song_extra_lyrics': item.song.extraLyrics,
+            // 코드 스냅샷(싱어·발표자 화면 전용)과 이 항목의 조 바꾸기·♯/♭ 선호.
+            'song_chord_lyrics': item.song.chordLyrics,
+            'song_chord_key': item.song.chordKey,
+            'song_transpose': readTranspose(item.song.chordTranspose),
+            'song_chord_accidental': item.song.chordAccidental.dbValue,
           };
         } else if (item is BibleStagingItem) {
           row = {
@@ -277,6 +283,11 @@ class WorshipContiRepository {
           missingCount++;
           continue;
         }
+        // 코드도 스냅샷을 쓴다(라이브러리 곡을 따라가지 않는다). v19 이전 행은 NULL = 코드 없음.
+        final storedChord = _nonEmpty(row['song_chord_lyrics']);
+        final storedKey = _nonEmpty(row['song_chord_key']);
+        final transpose = readTranspose(row['song_transpose']);
+        final accidental = ChordAccidental.fromDb(row['song_chord_accidental']);
         final song = baseSong == null
             ? PraiseSong(
                 id: songId,
@@ -285,6 +296,10 @@ class WorshipContiRepository {
                 lyrics: storedLyrics!,
                 englishLyrics: storedEnglishLyrics ?? '',
                 extraLyrics: storedExtraLyrics,
+                chordLyrics: storedChord,
+                chordKey: storedKey,
+                chordTranspose: transpose,
+                chordAccidental: accidental,
               )
             : (storedLyrics != null
                   ? PraiseSong(
@@ -296,8 +311,15 @@ class WorshipContiRepository {
                       lyrics: storedLyrics,
                       englishLyrics: storedEnglishLyrics ?? '',
                       extraLyrics: storedExtraLyrics,
+                      chordLyrics: storedChord,
+                      chordKey: storedKey,
+                      chordTranspose: transpose,
+                      chordAccidental: accidental,
                     )
-                  : baseSong);
+                  : baseSong.copyWith(
+                      chordTranspose: transpose,
+                      chordAccidental: accidental,
+                    ));
         result.add((uid: uid++, item: SongStagingItem(song)));
       } else if (type == 'bible') {
         final ref = row['bible_reference'] as String?;
@@ -381,7 +403,8 @@ class WorshipContiRepository {
     final itemRows = await db.rawQuery(
       """
       SELECT wci.*, ps.title AS cur_title, ps.lyrics AS cur_lyrics,
-             ps.english_lyrics AS cur_english_lyrics, ps.uid AS cur_song_uid
+             ps.english_lyrics AS cur_english_lyrics, ps.uid AS cur_song_uid,
+             ps.chord_lyrics AS cur_chord_lyrics, ps.chord_key AS cur_chord_key
       FROM worship_conti_items wci
       LEFT JOIN praise_songs ps ON ps.id = wci.song_id
       WHERE wci.conti_id = ?
@@ -569,6 +592,16 @@ class WorshipContiRepository {
         }
         row['background'] = mapBackgroundPaths(row['background'], unpack);
         row['media'] = _youtubeOnly(row['media']);
+        // 남이 만든 파일 — 조 값은 범위 안 정수만, ♯/♭ 은 아는 값만.
+        if (row.containsKey('song_transpose')) {
+          final t = readTranspose(row['song_transpose']);
+          row['song_transpose'] = t == 0 ? null : t;
+        }
+        if (row.containsKey('song_chord_accidental')) {
+          row['song_chord_accidental'] = ChordAccidental.fromDb(
+            row['song_chord_accidental'],
+          ).dbValue;
+        }
         final songUid = row['song_uid'];
         if (songUid is String) row['song_id'] = songIdByUid(songUid);
         row['conti_id'] = contiId;
@@ -693,6 +726,13 @@ class WorshipContiRepository {
     ];
   }
 
+  /// 콘티 행의 조 바꾸기 값. −11..11 정수만, 그 밖(범위 밖·정수 아님·null)은 0.
+  static int readTranspose(Object? value) =>
+      value is int && value >= -11 && value <= 11 ? value : 0;
+
+  static String? _nonEmpty(Object? value) =>
+      value is String && value.isNotEmpty ? value : null;
+
   /// 다른 PC 로 보낼 항목 행(.wsconti·동기화 공용). 이 PC 에서만 뜻이 있는 칸(id·conti_id·song_id·
   /// 원본 PPT 경로)과 `cur_` 로 시작하는 곁들인 칸을 빼고, 빈 곡 스냅샷은 지금 곡(`cur_title`·
   /// `cur_lyrics`·`cur_english_lyrics`)으로 채운다 — 예전(DB version 7·13 전) 콘티는 스냅샷이 비어
@@ -707,6 +747,12 @@ class WorshipContiRepository {
       ..removeWhere((key, _) => key.startsWith('cur_'));
     if (row['item_type'] == 'song') {
       item['song_title'] ??= row['cur_title'];
+      // 가사 스냅샷을 지금 곡으로 채울 때만 코드도 지금 곡 것으로 채운다(가사와 짝이 맞게).
+      // 가사 스냅샷이 있는 행의 빈 코드는 '코드 없음' 그대로다.
+      if (row['song_lyrics'] == null) {
+        item['song_chord_lyrics'] ??= row['cur_chord_lyrics'];
+        item['song_chord_key'] ??= row['cur_chord_key'];
+      }
       item['song_lyrics'] ??= row['cur_lyrics'];
       item['song_english_lyrics'] ??= row['cur_english_lyrics'];
       // 받는 PC 가 같은 곡(동기화로 uid 가 같은 곡)에 다시 잇는 데 쓴다.
