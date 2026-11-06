@@ -41,6 +41,7 @@ import '../data/sync_store.dart';
 import '../data/source_file_watcher.dart';
 import '../data/speech_listener.dart';
 import '../data/worship_conti_repository.dart';
+import '../domain/chord_lyrics.dart';
 import '../domain/worship_conti.dart';
 import '../domain/export_style.dart';
 import '../domain/offering_design.dart';
@@ -50,6 +51,8 @@ import '../domain/slide_background.dart';
 import '../domain/slide_media.dart';
 import '../domain/staging_item.dart';
 import 'b_screen_dialogs.dart';
+import 'chord_key_controls.dart';
+import 'chord_sheet_view.dart';
 import 'background_image_gallery.dart';
 import 'libreoffice_install_dialog.dart';
 import 'lyrics_editor_dialog.dart';
@@ -92,6 +95,8 @@ class _SlideInfo {
     this.imagePath,
     this.background,
     this.media,
+    this.chordText = '',
+    this.chordSong,
   });
   final int stagingUid;
   final String mainText;
@@ -111,6 +116,11 @@ class _SlideInfo {
   final SlideBackground? background;
   // 동영상·음악·유튜브 페이지, 또는 동영상이 든 PPT 페이지.
   final SlideMedia? media;
+  // 이 페이지 코드 글(조 바꾸기를 적용한 뒤), '' = 없음. 싱어·발표 보기 코드 악보만 쓴다 —
+  // 관객 쪽 SlidePageData 로는 넘기지 않는다.
+  final String chordText;
+  // 코드 있는 곡 항목의 곡(조 묶음·조 배지용). 코드가 없으면 null.
+  final PraiseSong? chordSong;
 }
 
 /// 발표 보기에서 복사·옮기는 콘티 항목 하나: 새 항목 + 배경 + 이 항목에 담긴 원래 페이지들.
@@ -947,7 +957,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       } else if (item is SongStagingItem) {
         final song = item.song;
         final pairs = song.pairedPages;
+        final chordSong = song.hasChords ? song : null;
+        final chordKey = song.effectiveChordKey;
         for (var j = 0; j < pairs.length; j++) {
+          final chord = pairs[j].chord;
           tryAdd(
             _SlideInfo(
               stagingUid: entry.uid,
@@ -958,6 +971,15 @@ class _PraiseHomePageState extends State<PraiseHomePage>
               isBible: false,
               pageIndexInItem: j,
               background: background,
+              chordText: chord.isEmpty
+                  ? ''
+                  : transposeChordText(
+                      chord,
+                      song.chordTranspose,
+                      accidental: song.chordAccidental,
+                      originalKey: chordKey,
+                    ),
+              chordSong: chordSong,
             ),
           );
         }
@@ -1288,10 +1310,12 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   // ── 싱어 화면 ───────────────────────────────────────────────────────────
 
   /// [originalOnly] = 휴대폰(싱어·리모컨)용: 보조 가사를 빼고 원본만. 설교 부제는 내용이라 둔다.
+  /// 휴대폰용은 코드를 늘 싣고(휴대폰 버튼이 정한다), 네이티브 싱어 창은 '싱어 코드'가 켜져 있을 때만.
   SingerViewData _buildSingerViewData([
     List<_SlideInfo>? allSlides,
     bool originalOnly = false,
   ]) {
+    final withChords = originalOnly || _nativeSingerChords;
     final slides = allSlides ?? _allSlides;
     final index = slides.isEmpty
         ? 0
@@ -1310,6 +1334,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
             : slide.englishText,
         title: slide.title,
         imagePath: slide.imagePath,
+        chordLines: withChords && slide.chordText.isNotEmpty
+            ? parseChordPage(slide.chordText)
+            : null,
+        keyLabel: withChords ? chordKeyLabelOf(slide.chordSong) : '',
       );
     }
 
@@ -1322,6 +1350,31 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       clock: _presenterView.timer.toSingerJson(),
     );
   }
+
+  /// 콘티 항목 곡의 조 값·♯/♭ 표기를 바꾼다(라이브러리 곡은 그대로). 관객 화면엔 다시 보내지 않고
+  /// 싱어·휴대폰만 다시 보낸다 — 페이지가 그대로여도 코드가 바뀌어야 해서 직접 부른다.
+  void _setChordTranspose(
+    int uid, {
+    int? transpose,
+    ChordAccidental? accidental,
+  }) {
+    final index = _stagingItems.indexWhere((e) => e.uid == uid);
+    if (index < 0) return;
+    final item = _stagingItems[index].item;
+    if (item is! SongStagingItem) return;
+    final song = item.song.copyWith(
+      chordTranspose: transpose == null ? null : wrapTranspose(transpose),
+      chordAccidental: accidental,
+    );
+    setState(
+      () => _stagingItems[index] = (uid: uid, item: SongStagingItem(song)),
+    );
+    _sendSingerView();
+  }
+
+  /// 네이티브 싱어 창에 코드를 보낼지. Windows 싱어 창은 2차라 macOS 만.
+  bool get _nativeSingerChords =>
+      Platform.isMacOS && _presenterView.singerChords;
 
   Future<void> _toggleSingerWindow() async {
     if (_isSingerOpen) {
@@ -2652,27 +2705,31 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   /// '콘티 한번에 넣기': 콘티 글을 붙여 넣어 줄마다 찾은 곡을 콘티 맨 끝에 순서대로 담는다.
   Future<void> _importContiText() async {
-    final songs = await ContiTextImportDialog.show(
+    final picks = await ContiTextImportDialog.show(
       context,
       loadSongs: () => _repository.searchSongs(''),
     );
-    if (songs == null || songs.isEmpty) return;
+    if (picks == null || picks.isEmpty) return;
     // 보조 언어를 다 입힌 뒤 한 번에 넣는다 — 중간에 그리면 순서대로 하나씩 늘어나 보인다.
     // 보조 가사를 못 읽은 곡(DB 잠김 등)도 원본 가사로는 담는다. 고른 곡을 통째로 잃지 않게.
+    // 글에 적힌 조는 담은 뒤에 얹는다(_withSubLyrics 는 조 값을 모른다).
     final staged = <PraiseSong>[];
     var noSubLyrics = 0;
-    for (final song in songs) {
+    for (final pick in picks) {
+      final song = pick.song;
+      PraiseSong withSub;
       try {
-        staged.add(await _withSubLyrics(song));
+        withSub = await _withSubLyrics(song);
       } catch (e, st) {
         AppLogger.instance.error(
           '[conti-text] 보조 가사 읽기 실패: ${song.title}',
           e,
           st,
         );
-        staged.add(song);
+        withSub = song;
         noSubLyrics++;
       }
+      staged.add(withSub.copyWith(chordTranspose: pick.transpose));
     }
     if (!mounted) return;
     setState(() {
@@ -5593,10 +5650,22 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     if (result == null || !mounted) return;
     final (edited, subLyrics) = result;
     // 악보에서 만든 초안은 song 이 있어도 id 가 없다 → 새 곡으로 넣는다.
+    // 가사(updateSong·insertSong)와 코드(saveChords)는 길이 따로다 — 가사만 고치는 길이 코드를 덮지 않게(§3-4).
+    final int id;
     if (edited.id == null) {
-      await _repository.insertSong(edited);
+      id = await _repository.insertSong(edited);
     } else {
+      id = edited.id!;
       await _repository.updateSong(edited);
+    }
+    if (edited.chordLyrics != song?.chordLyrics ||
+        edited.chordKey != song?.chordKey ||
+        edited.id == null) {
+      await _repository.saveChords(
+        id,
+        chordLyrics: edited.chordLyrics,
+        chordKey: edited.chordKey,
+      );
     }
     for (final entry in subLyrics.entries) {
       if (entry.key == PraiseRepository.defaultSubLanguage) continue;
@@ -5860,6 +5929,11 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               bPairs: _bConfig.pairs,
                               onLinkB: _linkBPpt,
                               onUnlinkB: _unlinkBPpt,
+                              onTranspose: (uid, n, acc) => _setChordTranspose(
+                                uid,
+                                transpose: n,
+                                accidental: acc,
+                              ),
                               onReorder: _onStagingReorder,
                               onRemove: _removeFromStaging,
                               onDropSong: _addSongToStaging,
@@ -5980,6 +6054,14 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               onToggleVoice: _toggleVoice,
                               onShowVoiceInsert: _showVoiceInsert,
                               onUndoVoiceInsert: _undoVoiceInsert,
+                              onTransposeChanged: (uid, n) =>
+                                  _setChordTranspose(uid, transpose: n),
+                              onSingerChordsChanged: (on) {
+                                setState(
+                                  () => _presenterView.singerChords = on,
+                                );
+                                _sendSingerView();
+                              },
                               onZoomChanged: (center, scale) {
                                 setState(() {
                                   _zoomCenter = center;
@@ -6849,6 +6931,41 @@ class _OverflowChip extends StatelessWidget {
   }
 }
 
+/// 발표 보기 머리줄 켜기/끄기 칩('코드 보기'·'싱어 코드'). 포커스를 안 가져간다 — 발표 단축키가 그대로 돈다.
+class _ToggleChip extends StatelessWidget {
+  const _ToggleChip({
+    required this.label,
+    required this.tooltip,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String label;
+  final String tooltip;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return ExcludeFocus(
+      child: Tooltip(
+        message: tooltip,
+        child: FilterChip(
+          label: Text(label),
+          selected: value,
+          showCheckmark: true,
+          visualDensity: VisualDensity.compact,
+          labelStyle: const TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
+          onSelected: onChanged,
+        ),
+      ),
+    );
+  }
+}
+
 // ── StagingPanel ──────────────────────────────────────────────────────────
 
 enum _PptMenu { open, reload, linkB, unlinkB }
@@ -6876,6 +6993,7 @@ class _StagingPanel extends StatelessWidget {
     required this.onAddBlank,
     required this.onLinkB,
     required this.onUnlinkB,
+    required this.onTranspose,
     this.bPairs = const {},
     this.overflowCounts = const {},
     this.contiName,
@@ -6902,6 +7020,9 @@ class _StagingPanel extends StatelessWidget {
   final Map<String, BPptPair> bPairs;
   final ValueChanged<int> onLinkB;
   final ValueChanged<int> onUnlinkB;
+  // 코드 있는 곡 항목의 조 칩 → 조 바꾸기 팝오버.
+  final void Function(int uid, int transpose, ChordAccidental accidental)
+  onTranspose;
   final void Function(int oldIndex, int newIndex) onReorder;
   final void Function(int uid) onRemove;
   // 찬양 검색 목록에서 끌어 온 곡 (콘티 맨 끝에 담는다)
@@ -7330,6 +7451,30 @@ class _StagingPanel extends StatelessWidget {
                                                       ],
                                                     ),
                                                   ),
+                                                ),
+                                              ),
+                                            if (item is SongStagingItem &&
+                                                item.song.hasChords)
+                                              ChordKeyChip(
+                                                song: item.song,
+                                                onTap: () => showDialog<void>(
+                                                  context: context,
+                                                  builder: (dialogContext) =>
+                                                      ChordTransposeDialog(
+                                                        song: item.song,
+                                                        onEditKey: () {
+                                                          Navigator.of(
+                                                            dialogContext,
+                                                          ).pop();
+                                                          onEditText(entry.uid);
+                                                        },
+                                                        onChanged: (n, acc) =>
+                                                            onTranspose(
+                                                              entry.uid,
+                                                              n,
+                                                              acc,
+                                                            ),
+                                                      ),
                                                 ),
                                               ),
                                             if (overflowCounts[entry.uid]
@@ -7768,7 +7913,19 @@ class _SongSearchContent extends StatelessWidget {
                                   dense: true,
                                   visualDensity: VisualDensity.compact,
                                   mouseCursor: SystemMouseCursors.grab,
-                                  title: Text(song.title),
+                                  title: song.hasChords
+                                      ? Row(
+                                          children: [
+                                            Flexible(
+                                              child: Text(
+                                                song.title,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                            ),
+                                            ChordSongBadge(song: song),
+                                          ],
+                                        )
+                                      : Text(song.title),
                                   subtitle: Text(
                                     song.pages.join(' / '),
                                     maxLines: 1,
@@ -10808,12 +10965,16 @@ class _SlideThumbnail extends StatefulWidget {
     required this.isSelected,
     required this.index,
     this.isEditable = true,
+    this.chordBadge = false,
     required this.onTap,
     required this.onEdit,
     required this.onDelete,
   });
 
   final SlidePageData data;
+
+  /// 코드 있는 곡 항목의 첫 페이지 — 작은 ♪ 배지. 코드 자체는 썸네일에 안 그린다.
+  final bool chordBadge;
 
   /// 통역 화면 판. 있으면 그 기준 넘침도 표시한다.
   final SlidePageData? bData;
@@ -10891,6 +11052,32 @@ class _SlideThumbnailState extends State<_SlideThumbnail> {
                       ),
                     ),
                   ),
+                  if (widget.chordBadge)
+                    Positioned(
+                      bottom: 4,
+                      left: 4,
+                      child: Tooltip(
+                        message: "코드 있는 곡 (발표 보기 '코드 보기'·싱어 화면에서 보입니다)",
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 5,
+                            vertical: 1,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.6),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: const Text(
+                            '♪',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                              color: chordKeyBadgeColor,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                   if (overflow != null) ...[
                     Positioned.fill(
                       child: IgnorePointer(
@@ -12352,6 +12539,10 @@ class PresenterViewState {
   double gridThumbW = 140;
   // 곡 찾기 범위. 예배 도중 탭을 오가도 고른 범위가 유지되게 여기에 둔다.
   SlideSearchScope searchScope = SlideSearchScope.title;
+  // 코드 악보. 앱이 켜져 있는 동안만 기억한다(다음 실행 때 끔).
+  // singerChords = macOS 싱어 창에 코드 보내기, chordView = 현재 슬라이드 칸을 코드 악보로.
+  bool singerChords = false;
+  bool chordView = false;
 }
 
 /// 발표 보기 곡 찾기 범위: 제목만 / 가사(원본·보조 언어)만.
@@ -12415,6 +12606,8 @@ class _PresenterConsole extends StatefulWidget {
     required this.onToggleVoice,
     required this.onShowVoiceInsert,
     required this.onUndoVoiceInsert,
+    required this.onTransposeChanged,
+    required this.onSingerChordsChanged,
   });
 
   final List<_SlideInfo> slides;
@@ -12477,6 +12670,10 @@ class _PresenterConsole extends StatefulWidget {
   final VoidCallback onToggleVoice;
   final VoidCallback onShowVoiceInsert;
   final VoidCallback onUndoVoiceInsert;
+  // 코드 있는 곡 항목의 조 값(반음)을 바꾼다. 관객 화면은 그대로, 싱어·휴대폰만 다시 보낸다.
+  final void Function(int stagingUid, int transpose) onTransposeChanged;
+  // '싱어 코드' 스위치(macOS 싱어 창). 값은 viewState.singerChords.
+  final ValueChanged<bool> onSingerChordsChanged;
 
   @override
   State<_PresenterConsole> createState() => _PresenterConsoleState();
@@ -13406,11 +13603,16 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
           color: _view.showAllPages ? cs.primary : null,
         ),
         IconButton(
-          onPressed: widget.onZoomToggled,
+          // 코드 보기 중엔 칸이 관객 화면 모양이 아니라 확대 영역을 고를 수 없다.
+          onPressed: _showingChordSheet ? null : widget.onZoomToggled,
           icon: Icon(
             widget.isZoomOn ? Icons.zoom_in_rounded : Icons.search_rounded,
           ),
-          tooltip: widget.isZoomOn ? '확대 끄기' : '영역 확대',
+          tooltip: _showingChordSheet
+              ? '코드 보기 중에는 영역 확대를 쓸 수 없습니다'
+              : widget.isZoomOn
+              ? '확대 끄기'
+              : '영역 확대',
           color: widget.isZoomOn ? cs.primary : null,
         ),
         // 발표 시작/종료는 탭 옆 상단 버튼이 담당한다. 여기선 화면 끄기만.
@@ -13435,6 +13637,16 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
                 ? '싱어 화면 닫기'
                 : '싱어 화면 열기 (현재 + 다음 페이지)',
             color: widget.isSingerOpen ? cs.primary : null,
+          ),
+        // Windows 싱어 창 코드는 2차 — 스위치를 숨긴다(휴대폰·코드 보기는 된다).
+        if (open && Platform.isMacOS)
+          _ToggleChip(
+            label: '싱어 코드',
+            tooltip: _view.singerChords
+                ? '싱어 화면에서 코드 숨기기'
+                : '싱어 화면 가사 위에 코드 보이기 (관객 화면은 그대로)',
+            value: _view.singerChords,
+            onChanged: widget.onSingerChordsChanged,
           ),
         if (open)
           IconButton(
@@ -13465,7 +13677,46 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
     );
   }
 
+  // ── 코드 악보 (D4-A) ──
+
+  _SlideInfo? _slideAt(int i) =>
+      i >= 0 && i < widget.slides.length ? widget.slides[i] : null;
+
+  /// 코드 있는 곡 항목의 첫 페이지인지(썸네일 ♪ 배지).
+  bool _isFirstChordPage(int i) {
+    final slide = widget.slides[i];
+    if (slide.chordSong == null || slide.isAutoSpacer) return false;
+    return i == 0 || widget.slides[i - 1].stagingUid != slide.stagingUid;
+  }
+
+  bool get _anyChordSlide => widget.slides.any((s) => s.chordText.isNotEmpty);
+
+  /// 지금 현재 칸이 코드 악보로 그려지는지. 코드 없는 페이지는 '코드 보기'를 켜도 평소 슬라이드다.
+  bool get _showingChordSheet =>
+      _view.chordView &&
+      (_slideAt(widget.currentIndex)?.chordText.isNotEmpty ?? false);
+
+  void _setChordView(bool on) {
+    setState(() => _view.chordView = on);
+    // 켜는 순간 관객 화면에 남은 포인터를 지운다(코드 악보 위 좌표는 관객 화면과 안 맞는다).
+    if (on) widget.onPointerMove(null);
+  }
+
+  /// 코드 악보 한 페이지. 보조 덩어리는 관객 화면처럼 디자인의 보조 언어 스위치를 따른다.
+  Widget _chordSheetFor(_SlideInfo slide, {bool dim = false}) {
+    final showSub = widget.style
+        .withBackground(slide.background)
+        .includeEnglishLyrics;
+    return ChordSheetView(
+      lines: parseChordPage(slide.chordText),
+      subTexts: showSub ? [slide.englishText, slide.extraText] : const [],
+      dim: dim,
+    );
+  }
+
   Widget _currentStage(ColorScheme cs) {
+    final current = _slideAt(widget.currentIndex);
+    final keyText = chordKeyLabelOf(current?.chordSong);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -13477,14 +13728,31 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
                 '외국어 쪽 없음',
                 tooltip: '통역 화면에 원본 쪽이 나가고 있습니다.',
               ),
+            const Spacer(),
+            if (_showingChordSheet && keyText.isNotEmpty) ...[
+              ChordKeyBadge(keyText),
+              const SizedBox(width: 8),
+            ],
+            if (_anyChordSlide || _view.chordView)
+              _ToggleChip(
+                label: '코드 보기',
+                tooltip: _view.chordView
+                    ? '평소 슬라이드로 돌아가기'
+                    : '현재 칸을 코드 악보로 (관객 화면은 구석에 작게, 포인터·확대는 꺼짐)',
+                value: _view.chordView,
+                onChanged: _setChordView,
+              ),
           ],
         ),
         const SizedBox(height: 6),
         Expanded(
           child: LayoutBuilder(
             builder: (context, constraints) => MouseRegion(
-              onHover: (event) =>
-                  _emitPointer(constraints.biggest, event.localPosition),
+              // 코드 보기 중엔 포인터를 관객 화면에 보내지 않는다(좌표가 관객 화면과 안 맞는다).
+              onHover: (event) {
+                if (_showingChordSheet) return;
+                _emitPointer(constraints.biggest, event.localPosition);
+              },
               onExit: (_) => widget.onPointerMove(null),
               child: Center(
                 child: AspectRatio(
@@ -13499,10 +13767,46 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
                       child: Stack(
                         fit: StackFit.expand,
                         children: [
-                          ConsoleSlideView(
-                            data: _pageDataFor(widget.currentIndex),
-                          ),
-                          if (widget.isZoomOn)
+                          if (_showingChordSheet) ...[
+                            _chordSheetFor(current!),
+                            // 관객 화면은 구석에 작게 남긴다. 누르면 코드 보기를 끈다.
+                            Align(
+                              alignment: Alignment.bottomRight,
+                              child: FractionallySizedBox(
+                                widthFactor: 0.25,
+                                child: Padding(
+                                  padding: const EdgeInsets.all(8),
+                                  child: Tooltip(
+                                    message: '관객 화면 · 눌러서 코드 보기 끄기',
+                                    child: GestureDetector(
+                                      onTap: () => _setChordView(false),
+                                      child: AspectRatio(
+                                        aspectRatio: _thumbAspect,
+                                        child: DecoratedBox(
+                                          position:
+                                              DecorationPosition.foreground,
+                                          decoration: BoxDecoration(
+                                            border: Border.all(
+                                              color: chordKeyBadgeColor,
+                                            ),
+                                          ),
+                                          child: ConsoleSlideView(
+                                            data: _pageDataFor(
+                                              widget.currentIndex,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ] else
+                            ConsoleSlideView(
+                              data: _pageDataFor(widget.currentIndex),
+                            ),
+                          if (widget.isZoomOn && !_showingChordSheet)
                             _ZoomRegionOverlay(
                               center: widget.zoomCenter,
                               scale: widget.zoomScale,
@@ -13552,6 +13856,10 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
           const SizedBox(height: 6),
           _nextPreview(cs),
           const SizedBox(height: 14),
+          if (_slideAt(widget.currentIndex)?.chordSong != null) ...[
+            _keyBox(cs, _slideAt(widget.currentIndex)!),
+            const SizedBox(height: 14),
+          ],
           _ElapsedClock(
             isRunning: widget.isPresentationOpen,
             timer: _view.timer,
@@ -13583,13 +13891,84 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
         ),
         clipBehavior: Clip.antiAlias,
         child: hasNext
-            ? ConsoleSlideView(data: _pageDataFor(widget.currentIndex + 1))
+            ? (_view.chordView &&
+                      widget
+                          .slides[widget.currentIndex + 1]
+                          .chordText
+                          .isNotEmpty
+                  ? _chordSheetFor(
+                      widget.slides[widget.currentIndex + 1],
+                      dim: true,
+                    )
+                  : ConsoleSlideView(
+                      data: _pageDataFor(widget.currentIndex + 1),
+                    ))
             : Center(
                 child: Text(
                   '— 마지막 —',
                   style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
                 ),
               ),
+      ),
+    );
+  }
+
+  /// '조' 묶음 (S4): 현재 항목이 코드 있는 곡일 때만. 버튼은 포커스를 안 가져간다(발표 단축키 유지).
+  Widget _keyBox(ColorScheme cs, _SlideInfo slide) {
+    final song = slide.chordSong!;
+    final n = song.chordTranspose;
+    final from = song.effectiveChordKey;
+    final estimated = song.chordKeyEstimated ? ' (추정)' : '';
+    final sign = n > 0 ? '+$n' : '$n';
+    final label = from == null
+        ? (n == 0 ? '원래 조' : '$sign 반음')
+        : n == 0
+        ? '원래 $from$estimated'
+        : '원래 $from$estimated · 지금 '
+              '${keyAfter(from, n, accidental: song.chordAccidental)} ($sign)';
+    void set(int v) => widget.onTransposeChanged(slide.stagingUid, v);
+    return ExcludeFocus(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _sectionLabel(cs, '조'),
+          const SizedBox(height: 6),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: n == 0 ? FontWeight.w500 : FontWeight.w700,
+              color: cs.onSurface,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              IconButton.outlined(
+                visualDensity: VisualDensity.compact,
+                tooltip: '반음 내리기',
+                onPressed: () => set(wrapTranspose(n - 1)),
+                icon: const Icon(Icons.remove_rounded, size: 18),
+              ),
+              const SizedBox(width: 6),
+              IconButton.outlined(
+                visualDensity: VisualDensity.compact,
+                tooltip: '반음 올리기',
+                onPressed: () => set(wrapTranspose(n + 1)),
+                icon: const Icon(Icons.add_rounded, size: 18),
+              ),
+              const SizedBox(width: 6),
+              TextButton(
+                onPressed: n == 0 ? null : () => set(0),
+                child: const Text('원래대로'),
+              ),
+            ],
+          ),
+          Text(
+            '싱어·휴대폰·코드 보기만 바뀝니다. 콘티를 저장하면 남습니다.',
+            style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+          ),
+        ],
       ),
     );
   }
@@ -13858,6 +14237,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
                             isSelected: i == widget.currentIndex,
                             index: i,
                             isEditable: !widget.slides[i].isAutoSpacer,
+                            chordBadge: _isFirstChordPage(i),
                             // 누른 페이지로 넘기기만 한다. 보기 전환은 버튼으로만.
                             onTap: () => _onThumbTap(i),
                             onEdit: () => widget.onSlideEdit(i),
@@ -13978,6 +14358,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
                         isSelected: i == widget.currentIndex,
                         index: i,
                         isEditable: !widget.slides[i].isAutoSpacer,
+                        chordBadge: _isFirstChordPage(i),
                         onTap: () => _onThumbTap(i),
                         onEdit: () => widget.onSlideEdit(i),
                         onDelete: () => widget.onSlideDelete(i),
