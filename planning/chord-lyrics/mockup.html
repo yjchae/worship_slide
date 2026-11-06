@@ -1,0 +1,849 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>코드 악보 화면 목업</title>
+<style>
+@font-face { font-family: Pretendard; font-weight: 400; src: url("../../assets/fonts/Pretendard-Regular.ttf"); }
+@font-face { font-family: Pretendard; font-weight: 500; src: url("../../assets/fonts/Pretendard-Medium.ttf"); }
+@font-face { font-family: Pretendard; font-weight: 600; src: url("../../assets/fonts/Pretendard-SemiBold.ttf"); }
+@font-face { font-family: Pretendard; font-weight: 700; src: url("../../assets/fonts/Pretendard-Bold.ttf"); }
+@font-face { font-family: Pretendard; font-weight: 800; src: url("../../assets/fonts/Pretendard-Bold.ttf"); }
+
+/* 앱 화면 색 (lib/src/app_colors.dart 밝은 테마와 같은 값) */
+:root {
+  --canvas: #F4F5F8; --surface: #FFFFFF; --line: #D6DBE6; --outline: #B4BCCC;
+  --point: #4D5E82; --ink: #1C1C21; --muted: #6E6E7A; --subtle: #EDEDF1;
+  --graphite: #2C2E35; --live: #E5484D; --warn: #B7791F; --warn-bg: #FFF6E5;
+  --r-control: 6px; --r-panel: 10px; --r-dialog: 14px;
+  /* 슬라이드(관객) 기본 색 */
+  --slide-bg: #10131A; --c-main: #FFFFFF; --c-sub: #FFF176;
+  /* 코드 악보 (싱어·발표자 전용) */
+  --chord: #FFA94D;          /* 어두운 바탕 위 코드 — 기획 #FFC857 은 싱어 보조 줄(#ffd54f)과 거의 같아 주황으로 옮김 */
+  --chord-ink: #C25A0A;      /* 흰 입력칸 안 코드 토큰 */
+  --s-bg: #0d0f12; --s-cur: #1b2028; --s-cur-line: #5a6472; --s-next: #0f1215; --s-next-line: #232930;
+  --s-text: #e6e9ee; --s-muted: #9aa4b1; --s-sub: #ffd54f;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--canvas); color: var(--ink);
+  font-family: Pretendard, sans-serif; font-size: 13px; }
+.page { max-width: 1520px; margin: 0 auto; padding: 32px 16px 64px; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+.lead { color: var(--muted); margin: 0 0 32px; line-height: 1.6; }
+section { margin-bottom: 52px; }
+section > h2 { font-size: 16px; margin: 0 0 4px; }
+section > p.cap { color: var(--muted); margin: 0 0 14px; line-height: 1.6; max-width: 1100px; }
+.frame { display: inline-block; padding: 28px; background: #E3E6EE; border-radius: 16px; position: relative; }
+
+/* 공통 컨트롤 */
+.dialog { background: var(--surface); border-radius: var(--r-dialog);
+  box-shadow: 0 18px 50px rgba(28,28,33,.18), 0 2px 6px rgba(28,28,33,.08); }
+.btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px; white-space: nowrap;
+  border-radius: var(--r-control); font-weight: 600; font-size: 13px; border: 1px solid transparent; }
+.btn.sm { height: 26px; padding: 0 10px; font-size: 12px; }
+.btn.text { color: var(--point); }
+.btn.filled { background: var(--graphite); color: #fff; }
+.btn.outline { border-color: var(--line); color: var(--ink); background: var(--surface); }
+.dd { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px 0 10px; white-space: nowrap;
+  border: 1px solid var(--line); border-radius: var(--r-control); background: var(--surface); font-weight: 600; }
+.dd::after { content: "▾"; color: var(--muted); font-size: 11px; }
+.field { border: 1px solid var(--line); border-radius: var(--r-control); background: var(--surface);
+  padding: 7px 10px; min-height: 32px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--r-control); overflow: hidden; background: var(--surface); }
+.seg span { padding: 5px 12px; font-weight: 600; color: var(--muted); white-space: nowrap; }
+.seg span.on { background: var(--graphite); color: #fff; }
+.sw { width: 30px; height: 18px; border-radius: 9px; background: var(--outline); position: relative; display: inline-block; vertical-align: middle; flex: none; }
+.sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; }
+.sw.on { background: var(--point); }
+.sw.on::after { left: 14px; }
+.swl { display: inline-flex; align-items: center; gap: 7px; font-weight: 600; white-space: nowrap; }
+.chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 700; white-space: nowrap; }
+.chip.warn { background: var(--warn-bg); color: var(--warn); }
+.chip.err { background: #FDECEC; color: #B4232A; }
+.chip.ok { background: #E9F4EC; color: #2F7A45; }
+.chip.muted { background: var(--subtle); color: var(--muted); }
+.chip.chord { background: #FFF1E0; color: var(--chord-ink); }
+.mono { font-variant-numeric: tabular-nums; }
+.note { position: absolute; background: #2C2E35; color: #fff; font-size: 11.5px; padding: 5px 9px; z-index: 20;
+  border-radius: 6px; line-height: 1.45; white-space: nowrap; box-shadow: 0 4px 12px rgba(0,0,0,.2); }
+.note b { color: #FFD66B; }
+.new { outline: 2px solid #F2B84B; outline-offset: 3px; border-radius: 6px; }
+.newtag { font-size: 10px; font-weight: 800; color: #9A6510; background: #FFE9BF; padding: 1px 6px; border-radius: 999px; }
+.banner { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 8px;
+  background: #EEF2FA; border: 1px solid #CBD5EA; color: var(--ink); margin-bottom: 12px; }
+.banner.warn { background: var(--warn-bg); border-color: #F0D49A; }
+.banner .x { margin-left: auto; color: var(--muted); }
+
+/* ── 코드 악보 그리기 (싱어 화면 규칙: 코드 = 가사 0.55배 · 굵게 · 주황, 코드 뒤 틈 0.4em) ── */
+.sheet { font-weight: 700; color: var(--s-text); text-align: center; line-height: 1.22; }
+.sheet .cl { white-space: nowrap; }
+.sheet .cl + .cl, .sheet .sub + .cl { margin-top: .12em; }
+.sheet .cs { display: inline-block; vertical-align: bottom; text-align: left; }
+.sheet .cs i { display: block; font-style: normal; font-size: .55em; font-weight: 800; color: var(--chord);
+  line-height: 1.15; padding-right: .4em; white-space: nowrap; letter-spacing: .01em; }
+.sheet .cs span { white-space: pre; }
+.sheet .sub { color: var(--s-sub); font-size: .78em; margin-top: .2em; margin-bottom: .35em; white-space: nowrap; }
+.sheet.next { color: #c3cad4; }
+.sheet.next .sub { color: #b8a25a; }
+.sheet.nochord .cs i { display: none; }
+.sheet .hov { outline: 1.5px dashed #FFA94D; outline-offset: 1px; border-radius: 2px; }
+.sheet .cs i.hovslot { outline: 1.5px dashed #FFA94D; border-radius: 2px; min-width: 1.6em; color: transparent; }
+
+/* 관객 슬라이드 (코드 없음) */
+.slide { position: relative; aspect-ratio: 16/9; border-radius: 6px; overflow: hidden;
+  background: radial-gradient(120% 90% at 30% 20%, #2A3350 0%, #141824 55%, #0B0D13 100%);
+  color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+.slide .st { position: absolute; top: 5%; left: 0; right: 0; font-size: .5em; opacity: .7; font-weight: 600; }
+.slide .m { font-weight: 700; line-height: 1.3; }
+.slide .e { color: var(--c-sub); font-size: .78em; line-height: 1.3; margin-top: .25em; font-weight: 600; }
+.slide.bible { background: linear-gradient(160deg, #23303A, #10161C); }
+.slide.blank { background: #000; }
+.slide.ppt { background: linear-gradient(135deg, #F2E7D3, #E2C99E); color: #4A3418; }
+
+/* ── S1: 가사 수정 — 코드 모드 ─────────────────────────── */
+.editor { width: 1300px; padding: 22px 24px 18px; position: relative; }
+.ed-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.ed-head h3 { font-size: 19px; margin: 0; flex: 0 0 auto; }
+.ed-head .title { flex: 1; font-weight: 600; }
+.grid-head, .grid-row { display: grid; grid-template-columns: 34px 1.25fr 1fr 1fr 28px; gap: 10px; align-items: start; }
+.grid-head { padding: 0 0 8px; border-bottom: 1px solid var(--line); align-items: center; }
+.colhead { display: flex; align-items: center; gap: 8px; font-weight: 700; white-space: nowrap; }
+.colhead small { color: var(--muted); font-weight: 500; }
+.lang-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.grid-row { padding: 10px 0; border-bottom: 1px solid var(--subtle); position: relative; }
+.grid-row.sel { background: #F0F3F9; margin: 0 -8px; padding: 10px 8px; border-radius: 8px; border-bottom-color: transparent; }
+.pno { font-weight: 700; color: var(--muted); text-align: center; padding-top: 8px; font-size: 13px; }
+.grid-row.sel .pno { color: var(--point); }
+.cell { border: 1px solid var(--line); border-radius: var(--r-control); background: var(--surface);
+  padding: 7px 10px; line-height: 1.6; min-height: 56px; white-space: pre-line; position: relative; }
+.cell.focus { border-color: var(--point); box-shadow: 0 0 0 2px rgba(77,94,130,.15); }
+.cell.code { font-size: 13.5px; }
+.tk { color: var(--chord-ink); font-weight: 800; font-style: normal; }
+.tk.bad { color: #B4232A; text-decoration: underline wavy #E5484D; text-underline-offset: 3px; font-weight: 700; }
+.cellwrap { display: flex; flex-direction: column; gap: 6px; }
+.strip { background: var(--s-cur); border-radius: 6px; padding: 9px 10px 10px; font-size: 15px; position: relative; }
+.strip .lbl { position: absolute; top: 5px; left: 8px; font-size: 9.5px; font-weight: 700; color: #6d7786; letter-spacing: .03em; }
+.cell-warn { font-size: 11.5px; color: #B4232A; display: flex; align-items: center; gap: 6px; white-space: nowrap; justify-content: space-between; }
+.cell-warn .btn { height: 22px; padding: 0 8px; font-size: 11.5px; }
+.rowmenu { color: var(--muted); text-align: center; padding-top: 8px; font-size: 16px; }
+.ed-foot { display: flex; align-items: center; gap: 14px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.ed-foot .sum { color: var(--muted); flex: 1; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.ed-foot .sum b { color: var(--ink); }
+.mini-off { margin-top: 18px; display: grid; grid-template-columns: 420px 1fr; gap: 18px; align-items: start; }
+.mini-off .card { background: var(--surface); border-radius: 12px; padding: 14px 16px; border: 1px solid var(--line); }
+.mini-off h4 { margin: 0 0 10px; font-size: 13px; }
+.mini-off h4 small { color: var(--muted); font-weight: 500; margin-left: 6px; }
+.note-mark { position: absolute; top: 4px; left: 6px; color: var(--chord-ink); font-size: 11px; font-weight: 800; }
+
+/* ── S1b: 코드 팝업 ─────────────────────────────── */
+.pop { width: 380px; background: var(--surface); border-radius: 12px; padding: 14px; position: relative;
+  box-shadow: 0 14px 40px rgba(28,28,33,.22), 0 2px 6px rgba(28,28,33,.1); border: 1px solid var(--line); }
+.pop::before { content: ""; position: absolute; bottom: -7px; left: 222px; width: 12px; height: 12px; background: var(--surface);
+  border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); transform: rotate(45deg); }
+.pop .hd { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.pop .hd b { font-size: 13px; }
+.pop .hd small { color: var(--muted); }
+.pop .inp { display: flex; gap: 8px; margin-bottom: 12px; }
+.pop .inp .field { flex: 1; font-size: 18px; font-weight: 800; color: var(--chord-ink); padding: 4px 10px; display: flex; align-items: center;
+  border-color: var(--point); box-shadow: 0 0 0 2px rgba(77,94,130,.15); }
+.pop .inp .field::after { content: ""; width: 1.5px; height: 20px; background: var(--ink); margin-left: 2px; }
+.pop .row-l { font-size: 11px; color: var(--muted); font-weight: 600; margin: 0 0 5px; }
+.keys { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
+.k { min-width: 34px; height: 28px; padding: 0 8px; display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line); border-radius: 6px; font-weight: 700; font-size: 12.5px; background: var(--surface); white-space: nowrap; }
+.k.ch { color: var(--chord-ink); background: #FFF8EF; border-color: #F3D9B8; }
+.k.on { background: var(--graphite); color: #fff; border-color: var(--graphite); }
+.k.sm { min-width: 28px; height: 24px; font-size: 11.5px; padding: 0 6px; }
+.builder { background: var(--canvas); border-radius: 8px; padding: 8px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 5px; }
+.builder .keys { margin: 0; gap: 4px; }
+.pop .ft { display: flex; align-items: center; gap: 8px; }
+.pop .ft .hint { color: var(--muted); font-size: 11px; flex: 1; }
+
+/* ── S1c ─────────────────────────────── */
+.pastebox { width: 1180px; padding: 20px 22px; display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+.pastebox h4 { margin: 0 0 10px; font-size: 13px; display: flex; align-items: center; gap: 8px; }
+.pastebox h4 .n { width: 20px; height: 20px; border-radius: 50%; background: var(--graphite); color: #fff; font-size: 11px; display: grid; place-items: center; }
+.monocell { font-family: "D2Coding", "NanumGothicCoding", ui-monospace, Menlo, monospace; white-space: pre; line-height: 1.5; font-size: 13px; }
+.monocell .crow { color: var(--chord-ink); font-weight: 700; }
+
+/* ── S2: 싱어 창 (네이티브) ─────────────────────────── */
+.win { border-radius: 10px; overflow: hidden; box-shadow: 0 20px 50px rgba(0,0,0,.35); background: var(--s-bg); }
+.win .tb { height: 28px; background: #2a2d33; display: flex; align-items: center; gap: 7px; padding: 0 11px; color: #a7adb8; font-size: 12px; }
+.win .tb .d { width: 12px; height: 12px; border-radius: 50%; }
+.win .tb .t { flex: 1; text-align: center; margin-right: 50px; font-weight: 600; }
+.singer { width: 1040px; height: 620px; padding: 14px 20px 16px; display: flex; flex-direction: column; gap: 10px; color: #fff; }
+.shd { display: flex; align-items: center; gap: 16px; font-size: 15px; color: var(--s-muted); flex: none; }
+.shd .tt { flex: 1; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.shd .pg { font-weight: 700; color: var(--s-text); }
+.shd .clk { font-weight: 700; color: #c3cad4; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.keybadge { background: #3a2c12; color: var(--chord); border: 1px solid #6b5220; border-radius: 999px; padding: 2px 10px; font-weight: 800; font-size: 13px; white-space: nowrap; }
+.spane { border-radius: 12px; display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative; min-height: 0; }
+.spane.cur { background: var(--s-cur); border: 2px solid var(--s-cur-line); }
+.spane.nxt { background: var(--s-next); border: 1px solid var(--s-next-line); }
+.slabel { font-size: 13px; color: #8b95a2; font-weight: 600; flex: none; }
+
+/* ── S3: 휴대폰 ─────────────────────────── */
+.phones { display: flex; gap: 34px; align-items: flex-start; }
+.phone { width: 340px; height: 720px; border-radius: 44px; background: #050506; padding: 12px; box-shadow: 0 20px 50px rgba(0,0,0,.3); position: relative; }
+.phone .scr { width: 100%; height: 100%; border-radius: 34px; overflow: hidden; background: var(--s-bg); display: flex; flex-direction: column; padding: 40px 12px 16px; gap: 8px; position: relative; }
+.phone .notch { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); width: 92px; height: 26px; background: #000; border-radius: 20px; z-index: 3; }
+.phd { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--s-muted); flex: none; }
+.phd .tt { flex: 1; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.phd .pg { font-weight: 700; color: var(--s-text); }
+.phd .clk { font-weight: 700; color: #c3cad4; font-variant-numeric: tabular-nums; }
+.pbtn { flex: none; background: #1b2028; color: var(--s-text); border: 1px solid #3a424d; border-radius: 6px; font-weight: 700; font-size: 11.5px; padding: 3px 8px; white-space: nowrap; }
+.pbtn.on { background: var(--chord); border-color: var(--chord); color: #241a05; }
+.pbtn.dim { opacity: .38; }
+.psplit { height: 16px; display: flex; align-items: center; justify-content: center; flex: none; }
+.psplit::before { content: ""; width: 44px; height: 4px; border-radius: 999px; background: #4a5360; }
+.pmsg { background: #fff; color: #000; font-weight: 700; font-size: 15px; border-radius: 6px; padding: 8px 10px; flex: none; }
+.pnote { background: #1a1f26; border-left: 3px solid #ffd54f; border-radius: 6px; padding: 6px 10px; color: var(--s-text); font-size: 12px; line-height: 1.4; flex: none; }
+.pblack { border: 1px solid #3a424d; border-radius: 8px; background: #1b2028; color: var(--s-text); font-weight: 700; text-align: center; padding: 10px 0; font-size: 13px; flex: none; }
+.ptoast { position: absolute; left: 50%; transform: translateX(-50%); background: rgba(20,22,27,.94); border: 1px solid #6b5220; color: #ffe3a6;
+  font-size: 11.5px; font-weight: 600; padding: 6px 10px; border-radius: 8px; white-space: nowrap; z-index: 4; }
+.states { display: flex; flex-direction: column; gap: 12px; padding-top: 6px; }
+.states .card { background: #16181d; border-radius: 12px; padding: 12px 14px; color: var(--s-muted); width: 300px; }
+.states .card h5 { margin: 0 0 10px; color: #e6e9ee; font-size: 12.5px; }
+.states .r { display: flex; align-items: center; gap: 8px; font-size: 12px; margin-bottom: 8px; }
+.states .r:last-child { margin-bottom: 0; }
+
+/* ── S4: 발표 보기 (데스크톱) ─────────────────────────── */
+.desk { width: 1480px; height: 930px; background: var(--canvas); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column;
+  box-shadow: 0 20px 50px rgba(0,0,0,.25); border: 1px solid #C9CFDC; }
+.osbar { height: 28px; background: #E9EBF0; display: flex; align-items: center; gap: 7px; padding: 0 11px; border-bottom: 1px solid #D3D7E0; flex: none; }
+.osbar .d { width: 12px; height: 12px; border-radius: 50%; }
+.topbar { height: 52px; background: var(--surface); border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 12px; padding: 0 16px; flex: none; }
+.logo { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 14px; margin-right: 6px; white-space: nowrap; }
+.logo i { width: 24px; height: 24px; border-radius: 7px; background: var(--graphite); display: inline-block; position: relative; }
+.logo i::after { content: ""; position: absolute; inset: 7px 5px; border-radius: 2px; background: #fff; }
+.tabs { display: flex; gap: 2px; }
+.tabs span { padding: 15px 14px 14px; font-weight: 700; color: var(--muted); border-bottom: 2.5px solid transparent; white-space: nowrap; }
+.tabs span.on { color: var(--ink); border-bottom-color: var(--point); }
+.sp { flex: 1; }
+.live { display: inline-flex; align-items: center; gap: 6px; color: var(--live); font-weight: 800; white-space: nowrap; }
+.live::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--live); }
+.ribbon { height: 36px; background: var(--surface); border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 4px; padding: 0 16px; flex: none; color: var(--muted); font-weight: 600; }
+.ribbon span { padding: 0 10px; white-space: nowrap; }
+.ribbon span.on { color: var(--ink); }
+.tool { height: 48px; background: var(--surface); border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 6px; padding: 0 14px; flex: none; }
+.ib { height: 32px; min-width: 32px; padding: 0 9px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--surface); font-weight: 600; white-space: nowrap; font-size: 12.5px; color: var(--ink); }
+.ib.on { background: #E8ECF5; border-color: #B9C3DA; color: var(--point); }
+.ib.dim { opacity: .38; }
+.ib svg { width: 16px; height: 16px; }
+.vsep { width: 1px; height: 24px; background: var(--line); margin: 0 4px; flex: none; }
+.pageno { font-weight: 800; font-variant-numeric: tabular-nums; padding: 0 8px; white-space: nowrap; }
+.work { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 340px; gap: 14px; padding: 14px 16px 0; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-panel); display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.panel .ph { height: 40px; display: flex; align-items: center; gap: 10px; padding: 0 12px; border-bottom: 1px solid var(--line); flex: none; }
+.panel .ph b { white-space: nowrap; }
+.panel .ph small { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.curstage { flex: 1; min-height: 0; background: #0d0f12; display: flex; align-items: center; justify-content: center; position: relative; padding: 14px; }
+.cbox { width: 100%; height: 100%; background: var(--s-cur); border-radius: 10px; display: flex; align-items: center; justify-content: center; position: relative; }
+.cbox .tag { position: absolute; top: 10px; left: 12px; font-size: 11.5px; color: #8b95a2; font-weight: 700; display: flex; gap: 8px; align-items: center; }
+.inset { position: absolute; right: 26px; bottom: 26px; width: 25%; border-radius: 7px; box-shadow: 0 8px 22px rgba(0,0,0,.55); outline: 2px solid #59626e; font-size: 13px; }
+.inset .lab { position: absolute; top: -22px; left: 0; font-size: 11px; color: #c3cad4; font-weight: 700; display: flex; gap: 6px; align-items: center; white-space: nowrap; }
+.inset .lab .live { font-size: 11px; }
+.side { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+.side .panel .bd { padding: 10px 12px; }
+.nextbox { background: var(--s-next); border-radius: 8px; aspect-ratio: 16/9; display: flex; align-items: center; justify-content: center; font-size: 15px; }
+.keygrp .bd { display: flex; flex-direction: column; gap: 10px; }
+.keyline { display: flex; align-items: baseline; gap: 8px; font-size: 13px; color: var(--muted); }
+.keyline b { color: var(--ink); font-size: 18px; }
+.keyline .now { color: var(--chord-ink); font-size: 18px; font-weight: 800; }
+.stepper { display: flex; align-items: center; gap: 6px; }
+.stepper .ib { min-width: 36px; font-size: 16px; font-weight: 800; }
+.stepper .val { flex: 1; height: 32px; border: 1px solid var(--line); border-radius: 6px; display: flex; align-items: center; justify-content: center; gap: 8px; font-weight: 800; font-size: 15px; }
+.stepper .val small { color: var(--chord-ink); font-size: 12px; }
+.memo { color: var(--ink); line-height: 1.5; font-size: 12.5px; }
+.timer { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.timer small { font-size: 13px; color: var(--muted); font-weight: 600; }
+.stripbar { height: 12px; display: flex; align-items: center; justify-content: center; flex: none; }
+.stripbar::before { content: ""; width: 60px; height: 4px; border-radius: 999px; background: var(--outline); }
+.thumbs { height: 132px; flex: none; display: flex; gap: 10px; padding: 0 16px 10px; overflow: hidden; }
+.th { width: 168px; flex: none; position: relative; }
+.th .slide { font-size: 8px; border-radius: 5px; }
+.th .no { font-size: 11px; color: var(--muted); margin-top: 4px; display: flex; justify-content: space-between; white-space: nowrap; }
+.th.cur .slide { outline: 3px solid var(--point); outline-offset: 2px; }
+.th.onair .no b { color: var(--live); }
+.th .nb { position: absolute; z-index: 2; top: 5px; left: 5px; background: rgba(255,169,77,.95); color: #241a05; font-size: 10px; font-weight: 800; border-radius: 4px; padding: 1px 5px; }
+.statusbar { height: 26px; background: var(--surface); border-top: 1px solid var(--line); display: flex; align-items: center; gap: 16px; padding: 0 16px; color: var(--muted); font-size: 11.5px; flex: none; }
+
+/* ── S5: 콘티 목록 + 조 팝오버 ─────────────────────────── */
+.contiwrap { width: 1060px; display: grid; grid-template-columns: 480px 1fr; gap: 26px; align-items: start; }
+.contip { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-panel); }
+.contip .ph { height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid var(--line); }
+.contip .ph b { flex: 1; }
+.citems { display: flex; flex-direction: column; gap: 6px; padding: 10px; }
+.citem { display: flex; align-items: center; gap: 9px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); position: relative; }
+.citem.sel { border-color: var(--point); box-shadow: 0 0 0 2px rgba(77,94,130,.12); }
+.citem .hnd { color: var(--outline); font-size: 12px; }
+.citem .k { width: 22px; height: 22px; border-radius: 5px; display: grid; place-items: center; font-size: 11px; font-weight: 800; color: #fff; flex: none; }
+.citem .t { flex: 1; font-weight: 600; min-width: 0; }
+.citem .t small { display: block; font-weight: 500; color: var(--muted); font-size: 11.5px; }
+.kchip { display: inline-flex; align-items: center; height: 24px; padding: 0 9px; border-radius: 6px; font-weight: 800; font-size: 12px; border: 1px solid var(--line); background: var(--surface); white-space: nowrap; }
+.kchip.moved { background: #FFF1E0; border-color: #F1C48F; color: var(--chord-ink); }
+.kchip.open { box-shadow: 0 0 0 2px rgba(194,90,10,.25); }
+.ic { color: var(--muted); font-size: 13px; }
+.kpop { width: 380px; padding: 16px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line);
+  box-shadow: 0 14px 40px rgba(28,28,33,.22), 0 2px 6px rgba(28,28,33,.1); position: relative; margin-top: 72px; }
+.kpop.noarrow::before { display: none; }
+.kpop::before { content: ""; position: absolute; left: -7px; top: 58px; width: 12px; height: 12px; background: var(--surface);
+  border-left: 1px solid var(--line); border-bottom: 1px solid var(--line); transform: rotate(45deg); }
+.kpop .r { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.kpop .lab { width: 64px; color: var(--muted); font-weight: 600; font-size: 12px; flex: none; }
+.kgrid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px; margin-bottom: 12px; }
+.kgrid .k { min-width: 0; }
+.prevline { background: var(--s-cur); border-radius: 8px; padding: 8px 10px 10px; font-size: 15px; margin-bottom: 12px; }
+
+/* ── S6: 콘티 한번에 넣기 ─────────────────────────── */
+.imp { width: 1240px; padding: 20px 22px 16px; }
+.imp h3 { margin: 0 0 14px; font-size: 18px; }
+.imp-body { display: grid; grid-template-columns: 300px 1fr; gap: 18px; }
+.paste { border: 1px solid var(--line); border-radius: var(--r-control); padding: 10px 12px; line-height: 1.75; white-space: pre; color: var(--ink); font-size: 12.5px; background: #FBFBFD; }
+.mtab { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.mrow { display: grid; grid-template-columns: 28px 200px 1fr 330px; gap: 12px; align-items: center; padding: 9px 12px; border-bottom: 1px solid var(--subtle); position: relative; }
+.mrow:last-child { border-bottom: 0; }
+.mrow.h { background: var(--canvas); font-weight: 700; color: var(--muted); font-size: 12px; padding: 7px 12px; }
+.mrow .src { color: var(--muted); font-size: 12px; }
+.mrow .src b { color: var(--ink); font-weight: 600; font-size: 13px; }
+.found { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.found .dd { flex: 1; min-width: 0; justify-content: space-between; height: 30px; }
+.found .dd em { font-style: normal; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kcell { display: flex; align-items: center; gap: 7px; font-weight: 700; white-space: nowrap; }
+.cb { width: 16px; height: 16px; border-radius: 4px; border: 1.5px solid var(--outline); display: inline-grid; place-items: center; flex: none; }
+.cb.on { background: var(--point); border-color: var(--point); }
+.cb.on::after { content: "✓"; color: #fff; font-size: 11px; font-weight: 800; }
+.kcell .to { color: var(--chord-ink); }
+.kcell .gr { color: #A5A9B4; font-weight: 600; }
+
+/* ── S7 ─────────────────────────── */
+.s7 { width: 1060px; display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+.results .rrow { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--subtle); }
+.results .rrow:last-child { border-bottom: 0; }
+.results .rrow .t { flex: 1; min-width: 0; }
+.results .rrow .t b { display: block; font-weight: 700; }
+.results .rrow .t small { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+.legend { margin-top: 12px; color: var(--muted); font-size: 12px; line-height: 1.7; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>찬양 가사에 코드 넣기 — 화면 목업</h1>
+  <p class="lead">코드는 싱어·발표자 화면 전용이다(관객 화면·PPTX·통역 화면엔 안 나간다). 노란 테두리·<span class="newtag">NEW</span> 는 새로 생기는 컨트롤이다.<br>
+    예시 가사는 목업용으로 지은 문구다. 코드 = 가사 글자의 0.55배 · 굵게 · 주황(<span class="mono">#FFA94D</span> — 기획의 #FFC857 은 싱어 보조 줄 노랑 #ffd54f 와 구분이 안 돼 옮김), 음절 바로 위.</p>
+
+  <!-- ─────────── S1 ─────────── -->
+  <section id="s1">
+    <h2>S1. 가사 수정 창 — 코드 모드</h2>
+    <p class="cap">머리줄 <b>코드</b> 스위치를 켜면 원본 열 칸이 코드 붙은 글(<span class="mono">[G]주님 은[D/F#]혜</span>)이 되고, 칸 아래에 싱어 화면 모양의 미리보기 띠가 붙는다.
+      보조·추가 보조 열은 그대로(코드 없음). 아래 작은 카드는 코드 모드를 껐을 때의 모습이다.</p>
+    <div class="frame" id="shot-s1">
+      <div class="dialog editor">
+        <div class="ed-head">
+          <h3>가사 수정</h3>
+          <div class="field title">주님 은혜 날 새롭게 해</div>
+          <div class="seg"><span class="on">페이지 표</span><span>통째로</span></div>
+          <span class="swl new" style="padding:4px 8px"><span class="sw on"></span>코드</span>
+          <span class="swl new" style="padding:2px 4px;gap:6px">원래 조 <span class="dd" style="color:var(--chord-ink)">G</span></span>
+          <span class="btn text">취소</span><span class="btn filled">저장</span>
+        </div>
+
+        <div class="grid-head">
+          <div></div>
+          <div class="colhead"><span class="lang-dot" style="background:#fff;border:1px solid #999"></span>원본 <small>· 한국어 · 코드 붙은 글</small></div>
+          <div class="colhead"><span class="lang-dot" style="background:#E2C800"></span>보조 <span class="dd">영어</span></div>
+          <div class="colhead"><span class="lang-dot" style="background:#3BB6C6"></span>추가 보조 <span class="dd">없음</span></div>
+          <div></div>
+        </div>
+
+        <div class="grid-row">
+          <div class="pno">1</div>
+          <div class="cellwrap">
+            <div class="cell code" data-tok="[G]주님 은[D/F#]혜 날 새[Em7]롭게 해
+[C]어둔 길 [Am7]지날 때 [D]함께 하시네"></div>
+            <div class="strip new"><span class="lbl">미리보기</span><div class="sheet" style="padding-top:8px" data-cp="[G]주님 은[D/F#]혜 날 새[Em7]롭게 해
+[C]어둔 길 [Am7]지날 때 [D]함께 하시네"></div></div>
+          </div>
+          <div class="cell">Your grace, O Lord, makes me new
+You walk with me through the night</div>
+          <div class="cell" style="color:var(--muted);font-size:12px;border-style:dashed;background:var(--canvas)">—</div>
+          <div class="rowmenu">⋮</div>
+        </div>
+
+        <div class="grid-row sel">
+          <div class="pno">2</div>
+          <div class="cellwrap">
+            <div class="cell code focus" data-tok="[G]내 맘의 [D/F#]노래 [Em7]주께 드려
+[C]영원히 [D]주를 찬[G]양해"></div>
+            <div class="strip new" style="position:relative"><span class="lbl">미리보기 · 글자를 누르면 코드 넣기</span>
+              <div class="sheet" style="padding-top:8px" id="hovsheet" data-cp="[G]내 맘의 [D/F#]노래 [Em7]주께 드려
+[C]영원히 [D]주를 찬[G]양해"></div>
+              <span class="note" style="left:calc(100% + 22px);top:44px">← 글자에 올리면 그 위 코드 자리를 <b>점선</b>으로 · 누르면 S1b 팝업</span>
+            </div>
+          </div>
+          <div class="cell">The song of my heart I give
+Forever I praise Your name</div>
+          <div class="cell" style="color:var(--muted);font-size:12px;border-style:dashed;background:var(--canvas)">—</div>
+          <div class="rowmenu">⋮</div>
+        </div>
+
+        <div class="grid-row">
+          <div class="pno">3</div>
+          <div class="cellwrap">
+            <div class="cell code" data-tok="[C]찬양해 [D]찬양해
+[Bm7]주의 [Em7]이름 높[Gsuss]이리[D]"></div>
+            <div class="cell-warn"><span>⚠ 코드로 못 읽음: <b class="mono">[Gsuss]</b> — 관객 화면에 글자로 나갑니다</span>
+              <span class="btn outline">[Gsus] 로 고치기</span></div>
+            <div class="strip new"><span class="lbl">미리보기</span><div class="sheet" style="padding-top:8px" data-cp="[C]찬양해 [D]찬양해
+[Bm7]주의 [Em7]이름 높이리[D]"></div></div>
+          </div>
+          <div class="cell">We praise, we praise
+Lift high the name of the Lord</div>
+          <div class="cell" style="color:var(--muted);font-size:12px;border-style:dashed;background:var(--canvas)">—</div>
+          <div class="rowmenu">⋮</div>
+        </div>
+
+        <div class="ed-foot">
+          <div class="sum">페이지 <b>3</b> · 보조 <b>3/3</b>
+            <span class="chip chord new">코드 18개</span><span class="chip muted">코드 없는 페이지 0</span><span class="chip err">못 읽음 1</span></div>
+          <span style="color:var(--muted);font-size:12px">대괄호 <span class="mono">[</span> 를 치면 자동완성 — 이 곡 코드 + G 조 다이어토닉</span>
+        </div>
+      </div>
+
+      <div class="mini-off">
+        <div class="card">
+          <h4>코드 모드 끔 <small>평소 원본 칸 · 코드 있는 곡엔 ♪</small></h4>
+          <div class="cell" style="padding-left:24px"><span class="note-mark">♪</span>내 맘의 노래 주께 드려
+영원히 주를 찬양해</div>
+        </div>
+        <div class="card">
+          <h4>가사만 고치고 저장했을 때 <small>코드를 다시 맞추고 알린다 (§3-5)</small></h4>
+          <div class="banner warn" style="margin:0">
+            <span>♪</span>
+            <span>코드 <b>16개 그대로</b>, <b>2개 위치 옮김</b>(확인 필요)</span>
+            <span class="btn outline sm">코드 모드로 보기</span>
+            <span class="x">✕</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────── S1b ─────────── -->
+  <section id="s1b">
+    <h2>S1b. 코드 넣기 팝업 (미리보기 글자 클릭)</h2>
+    <p class="cap">클릭한 글자 위에 뜬다. 입력칸 + 이 곡에서 쓴 코드 + 원래 조 다이어토닉 7개 + 조립 버튼(뿌리음·♯♭·성질·/베이스).
+      Enter = 넣기, Esc = 닫기, Tab = 다음 글자로 옮겨 계속 넣기. 이미 코드가 있는 자리면 [바꾸기] [지우기].</p>
+    <div class="frame" id="shot-s1b" style="padding:28px 40px 34px">
+      <div class="pop">
+        <div class="hd"><b>'양' 위의 코드</b><small>· 2페이지 2줄</small><span style="flex:1"></span><span class="chip chord">지금: G</span></div>
+        <div class="inp"><div class="field">G</div><span class="btn filled">바꾸기</span><span class="btn outline">지우기</span></div>
+        <div class="row-l">이 곡에서 쓴 코드</div>
+        <div class="keys"><span class="k ch on">G</span><span class="k ch">D/F#</span><span class="k ch">Em7</span><span class="k ch">C</span><span class="k ch">Am7</span><span class="k ch">D</span><span class="k ch">Bm7</span></div>
+        <div class="row-l">G 조 다이어토닉</div>
+        <div class="keys"><span class="k">G</span><span class="k">Am</span><span class="k">Bm</span><span class="k">C</span><span class="k">D</span><span class="k">Em</span><span class="k">F#m7b5</span></div>
+        <div class="builder">
+          <div class="keys"><span class="k sm on">G</span><span class="k sm">A</span><span class="k sm">B</span><span class="k sm">C</span><span class="k sm">D</span><span class="k sm">E</span><span class="k sm">F</span><span style="width:6px"></span><span class="k sm">♯</span><span class="k sm">♭</span></div>
+          <div class="keys"><span class="k sm">m</span><span class="k sm">7</span><span class="k sm">maj7</span><span class="k sm">sus4</span><span class="k sm">add9</span><span class="k sm">dim</span><span style="width:6px"></span><span class="k sm">/ 베이스</span></div>
+        </div>
+        <div class="ft"><span class="hint">Enter 넣기 · Tab 다음 글자 · Esc 닫기</span></div>
+      </div>
+      <div class="strip" style="width:380px;margin-top:16px;font-size:17px">
+        <div class="sheet" data-cp="[G]내 맘의 [D/F#]노래 [Em7]주께 드려
+[C]영원히 [D]주를 찬[G]{양}해"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────── S1c ─────────── -->
+  <section id="s1c">
+    <h2>S1c. '코드 위 가사' 붙여 넣기 배너</h2>
+    <p class="cap">카톡·웹 악보처럼 "코드만 있는 줄 + 바로 아래 가사 줄"이 2쌍 이상인 글을 원본 칸(코드 모드)에 붙여 넣으면 배너가 뜬다.
+      바꾸면 인라인 표기가 되고 미리보기로 위치를 확인한다(한글은 폭 2칸으로 센다). 되돌리기 배너는 기존 붙여 넣기 나누기 배너와 같은 모양.</p>
+    <div class="frame" id="shot-s1c">
+      <div class="dialog pastebox">
+        <div>
+          <h4><span class="n">1</span>붙여 넣은 직후</h4>
+          <div class="banner new">
+            <span>♪</span>
+            <span><b>코드 위 가사</b> 형식 같습니다.</span>
+            <span class="btn filled sm">코드 표기로 바꾸기</span>
+            <span class="btn text sm">그대로 두기</span>
+          </div>
+          <div class="cell code focus monocell"><span class="crow">G       D/F#     Em7</span>
+주님 은혜 날 새롭게 해
+<span class="crow">C        Am7      D</span>
+어둔 길 지날 때 함께 하시네</div>
+        </div>
+        <div>
+          <h4><span class="n">2</span>바꾼 뒤</h4>
+          <div class="banner">
+            <span>✓</span>
+            <span>코드 표기로 바꿨습니다 · 코드 <b>6개</b>, 2줄</span>
+            <span class="btn text sm">되돌리기</span>
+            <span class="x">✕</span>
+          </div>
+          <div class="cellwrap">
+            <div class="cell code focus" data-tok="[G]주님 은[D/F#]혜 날 [Em7]새롭게 해
+[C]어둔 길 [Am7]지날 때 [D]함께 하시네"></div>
+            <div class="strip"><span class="lbl">미리보기 — 위치가 어긋났으면 글자를 눌러 고친다</span><div class="sheet" style="padding-top:10px" data-cp="[G]주님 은[D/F#]혜 날 [Em7]새롭게 해
+[C]어둔 길 [Am7]지날 때 [D]함께 하시네"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────── S2 ─────────── -->
+  <section id="s2">
+    <h2>S2. 싱어 창 (네이티브 macOS·Windows)</h2>
+    <p class="cap">배치는 지금 그대로(머리줄 + 현재 63% + 다음 37%). '싱어 코드'를 켜면 원본 줄마다 위에 코드 줄이 뜨고 보조 줄은 그 아래(코드 없음).
+      조를 바꿨을 때만 머리줄에 <span class="mono">A (원래 G, +2)</span>. 창엔 버튼이 없다 — 켜기/끄기는 발표 보기 툴바(S4).</p>
+    <div class="frame" id="shot-s2">
+      <div class="win">
+        <div class="tb"><span class="d" style="background:#FF5F57"></span><span class="d" style="background:#FEBC2E"></span><span class="d" style="background:#28C840"></span><span class="t">싱어 화면</span></div>
+        <div class="singer">
+          <div class="shd"><span class="pg">4 / 18</span><span class="tt">주님 은혜 날 새롭게 해 · 2/3</span>
+            <span class="keybadge new">A (원래 G, +2)</span><span class="clk">오후 7:32 · 12:05 / 20:00</span></div>
+          <div class="spane cur" style="flex:63 1 0">
+            <div class="sheet" style="font-size:44px" data-cp="[A]내 맘의 [E/G#]노래 [F#m7]주께 드려
+> The song of my heart I give
+[D]영원히 [E]주를 찬[A]양해
+> Forever I praise Your name"></div>
+          </div>
+          <div class="slabel">다음</div>
+          <div class="spane nxt" style="flex:37 1 0">
+            <div class="sheet next" style="font-size:26px" data-cp="[D]찬양해 [E]찬양해
+> We praise, we praise
+[C#m7]주의 [F#m7]이름 높[Bm7]이리[E]
+> Lift high the name of the Lord"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────── S3 ─────────── -->
+  <section id="s3">
+    <h2>S3. 휴대폰 싱어 / 발표자 리모컨</h2>
+    <p class="cap">머리줄 '위아래/좌우' 버튼 옆 <b>코드</b> 버튼(켜짐 = 채운 모양, 이 휴대폰만 기억 <span class="mono">singer_chords</span>, 기본 끔).
+      휴대폰은 원본만 보내는 규칙 그대로라 보조 줄은 없다. 다음 칸도 코드 포함, 현재 글자의 0.75배 상한. 리모컨은 확대 중 안내를 한 번 띄운다.</p>
+    <div class="frame" id="shot-s3">
+      <div class="phones">
+        <div class="phone"><div class="notch"></div><div class="scr">
+          <div class="phd"><span class="tt">주님 은혜 날 새롭게 해</span><span class="clk">12:05</span><span class="pg">4/18</span>
+            <span class="pbtn">위아래</span><span class="pbtn on new">코드</span></div>
+          <div class="spane cur" style="flex:65 1 0">
+            <div class="sheet" style="font-size:24px" data-cp="[A]내 맘의 [E/G#]노래 [F#m7]주께 드려
+[D]영원히 [E]주를 찬[A]양해"></div>
+          </div>
+          <div class="psplit"></div>
+          <div class="slabel" style="font-size:11px">다음</div>
+          <div class="spane nxt" style="flex:35 1 0">
+            <div class="sheet next" style="font-size:18px" data-cp="[D]찬양해 [E]찬양해
+[C#m7]주의 [F#m7]이름 높[Bm7]이리[E]"></div>
+          </div>
+        </div></div>
+
+        <div class="phone"><div class="notch"></div><div class="scr">
+          <div class="pmsg">후렴 한 번 더 갈게요</div>
+          <div class="phd"><span class="tt">발표자 리모컨</span><span class="clk">12:05</span><span class="pg">4/18</span>
+            <span class="pbtn">위아래</span><span class="pbtn on new">코드</span></div>
+          <div class="spane cur" style="flex:65 1 0">
+            <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;transform:scale(1.3);transform-origin:50% 45%">
+              <div class="sheet" style="font-size:20px" data-cp="[A]내 맘의 [E/G#]노래 [F#m7]주께 드려
+[D]영원히 [E]주를 찬[A]양해"></div>
+            </div>
+            <span class="ptoast new" style="top:10px">확대 중 · 코드 때문에 위치가 다를 수 있어요</span>
+          </div>
+          <div class="psplit"></div>
+          <div class="slabel" style="font-size:11px">다음</div>
+          <div class="spane nxt" style="flex:30 1 0">
+            <div class="sheet next" style="font-size:16px" data-cp="[D]찬양해 [E]찬양해
+[C#m7]주의 [F#m7]이름 높[Bm7]이리[E]"></div>
+          </div>
+          <div class="pnote">2절 뒤 간주 8마디 · 마지막 후렴 반 키 올림</div>
+          <div class="pblack">화면 끄기 (길게 누르기)</div>
+        </div></div>
+
+        <div class="states">
+          <div class="card"><h5>코드 버튼 상태</h5>
+            <div class="r"><span class="pbtn">코드</span>끔 (기본)</div>
+            <div class="r"><span class="pbtn on">코드</span>켜짐 — 이 휴대폰에 기억</div>
+            <div class="r"><span class="pbtn dim">코드</span>콘티에 코드 있는 곡이 없음</div>
+          </div>
+          <div class="card"><h5>코드 없는 페이지 (성경·PPT·빈 페이지)</h5>
+            <div class="r" style="line-height:1.5">켜 둬도 지금과 똑같이 그린다.<br>코드 줄 자리도 두지 않는다.</div>
+          </div>
+          <div class="card"><h5>코드 끈 같은 페이지</h5>
+            <div class="spane cur" style="height:120px">
+              <div class="sheet nochord" style="font-size:20px" data-cp="[A]내 맘의 [E/G#]노래 [F#m7]주께 드려
+[D]영원히 [E]주를 찬[A]양해"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────── S4 ─────────── -->
+  <section id="s4">
+    <h2>S4. 발표 보기 (발표자 화면)</h2>
+    <p class="cap">툴바 마이크(싱어 창) 옆 <b>싱어 코드</b> 스위치 · 현재 슬라이드 칸 머리 <b>코드 보기</b> 스위치. 코드 보기를 켜면 칸 안이 싱어식 코드 악보로 바뀌고 관객 화면은 오른쪽 아래 작은 그림(폭 25%, 누르면 코드 보기 끔).
+      코드 보기 중엔 영역 확대·포인터가 흐려진다. 오른쪽 칸: 다음 슬라이드도 코드 악보, 새 묶음 <b>조</b>. 썸네일은 관객 기준(코드 없음), 코드 있는 곡 첫 장에 ♪.</p>
+    <div class="frame" id="shot-s4">
+      <div class="desk">
+        <div class="osbar"><span class="d" style="background:#FF5F57"></span><span class="d" style="background:#FEBC2E"></span><span class="d" style="background:#28C840"></span></div>
+        <div class="topbar">
+          <span class="logo"><i></i>Worship Slides</span>
+          <div class="tabs"><span>편집</span><span class="on">발표 보기</span></div>
+          <span class="dd" style="margin-left:8px">가져오기</span>
+          <span class="sp"></span>
+          <span class="ib">테마</span>
+          <span class="btn outline">PPTX 저장</span>
+          <span class="ib">모니터</span>
+          <span class="live">발표 중</span>
+          <span class="btn filled" style="background:var(--live)">발표 종료</span>
+        </div>
+        <div class="ribbon"><span style="color:var(--ink);font-weight:700">디자인 ▸</span><span class="on">찬양</span><span>성경</span><span>공통</span></div>
+        <div class="tool">
+          <span class="ib">◀</span><span class="pageno">4 / 18</span><span class="ib">▶</span>
+          <span class="vsep"></span>
+          <span class="ib">B 블랙아웃</span>
+          <span class="vsep"></span>
+          <span class="ib on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5.5" y="1.5" width="5" height="8.5" rx="2.5"/><path d="M3 8a5 5 0 0 0 10 0M8 13v2"/></svg>싱어 창</span>
+          <span class="ib new" style="gap:8px"><span class="sw on"></span>싱어 코드</span>
+          <span class="ib">휴대폰</span>
+          <span class="ib">음성 검색</span>
+          <span class="vsep"></span>
+          <span class="ib dim">영역 확대</span><span class="ib dim">포인터</span>
+          <span class="vsep"></span>
+          <span class="ib">＋ 새 페이지 추가</span>
+          <span class="sp"></span>
+          <span class="field" style="width:200px;color:var(--muted);min-height:32px;padding:6px 10px">곡 찾기 (⌘F)</span>
+          <span class="seg"><span class="on">제목</span><span>가사</span></span>
+        </div>
+
+        <div class="work">
+          <div class="panel">
+            <div class="ph"><b>현재 슬라이드</b><small>4 / 18 · 주님 은혜 날 새롭게 해 (2/3)</small><span class="sp"></span>
+              <span class="swl new" style="padding:3px 8px"><span class="sw on"></span>코드 보기</span></div>
+            <div class="curstage">
+              <div class="cbox">
+                <span class="tag">코드 악보 · 싱어·발표자 전용 <span class="keybadge" style="font-size:11px;padding:1px 8px">A (원래 G, +2)</span></span>
+                <div class="sheet" style="font-size:46px;margin-bottom:40px" data-cp="[A]내 맘의 [E/G#]노래 [F#m7]주께 드려
+> The song of my heart I give
+[D]영원히 [E]주를 찬[A]양해
+> Forever I praise Your name"></div>
+                <div class="inset new">
+                  <span class="lab"><span class="live">관객 화면</span> · 누르면 코드 보기 끔</span>
+                  <div class="slide"><span class="st">주님 은혜 날 새롭게 해</span><div class="m">내 맘의 노래 주께 드려<br>영원히 주를 찬양해</div><div class="e">The song of my heart I give<br>Forever I praise Your name</div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="side">
+            <div class="panel">
+              <div class="ph"><b>다음 슬라이드</b><small>5 / 18</small></div>
+              <div class="bd"><div class="nextbox"><div class="sheet next" data-cp="[D]찬양해 [E]찬양해
+> We praise, we praise
+[C#m7]주의 [F#m7]이름 높[Bm7]이리[E]
+> Lift high the name of the Lord"></div></div></div>
+            </div>
+            <div class="panel keygrp new">
+              <div class="ph"><b>조</b><small>주님 은혜 날 새롭게 해</small></div>
+              <div class="bd">
+                <div class="keyline">원래 <b>G</b> · 지금 <span class="now">A</span> <span class="chip chord">+2</span></div>
+                <div class="stepper"><span class="ib">−</span><span class="val">A <small>+2</small></span><span class="ib">+</span><span class="btn outline sm" style="height:32px">원래대로</span></div>
+              </div>
+            </div>
+            <div class="panel">
+              <div class="ph"><b>발표자 메모</b></div>
+              <div class="bd memo">2절 뒤 간주 8마디 · 마지막 후렴 반 키 올림</div>
+            </div>
+            <div class="panel">
+              <div class="ph"><b>경과 시간</b><span class="sp"></span><span class="swl" style="font-size:12px"><span class="sw on"></span>싱어 표시</span></div>
+              <div class="bd"><span class="timer">12:05 <small>/ 20:00</small></span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="stripbar"></div>
+        <div class="thumbs">
+          <div class="th"><div class="slide bible"><div class="m" style="font-size:8px">여호와는 나의 목자시니<br>내게 부족함이 없으리로다</div></div><div class="no"><span>1</span><span>시편 23:1</span></div></div>
+          <div class="th"><div class="slide blank"></div><div class="no"><span>2</span><span>여백</span></div></div>
+          <div class="th"><span class="nb new">♪</span><div class="slide"><span class="st">주님 은혜 날 새롭게 해</span><div class="m" style="font-size:8.5px">주님 은혜 날 새롭게 해<br>어둔 길 지날 때 함께 하시네</div><div class="e">Your grace, O Lord, makes me new</div></div><div class="no"><span>3</span><span>주님 은혜…</span></div></div>
+          <div class="th cur onair"><div class="slide"><span class="st">주님 은혜 날 새롭게 해</span><div class="m" style="font-size:8.5px">내 맘의 노래 주께 드려<br>영원히 주를 찬양해</div><div class="e">The song of my heart I give</div></div><div class="no"><b>4 · 송출 중</b><span>2/3</span></div></div>
+          <div class="th"><div class="slide"><span class="st">주님 은혜 날 새롭게 해</span><div class="m" style="font-size:8.5px">찬양해 찬양해<br>주의 이름 높이리</div><div class="e">We praise, we praise</div></div><div class="no"><span>5</span><span>3/3</span></div></div>
+          <div class="th"><div class="slide blank"></div><div class="no"><span>6</span><span>여백</span></div></div>
+          <div class="th"><div class="slide ppt"><div class="m" style="font-size:9px">광고 · 이번 주 소식</div></div><div class="no"><span>7</span><span>주보 광고.pptx</span></div></div>
+          <div class="th"><span class="nb">♪</span><div class="slide"><span class="st">빛 되신 주</span><div class="m" style="font-size:8.5px">빛 되신 주 나를 비추네<br>그 품 안에 쉬리라</div><div class="e">Light of the world, shine on me</div></div><div class="no"><span>8</span><span>빛 되신 주</span></div></div>
+        </div>
+        <div class="statusbar"><span>곡 1,284</span><span>콘티: 11월 둘째 주 주일 예배</span><span class="sp"></span><span>v1.4.2</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────── S5 ─────────── -->
+  <section id="s5">
+    <h2>S5. 콘티 항목 조 바꾸기 (편집 탭 콘티 목록)</h2>
+    <p class="cap">코드 있는 곡 항목 줄에 조 칩: 원래대로면 <span class="kchip" style="height:20px">G</span>, 바꿨으면 강조색 <span class="kchip moved" style="height:20px">G→A</span>.
+      칩을 누르면 팝오버 — 반음 −11~+11, 결과 조 빠른 고르기 12칸, ♯/♭ 표기, 첫 페이지 미리보기 한 줄, 원래대로.</p>
+    <div class="frame" id="shot-s5">
+      <div class="contiwrap">
+        <div class="contip">
+          <div class="ph"><b>예배 콘티</b><span class="ib" style="height:28px">새 콘티</span><span class="ib" style="height:28px">한번에 넣기</span></div>
+          <div class="citems">
+            <div class="citem"><span class="hnd">⋮⋮</span><span class="k" style="background:#5B7BB0">말</span><span class="t">시편 23:1-3<small>새번역 · 2페이지</small></span></div>
+            <div class="citem sel"><span class="hnd">⋮⋮</span><span class="k" style="background:#2C2E35">찬</span><span class="t">주님 은혜 날 새롭게 해<small>3페이지 · 영어</small></span>
+              <span class="kchip moved open new">G→A</span><span class="ic">✎</span></div>
+            <div class="citem"><span class="hnd">⋮⋮</span><span class="k" style="background:#2C2E35">찬</span><span class="t">빛 되신 주<small>4페이지 · 영어</small></span>
+              <span class="kchip new">E</span><span class="ic">✎</span></div>
+            <div class="citem"><span class="hnd">⋮⋮</span><span class="k" style="background:#2C2E35">찬</span><span class="t">평안의 노래<small>5페이지 · 코드 없음</small></span><span class="ic">✎</span></div>
+            <div class="citem"><span class="hnd">⋮⋮</span><span class="k" style="background:#2C2E35">찬</span><span class="t">은혜의 강가로 <span style="color:var(--muted);font-weight:500">1/2</span><small>4페이지</small></span>
+              <span class="chip warn">코드 확인 1</span><span class="kchip new">D</span><span class="ic">✎</span></div>
+            <div class="citem"><span class="hnd">⋮⋮</span><span class="k" style="background:#8A7350">PPT</span><span class="t">주보 광고.pptx<small>3페이지</small></span></div>
+          </div>
+        </div>
+
+        <div class="kpop new">
+          <div class="r"><span class="lab">원래 조</span><b style="font-size:16px">G</b><span class="chip muted">{key: G}</span></div>
+          <div class="r"><span class="lab">지금</span>
+            <div class="stepper" style="flex:1"><span class="ib">−</span><span class="val" style="font-size:17px">A <small>+2</small></span><span class="ib">+</span></div></div>
+          <div class="kgrid">
+            <span class="k">C</span><span class="k">C#/Db</span><span class="k">D</span><span class="k">D#/Eb</span><span class="k">E</span><span class="k">F</span>
+            <span class="k">F#/Gb</span><span class="k" style="border-color:var(--outline)">G</span><span class="k">G#/Ab</span><span class="k on">A</span><span class="k">A#/Bb</span><span class="k">B</span>
+          </div>
+          <div class="r"><span class="lab">♯/♭ 표기</span><span class="seg"><span class="on">자동</span><span>♯</span><span>♭</span></span></div>
+          <div class="row-l" style="font-size:11px;color:var(--muted);font-weight:600;margin-bottom:5px">첫 페이지 미리보기</div>
+          <div class="prevline"><div class="sheet" data-cp="[A]주님 은[E/G#]혜 날 새[F#m7]롭게 해"></div></div>
+          <div style="display:flex;gap:8px;align-items:center"><span style="color:var(--muted);font-size:11.5px;flex:1">이 항목만 바뀝니다 (곡 DB 는 그대로)</span><span class="btn outline sm">원래대로</span></div>
+        </div>
+      </div>
+      <div style="margin-top:16px;display:flex;gap:14px;align-items:center">
+        <div class="kpop noarrow" style="width:300px;margin:0;padding:12px 14px">
+          <div class="r" style="margin-bottom:8px"><span class="lab">원래 조</span><b>E</b><span class="chip warn">추정</span></div>
+          <span class="btn text sm" style="padding:0">가사 수정에서 정하기 ›</span>
+        </div>
+        <span style="color:var(--muted);font-size:12px">원래 조가 지시문이 아니라 첫 코드로 추정한 값이면</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────── S6 ─────────── -->
+  <section id="s6">
+    <h2>S6. 콘티 한번에 넣기 — 조 칸</h2>
+    <p class="cap">기존 창의 줄마다 찾은 곡 옆에 조 칸을 하나 더 둔다. 글에 조가 있고 곡에 코드·원래 조가 있으면 <span class="mono">G → F (−2)</span> 체크(기본 켬).
+      곡에 코드가 없으면 회색 글자만. <span class="mono">F-G</span> 처럼 조가 둘이면 첫 조로 맞춘다.</p>
+    <div class="frame" id="shot-s6">
+      <div class="dialog imp">
+        <h3>콘티 한번에 넣기</h3>
+        <div class="imp-body">
+          <div class="paste">&lt;11월 둘째 주 주일 예배&gt;
+1. 주님 은혜 날 새롭게 해 A
+2. 빛 되신 주 F
+-&gt; 은혜의 강가로 F-G
+3. 평안의 노래 (Key Bb)
+4. 새 노래로 주를 C</div>
+          <div class="mtab">
+            <div class="mrow h"><span>#</span><span>글</span><span>찾은 곡</span><span class="new" style="padding:0 4px">조 <span class="newtag">NEW</span></span></div>
+            <div class="mrow"><span class="mono">1</span><span class="src"><b>주님 은혜 날 새롭게 해</b> · A</span>
+              <div class="found"><span class="dd"><em>주님 은혜 날 새롭게 해 · 3쪽 · 코드</em></span></div>
+              <div class="kcell"><span class="cb on"></span>G → <span class="to">A</span> <span class="chip chord">+2</span></div></div>
+            <div class="mrow"><span class="mono">2</span><span class="src"><b>빛 되신 주</b> · F</span>
+              <div class="found"><span class="dd"><em>빛 되신 주 · 4쪽 · 코드</em></span></div>
+              <div class="kcell"><span class="cb on"></span>E → <span class="to">F</span> <span class="chip chord">+1</span></div></div>
+            <div class="mrow"><span class="mono">→</span><span class="src"><b>은혜의 강가로</b> · F-G</span>
+              <div class="found"><span class="dd"><em>은혜의 강가로 · 4쪽 · 코드</em></span></div>
+              <div class="kcell"><span class="cb on"></span>D → <span class="to">F</span> <span class="chip chord">+3</span>
+                <span class="chip muted" title="중간 전조는 직접">ⓘ 중간 전조(→G)는 직접</span></div></div>
+            <div class="mrow"><span class="mono">3</span><span class="src"><b>평안의 노래</b> · Bb</span>
+              <div class="found"><span class="dd"><em>평안의 노래 · 5쪽</em></span></div>
+              <div class="kcell"><span class="gr">Bb · 코드 없어 적용 안 됨</span></div></div>
+            <div class="mrow"><span class="mono">4</span><span class="src"><b>새 노래로 주를</b> · C</span>
+              <div class="found"><span class="dd" style="border-color:#E0B867;background:#FFFBF1"><em style="color:#9A6510">곡을 골라 주세요 (2곡)</em></span></div>
+              <div class="kcell"><span class="gr">C</span></div></div>
+          </div>
+        </div>
+        <div class="ed-foot" style="margin-top:14px">
+          <div class="sum">5줄 · 찾음 <b>4</b> · 고르기 필요 <b>1</b> · 조 맞춤 <b>3</b></div>
+          <span class="btn text">취소</span><span class="btn filled" style="opacity:.45">담기</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────── S7 ─────────── -->
+  <section id="s7">
+    <h2>S7. 곡 목록 · 콘티 목록 배지</h2>
+    <p class="cap">검색 결과 곡 줄에 <span class="chip chord">코드</span> 배지, 가사만 고쳐 코드를 다시 맞춘 곡은 주황 <span class="chip warn">코드 확인 필요</span>.
+      콘티 항목엔 조 칩(S5) + 어긋난 페이지가 있으면 <span class="chip warn">코드 확인 N</span>.</p>
+    <div class="frame" id="shot-s7">
+      <div class="s7">
+        <div class="contip results">
+          <div class="ph"><b>찬양 검색</b><span class="field" style="width:180px;min-height:28px;padding:4px 10px">은혜</span></div>
+          <div class="rrow"><div class="t"><b>주님 은혜 날 새롭게 해</b><small>주님 은혜 날 새롭게 해 어둔 길 지날 때…</small></div><span class="chip chord new">코드</span><span class="chip muted">영어</span></div>
+          <div class="rrow"><div class="t"><b>은혜의 강가로</b><small>은혜의 강가로 나아가네 맑은 물…</small></div><span class="chip warn new">코드 확인 필요</span><span class="chip muted">영어</span></div>
+          <div class="rrow"><div class="t"><b>은혜 아침</b><small>새 아침 주신 은혜로 노래해…</small></div></div>
+          <div class="rrow"><div class="t"><b>넘치는 은혜</b><small>넘치는 은혜 내 잔에 가득하네…</small></div><span class="chip chord new">코드</span></div>
+        </div>
+        <div>
+          <div class="contip">
+            <div class="ph"><b>예배 콘티</b></div>
+            <div class="citems">
+              <div class="citem"><span class="hnd">⋮⋮</span><span class="k" style="background:#2C2E35">찬</span><span class="t">주님 은혜 날 새롭게 해<small>3페이지</small></span><span class="kchip moved">G→A</span><span class="ic">✎</span></div>
+              <div class="citem"><span class="hnd">⋮⋮</span><span class="k" style="background:#2C2E35">찬</span><span class="t">은혜의 강가로<small>4페이지 · 넘침 1</small></span><span class="chip warn new">코드 확인 2</span><span class="kchip">D</span><span class="ic">✎</span></div>
+              <div class="citem"><span class="hnd">⋮⋮</span><span class="k" style="background:#2C2E35">찬</span><span class="t">은혜 아침<small>3페이지 · 코드 없음</small></span><span class="ic">✎</span></div>
+            </div>
+          </div>
+          <div class="legend">코드 확인 = 코드 붙은 글에서 코드를 뺀 글이 그 페이지 원본 가사와 달라 그 페이지 코드를 숨긴 수(§3-4).<br>관객 화면은 늘 원본 가사 기준이라 영향이 없다.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+var CHORD_RE = /^([A-G](#|b|♯|♭)?(maj7|maj|min|m7b5|m|M|dim|aug|sus2|sus4|sus|add9|add|°|ø|\+)?(\d{1,2}|b5|#5|b9|#9|#11|b13)*(\/[A-G](#|b)?)?|N\.C\.)$/;
+// ChordPro 한 줄 → 코드 조각. {X} = 그 글자를 점선 강조(마우스 올림 표시)
+function cpLine(line){
+  var parts=[], re=/\[([^\]]+)\]/g, m, last=0, chord='';
+  while((m=re.exec(line))){
+    parts.push({c:chord, t:line.slice(last, m.index)});
+    chord=m[1]; last=re.lastIndex;
+  }
+  parts.push({c:chord, t:line.slice(last)});
+  if(parts[0].c==='' && parts[0].t==='') parts.shift();
+  return '<div class="cl">'+parts.map(function(p){
+    var t=esc(p.t).replace(/\{(.)\}/g,'<em class="hov" style="font-style:normal">$1</em>');
+    var hasHov=/\{.\}/.test(p.t);
+    return '<span class="cs"><i>'+(p.c?esc(p.c):'&nbsp;')+'</i><span>'+(t||'&nbsp;')+'</span></span>';
+  }).join('')+'</div>';
+}
+document.querySelectorAll('[data-cp]').forEach(function(el){
+  el.innerHTML = el.getAttribute('data-cp').split('\n').map(function(l){
+    if(l.indexOf('> ')===0) return '<div class="sub">'+esc(l.slice(2))+'</div>';
+    return cpLine(l);
+  }).join('');
+});
+// 입력칸: 코드 토큰 색칠, 못 읽은 대괄호는 빨간 물결
+document.querySelectorAll('[data-tok]').forEach(function(el){
+  el.innerHTML = esc(el.getAttribute('data-tok')).replace(/\[([^\]]*)\]/g, function(all, c){
+    return CHORD_RE.test(c) ? '<em class="tk">['+c+']</em>' : '<em class="tk bad">['+c+']</em>';
+  });
+});
+// S1 선택 행 미리보기: '주께' 의 '주' 에 마우스 올림 표시
+(function(){
+  var s=document.getElementById('hovsheet'); if(!s) return;
+  var segs=s.querySelectorAll('.cs');
+  var seg=segs[2]; // [Em7]주께 드려
+  if(seg){ var sp=seg.querySelector('span'); sp.innerHTML=sp.textContent.replace('드','<em class="hov" style="font-style:normal">드</em>'); }
+})();
+</script>
+</body>
+</html>
