@@ -1,7 +1,7 @@
 # 구현 명세 — 찬양 가사에 코드 넣기 (싱어·발표자 화면 전용)
 
 - 작성일: 2026-11-06 (기획 초안 → QA 검토 [`qa-review.md`](qa-review.md) 반영 → **구현용 최종 명세**)
-- 상태: **명세 확정, 구현 전**. 앱 코드는 아직 손대지 않았다
+- 상태: **백엔드 B0~B7 구현 끝**(2026-11-06, §5-3 끝 구현 메모). 프론트 F1~F8 남음
 - 근거 문서: [`tech-backend.md`](tech-backend.md) · [`tech-frontend.md`](tech-frontend.md) · [`qa-review.md`](qa-review.md). **이 문서와 다르면 이 문서가 이긴다**
 - 화면 목업: [`mockup.html`](mockup.html) · `screens/s1.png`, `s1b.png`, `s1c.png`, `s2.png` ~ `s7.png` (목업 수정 메모는 §2 끝)
 - 요청 원문: "찬양 가사 넣을 때 코드도 가사 위치에 넣을 수 있게 하고, 그걸 싱어 화면이나 발표자 화면에서도 볼 수 있게 하고 싶어"
@@ -641,6 +641,24 @@ typedef ContiTextPick = ({PraiseSong song, int transpose}); // transpose: 체크
 static Future<List<ContiTextPick>?> show(...);
 // _importContiText 는 pick.song.copyWith(chordTranspose: pick.transpose) 로 담는다 (_withSubLyrics 뒤)
 ```
+
+> **[백엔드 구현 메모 — 2026-11-06, B0~B7 끝]** 위 계약 그대로 만들었고, 바꾸거나 더한 것만 적는다.
+> - **바꿈** `stripChords` 4단계: 줄 끝 공백은 **코드 토큰이 있던 줄만** 지운다. 모든 줄을 지우면 `stripChords(escapeLyricsForChords(x)) == normalizeEditableLyrics(x)` 가 깨진다(가사에 줄 끝 공백이 있을 때)
+> - **바꿈** `stripChords` 는 페이지 단위로 돈다(빈 줄로 먼저 나눈 뒤 줄마다 strip). 그래야 §3-1 표의 `[G] [D]\n\n가사` → `\n\n가사`, 가운데 코드만 있는 페이지 → 빈 페이지가 나온다
+> - **바꿈** `matchedChordPages`: 짝은 맞지만 **코드 토큰이 하나도 없는 페이지도 null**(→ `LyricsPage.chord == ''`). 그래야 `chord.isEmpty` = "보일 코드 없음" 하나로 판단하고 `_songWithPages` 가 그 페이지를 이스케이프한 원본으로 채운다. '코드 확인 N' 은 새 함수 `hiddenChordPageCount(chord, lyrics)` 로 센다(코드가 든 페이지 중 안 보이는 수, 끝 코드만 있는 페이지 포함)
+> - **바꿈** `keyLabel`: 원래 조를 모르면 `'+2'` 만 돌려준다
+> - **바꿈** `realignChords`: 붙어 있던 글자가 지워졌으면 같은 줄의 **앞 살아 있는 글자 바로 뒤**(= 바꿔 쓴 새 글자 위, `놀라[D]워`→`놀라[D]와`), 앞 글자가 없으면 다음 살아 있는 글자, 둘 다 없으면 줄 끝(옮김). 끝의 코드만 있는 페이지(원래 안 보이던 코드)는 버리지 않고 새 글 끝에 그대로 붙인다. 자동 저장 (a) 는 `dropped == 0` 일 때만. 편집 거리 1000 을 넘으면 diff 를 포기하고(전부 바뀐 것으로) 확실하지 않음
+> - **바꿈** 코드만 있는 줄의 `ChordLine` 은 코드 오프셋이 모두 0
+> - **옮김** `normalizeEditableLyrics` 는 `domain/lyrics_text.dart` 로 옮겼다(도메인이 presentation 을 import 하지 않게). `lyrics_page_grid.dart` 가 다시 내보내므로 기존 import 는 그대로 된다
+> - **더함** `chord_lyrics.dart`: `ChordAccidental.dbValue`·`fromDb`, `countEscapedBrackets(lyrics)`(S1 배너 수), `chordNamesIn(text)`(많이 쓴 순, S1b 빠른 버튼), `hiddenChordPageCount`, `chordNamePattern`
+> - **더함** `praise_song.dart`: `PraiseSong.effectiveChordKey`(정해 둔 조, 없으면 추정)·`chordKeyEstimated`, 최상위 `chordLyricsForPages(pages)`(`_songWithPages` 가 쓴다). `copyWith(chordLyrics: null)` = 지움(안 넘기면 그대로), `''` 는 null 로
+> - **더함** `praise_home_page.dart`: `stagedSongReplacement(old, updated)`(조 값·♯/♭ 이어받기, `_offerStagedSongUpdate` 가 이미 쓴다), `stagedSongUpdatePlan` 대상 조건에 코드·원래 조 같음, `songEditChanged` 에 코드·원래 조. `_applySlideEdit` 의 `chord: newMain == old.korean ? old.chord : ''` 도 넣었다
+> - **더함** `conti_text_parse.dart` `contiKeyPlan(entry.key, song)` → `(textKey, multiple, fromKey, fromEstimated, transpose, modeMismatch)`. S6 조 칸이 이것만 보면 된다. `ContiTextPick` typedef 는 `conti_text_import_dialog.dart` 에 만들어 두었다(`show` 반환형 바꾸기는 F7)
+> - **더함** `PythonBridge.exportPayload(...)`(static, PPTX payload 만들기를 떼어 냄 — 누출 테스트용), `WorshipContiRepository.readTranspose(v)`, `SyncChord`(sync_snapshot.dart), `SongBundleImportResult.chordsAddedCount`
+> - **정함** 곡 모음 가져오기: 새 곡은 코드를 받고, 이미 있는 곡은 **코드를 단 적이 없고(`chord_lyrics` NULL·시각 0) 가사가 그대로 맞을 때만** 채운다. 그 밖엔 덮지 않는다(M10)
+> - **정함** `portableItemRow`: 가사 스냅샷이 빈 옛 행을 지금 곡으로 채울 때만 코드도 지금 곡 것(`cur_chord_*`)으로 채운다. 가사 스냅샷이 있는 행의 빈 코드는 코드 없음 그대로
+> - **임시** `LyricsEditorDialog` 라이브러리 저장 결과에 `song.chordLyrics`·`chordKey` 를 그대로 싣는다(안 그러면 `songEditChanged` 가 늘 '바뀜'). F1 이 코드 모드로 바꾼다. `_openSongEditor` 의 `saveChords` 호출은 아직 없다(F1)
+> - 동기화: 옛 내 파일에 `chords` 키가 없으면 빈 목록과 같게 본다(`_ownFileUpToDate`, 올린 뒤 처음 켤 때 헛 '안 올린 수정' 방지)
 
 계약 규칙:
 - 프론트는 코드 글을 **직접 정규식으로 풀지 않는다**. 위 함수만 쓴다.

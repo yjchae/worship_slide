@@ -28,6 +28,8 @@ flutter test test/extra_language_test.dart # 추가 보조 언어(세 번째 줄
 flutter test test/b_screen_test.dart # 통역 화면(B): 칸 계산·폴더 대응표·보조 칸 올리기
 flutter test test/page_image_test.dart # 슬라이드 편집 페이지: 요소 JSON·clamp·배경 page_elements·.wsconti 경로·화면 밖 PNG 굽기
 flutter test test/page_editor_test.dart # 슬라이드 편집 창: 손잡이 크기 계산·되돌리기·자동 이름
+flutter test test/chord_lyrics_test.dart # 코드 가사 순수 함수: 문법·strip·이스케이프·페이지 짝·조 바꾸기·다시 맞추기·코드 위 가사 변환
+flutter test test/chord_repository_test.dart test/chord_conti_test.dart test/chord_leak_test.dart # 코드 저장 길(saveChords)·콘티 스냅샷·관객/PPTX 누출 없음
 flutter test test/lyrics_page_grid_test.dart # 가사 수정 창 페이지 표·넘침 측정 (LYRICS_EDITOR_SHOT=경로 면 창을 PNG 로)
 python3 python/test_render.py    # render 명령 self-check (LibreOffice 없으면 skip)
 python3 python/test_animation.py # 애니메이션 단계 펼치기 self-check (LibreOffice 불필요)
@@ -62,7 +64,7 @@ lib/
   src/app_colors.dart                -- 앱 화면 색·둥글기 토큰 (슬라이드·발표 창·PPTX 색과 무관)
   src/features/praise/
     data/
-      praise_database.dart           -- SQLite 스키마 + 마이그레이션 (현재 version 19)
+      praise_database.dart           -- SQLite 스키마 + 마이그레이션 (현재 version 20)
       praise_repository.dart         -- 곡 CRUD (searchSongs, replaceAllSongs, deleteSongsByIds ...)
       worship_conti_repository.dart  -- 콘티 저장/불러오기 (곡 가사 스냅샷까지 함께 보관)
       sync_snapshot.dart             -- 찬양 동기화 파일 모양: SyncSnapshot(PC 한 대분) · SyncSong · SyncTranslation
@@ -88,7 +90,9 @@ lib/
       libreoffice_installer.dart     -- LibreOffice 설치 확인 + winget(Windows)·Homebrew(macOS) 자동 설치
     domain/
       slide_media.dart               -- SlideMedia (동영상·음악·유튜브 페이지)
-      praise_song.dart               -- PraiseSong; 페이지 구분자는 빈 줄(\n\n)
+      praise_song.dart               -- PraiseSong; 페이지 구분자는 빈 줄(\n\n). 코드 칸 chordLyrics·chordKey(+콘티 전용 chordTranspose·chordAccidental)
+      chord_lyrics.dart              -- 코드 가사 순수 함수(문법 isChordName·stripChords·escape·matchedChordPages·조 바꾸기·realignChords). 기획 planning/chord-lyrics/plan.md
+      lyrics_text.dart               -- normalizeEditableLyrics(가사 편집 글 정규화, lyrics_page_grid 가 다시 내보냄)
       export_style.dart              -- ExportStyle (가사/성경 각각의 색·크기·정렬·제목 표시 등)
       slide_background.dart          -- SlideBackground (콘티 항목 하나만 배경을 다르게, 편집 페이지 요소 page_elements)
       page_element.dart              -- 슬라이드 편집 페이지 요소 PageElement(그림·글 상자)
@@ -361,6 +365,13 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   후보마다 첫 가사·쪽 수·파일 이름을 보이고 마우스를 올리면 가사 앞부분. 없으면 건너뛴다('직접 찾기' = 제목·가사 검색, 입력이 0.2초 멈추면 찾는다).
   정규화한 제목·가사는 `ContiSongMatcher.build`(`Isolate.run`)가 한 번에 만든다(곡 수천 곡이면 화면이 멈췄다).
   담을 때는 `_withSubLyrics` 를 거친다(더블클릭 담기와 같다). 보조 가사를 못 읽은 곡은 원본 가사로 담고 알린다(`app.log` `[conti-text]`)
+- **코드 가사** (기획 `planning/chord-lyrics/plan.md`, DB version 20): `praise_songs.chord_lyrics`(ChordPro 인라인 `[G]주 은[D/F#]혜`, NULL = 없음)·`chord_key`·`chord_updated_at`.
+  **원본 가사 `lyrics` 가 기준**이고 코드 글은 `stripChords(코드 글) == lyrics` 인 페이지만 보인다(어긋나면 숨김, 자동으로 지우지 않음).
+  코드를 DB 에 쓰는 길은 `PraiseRepository.saveChords` 하나 — `toMap` 에 코드 칸이 없어서 가사만 고치는 길이 코드를 덮지 않는다. 코드 시각은 곡 `updated_at` 과 따로다.
+  `replaceAllSongs` 는 uid 를 이어 쓰는 곡의 코드를 옮기고, `addNewSongs` 고치기는 `realignChords` 가 확실할 때만 저장한다.
+  동기화는 스냅샷 `chords` 구역(`SyncChord`, `_mergeChords`)으로 따로 맞춘다 — 옛 앱은 이 키를 모르고 지나갈 뿐 코드를 못 지운다. 합칠 때 코드를 다시 맞추지 않는다.
+  콘티 항목은 `song_chord_lyrics`·`song_chord_key`·`song_transpose`(−11..11, 그 밖은 0)·`song_chord_accidental`('' / '#' / 'b') 스냅샷. 곡을 나누면(`_songWithPages`) 코드가 페이지를 따라간다.
+  **관객 화면·통역(B)·PPTX 에는 코드가 없다** — `SlidePageData`·`PythonBridge.exportPayload` 에 코드 칸이 없다(`test/chord_leak_test.dart`)
 - **DB 갱신** (`replaceAllSongs`): 전체 삭제 후 재삽입 (증분 갱신 아님)
 - **폴더 다시 가져오기** (`addNewSongs`): 같은 제목에 원본 가사까지 같으면 건너뛰고, 원본+보조 가사의 줄 모음
   (순서 무시)이 같으면 나누기 규칙만 바뀐 것으로 보고 **기존 곡을 고친다**(새 곡을 만들지 않는다). 나머지는 새로 넣는다
