@@ -3,6 +3,7 @@ import copy
 import functools
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -1606,6 +1607,47 @@ def _lyrics_box_vertical_layout(style, is_bible):
     return top, _LYRICS_BOX_HEIGHT
 
 
+# 찬양 '중단' + 보조 줄: 보조 줄이 내려갈 수 있는 한계 = 슬라이드 아래 끝에서 이만큼(인치) 위.
+_SUB_HANG_BOTTOM_MARGIN = 0.3
+# PowerPoint 한 줄 높이(줄 간격 1.0) ≈ 글자 크기 × 1.2
+_PPT_LINE_HEIGHT = 1.2
+
+
+def _estimate_text_height(text, size_pt, width_in):
+    """글 높이(인치) 어림. PPTX 는 글자를 잴 수 없어 글자 폭(한글·한자·가나 1em,
+    공백 0.3em, 나머지 0.55em)으로 줄바꿈을 어림한다."""
+    if not text:
+        return 0.0
+    width_pt = width_in * 72
+    lines = 0
+    for line in text.split("\n"):
+        em = 0.0
+        for ch in line:
+            code = ord(ch)
+            if ch == " ":
+                em += 0.3
+            elif (0x1100 <= code <= 0x11FF or 0x2E80 <= code <= 0xA4CF
+                  or 0xAC00 <= code <= 0xD7AF or 0xF900 <= code <= 0xFAFF
+                  or 0xFF00 <= code <= 0xFF60):
+                em += 1.0
+            else:
+                em += 0.55
+        lines += max(1, math.ceil(em * size_pt / width_pt - 1e-9))
+    return lines * size_pt * _PPT_LINE_HEIGHT / 72
+
+
+def _anchored_lyrics_top(box_top, main_h, total_h):
+    """찬양 '중단' + 보조 줄일 때 원본 가사 첫 줄 자리(가사 상자 위에서 인치).
+
+    원본 가사만으로 가운데를 잡고 보조 줄은 그 아래로 늘어뜨린다 — 보조 가사 길이가
+    달라도 원본 가사 시작 위치가 그대로다. 보조 줄이 슬라이드 아래 끝
+    ``_SUB_HANG_BOTTOM_MARGIN`` 위를 넘을 때만 그만큼 올린다.
+    미리보기(Dart SlideTextLayout.anchoredTopInBox)·발표 창 두 곳과 같은 규칙이다.
+    """
+    limit = max(_LYRICS_BOX_HEIGHT, _SLIDE_H - _SUB_HANG_BOTTOM_MARGIN - box_top)
+    return max(0.0, min((_LYRICS_BOX_HEIGHT - main_h) / 2, limit - total_h))
+
+
 def _lyrics_offset_y(style, is_bible):
     """본문 세로 미세 조정 값(인치, + = 아래로)."""
     return _clamp_offset_y(style.get(
@@ -1912,6 +1954,33 @@ def add_song_slides(prs, song, style, background=None):
         lyrics_box_top, lyrics_box_height = _lyrics_box_vertical_layout(
             style, is_bible
         )
+        anchor = {
+            "top": MSO_ANCHOR.TOP,
+            "middle": MSO_ANCHOR.MIDDLE,
+            "bottom": MSO_ANCHOR.BOTTOM,
+        }[position]
+        shows_english = bool(include_english_lyrics and english_page)
+        shows_extra = bool(include_extra_lyrics and extra_page)
+        if (not is_bible and position == "middle" and page
+                and (shows_english or shows_extra)):
+            # 원본 가사 기준으로 자리를 잡고 위에서부터 채운다(보조 길이에 흔들리지 않게).
+            gap = font_size.pt * 0.4 / 72  # 발표 창의 보조 블록 앞 틈과 같은 값
+            main_h = _estimate_text_height(page, font_size.pt, lyrics_box_width)
+            total_h = main_h
+            if shows_english:
+                total_h += gap + _estimate_text_height(
+                    english_page, english_size, lyrics_box_width)
+            if shows_extra:
+                total_h += gap + _estimate_text_height(
+                    extra_page, extra_size, lyrics_box_width)
+            shift = _anchored_lyrics_top(lyrics_box_top, main_h, total_h)
+            limit = max(
+                _LYRICS_BOX_HEIGHT,
+                _SLIDE_H - _SUB_HANG_BOTTOM_MARGIN - lyrics_box_top,
+            )
+            lyrics_box_top += shift
+            lyrics_box_height = limit - shift
+            anchor = MSO_ANCHOR.TOP
 
         textbox = slide.shapes.add_textbox(
             Inches(lyrics_box_left), Inches(lyrics_box_top),
@@ -1920,11 +1989,7 @@ def add_song_slides(prs, song, style, background=None):
         frame = textbox.text_frame
         frame.clear()
         frame.word_wrap = True
-        frame.vertical_anchor = {
-            "top": MSO_ANCHOR.TOP,
-            "middle": MSO_ANCHOR.MIDDLE,
-            "bottom": MSO_ANCHOR.BOTTOM,
-        }[position]
+        frame.vertical_anchor = anchor
 
         if is_bible:
             _add_bible_page_text(frame, page, lyrics_align, font_size, text_color, font_name)

@@ -325,6 +325,58 @@ void main() {
     });
   });
 
+  group('찬양 중단 + 보조 줄: 원본 가사 시작 위치 고정', () {
+    SlidePageData page(String english, {bool isBible = false}) =>
+        SlidePageData(
+          mainText: '첫째 줄\n둘째 줄',
+          englishText: english,
+          isBible: isBible,
+          pageIndex: 0,
+          totalPages: 1,
+          style: ExportStyle.fromJson({
+            'font_size': 30,
+            'bible_font_size': 20,
+            'text_position': 'middle',
+            'bible_text_position': 'middle',
+            'include_english_lyrics': true,
+          }),
+        );
+
+    test('보조 줄 길이가 달라도 원본 첫 줄 자리가 같다', () {
+      final short = SlideTextLayout.anchoredTopInBox(page('short'), 0.6);
+      final long = SlideTextLayout.anchoredTopInBox(
+        page('a longer line\nand another\nand one more'),
+        0.6,
+      );
+      expect(short, isNotNull);
+      expect(long, closeTo(short!, 1e-9));
+    });
+
+    test('보조가 없거나 성경이면 예전처럼 상자 정렬', () {
+      expect(SlideTextLayout.anchoredTopInBox(page(''), 0.6), isNull);
+      expect(
+        SlideTextLayout.anchoredTopInBox(page('verse', isBible: true), 0.6),
+        isNull,
+      );
+    });
+
+    test('보조 줄이 슬라이드 아래 끝 0.3인치를 넘을 때만 올린다', () {
+      // 상자 위 0.6 → 한계 = 7.5 - 0.3 - 0.6 = 6.6 (상자 위에서)
+      expect(
+        SlideTextLayout.placeAnchored(mainH: 2, totalH: 3, boxTop: 0.6),
+        closeTo(1.7, 1e-9),
+      );
+      expect(
+        SlideTextLayout.placeAnchored(mainH: 2, totalH: 5.6, boxTop: 0.6),
+        closeTo(1.0, 1e-9),
+      );
+      expect(
+        SlideTextLayout.placeAnchored(mainH: 2, totalH: 9, boxTop: 0.6),
+        0,
+      );
+    });
+  });
+
   group('설교자 화면(원본만)', () {
     SlidePageData page({required bool originalOnly}) => SlidePageData(
       mainText: '1절',

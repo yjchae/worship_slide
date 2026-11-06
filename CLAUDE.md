@@ -755,6 +755,11 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
     `_lyrics_box_vertical_layout`·`_add_title_textbox`(PPTX).
     허용 범위(±2.0)도 네 곳이 같아야 한다
   - 키가 없는 예전 설정·콘티는 0으로 읽혀 기존 동작 그대로다
+  - **찬양 '중단' + 보조 줄은 원본 가사로만 자리를 잡는다** (`SlideTextLayout.anchoredTopInBox`): 통째로 가운데 정렬하면
+    보조 가사 길이가 페이지마다 달라 원본 가사 시작 위치가 흔들렸다. 원본 가사만 상자 가운데에 두고 보조·추가 보조는 그 아래로
+    늘어뜨린다(상자 아래로 넘어가도 된다). 보조 줄 끝이 슬라이드 아래 끝 0.3인치 위(`subHangBottomMargin`)를 넘을 때만 그만큼 올린다.
+    상단·하단 기준·성경·보조 없는 페이지는 예전 그대로. 네 곳 같은 규칙 — 미리보기, macOS `placeMain()`(JS, padding-top),
+    Windows `startY`, PPTX `_anchored_lyrics_top`(글자를 못 재서 `_estimate_text_height` 로 줄바꿈을 어림하고 상자를 위 정렬로 옮긴다)
 
 - **디자인 리본**: 폰트·색·위치 설정은 오른쪽 패널이 아니라 접이식 리본(`_DesignRibbon`)에 있다.
   메인 탭(편집/발표 보기)·가져오기 메뉴·PPTX 저장·발표 시작은 맨 위 앱 바(`_TopBar`) 한 줄에 있고, 보관함 정보(곡 수·폴더·진행률·버전)는

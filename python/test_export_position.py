@@ -262,6 +262,30 @@ def test_export_without_key():
     check("제목도 마찬가지", title_box(titled.slides[0]).top, Inches(6.75))
 
 
+def test_sub_lines_do_not_move_main_top():
+    print("찬양 중단 + 보조 줄: 원본 가사 시작 위치 고정")
+    style = dict(_STYLE, include_english_lyrics=True)
+    short = {
+        "type": "song", "title": "찬양",
+        "lyrics": "첫째 줄\n둘째 줄\n\n셋째 줄\n넷째 줄",
+        "english_lyrics": "short\n\nThis is a much longer line\nwith more\nand more lines",
+        "background": None,
+    }
+    slides = export([short], style=style).slides
+    a, b = body_box(slides[0]), body_box(slides[1])
+    check("보조 줄 길이가 달라도 상자 위치가 같다", a.top, b.top)
+    check("위에서부터 채운다", str(a.text_frame.vertical_anchor), "TOP (1)")
+    no_sub = body_box(export([dict(short, english_lyrics="")], style=style).slides[0])
+    check("보조 없으면 예전처럼 가운데 정렬",
+          str(no_sub.text_frame.vertical_anchor), "MIDDLE (3)")
+
+    # 보조 줄이 아주 길면 슬라이드 아래 끝 0.3인치 위를 넘지 않게 올린다.
+    long_sub = dict(short, lyrics="첫째 줄\n둘째 줄",
+                    english_lyrics="\n".join(["line"] * 10))
+    c = body_box(export([long_sub], style=style).slides[0])
+    check("넘치면 올라간다", c.top < a.top, True)
+
+
 if __name__ == "__main__":
     test_layout_shifts_box_only()
     test_legacy_top_margin_ignored()
@@ -271,6 +295,7 @@ if __name__ == "__main__":
     test_title_offset()
     test_bible_title_offset()
     test_export_without_key()
+    test_sub_lines_do_not_move_main_top()
     if _failures:
         print(f"\n{len(_failures)}개 실패: {_failures}")
         raise SystemExit(1)

@@ -651,6 +651,13 @@ void PresentationChannel::Paint(HDC hdc, RECT cli) const {
     case 2: startY = bodyBottom - totalH; break;
     default: startY = bodyTop + (bodyBoxH - totalH) / 2; break;
   }
+  // 찬양 '중단' + 보조 줄: 원본 가사만으로 가운데를 잡고 보조 줄은 그 아래로 늘어뜨린다 —
+  // 보조 가사 길이가 달라도 원본 가사 시작 위치가 그대로다. 보조 줄이 슬라이드 아래 끝
+  // 0.3인치 위를 넘을 때만 그만큼 올린다(Dart SlideTextLayout.anchoredTopInBox 와 같은 규칙).
+  if (!slide_.isBible && slide_.vAlign == 1 && mainH > 0 && (engFont || extraFont)) {
+    int limitY = std::max(bodyBottom, (int)((7.5 - 0.3) / 7.5 * H));
+    startY = std::min(bodyTop + (bodyBoxH - mainH) / 2, limitY - totalH);
+  }
   startY = std::max(bodyTop, startY);
 
   // Draw main text

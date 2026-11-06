@@ -31,6 +31,7 @@ class SlideTextLayout {
     SlidePageData data, {
     double fontScale = 1,
     bool originalOnly = false,
+    bool mainOnly = false,
   }) {
     final style = data.style;
     final isBible = data.isBible;
@@ -51,7 +52,7 @@ class SlideTextLayout {
           text: data.mainText,
           style: textStyle(bodyColor, bodyFontSize, _mainHeight),
         ),
-        if (showsSub(data))
+        if (!mainOnly && showsSub(data))
           TextSpan(
             text: '\n${data.englishText}',
             style: textStyle(
@@ -60,7 +61,7 @@ class SlideTextLayout {
               _subHeight,
             ),
           ),
-        if (showsExtra(data))
+        if (!mainOnly && showsExtra(data))
           TextSpan(
             text: '\n${data.extraText}',
             style: textStyle(
@@ -127,6 +128,65 @@ class SlideTextLayout {
       }
       return scale;
     }();
+  }
+
+  /// 보조 줄이 가사 상자 아래로 내려갈 수 있는 한계 = 슬라이드 아래 끝에서 이만큼(인치) 위.
+  static const double subHangBottomMargin = 0.3;
+
+  /// 찬양 가사 '중단' 기준에서 보조·추가 보조가 있을 때 원본 가사 첫 줄의 자리
+  /// (가사 상자 위에서 인치). 원본 가사만으로 가운데를 잡고 보조 줄은 그 아래로 늘어뜨린다 —
+  /// 보조 가사 길이가 페이지마다 달라도 원본 가사 시작 위치가 흔들리지 않게.
+  /// 보조 줄이 [subHangBottomMargin] 한계를 넘으면 그만큼만 올린다(그때만 위치가 바뀐다).
+  /// null = 예전처럼 상자 안에서 통째로 정렬(상단·하단 기준, 성경, 보조 없음).
+  /// 발표 창 두 곳(macOS·Windows)·PPTX 도 같은 규칙이다.
+  static double? anchoredTopInBox(SlidePageData data, double boxTop) {
+    if (data.imagePath != null || data.isBible) return null;
+    if (data.style.textPosition != VerticalTextPosition.middle) return null;
+    if (data.mainText.isEmpty || (!showsSub(data) && !showsExtra(data))) {
+      return null;
+    }
+    final key = (_cacheKey(data), 'top', boxTop, data.style.textPosition);
+    if (_overflowCache.length > 2000) _overflowCache.clear();
+    return _overflowCache[key] ??= () {
+      final scale = fitScale(data);
+      double measure(bool mainOnly) {
+        final painter = TextPainter(
+          text: bodySpan(data, fontScale: scale, mainOnly: mainOnly),
+          textAlign: textAlign(data),
+          textDirection: TextDirection.ltr,
+        )..layout(maxWidth: boxW(false) * 72);
+        final h = painter.height / 72;
+        painter.dispose();
+        return h;
+      }
+
+      // 발표 창은 보조 블록마다 앞에 틈(본문 × 0.4)을 둔다 — 한계 비교엔 그 틈까지 넣는다.
+      final blocks = (showsSub(data) ? 1 : 0) + (showsExtra(data) ? 1 : 0);
+      final gaps = blocks * data.style.fontSize * scale * _blockGap / 72;
+      return placeAnchored(
+        mainH: measure(true),
+        totalH: measure(false) + gaps,
+        boxTop: boxTop,
+      );
+    }();
+  }
+
+  /// [anchoredTopInBox] 의 계산(인치). 원본 가사 가운데 정렬 → 보조 줄이 한계를 넘으면 올리기.
+  static double placeAnchored({
+    required double mainH,
+    required double totalH,
+    required double boxTop,
+  }) {
+    final limit = anchoredLimitInBox(boxTop);
+    final anchor = (lyricsBoxH - mainH) / 2;
+    final top = anchor < limit - totalH ? anchor : limit - totalH;
+    return top < 0 ? 0.0 : top;
+  }
+
+  /// 보조 줄이 내려갈 수 있는 아래 끝(가사 상자 위에서 인치). 상자 아래 끝보다 위로는 안 온다.
+  static double anchoredLimitInBox(double boxTop) {
+    final limit = slideH - subHangBottomMargin - boxTop;
+    return limit > lyricsBoxH ? limit : lyricsBoxH;
   }
 
   /// 발표 창(Windows)의 보조 블록 앞 틈 = 본문 글자 크기 × 이 값.

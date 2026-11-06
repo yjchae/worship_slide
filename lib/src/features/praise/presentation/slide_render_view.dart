@@ -243,11 +243,15 @@ class SlideRenderView extends StatelessWidget {
       isBible ? style.bibleTitleOffsetY : style.titleOffsetY,
     );
 
-    final bodyAlignment = switch (bodyTextPosition) {
-      VerticalTextPosition.top => Alignment.topCenter,
-      VerticalTextPosition.middle => Alignment.center,
-      VerticalTextPosition.bottom => Alignment.bottomCenter,
-    };
+    // 찬양 '중단' + 보조 줄: 원본 가사만으로 자리를 잡아 보조 길이에 흔들리지 않게(위에서부터 그린다).
+    final anchoredTop = SlideTextLayout.anchoredTopInBox(data, bodyBoxTop);
+    final bodyAlignment = anchoredTop != null
+        ? Alignment.topCenter
+        : switch (bodyTextPosition) {
+            VerticalTextPosition.top => Alignment.topCenter,
+            VerticalTextPosition.middle => Alignment.center,
+            VerticalTextPosition.bottom => Alignment.bottomCenter,
+          };
 
     final textAlign = SlideTextLayout.textAlign(data);
 
@@ -297,9 +301,15 @@ class SlideRenderView extends StatelessWidget {
                 ),
               Positioned(
                 left: w * SlideTextLayout.boxL(isBible) / _slideW,
-                top: h * bodyBoxTop / _slideH,
+                top: h * (bodyBoxTop + (anchoredTop ?? 0)) / _slideH,
                 width: w * SlideTextLayout.boxW(isBible) / _slideW,
-                height: h * _lyricsBoxH / _slideH,
+                height:
+                    h *
+                    (anchoredTop == null
+                        ? _lyricsBoxH
+                        : SlideTextLayout.anchoredLimitInBox(bodyBoxTop) -
+                              anchoredTop) /
+                    _slideH,
                 child: Align(
                   alignment: bodyAlignment,
                   child: FittedBox(

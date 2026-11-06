@@ -681,11 +681,17 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate, WKNavi
     let bodyBoxHeightPct = 5.4 / 7.5 * 100
 
     let textPositionKey = isBible ? "bible_text_position" : "text_position"
+    let textPosition = style[textPositionKey] as? String ?? "middle"
+    // 찬양 '중단' + 보조 줄: 원본 가사만으로 가운데를 잡고 보조 줄은 그 아래로 늘어뜨린다 —
+    // 보조 가사 길이가 달라도 원본 가사 시작 위치가 그대로다(Dart SlideTextLayout.anchoredTopInBox 와 같은 규칙).
+    let anchorMain = !isBible && textPosition != "top" && textPosition != "bottom"
+      && !mainText.isEmpty
+      && ((includeEnglish && !englishText.isEmpty) || (includeExtra && !extraText.isEmpty))
     let justifyContent: String
-    switch style[textPositionKey] as? String ?? "middle" {
+    switch textPosition {
     case "top": justifyContent = "flex-start"
     case "bottom": justifyContent = "flex-end"
-    default: justifyContent = "center"
+    default: justifyContent = anchorMain ? "flex-start" : "center"
     }
 
     let textAlignKey = isBible ? "bible_text_align" : "lyrics_text_align"
@@ -795,7 +801,7 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate, WKNavi
       \(Self.pointerHTML)
     <script>
     \(pointerScript())
-    requestAnimationFrame(function(){
+    function fitBody(){
       var box = document.querySelector('.body-box');
       if (!box) return;
       var boxH = box.offsetHeight;
@@ -816,7 +822,27 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate, WKNavi
           totalH += k.offsetHeight + parseFloat(getComputedStyle(k).marginTop);
         });
       }
-    });
+    }
+    // 원본 가사 기준 자리 잡기. 보조 줄이 슬라이드 아래 끝 0.3인치 위를 넘을 때만 올린다.
+    function placeMain(){
+      if (!\(anchorMain ? "true" : "false")) return;
+      var box = document.querySelector('.body-box');
+      var main = box && box.querySelector('.main-text');
+      if (!main) return;
+      box.style.paddingTop = '0px';
+      var boxH = box.clientHeight;
+      var total = 0;
+      for (var i = 0; i < box.children.length; i++) {
+        var k = box.children[i];
+        total += k.offsetHeight + (i ? parseFloat(getComputedStyle(k).marginTop) : 0);
+      }
+      var inch = window.innerHeight / 7.5;
+      var limit = Math.max(boxH, (7.5 - 0.3 - \(String(format: "%.4f", 0.6 + bodyOffsetY))) * inch);
+      var top = Math.max(0, Math.min((boxH - main.offsetHeight) / 2, limit - total));
+      box.style.paddingTop = top + 'px';
+    }
+    requestAnimationFrame(function(){ fitBody(); placeMain(); });
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(placeMain);
     </script>
     </body></html>
     """
