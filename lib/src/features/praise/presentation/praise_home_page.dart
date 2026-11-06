@@ -2250,10 +2250,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       final pairs = List.of(song.pairedPages);
 
       if (info.pageIndexInItem < pairs.length) {
+        final old = pairs[info.pageIndexInItem];
         pairs[info.pageIndexInItem] = (
           korean: newMain,
           english: newEnglish,
           extra: newExtra,
+          // 원본 가사를 고쳤으면 그 페이지 코드는 짝이 안 맞으니 뺀다(다시 맞추지 않는다, §3-7).
+          chord: newMain == old.korean ? old.chord : '',
         );
       }
 
@@ -3818,11 +3821,14 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     return _stagingItems.indexWhere((e) => e.uid == parts.last.first);
   }
 
+  /// 고른 페이지만 담은 곡. 코드는 페이지마다 따라가고(코드 없는 페이지는 이스케이프한 원본으로
+  /// 채워 페이지 수를 맞춘다), 원래 조·조 바꾸기·♯/♭ 은 copyWith 로 그대로 간다(§3-7).
   static PraiseSong _songWithPages(PraiseSong song, List<LyricsPage> pages) =>
       song.copyWith(
         lyrics: encodePages(pages.map((p) => p.korean)),
         englishLyrics: encodePages(pages.map((p) => p.english)),
         extraLyrics: encodePages(pages.map((p) => p.extra)),
+        chordLyrics: chordLyricsForPages(pages),
       );
 
   /// 콘티 항목 하나의 배경만 따로 지정한다(헌금송만 다른 배경 등).
@@ -5652,12 +5658,18 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       songId: id,
       before: before,
     ).targets.where(plan.targets.contains).toSet();
-    final newItem = SongStagingItem(updatedSong);
     var replaced = 0;
     setState(() {
       for (var i = 0; i < _stagingItems.length; i++) {
         final entry = _stagingItems[i];
         if (!targets.contains(entry.uid)) continue;
+        final old = entry.item;
+        // 조 바꾸기·♯/♭ 은 항목 값이라 옛 항목에서 이어받는다(빠뜨리면 원래 조로 돌아간다).
+        final newItem = SongStagingItem(
+          old is SongStagingItem
+              ? stagedSongReplacement(old.song, updatedSong)
+              : updatedSong,
+        );
         // 장 수가 같으면 지운 표시·메모를 그대로 두고, 다르면 그 항목의 지운 표시를 풀고
         // 범위 밖 메모만 버린다. 자동 여백 표시·메모는 새 끝으로 옮긴다.
         remapReloadedPages(
@@ -10519,7 +10531,10 @@ class _SheetLyricsDialogState extends State<_SheetLyricsDialog> {
   for (final entry in items) {
     final item = entry.item;
     if (item is! SongStagingItem || item.song.id != songId) continue;
-    if (item.song.lyrics == before.lyrics) {
+    // 콘티 쪽에서 따로 고친 코드·원래 조도 덮지 않는다(§3-9).
+    if (item.song.lyrics == before.lyrics &&
+        item.song.chordLyrics == before.chordLyrics &&
+        item.song.chordKey == before.chordKey) {
       targets.add(entry.uid);
     } else {
       skipped++;
@@ -10527,6 +10542,14 @@ class _SheetLyricsDialogState extends State<_SheetLyricsDialog> {
   }
   return (targets: targets, skipped: skipped);
 }
+
+/// '콘티도 바꿀까요' 로 바꿀 때의 새 곡. 코드·가사는 [updated], 조 바꾸기·♯/♭ 은 [old] 항목 것(§3-9).
+@visibleForTesting
+PraiseSong stagedSongReplacement(PraiseSong old, PraiseSong updated) =>
+    updated.copyWith(
+      chordTranspose: old.chordTranspose,
+      chordAccidental: old.chordAccidental,
+    );
 
 /// 곡 편집 창에서 실제로 바뀐 게 있는지. 제목·원본·기본 보조(영어) 가사와,
 /// 저장한 다른 언어 번역([newSubLyrics])이 기존 번역([oldTranslations])과 모두 같으면 false.
@@ -10540,7 +10563,9 @@ bool songEditChanged({
 }) {
   if (before.title != edited.title ||
       before.lyrics != edited.lyrics ||
-      before.englishLyrics != edited.englishLyrics) {
+      before.englishLyrics != edited.englishLyrics ||
+      before.chordLyrics != edited.chordLyrics ||
+      before.chordKey != edited.chordKey) {
     return true;
   }
   for (final entry in newSubLyrics.entries) {

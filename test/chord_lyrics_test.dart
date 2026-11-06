@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:worship_slides/src/features/praise/domain/chord_lyrics.dart';
 import 'package:worship_slides/src/features/praise/domain/lyrics_text.dart';
+import 'package:worship_slides/src/features/praise/domain/praise_song.dart';
 
 void main() {
   group('isChordName (§3-1 표)', () {
@@ -585,6 +586,76 @@ void main() {
     test('가사의 대괄호는 이스케이프', () {
       const pasted = 'G\n[A]가\nC\n나';
       expect(chordOverLyricsToInline(pasted), '[G]\\[A]가\n[C]나');
+    });
+  });
+
+  group('PraiseSong 코드 칸', () {
+    const song = PraiseSong(
+      id: 1,
+      fileName: 'a.pptx',
+      title: '주 은혜',
+      lyrics: '주 은혜\n\n놀라워\n\n끝',
+      englishLyrics: 'grace\n\namazing',
+      chordLyrics: '[G]주 은[D]혜\n\n놀라워\n\n[C]끝',
+      chordKey: 'G',
+    );
+
+    test('pairedPages 의 chord 는 짝이 맞는 페이지만', () {
+      expect(song.pairedPages.map((p) => p.chord), ['[G]주 은[D]혜', '', '[C]끝']);
+      final stale = song.copyWith(lyrics: '주 은혜\n\n놀라워\n\n끝!');
+      expect(stale.pairedPages.map((p) => p.chord), ['[G]주 은[D]혜', '', '']);
+      final noChords = song.copyWith(chordLyrics: null);
+      expect(noChords.hasChords, isFalse);
+      expect(noChords.pairedPages.every((p) => p.chord.isEmpty), isTrue);
+    });
+
+    test('copyWith: 안 넘기면 그대로, null 이면 지움, 빈 글은 null', () {
+      final moved = song.copyWith(
+        chordTranspose: 2,
+        chordAccidental: ChordAccidental.flat,
+      );
+      expect(moved.chordLyrics, song.chordLyrics);
+      expect(moved.chordKey, 'G');
+      expect(moved.chordTranspose, 2);
+      expect(moved.chordAccidental, ChordAccidental.flat);
+      expect(moved.copyWith(title: 'x').chordTranspose, 2);
+      expect(song.copyWith(chordKey: null).chordKey, isNull);
+      expect(song.copyWith(chordLyrics: '').chordLyrics, isNull);
+    });
+
+    test('toMap 에는 코드 칸이 없고 fromMap 은 읽는다 (H2)', () {
+      final map = song.toMap();
+      expect(map.keys.where((k) => k.contains('chord')), isEmpty);
+      final read = PraiseSong.fromMap({
+        ...map,
+        'chord_lyrics': '[G]주',
+        'chord_key': '',
+      });
+      expect(read.chordLyrics, '[G]주');
+      expect(read.chordKey, isNull);
+      expect(PraiseSong.fromMap(map).chordLyrics, isNull);
+    });
+
+    test('원래 조: 정해 둔 값, 없으면 추정', () {
+      expect(song.effectiveChordKey, 'G');
+      expect(song.chordKeyEstimated, isFalse);
+      final guess = song.copyWith(chordKey: null);
+      expect(guess.effectiveChordKey, 'G');
+      expect(guess.chordKeyEstimated, isTrue);
+      expect(song.copyWith(chordKey: 'H').effectiveChordKey, 'G');
+    });
+
+    test('chordLyricsForPages: 코드 없는 페이지는 이스케이프한 원본으로 채운다', () {
+      final pages = song.pairedPages;
+      expect(chordLyricsForPages([pages[0], pages[2]]), '[G]주 은[D]혜\n\n[C]끝');
+      expect(chordLyricsForPages([pages[1]]), isNull);
+      final withBracket = [
+        (korean: '[A] 글자', english: '', extra: '', chord: ''),
+        pages[2],
+      ];
+      final text = chordLyricsForPages(withBracket)!;
+      expect(text, '\\[A] 글자\n\n[C]끝');
+      expect(stripChords(text), '[A] 글자\n\n끝');
     });
   });
 }

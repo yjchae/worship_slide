@@ -32,9 +32,9 @@ void main() {
   group('페이지', () {
     test('세 언어를 페이지별로 짝짓고 모자란 칸은 빈 문자열', () {
       expect(song.pairedPages, [
-        (korean: '1절', english: 'verse 1', extra: 'verso 1'),
-        (korean: '2절', english: 'verse 2', extra: 'verso 2'),
-        (korean: '3절', english: 'verse 3', extra: ''),
+        (korean: '1절', english: 'verse 1', extra: 'verso 1', chord: ''),
+        (korean: '2절', english: 'verse 2', extra: 'verso 2', chord: ''),
+        (korean: '3절', english: 'verse 3', extra: '', chord: ''),
       ]);
       expect(song.extraPages, ['verso 1', 'verso 2', '']);
     });
@@ -49,7 +49,12 @@ void main() {
         extraLyrics: 'x\n\ny',
       );
       expect(longer.pairedPages.length, 2);
-      expect(longer.pairedPages[1], (korean: '', english: '', extra: 'y'));
+      expect(longer.pairedPages[1], (
+        korean: '',
+        english: '',
+        extra: 'y',
+        chord: '',
+      ));
     });
 
     test('끝에 세 칸 모두 빈 페이지는 뗀다', () {

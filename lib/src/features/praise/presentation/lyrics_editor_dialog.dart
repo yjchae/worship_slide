@@ -568,6 +568,9 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
         title: title,
         lyrics: _original,
         englishLyrics: _texts[PraiseRepository.defaultSubLanguage] ?? '',
+        // 코드 모드(F1) 전까지는 곡의 코드를 그대로 싣는다 — 빠지면 '바뀐 것'으로 보인다.
+        chordLyrics: song?.chordLyrics,
+        chordKey: song?.chordKey,
       ),
       Map<String, String>.from(_texts),
     ));

@@ -71,4 +71,73 @@ void main() {
 
     expect(await File('$backup-journal').readAsString(), 'hot journal');
   });
+
+  group('version 20 (코드 가사)', () {
+    Future<Set<String>> columns(Database db, String table) async => {
+      for (final c in await db.rawQuery('PRAGMA table_info($table)'))
+        c['name'] as String,
+    };
+
+    test('v19 DB 를 열면 v19.bak 이 생기고 코드 칸이 생긴다', () async {
+      final db = await databaseFactoryFfi.openDatabase(dbPath);
+      // v19 모양의 핵심 칸만(코드 칸 없음).
+      await db.execute('''CREATE TABLE praise_songs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, file_name TEXT NOT NULL,
+        title TEXT NOT NULL, lyrics TEXT NOT NULL,
+        english_lyrics TEXT NOT NULL DEFAULT '', uid TEXT,
+        updated_at INTEGER NOT NULL DEFAULT 0)''');
+      await db.execute('''CREATE TABLE worship_conti_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, conti_id INTEGER NOT NULL,
+        position INTEGER NOT NULL, item_type TEXT NOT NULL, song_id INTEGER,
+        song_lyrics TEXT)''');
+      await db.insert('praise_songs', {
+        'file_name': 'a.pptx',
+        'title': '주 은혜',
+        'lyrics': '주 은혜',
+      });
+      await db.setVersion(19);
+      await db.close();
+
+      expect(
+        await backupBeforeUpgrade(
+          dbPath,
+          toVersion: PraiseDatabase.schemaVersion,
+        ),
+        '$dbPath.v19.bak',
+      );
+      final up = await databaseFactoryFfi.openDatabase(dbPath);
+      await upgradePraiseSchema(up, 19);
+      expect(
+        await columns(up, 'praise_songs'),
+        containsAll(['chord_lyrics', 'chord_key', 'chord_updated_at']),
+      );
+      expect(
+        await columns(up, 'worship_conti_items'),
+        containsAll([
+          'song_chord_lyrics',
+          'song_chord_key',
+          'song_transpose',
+          'song_chord_accidental',
+        ]),
+      );
+      final row = (await up.query('praise_songs')).single;
+      expect(row['lyrics'], '주 은혜');
+      expect(row['chord_lyrics'], isNull);
+      expect(row['chord_updated_at'], 0);
+      await up.close();
+    });
+
+    test('칸이 이미 있는 DB(내려갔다 다시 올림)도 죽지 않는다', () async {
+      final db = await databaseFactoryFfi.openDatabase(dbPath);
+      await createPraiseSchema(db);
+      await upgradePraiseSchema(db, 19);
+      await upgradePraiseSchema(db, 19);
+      expect(await columns(db, 'praise_songs'), contains('chord_lyrics'));
+      await db.close();
+    });
+
+    test('스키마 버전은 20', () {
+      expect(PraiseDatabase.schemaVersion, 20);
+    });
+  });
 }
