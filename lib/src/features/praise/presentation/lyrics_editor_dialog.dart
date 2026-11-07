@@ -88,6 +88,9 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
   /// 세 언어째 복사한 페이지들. 창을 닫아도 남아 다른 곡에 붙여 넣을 수 있다.
   static List<List<String>> _pageClipboard = const [];
 
+  /// '코드 복사'로 담은 한 페이지 코드 글. 붙여 넣으면 가사는 그대로 두고 코드 자리만 옮긴다.
+  static String? _chordClipboard;
+
   /// 페이지를 고르면 입력칸 대신 표가 포커스를 받아 ⌘/Ctrl+C·V 를 페이지 복사·붙여 넣기로 쓴다.
   final FocusNode _tableFocus = FocusNode(debugLabel: 'lyrics table');
 
@@ -675,6 +678,40 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
   /// 코드 모드 표의 원본 열 전체(요약·빠른 버튼용).
   String get _chordModeText =>
       _view == _EditorView.table ? _grid.toTexts()[0] : _whole[0].text;
+
+  bool _rowHasChords(int row) => countChords(_grid.cell(row, 0)) > 0;
+
+  /// [row] 와 가사가 똑같은 다른 페이지(코드 모드 원본 칸 기준).
+  List<int> _sameLyricsRows(int row) {
+    final lyrics = stripChords(_grid.cell(row, 0));
+    if (lyrics.isEmpty) return const [];
+    return [
+      for (var r = 0; r < _grid.length; r++)
+        if (r != row && stripChords(_grid.cell(r, 0)) == lyrics) r,
+    ];
+  }
+
+  /// [source] 코드 글을 [rows] 페이지에 옮겨 붙인다(가사 그대로). 되돌리기 배너를 띄운다.
+  void _pasteChordsInto(String source, List<int> rows) {
+    final before = _grid.copy();
+    var done = 0;
+    for (final r in rows) {
+      final pasted = copyChordsToPage(source, _grid.cell(r, 0));
+      if (pasted == null) continue;
+      _grid.setCell(r, 0, pasted);
+      done++;
+    }
+    setState(() {
+      _undo = done == 0
+          ? null
+          : (before: before, message: '코드를 $done페이지에 넣었습니다. 위치를 확인해 주세요.');
+      _rebuildCells();
+    });
+  }
+
+  /// 붙여 넣을 페이지: [row] 가 고른 행 안이면 고른 행 전부, 아니면 그 행만.
+  List<int> _targetRows(int row) =>
+      _pickedRows.contains(row) ? (_pickedRows.toList()..sort()) : [row];
 
   void _applyPasteOffer() {
     final offer = _pasteOffer;
@@ -1530,6 +1567,26 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
             onTapChar: (line, offset) => _pickChordAt(row, line, offset),
           ),
         ),
+        if (_rowHasChords(row)) ...() {
+          // 후렴처럼 같은 가사가 또 나오는데 아직 코드가 다르면(없으면) 한 번에 넣는다.
+          final same = [
+            for (final r in _sameLyricsRows(row))
+              if (_grid.cell(r, 0) != text) r,
+          ];
+          if (same.isEmpty) return const <Widget>[];
+          return [
+            const SizedBox(height: 4),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: _cellTool(
+                Icons.library_add_outlined,
+                '같은 가사 ${same.length}페이지에도 넣기',
+                '${same.map((r) => '${r + 1}').join(', ')}페이지에 이 페이지 코드를 그대로 넣습니다',
+                () => _pasteChordsInto(text, same),
+              ),
+            ),
+          ];
+        }(),
       ],
     ];
   }
@@ -1599,6 +1656,23 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
               pasteCount > 0 ? '위에 붙여 넣기 ($pasteCount페이지)' : '위에 붙여 넣기',
             ),
           ),
+          if (_chordMode) ...[
+            const PopupMenuDivider(),
+            PopupMenuItem(
+              enabled: _rowHasChords(row),
+              value: () => setState(() => _chordClipboard = _grid.cell(row, 0)),
+              child: const Text('이 페이지 코드만 복사'),
+            ),
+            PopupMenuItem(
+              enabled: _chordClipboard != null,
+              value: () => _pasteChordsInto(_chordClipboard!, _targetRows(row)),
+              child: Text(
+                _targetRows(row).length > 1
+                    ? '고른 ${_targetRows(row).length}페이지에 코드 붙여 넣기 (가사 그대로)'
+                    : '코드 붙여 넣기 (가사 그대로)',
+              ),
+            ),
+          ],
           const PopupMenuDivider(),
           PopupMenuItem(
             value: () => _mutate(

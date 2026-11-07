@@ -1213,6 +1213,51 @@ String _emitLine(String line, Map<int, List<String>> at) {
   return out.toString();
 }
 
+// ── 코드 옮겨 붙이기 (같은 코드 쓰는 페이지) ─────────────────
+
+/// [source] 페이지의 코드를 [target] 페이지 가사에 옮겨 붙인 코드 글. [target] 의 가사는 그대로고
+/// 원래 있던 코드는 바뀐다. 가사 줄은 순서대로 짝짓고(코드만 있는 줄은 다음 가사 줄 앞에),
+/// 줄 안에서는 **공백 뺀 몇 번째 글자**인지로 자리를 잡는다 — 같은 가사면 같은 자리, 2절처럼 가사가
+/// 달라도 음절 수가 비슷하면 같은 음에 붙는다. 넘치는 코드는 줄 끝, 짝 없는 줄의 코드는 버린다.
+/// 코드가 없으면 null.
+String? copyChordsToPage(String source, String target) {
+  final src = parseChordPage(source);
+  if (!src.any((l) => l.chords.isNotEmpty)) return null;
+  final dst = parseChordPage(target).where((l) => l.text.isNotEmpty).toList();
+  // 공백 아닌 글자의 위치들.
+  List<int> letters(String s) => [
+    for (var i = 0; i < s.length; i++)
+      if (s[i].trim().isNotEmpty) i,
+  ];
+  final out = <String>[];
+  var j = 0;
+  for (final line in src) {
+    if (line.text.isEmpty) {
+      out.add(line.chords.map((c) => '[${c.name}]').join(' '));
+      continue;
+    }
+    if (j >= dst.length) break;
+    final from = letters(line.text);
+    final to = letters(dst[j].text);
+    final at = <int, List<String>>{};
+    for (final c in line.chords) {
+      final k = from.where((i) => i < c.offset).length;
+      final pos = c.offset >= line.text.length || k >= to.length
+          ? dst[j].text.length
+          : to[k];
+      (at[pos] ??= []).add('[${c.name}]');
+    }
+    out.add(_emitLine(dst[j].text, at));
+    j++;
+  }
+  for (; j < dst.length; j++) {
+    out.add(_emitLine(dst[j].text, const {}));
+  }
+  final result = out.join('\n');
+  // 가사가 한 글자라도 바뀌면 안 된다.
+  return _stripPage(result) == _stripPage(target) ? result : null;
+}
+
 /// '코드 줄 + 가사 줄' 쌍이 2쌍 이상이면 인라인 코드 글로, 아니면 null (한글 폭 2칸).
 /// 짝 없는 코드 줄(전주·간주)은 코드만 있는 줄 `[G] [D]` 로 남긴다.
 String? chordOverLyricsToInline(String pasted) {

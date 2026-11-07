@@ -59,6 +59,32 @@ void main() {
       expect(taps, [(0, 3), (1, 0)]);
     });
 
+    testWidgets('코드는 그 글자 조각 바로 위, 왼쪽 끝을 맞춰 그린다', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SizedBox(
+            width: 600,
+            height: 300,
+            child: ChordSheetView(
+              lines: parseChordPage('주 [D]은혜 [Em7]놀라워'),
+              fontSize: 20,
+            ),
+          ),
+        ),
+      );
+      for (final (chord, text) in [('D', '은혜 '), ('Em7', '놀라워')]) {
+        final c = tester.getRect(find.text(chord));
+        final t = tester.getRect(find.text(text));
+        expect(c.left, closeTo(t.left, 0.01), reason: chord);
+        expect(c.bottom, lessThanOrEqualTo(t.top + 0.01), reason: chord);
+      }
+      // 코드가 가사보다 넓어도(Em7 > 놀) 다음 조각과 겹치지 않는다.
+      expect(
+        tester.getRect(find.text('D')).right,
+        lessThan(tester.getRect(find.text('Em7')).left),
+      );
+    });
+
     testWidgets('보조 덩어리는 원본 덩어리 다음에 그린다', (tester) async {
       await tester.pumpWidget(
         MaterialApp(

@@ -211,3 +211,22 @@
 - [ ] 글자 클릭 팝업: Enter·Esc·Tab, 바꾸기·지우기
 - [ ] 코드 모드에서 '번역·변환'·넘침 측정이 코드 뺀 글로 동작(M6)
 - [ ] 평소 모드로 가사를 고치고 저장 → 다시 맞추기 결과 배너. 버리는 코드 없음(충돌 3)
+
+---
+
+## ⑤ 구현 뒤 QA 재검증 (2026-11-07, macOS 로컬)
+
+`flutter analyze` 문제 없음 · `flutter test` 562 통과(리눅스에서 난 `update_script_test` 실패는 root 환경에서만, macOS 통과).
+
+| ④ 묶음 | 판정 | 근거 |
+|---|---|---|
+| 순수 로직 | 통과 | `chord_lyrics_test.dart` — strip·이스케이프·페이지 짝·조 바꾸기(E#/Cb 안 냄, strip 불변)·UTF-16·realign·코드 위 가사 |
+| DB·저장 | 통과 | `chord_repository_test`·`db_backup_test`(v19.bak·칸 있는 DB) — H2, 전체 교체, 다시 가져오기, 곡 모음(M10) |
+| 동기화 | 통과 | `sync_test.dart` '코드 (§3-8)' 9건 — 옛 앱 흉내·같은 시각·중복 정리·preview |
+| 콘티·.wsconti | 통과 | `chord_conti_test`·`staged_song_update_test`(H5)·`move_pages_test`(M5)·`conti_text_parse_test` contiKeyPlan(H4) |
+| 누출 방지 | 통과 | `chord_leak_test`(SlidePageData·forB·PPTX payload), `lyrics_page_grid_test` H7 |
+| 싱어·발표 보기 | 코드 읽기로 통과 | `chord_sheet_test`(chordPieces·배치·JSON). Windows 는 `_nativeSingerChords` = macOS 만. 조 바꾸면 `_sendSingerView` 직접 호출(M8), dedupe 키는 JSON 통째라 `chord_lines` 포함. 코드 보기 중 `_emitPointer` 안 부름 |
+| 가사 수정 창 | 코드 읽기로 통과 | 번역·넘침은 strip 한 글로(M6 — `_plainColumnTexts`·`_pageData`). 언어 다시 입히기는 `copyWith` 라 코드 유지 |
+
+**사람이 봐야 하는 것(남음)**: macOS 싱어 창·휴대폰 실제 그림(♯·♭ 글리프, 맞춤·0.75배, 색 구분), 코드 보기 중 단축키 포커스,
+리모컨 확대 안내, 통역(B) 화면, 옛 앱(v19)으로 v20 DB 열기(M9).

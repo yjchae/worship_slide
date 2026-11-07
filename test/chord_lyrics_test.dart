@@ -709,4 +709,47 @@ void main() {
       expect(diatonicChords('H'), isEmpty);
     });
   });
+
+  group('copyChordsToPage (같은 코드 쓰는 페이지)', () {
+    test('같은 가사면 같은 자리', () {
+      const src = '[G]주 은[D/F#]혜\n[Em]놀라워[C]';
+      expect(copyChordsToPage(src, '주 은혜\n놀라워'), src);
+    });
+
+    test('2절: 공백 뺀 몇 번째 글자로 자리를 잡는다', () {
+      expect(
+        copyChordsToPage('[G]주 은[D]혜 놀[C]라워', '나 같은 죄인'),
+        '[G]나 같[D]은 죄[C]인',
+      );
+    });
+
+    test('원래 코드는 바뀌고 가사는 그대로', () {
+      expect(copyChordsToPage('[A]주 은혜', '[G]나 [D]같은'), '[A]나 같은');
+    });
+
+    test('넘치는 코드는 줄 끝, 줄 끝 코드는 줄 끝', () {
+      expect(copyChordsToPage('주 은혜 놀[D]라[E]워', '나 같'), '나 같[D][E]');
+      expect(copyChordsToPage('[G]주[C]', '나 같은'), '[G]나 같은[C]');
+    });
+
+    test('코드만 있는 줄은 다음 가사 줄 앞, 남는 줄은 코드 없이', () {
+      expect(
+        copyChordsToPage('[G] [D]\n[Em]주 은혜', '나 같은\n죄인\n살리신'),
+        '[G] [D]\n[Em]나 같은\n죄인\n살리신',
+      );
+    });
+
+    test('짝 없는 원본 줄의 코드는 버린다', () {
+      expect(copyChordsToPage('[G]주\n[D]은혜', '나 같은'), '[G]나 같은');
+    });
+
+    test('가사의 대괄호는 이스케이프, strip 하면 가사 그대로', () {
+      final r = copyChordsToPage('[G]주 은혜', r'나 \[G] 같은')!;
+      expect(stripChords(r), '나 [G] 같은');
+    });
+
+    test('코드가 없으면 null', () {
+      expect(copyChordsToPage('주 은혜', '나 같은'), isNull);
+    });
+  });
 }

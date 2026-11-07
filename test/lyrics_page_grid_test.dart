@@ -438,6 +438,33 @@ void main() {
         expect(result.$1.chordLyrics, isNull);
       });
 
+      testWidgets('같은 가사 페이지에 코드를 한 번에 넣는다', (tester) async {
+        const chorus = PraiseSong(
+          id: 3,
+          fileName: 'c.pptx',
+          title: '후렴 반복',
+          lyrics: '주 은혜\n놀라워\n\n1절 가사\n\n주 은혜\n놀라워',
+          englishLyrics: '',
+        );
+        final result = await saveAfter(tester, () async {
+          await tester.tap(find.byType(Switch).first);
+          await tester.pumpAndSettle();
+          await tester.enterText(
+            find.byType(TextField).at(1),
+            '[G]주 은혜\n[D]놀라워',
+          );
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('같은 가사 1페이지에도 넣기'));
+          await tester.pumpAndSettle();
+          expect(find.text('같은 가사 1페이지에도 넣기'), findsNothing);
+        }, edit: chorus);
+        expect(result!.$1.lyrics, chorus.lyrics);
+        expect(
+          result.$1.chordLyrics,
+          '[G]주 은혜\n[D]놀라워\n\n1절 가사\n\n[G]주 은혜\n[D]놀라워',
+        );
+      });
+
       testWidgets('코드 칸에 코드를 치면 가사는 그대로, 코드 글이 실린다', (tester) async {
         final result = await saveAfter(tester, () async {
           await tester.tap(find.byType(Switch).first);
