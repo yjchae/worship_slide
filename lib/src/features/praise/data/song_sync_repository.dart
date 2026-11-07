@@ -57,6 +57,17 @@ class SongSyncRepository {
           _translationFromRow(r),
       ],
       translationDeleted: await _translationTombstones(db),
+      // 코드는 곡과 따로 자기 시각으로(§3-8). 한 번이라도 코드를 단(또는 지운) 곡만.
+      chords: [
+        for (final row in rows)
+          if (((row['chord_updated_at'] as int?) ?? 0) > 0)
+            SyncChord(
+              uid: row['uid'] as String,
+              chordLyrics: row['chord_lyrics'] as String?,
+              chordKey: row['chord_key'] as String?,
+              updatedAt: row['chord_updated_at'] as int,
+            ),
+      ],
     );
   }
 
@@ -89,20 +100,26 @@ class SongSyncRepository {
   ) async {
     // uid 없는 행 채우기도 트랜잭션 안에서 — 미리 세기(preview)면 같이 되돌려진다.
     await fillMissingSyncUids(txn);
-    final songs = await _mergeSongs(txn, remotes);
+    final touched = <String>{};
+    final songs = await _mergeSongs(txn, remotes, touched);
     final translations = await _mergeTranslations(txn, remotes);
+    // 곡 uid 합치기가 끝난 다음에 코드를 맞춘다. 코드만 바뀐 곡도 '바뀐 찬양' 한 곡으로 센다.
+    final chords = await _mergeChords(txn, remotes);
     return SyncMergeResult(
       addedCount: songs.addedCount,
-      updatedCount: songs.updatedCount + translations,
+      updatedCount:
+          songs.updatedCount + translations + chords.difference(touched).length,
       deletedCount: songs.deletedCount,
     );
   }
 
   // ── 곡 ──────────────────────────────────────────────────────────────
 
+  /// [touched] 에 더하거나 고친 곡의 uid 를 적는다(코드 셈이 같은 곡을 두 번 세지 않게).
   Future<SyncMergeResult> _mergeSongs(
     DatabaseExecutor txn,
     List<SyncSnapshot> remotes,
+    Set<String> touched,
   ) async {
     final aliases = await _mergeAliases(txn, remotes);
     String canonical(String uid) => resolveSongUid(aliases, uid);
@@ -182,6 +199,7 @@ class SongSyncRepository {
             if (song.withUid(twinUid).winsOver(twin.song)) {
               await _applySong(txn, twin, song.withUid(twinUid));
               updated += 1;
+              touched.add(twinUid);
             }
             continue;
           }
@@ -194,11 +212,13 @@ class SongSyncRepository {
         local[uid] = _LocalSong(id, song);
         byContent[song.contentKey] = uid;
         added += 1;
+        touched.add(uid);
       } else if (song.winsOver(mine.song)) {
         byContent.remove(mine.song.contentKey);
         await _applySong(txn, mine, song);
         byContent[song.contentKey] = uid;
         updated += 1;
+        touched.add(uid);
       }
     }
 
@@ -299,7 +319,14 @@ class SongSyncRepository {
     String Function(String) canonical,
   ) async {
     final result = <String, _LocalSong>{};
+    // 곡 행 id → 코드 칸. 중복 행을 지울 때 코드를 살리려고.
+    final chordOf = <int, ({Object? text, Object? key, int at})>{};
     for (final row in await txn.query('praise_songs')) {
+      chordOf[row['id'] as int] = (
+        text: row['chord_lyrics'],
+        key: row['chord_key'],
+        at: (row['chord_updated_at'] as int?) ?? 0,
+      );
       final song = _songFromRow(row);
       final uid = canonical(song.uid);
       var current = _LocalSong(row['id'] as int, song);
@@ -329,6 +356,22 @@ class SongSyncRepository {
       if (other != null) {
         // 내용까지 같은 중복 — 하나만 남긴다(콘티 곡 링크는 곡 uid 로 다시 맞춰진다).
         final loser = current.song.winsOver(other.song) ? other : current;
+        final winner = identical(loser, current) ? other : current;
+        // 진 행의 코드가 더 새로우면 남는 행으로 먼저 옮긴다(§3-8 중복 정리).
+        final lost = chordOf[loser.id]!;
+        if (lost.at > chordOf[winner.id]!.at) {
+          await txn.update(
+            'praise_songs',
+            {
+              'chord_lyrics': lost.text,
+              'chord_key': lost.key,
+              'chord_updated_at': lost.at,
+            },
+            where: 'id = ?',
+            whereArgs: [winner.id],
+          );
+          chordOf[winner.id] = lost;
+        }
         await txn.delete(
           'praise_songs',
           where: 'id = ?',
@@ -373,6 +416,65 @@ class SongSyncRepository {
       whereArgs: [mine.id],
     );
     mine.song = song;
+  }
+
+  // ── 코드 ────────────────────────────────────────────────────────────
+
+  /// 다른 PC 의 코드를 합친다(§3-8). 곡마다 나중에 고친 코드가 이긴다. 코드 칸 세 개만 고치고
+  /// 곡 `updated_at`·가사·내용 해시는 손대지 않는다. 다른 PC 가 가사를 바꿔 코드가 어긋나도
+  /// 여기서 다시 맞추지 않는다(PC 마다 다르게 맞춰 서로 덮어쓰지 않게).
+  /// 코드 글·원래 조가 실제로 바뀐 곡의 uid 를 돌려준다.
+  Future<Set<String>> _mergeChords(
+    DatabaseExecutor txn,
+    List<SyncSnapshot> remotes,
+  ) async {
+    final newest = <String, SyncChord>{};
+    if (remotes.every((r) => r.chords.isEmpty)) return const {};
+    final aliases = {
+      for (final r in await txn.query('song_uid_aliases'))
+        r['alias'] as String: r['uid'] as String,
+    };
+    for (final remote in remotes) {
+      for (final raw in remote.chords) {
+        final c = raw.withUid(resolveSongUid(aliases, raw.uid));
+        final before = newest[c.uid];
+        if (before == null || c.winsOver(before)) newest[c.uid] = c;
+      }
+    }
+    final rows = {
+      for (final r in await txn.query(
+        'praise_songs',
+        columns: ['id', 'uid', 'chord_lyrics', 'chord_key', 'chord_updated_at'],
+        where: 'uid IS NOT NULL',
+      ))
+        r['uid'] as String: r,
+    };
+    final changed = <String>{};
+    for (final c in newest.values) {
+      final row = rows[c.uid];
+      if (row == null) continue; // 이 PC 에 없는 곡(지웠거나 아직 안 옴)은 버린다.
+      final mine = SyncChord(
+        uid: c.uid,
+        chordLyrics: row['chord_lyrics'] as String?,
+        chordKey: row['chord_key'] as String?,
+        updatedAt: (row['chord_updated_at'] as int?) ?? 0,
+      );
+      if (!c.winsOver(mine)) continue;
+      await txn.update(
+        'praise_songs',
+        {
+          'chord_lyrics': c.chordLyrics,
+          'chord_key': c.chordKey,
+          'chord_updated_at': c.updatedAt,
+        },
+        where: 'id = ?',
+        whereArgs: [row['id']],
+      );
+      if (c.chordLyrics != mine.chordLyrics || c.chordKey != mine.chordKey) {
+        changed.add(c.uid);
+      }
+    }
+    return changed;
   }
 
   // ── 보조 언어 가사 ──────────────────────────────────────────────────

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:worship_slides/src/features/praise/domain/chord_lyrics.dart';
 import 'package:worship_slides/src/features/praise/domain/praise_song.dart';
 import 'package:worship_slides/src/features/praise/domain/staging_item.dart';
 import 'package:worship_slides/src/features/praise/presentation/praise_home_page.dart';
@@ -49,6 +50,50 @@ void main() {
     expect(changed(song(en: 'B'), const {}), isTrue);
     expect(changed(before, const {'일본어': 'い'}), isTrue);
     expect(changed(before, const {'중국어': '你'}), isTrue); // 새 번역
+  });
+
+  group('코드 (§3-9, H5)', () {
+    final before = song().copyWith(chordLyrics: '[G]가\n\n[D]나', chordKey: 'G');
+
+    test('코드·원래 조만 고쳐도 바뀐 것으로 본다', () {
+      bool changed(PraiseSong edited) => songEditChanged(
+        before: before,
+        edited: edited,
+        oldTranslations: const {},
+        newSubLyrics: const {},
+        defaultSubLanguage: '영어',
+      );
+      expect(changed(before), isFalse);
+      expect(changed(before.copyWith(chordLyrics: '[A]가\n\n[D]나')), isTrue);
+      expect(changed(before.copyWith(chordKey: 'A')), isTrue);
+      expect(changed(before.copyWith(chordLyrics: null)), isTrue);
+    });
+
+    test('콘티에서 따로 고친 코드는 대상이 아니다', () {
+      final items = <({int uid, StagingItem item})>[
+        (uid: 1, item: SongStagingItem(before.copyWith(chordTranspose: 2))),
+        (
+          uid: 2,
+          item: SongStagingItem(before.copyWith(chordLyrics: '[C]가\n\n나')),
+        ),
+        (uid: 3, item: SongStagingItem(before.copyWith(chordKey: null))),
+      ];
+      final plan = stagedSongUpdatePlan(items, songId: 7, before: before);
+      expect(plan.targets, [1]);
+      expect(plan.skipped, 2);
+    });
+
+    test('바꿀 때 조 바꾸기·♯/♭ 은 옛 항목 것이 남는다', () {
+      final old = before.copyWith(
+        chordTranspose: 2,
+        chordAccidental: ChordAccidental.flat,
+      );
+      final updated = before.copyWith(chordLyrics: '[G]가 고침\n\n[D]나');
+      final next = stagedSongReplacement(old, updated);
+      expect(next.chordLyrics, '[G]가 고침\n\n[D]나');
+      expect(next.chordTranspose, 2);
+      expect(next.chordAccidental, ChordAccidental.flat);
+    });
   });
 
   Future<ValueNotifier<Object?>> open(

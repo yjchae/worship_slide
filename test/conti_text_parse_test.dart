@@ -204,4 +204,49 @@ void main() {
       expect(matcher.search('갈길').map((s) => s.id), [2]);
     });
   });
+
+  group('contiKeyPlan (조 칸, S6)', () {
+    const chordSong = PraiseSong(
+      id: 1,
+      fileName: '',
+      title: '주 은혜',
+      lyrics: '주 은혜',
+      englishLyrics: '',
+      chordLyrics: '[G]주 은혜',
+      chordKey: 'G',
+    );
+    String keyOf(String line) => parseContiText(line).single.key;
+
+    test('글의 조 → 반음', () {
+      expect(contiKeyPlan(keyOf('1. 주 은혜 A'), chordSong)!.transpose, 2);
+      expect(contiKeyPlan(keyOf('1. 주 은혜 F'), chordSong)!.transpose, -2);
+      expect(contiKeyPlan(keyOf('1. 주 은혜 Bb'), chordSong)!.transpose, 3);
+      expect(contiKeyPlan(keyOf('1. 주 은혜 (Key Bb)'), chordSong)!.textKey, 'Bb');
+      expect(contiKeyPlan(keyOf('1. 주 은혜 G'), chordSong)!.transpose, 0);
+    });
+    test('조 바꿈은 첫 조로, 표시만', () {
+      final plan = contiKeyPlan(keyOf('1. 주 은혜 F-G'), chordSong)!;
+      expect(plan.textKey, 'F');
+      expect(plan.multiple, isTrue);
+      expect(plan.transpose, -2);
+    });
+    test('장·단조가 다르면 적용하지 않는다', () {
+      final plan = contiKeyPlan(keyOf('1. 주 은혜 F#m'), chordSong)!;
+      expect(plan.transpose, isNull);
+      expect(plan.modeMismatch, isTrue);
+      final minor = chordSong.copyWith(chordKey: 'Em');
+      expect(contiKeyPlan('F#m', minor)!.transpose, 2);
+    });
+    test('곡에 코드가 없으면 적용하지 않는다, 원래 조는 추정도 쓴다', () {
+      final none = chordSong.copyWith(chordLyrics: null);
+      final plan = contiKeyPlan('A', none)!;
+      expect(plan.transpose, isNull);
+      expect(plan.modeMismatch, isFalse);
+      final guessed = chordSong.copyWith(chordKey: null);
+      final g = contiKeyPlan('A', guessed)!;
+      expect(g.transpose, 2);
+      expect(g.fromEstimated, isTrue);
+      expect(contiKeyPlan('', chordSong), isNull);
+    });
+  });
 }

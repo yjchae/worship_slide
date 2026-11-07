@@ -1,3 +1,5 @@
+import '../domain/chord_lyrics.dart';
+
 /// 싱어용 화면(발표 창과 별도인 두 번째 네이티브 창)에 보낼 한 페이지.
 ///
 /// 싱어는 디자인(배경·폰트·위치)이 아니라 **가사만** 크게 보면 되므로 스타일은 싣지 않는다.
@@ -8,6 +10,8 @@ class SingerPage {
     this.englishText = '',
     this.title,
     this.imagePath,
+    this.chordLines,
+    this.keyLabel = '',
   });
 
   final String mainText;
@@ -18,6 +22,13 @@ class SingerPage {
 
   /// 외부 PPT 에서 구운 페이지 이미지. 있으면 글자 대신 이 이미지를 보여 준다.
   final String? imagePath;
+
+  /// 원본 줄마다 코드(조 바꾸기를 적용한 뒤). JSON `chord_lines` — 렌더러는 이것만 읽고 코드 글을 풀지 않는다.
+  /// null·빈 목록이면 키를 뺀다. 네이티브 싱어 창은 '싱어 코드'가 꺼져 있으면 아예 안 실린다.
+  final List<ChordLine>? chordLines;
+
+  /// 조를 바꿨을 때 머리줄 배지(`A (원래 G, +2)`). 그대로면 ''.
+  final String keyLabel;
 
   bool get isBlank =>
       (imagePath == null || imagePath!.isEmpty) &&
@@ -30,6 +41,9 @@ class SingerPage {
     'title': title ?? '',
     'image_path': imagePath ?? '',
     'is_blank': isBlank,
+    if (chordLines != null && chordLines!.isNotEmpty)
+      'chord_lines': [for (final l in chordLines!) l.toJson()],
+    if (keyLabel.isNotEmpty) 'key_label': keyLabel,
   };
 }
 

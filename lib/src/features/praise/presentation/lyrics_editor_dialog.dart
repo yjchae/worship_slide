@@ -4,8 +4,11 @@ import 'package:flutter/services.dart';
 import '../../../app_colors.dart';
 import '../data/claude_translator.dart';
 import '../data/praise_repository.dart';
+import '../domain/chord_lyrics.dart';
 import '../domain/export_style.dart';
 import '../domain/praise_song.dart';
+import 'chord_edit_widgets.dart';
+import 'chord_sheet_view.dart';
 import 'lyrics_page_grid.dart';
 import 'slide_page_data.dart';
 import 'slide_render_view.dart';
@@ -19,6 +22,10 @@ enum _EditorView { table, whole }
 /// 가사 수정 창. 좌 원본 · 가운데 보조 · 우 추가 보조를 **페이지 표**(한 행 = 관객 화면 한 장)로
 /// 고친다. '통째로' 보기는 예전처럼 언어별 큰 입력칸이고, 두 보기는 저장 형식(빈 줄 = 페이지)이
 /// 같아서 오가도 잃는 게 없다.
+///
+/// **코드 모드**(머리줄 '코드' 스위치): 원본 열 칸이 코드 글(`[G]주 은[D/F#]혜`)이 된다. 표 연산이
+/// 코드를 글자와 함께 옮기고, 저장할 때 원본 가사 = `stripChords(코드 글)` 이다(코드만 고쳤으면
+/// 가사는 한 글자도 안 바뀐다). 결과 곡의 chordLyrics·chordKey 에 코드가 실린다.
 class LyricsEditorDialog extends StatefulWidget {
   const LyricsEditorDialog({
     super.key,
@@ -81,13 +88,16 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
   /// 세 언어째 복사한 페이지들. 창을 닫아도 남아 다른 곡에 붙여 넣을 수 있다.
   static List<List<String>> _pageClipboard = const [];
 
+  /// '코드 복사'로 담은 한 페이지 코드 글. 붙여 넣으면 가사는 그대로 두고 코드 자리만 옮긴다.
+  static String? _chordClipboard;
+
   /// 페이지를 고르면 입력칸 대신 표가 포커스를 받아 ⌘/Ctrl+C·V 를 페이지 복사·붙여 넣기로 쓴다.
   final FocusNode _tableFocus = FocusNode(debugLabel: 'lyrics table');
 
   /// '통째로' 보기 입력칸(원본·보조·추가 보조).
-  final List<TextEditingController> _whole = List.generate(
+  final List<ChordTextController> _whole = List.generate(
     LyricsPageGrid.columnCount,
-    (_) => TextEditingController(),
+    (_) => ChordTextController()..highlight = false,
   );
 
   /// 붙여 넣기로 나눈 직후 되돌리기용.
@@ -97,12 +107,32 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
   bool _previewExtra = true;
   bool _translating = false;
 
+  // ── 코드 ──
+  bool _chordMode = false;
+
+  /// 코드 글 전체(원본 가사 + 코드). null = 아직 코드를 쓴 적 없음.
+  String? _chordText;
+
+  /// 원래 조. null = 모름(첫 코드로 추정).
+  String? _chordKey;
+
+  /// 코드 모드 알림(대괄호 이스케이프·다시 맞춤).
+  String? _chordNotice;
+
+  /// 평소 모드에서 가사를 고쳤는데 코드를 확실히 다시 맞추지 못했을 때 — 저장 전에 묻는 배너.
+  ChordRealign? _realignOffer;
+
+  /// '코드 위 가사' 꼴을 붙여 넣었을 때 바꿀지 묻는 배너(S1c). [before] = 붙여 넣기 전 표.
+  ({int row, LyricsPageGrid before, String converted})? _pasteOffer;
+
   @override
   void initState() {
     super.initState();
     final song = widget.song;
     _titleController = TextEditingController(text: song?.title ?? '');
     _original = song?.lyrics ?? '';
+    _chordText = song?.chordLyrics;
+    _chordKey = song?.chordKey;
     if (widget.contiOnly) {
       _texts = {
         widget.subLanguage: song?.englishLyrics ?? '',
@@ -150,13 +180,18 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
   bool get _hasExtra => _extraLanguage.isNotEmpty;
 
   List<String> get _columnTexts => [
-    _original,
+    _chordMode ? (_chordText ?? '') : _original,
     _texts[_subLanguage] ?? '',
     _hasExtra ? (_texts[_extraLanguage] ?? '') : '',
   ];
 
   void _storeColumnTexts(List<String> texts) {
-    _original = normalizeEditableLyrics(texts[0]);
+    if (_chordMode) {
+      _chordText = normalizeEditableLyrics(texts[0]);
+      _original = stripChords(_chordText!);
+    } else {
+      _original = normalizeEditableLyrics(texts[0]);
+    }
     _texts[_subLanguage] = normalizeEditableLyrics(texts[1]);
     if (_hasExtra) _texts[_extraLanguage] = normalizeEditableLyrics(texts[2]);
   }
@@ -180,6 +215,7 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
     for (var c = 0; c < _whole.length; c++) {
       _whole[c].text = lyricsToEditText(texts[c]);
     }
+    _whole[0].highlight = _chordMode;
   }
 
   void _disposeCells() {
@@ -216,7 +252,9 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
       for (var r = 0; r < _grid.length; r++)
         [
           for (var c = 0; c < LyricsPageGrid.columnCount; c++)
-            TextEditingController(text: _grid.cell(r, c)),
+            c == 0 && _chordMode
+                ? ChordTextController(text: _grid.cell(r, c))
+                : TextEditingController(text: _grid.cell(r, c)),
         ],
     ];
     _focus = [
@@ -258,6 +296,18 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
 
   void _onCellChanged(int row, int column, String text) {
     final before = _grid.copy();
+    // 코드 모드 원본 칸에 '코드 줄 + 가사 줄' 악보를 붙여 넣었으면 바꿀지 묻는다(S1c).
+    // 이미 그 꼴이던 칸을 고치는 중이면 다시 묻지 않는다.
+    final offer = _chordMode && column == 0
+        ? chordOverLyricsToInline(text)
+        : null;
+    final offerNew =
+        offer != null && chordOverLyricsToInline(before.cell(row, 0)) == null;
+    if (offerNew) {
+      _pasteOffer = (row: row, before: before, converted: offer);
+    } else if (_pasteOffer != null && offer == null) {
+      _pasteOffer = null;
+    }
     _grid.setCell(row, column, text);
     // 빈 줄 = 페이지 구분. 붙여 넣거나 엔터를 두 번 치면 그 자리에서 다음 행으로 넘긴다.
     if (RegExp(r'\n[ \t]*\n').hasMatch(text.replaceAll('\r\n', '\n'))) {
@@ -315,8 +365,12 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
   }
 
   void _splitAt(({int row, int column, int offset}) target) {
+    // 코드 토큰 안·`\[` 사이에서 나누지 않게 토큰 앞으로 당긴다(토큰은 뒤 조각 맨 앞으로 간다).
+    final offset = _chordMode && target.column == 0
+        ? snapSplitOffset(_grid.cell(target.row, 0), target.offset)
+        : target.offset;
     _mutate(
-      () => _grid.splitAt(target.row, target.column, target.offset),
+      () => _grid.splitAt(target.row, target.column, offset),
       focus: (row: target.row + 1, column: target.column),
     );
   }
@@ -445,7 +499,8 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
   /// 아니면 그 언어로 번역한다. 이미 채운 칸이 있으면 빈 칸만 채울지 묻는다.
   Future<void> _translate() async {
     setState(_commit);
-    final grid = LyricsPageGrid.fromTexts(_columnTexts);
+    // 코드 모드여도 Claude 에는 코드 뺀 원본 가사만 넘긴다(대괄호를 번역하지 않게).
+    final grid = LyricsPageGrid.fromTexts(_plainColumnTexts);
     final columns = [1, if (_hasExtra) 2];
     final hasFilled = [
       for (final c in columns)
@@ -501,7 +556,11 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
             }
           }
         }
-        _storeColumnTexts(grid.toTexts());
+        final texts = grid.toTexts();
+        _texts[_subLanguage] = normalizeEditableLyrics(texts[1]);
+        if (_hasExtra) {
+          _texts[_extraLanguage] = normalizeEditableLyrics(texts[2]);
+        }
         _undo = null;
         _loadGrid();
         _loadWhole();
@@ -526,6 +585,160 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
     }
   }
 
+  /// 원본 열이 코드 뺀 가사인 열 글(번역·넘침 측정용).
+  List<String> get _plainColumnTexts => [_original, ..._columnTexts.skip(1)];
+
+  // ── 코드 ───────────────────────────────────────────────────────────────
+
+  bool get _hasChordTokens =>
+      _chordText != null && countChords(_chordText!) > 0;
+
+  void _setChordMode(bool on) {
+    if (on == _chordMode) return;
+    setState(() {
+      _commit();
+      _undo = null;
+      _pasteOffer = null;
+      if (on) {
+        _prepareChordText();
+        _realignOffer = null;
+      } else {
+        _chordNotice = null;
+      }
+      _chordMode = on;
+      _loadGrid();
+      _loadWhole();
+    });
+  }
+
+  /// 코드 모드로 들어갈 때 코드 글을 지금 가사에 맞춘다. 처음이면 가사를 이스케이프해 시작값으로,
+  /// 가사가 코드 글과 어긋나 있으면 다시 맞춘다(지금 가사가 기준 — 저장하면 가사가 되돌아가지 않게).
+  void _prepareChordText() {
+    final lyrics = normalizeEditableLyrics(_original);
+    final chord = _chordText;
+    if (chord == null) {
+      final n = countEscapedBrackets(lyrics);
+      _chordText = escapeLyricsForChords(lyrics);
+      _chordNotice = n == 0 ? null : '가사에 원래 있던 대괄호 $n개는 글자로 둡니다.';
+      return;
+    }
+    if (stripChords(chord) == lyrics) return;
+    final r = realignChords(chord, lyrics);
+    if (stripChords(r.chordText) == lyrics) {
+      _chordText = r.chordText;
+      _chordNotice =
+          '가사가 바뀌어 코드를 다시 맞췄습니다 — 그대로 ${r.kept}개 · 옮김 ${r.moved}개'
+          '${r.dropped > 0 ? ' · 버림 ${r.dropped}개' : ''}. 위치를 확인해 주세요.';
+    } else {
+      _chordText = escapeLyricsForChords(lyrics);
+      _chordNotice = '가사와 어긋난 코드를 다시 맞추지 못해 코드 없이 시작합니다.';
+    }
+  }
+
+  /// 원본 칸 미리보기 글자를 눌렀을 때(S1b): 그 글자 앞에 코드를 넣거나 있던 코드를 바꾸고 지운다.
+  Future<void> _pickChordAt(int row, int line, int offset) async {
+    final cell = _grid.cell(row, 0);
+    final slot = chordSlotAt(cell, line, offset);
+    if (slot == null) return;
+    final lines = parseChordPage(cell);
+    final text = line < lines.length ? lines[line].text : '';
+    final charLabel = offset < text.length ? text[offset] : '';
+    final current = slot.tokens.isEmpty
+        ? null
+        : slot.tokens.map((t) => t.name).join(' ');
+    final all = _chordModeText;
+    final pick = await showDialog<ChordPick>(
+      context: context,
+      builder: (_) => ChordPickDialog(
+        current: current,
+        songChords: chordNamesIn(all),
+        songKey: _chordKey ?? estimateKey(all),
+        charLabel: charLabel.trim(),
+      ),
+    );
+    if (pick == null || !mounted) return;
+    final start = slot.tokens.isEmpty ? slot.insertAt : slot.tokens.first.start;
+    final end = slot.tokens.isEmpty ? slot.insertAt : slot.tokens.last.end;
+    final replaced = cell.replaceRange(
+      start,
+      end,
+      pick.name == null ? '' : '[${pick.name}]',
+    );
+    setState(() {
+      _grid.setCell(row, 0, replaced);
+      _cells[row][0].text = replaced;
+      _undo = null;
+    });
+    // Tab = 넣고 다음 글자로.
+    if (pick.next && pick.name != null && offset < text.length) {
+      await _pickChordAt(row, line, offset + 1);
+    }
+  }
+
+  /// 코드 모드 표의 원본 열 전체(요약·빠른 버튼용).
+  String get _chordModeText =>
+      _view == _EditorView.table ? _grid.toTexts()[0] : _whole[0].text;
+
+  bool _rowHasChords(int row) => countChords(_grid.cell(row, 0)) > 0;
+
+  /// [row] 와 가사가 똑같은 다른 페이지(코드 모드 원본 칸 기준).
+  List<int> _sameLyricsRows(int row) {
+    final lyrics = stripChords(_grid.cell(row, 0));
+    if (lyrics.isEmpty) return const [];
+    return [
+      for (var r = 0; r < _grid.length; r++)
+        if (r != row && stripChords(_grid.cell(r, 0)) == lyrics) r,
+    ];
+  }
+
+  /// [source] 코드 글을 [rows] 페이지에 옮겨 붙인다(가사 그대로). 되돌리기 배너를 띄운다.
+  void _pasteChordsInto(String source, List<int> rows) {
+    final before = _grid.copy();
+    var done = 0;
+    for (final r in rows) {
+      final pasted = copyChordsToPage(source, _grid.cell(r, 0));
+      if (pasted == null) continue;
+      _grid.setCell(r, 0, pasted);
+      done++;
+    }
+    setState(() {
+      _undo = done == 0
+          ? null
+          : (before: before, message: '코드를 $done페이지에 넣었습니다. 위치를 확인해 주세요.');
+      _rebuildCells();
+    });
+  }
+
+  /// 붙여 넣을 페이지: [row] 가 고른 행 안이면 고른 행 전부, 아니면 그 행만.
+  List<int> _targetRows(int row) =>
+      _pickedRows.contains(row) ? (_pickedRows.toList()..sort()) : [row];
+
+  void _applyPasteOffer() {
+    final offer = _pasteOffer;
+    if (offer == null) return;
+    setState(() {
+      _grid = offer.before.copy();
+      _grid.setCell(offer.row, 0, offer.converted);
+      final pieces = _grid.splitCell(offer.row, 0);
+      _pasteOffer = null;
+      _undo = (before: offer.before, message: '코드 위 가사를 코드 표기로 바꿨습니다.');
+      _rebuildCells(focus: (row: offer.row + pieces - 1, column: 0));
+    });
+  }
+
+  void _fixChordCase(int row, ({int start, int end, ChordIssue issue}) range) {
+    final cell = _grid.cell(row, 0);
+    final fixed = cell.replaceRange(
+      range.start,
+      range.end,
+      range.issue.suggestion!,
+    );
+    setState(() {
+      _grid.setCell(row, 0, fixed);
+      _cells[row][0].text = fixed;
+    });
+  }
+
   // ── 보기 · 저장 ────────────────────────────────────────────────────────
 
   void _setView(_EditorView view) {
@@ -543,11 +756,39 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
     });
   }
 
-  void _save() {
+  /// 저장. 코드가 있으면 결과 곡 chordLyrics·chordKey 에 싣는다(코드 토큰이 하나도 없으면 코드 없음).
+  /// [keepChords] = 평소 모드에서 가사를 고쳤지만 코드는 옛 글 그대로 둔다(다시 맞추기 배너의 선택).
+  Future<void> _save({bool keepChords = false}) async {
     final title = _titleController.text.trim();
     if (title.isEmpty) return;
-    _commit();
+    setState(_commit);
     final song = widget.song;
+    final lyrics = normalizeEditableLyrics(_original);
+    var chord = _hasChordTokens ? _chordText : null;
+    String? notice;
+    // 평소 모드에서 가사를 고쳤으면 코드를 다시 맞춘다. 확실할 때만 저절로, 아니면 묻는다(§3-5).
+    if (!_chordMode &&
+        !keepChords &&
+        chord != null &&
+        lyrics != normalizeEditableLyrics(song?.lyrics ?? '') &&
+        stripChords(chord) != lyrics) {
+      final r = realignChords(chord, lyrics);
+      if (r.confident && stripChords(r.chordText) == lyrics) {
+        chord = r.chordText;
+        notice =
+            '코드 ${r.kept}개 그대로${r.moved > 0 ? ', ${r.moved}개 옮김' : ''} — 가사에 맞춰 저장했습니다.';
+      } else {
+        setState(() => _realignOffer = r);
+        return;
+      }
+    }
+    if (chord != null && !await _confirmChordWarnings(chord)) return;
+    if (!mounted) return;
+    if (notice != null) {
+      ScaffoldMessenger.maybeOf(
+        context,
+      )?.showSnackBar(SnackBar(content: Text(notice)));
+    }
     if (widget.contiOnly && song != null) {
       Navigator.of(context).pop((
         song.copyWith(
@@ -556,6 +797,8 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
           extraLyrics: _hasExtra
               ? _texts[_extraLanguage] ?? ''
               : song.extraLyrics,
+          chordLyrics: chord,
+          chordKey: _chordKey,
         ),
         const <String, String>{},
       ));
@@ -568,9 +811,66 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
         title: title,
         lyrics: _original,
         englishLyrics: _texts[PraiseRepository.defaultSubLanguage] ?? '',
+        chordLyrics: chord,
+        chordKey: _chordKey,
       ),
       Map<String, String>.from(_texts),
     ));
+  }
+
+  /// 저장 전 확인(저장은 막지 않는다): 코드로 못 읽는 대괄호는 관객 화면에 글자로 나가고,
+  /// 끝의 코드만 있는 페이지는 짝이 없어 안 보인다.
+  Future<bool> _confirmChordWarnings(String chord) async {
+    final issues = validateChordText(chord);
+    final unreadable = issues
+        .where((i) => i.kind != ChordIssueKind.trailingChordOnlyPage)
+        .length;
+    final trailing = issues.any(
+      (i) => i.kind == ChordIssueKind.trailingChordOnlyPage,
+    );
+    if (unreadable == 0 && !trailing) return true;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('코드 확인'),
+        content: Text(
+          [
+            if (unreadable > 0)
+              '코드로 못 읽는 대괄호가 $unreadable개 있습니다. 관객 화면에 글자로 나갑니다.',
+            if (trailing) '마지막 페이지가 코드뿐입니다. 이 페이지 코드는 보이지 않습니다.',
+          ].join('\n'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('돌아가 고치기'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('그대로 저장'),
+          ),
+        ],
+      ),
+    );
+    return ok ?? false;
+  }
+
+  /// 다시 맞추기 배너 '다시 맞춘 결과로 바꾸기' — 코드 모드로 열어 확인하게 한다.
+  void _takeRealign() {
+    final r = _realignOffer;
+    if (r == null) return;
+    setState(() {
+      _realignOffer = null;
+      if (stripChords(r.chordText) == normalizeEditableLyrics(_original)) {
+        _chordText = r.chordText;
+      }
+    });
+    _setChordMode(true);
+    setState(
+      () => _chordNotice =
+          '다시 맞춘 코드입니다 — 그대로 ${r.kept}개 · 옮김 ${r.moved}개'
+          '${r.dropped > 0 ? ' · 버림 ${r.dropped}개' : ''}. 위치를 확인한 뒤 저장하세요.',
+    );
   }
 
   // ── 화면 ───────────────────────────────────────────────────────────────
@@ -578,7 +878,7 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
   SlidePageData _pageData(int row, {bool forPreview = false}) {
     final texts = _grid.row(row);
     return SlidePageData(
-      mainText: texts[0].trim(),
+      mainText: _chordMode ? stripChords(texts[0]) : texts[0].trim(),
       englishText: forPreview && !_previewSub ? '' : texts[1].trim(),
       extraText: !_hasExtra || (forPreview && !_previewExtra)
           ? ''
@@ -618,6 +918,50 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
                   _buildHeader(isNew),
                   const SizedBox(height: 12),
                   if (_undo != null) _buildUndoBanner(cs),
+                  if (_pasteOffer != null)
+                    _banner(
+                      cs,
+                      icon: Icons.music_note_rounded,
+                      message: '코드 위 가사 형식 같습니다.',
+                      actions: [
+                        TextButton(
+                          onPressed: _applyPasteOffer,
+                          child: const Text('코드 표기로 바꾸기'),
+                        ),
+                        TextButton(
+                          onPressed: () => setState(() => _pasteOffer = null),
+                          child: const Text('그대로 두기'),
+                        ),
+                      ],
+                    ),
+                  if (_realignOffer case final r?)
+                    _banner(
+                      cs,
+                      icon: Icons.warning_amber_rounded,
+                      warn: true,
+                      message:
+                          '코드 확인 필요 — 가사가 바뀐 페이지 '
+                          '${hiddenChordPageCount(_chordText, _original)}곳은 코드가 숨겨집니다 '
+                          '(다시 맞추면 옮김 ${r.moved}개 · 버림 ${r.dropped}개).',
+                      actions: [
+                        TextButton(
+                          onPressed: _takeRealign,
+                          child: const Text('다시 맞춘 결과로 바꾸기'),
+                        ),
+                        TextButton(
+                          onPressed: () => _save(keepChords: true),
+                          child: const Text('코드는 그대로 두고 저장'),
+                        ),
+                      ],
+                      onClose: () => setState(() => _realignOffer = null),
+                    ),
+                  if (_chordMode && _chordNotice != null)
+                    _banner(
+                      cs,
+                      icon: Icons.info_outline_rounded,
+                      message: _chordNotice!,
+                      onClose: () => setState(() => _chordNotice = null),
+                    ),
                   Expanded(
                     child: _view == _EditorView.whole
                         ? _buildWhole(cs)
@@ -675,6 +1019,20 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
         const SizedBox(width: 14),
         Tooltip(
           message:
+              '원본 가사 위에 코드(G, D/F#, Em7 …)를 넣습니다.\n'
+              '코드는 싱어·휴대폰·발표 보기에서만 보이고 관객 화면·PPTX 에는 안 나갑니다.',
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('코드', style: TextStyle(fontWeight: FontWeight.w600)),
+              Switch(value: _chordMode, onChanged: _setChordMode),
+            ],
+          ),
+        ),
+        if (_chordMode) ...[const SizedBox(width: 6), _keyPicker()],
+        const SizedBox(width: 14),
+        Tooltip(
+          message:
               '원본 가사로 보조·추가 보조 칸을 채웁니다 (Claude).\n'
               "언어 이름에 '발음'이 들어 있으면 한글 발음을 영어 글자로, 아니면 그 언어로 번역합니다.",
           child: OutlinedButton.icon(
@@ -700,6 +1058,105 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
           onSelectionChanged: (s) => _setView(s.first),
         ),
       ],
+    );
+  }
+
+  /// 원래 조 고르기. 비워 두면 첫 코드로 추정한 조를 '(추정)'으로 보여 준다.
+  Widget _keyPicker() {
+    final estimated = estimateKey(_chordModeText);
+    const majors = [
+      'C',
+      'Db',
+      'D',
+      'Eb',
+      'E',
+      'F',
+      'F#',
+      'G',
+      'Ab',
+      'A',
+      'Bb',
+      'B',
+    ];
+    const minors = [
+      'Am',
+      'Bbm',
+      'Bm',
+      'Cm',
+      'C#m',
+      'Dm',
+      'Ebm',
+      'Em',
+      'Fm',
+      'F#m',
+      'Gm',
+      'G#m',
+    ];
+    final key = _chordKey;
+    final keys = [
+      ...majors,
+      ...minors,
+      if (key != null &&
+          isKeyName(key) &&
+          !majors.contains(key) &&
+          !minors.contains(key))
+        key,
+    ];
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Text('원래 조 '),
+        DropdownButton<String>(
+          value: key != null && isKeyName(key) ? key : '',
+          isDense: true,
+          items: [
+            DropdownMenuItem(
+              value: '',
+              child: Text(estimated == null ? '모름' : '$estimated (추정)'),
+            ),
+            for (final k in keys) DropdownMenuItem(value: k, child: Text(k)),
+          ],
+          onChanged: (v) =>
+              setState(() => _chordKey = v == null || v.isEmpty ? null : v),
+        ),
+      ],
+    );
+  }
+
+  Widget _banner(
+    ColorScheme cs, {
+    required IconData icon,
+    required String message,
+    List<Widget> actions = const [],
+    bool warn = false,
+    VoidCallback? onClose,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      decoration: BoxDecoration(
+        color: warn ? cs.tertiaryContainer : cs.secondaryContainer,
+        borderRadius: BorderRadius.circular(AppRadius.panel),
+        border: Border.all(color: cs.outlineVariant),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            icon,
+            size: 16,
+            color: warn ? cs.onTertiaryContainer : cs.primary,
+          ),
+          const SizedBox(width: 10),
+          Expanded(child: Text(message)),
+          ...actions,
+          if (onClose != null)
+            IconButton(
+              tooltip: '닫기',
+              icon: const Icon(Icons.close_rounded, size: 18),
+              onPressed: onClose,
+            ),
+        ],
+      ),
     );
   }
 
@@ -924,6 +1381,14 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
                   ),
                 ),
               ),
+              if (!_chordMode && _chordPageRows.contains(row))
+                Tooltip(
+                  message: '이 페이지에 코드가 있습니다 (머리줄 코드 스위치로 보기)',
+                  child: Text(
+                    '♪',
+                    style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+                  ),
+                ),
               if (overflow)
                 Tooltip(
                   message:
@@ -1029,6 +1494,7 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
         field,
+        if (_chordMode && column == 0) ..._chordCellExtras(cs, row, text),
         if (focused && column != 0) ...[
           const SizedBox(height: 4),
           Wrap(
@@ -1058,6 +1524,81 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
         ],
       ],
     );
+  }
+
+  /// 코드 모드 원본 칸 아래: 못 읽는 대괄호 경고(+ 고치기)와 코드 악보 미리보기(글자를 눌러 코드 넣기).
+  List<Widget> _chordCellExtras(ColorScheme cs, int row, String text) {
+    final issues = chordIssueRanges(text);
+    final lines = parseChordPage(text);
+    final hasText = text.trim().isNotEmpty;
+    return [
+      for (final r in issues)
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Row(
+            children: [
+              Icon(Icons.error_outline_rounded, size: 14, color: cs.error),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  r.issue.kind == ChordIssueKind.nestedBracket
+                      ? '대괄호 겹침: ${text.substring(r.start, r.end)} — 바깥 대괄호는 관객 화면에 글자로 나갑니다'
+                      : '코드로 못 읽음: ${text.substring(r.start, r.end)} — 관객 화면에 글자로 나갑니다',
+                  style: TextStyle(fontSize: 12, color: cs.error),
+                ),
+              ),
+              if (r.issue.suggestion != null)
+                TextButton(
+                  onPressed: () => _fixChordCase(row, r),
+                  child: Text('고치기 → ${r.issue.suggestion}'),
+                ),
+            ],
+          ),
+        ),
+      if (hasText) ...[
+        const SizedBox(height: 4),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(AppRadius.control),
+          child: ChordSheetView(
+            lines: lines,
+            fontSize: 15,
+            fit: BoxFit.scaleDown,
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            onTapChar: (line, offset) => _pickChordAt(row, line, offset),
+          ),
+        ),
+        if (_rowHasChords(row)) ...() {
+          // 후렴처럼 같은 가사가 또 나오는데 아직 코드가 다르면(없으면) 한 번에 넣는다.
+          final same = [
+            for (final r in _sameLyricsRows(row))
+              if (_grid.cell(r, 0) != text) r,
+          ];
+          if (same.isEmpty) return const <Widget>[];
+          return [
+            const SizedBox(height: 4),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: _cellTool(
+                Icons.library_add_outlined,
+                '같은 가사 ${same.length}페이지에도 넣기',
+                '${same.map((r) => '${r + 1}').join(', ')}페이지에 이 페이지 코드를 그대로 넣습니다',
+                () => _pasteChordsInto(text, same),
+              ),
+            ),
+          ];
+        }(),
+      ],
+    ];
+  }
+
+  /// 평소 모드에서 코드가 보일 페이지(행 번호에 ♪).
+  Set<int> get _chordPageRows {
+    if (!_hasChordTokens) return const {};
+    final pages = matchedChordPages(_chordText, _original);
+    return {
+      for (var i = 0; i < pages.length; i++)
+        if (pages[i] != null) i,
+    };
   }
 
   Widget _cellTool(
@@ -1115,6 +1656,23 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
               pasteCount > 0 ? '위에 붙여 넣기 ($pasteCount페이지)' : '위에 붙여 넣기',
             ),
           ),
+          if (_chordMode) ...[
+            const PopupMenuDivider(),
+            PopupMenuItem(
+              enabled: _rowHasChords(row),
+              value: () => setState(() => _chordClipboard = _grid.cell(row, 0)),
+              child: const Text('이 페이지 코드만 복사'),
+            ),
+            PopupMenuItem(
+              enabled: _chordClipboard != null,
+              value: () => _pasteChordsInto(_chordClipboard!, _targetRows(row)),
+              child: Text(
+                _targetRows(row).length > 1
+                    ? '고른 ${_targetRows(row).length}페이지에 코드 붙여 넣기 (가사 그대로)'
+                    : '코드 붙여 넣기 (가사 그대로)',
+              ),
+            ),
+          ],
           const PopupMenuDivider(),
           PopupMenuItem(
             value: () => _mutate(
@@ -1314,6 +1872,28 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
                 ? '$name ${pages - missing} / $pages'
                 : '$name ${pages - missing} / $pages · $missing페이지 비어 있음',
             warn: missing > 0,
+          ),
+        );
+      }
+      if (_chordMode) {
+        final cells = [for (var r = 0; r < _grid.length; r++) _grid.cell(r, 0)];
+        final chords = cells.fold(0, (n, c) => n + countChords(c));
+        final noChord = cells
+            .where((c) => c.trim().isNotEmpty && countChords(c) == 0)
+            .length;
+        final unreadable = cells.fold(
+          0,
+          (n, c) => n + chordIssueRanges(c).length,
+        );
+        chips.add(
+          _chip(
+            cs,
+            [
+              '코드 $chords개',
+              if (noChord > 0) '코드 없는 페이지 $noChord',
+              if (unreadable > 0) '못 읽음 $unreadable',
+            ].join(' · '),
+            warn: unreadable > 0,
           ),
         );
       }

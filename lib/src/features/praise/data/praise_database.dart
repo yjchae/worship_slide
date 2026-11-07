@@ -16,7 +16,7 @@ class PraiseDatabase {
   static final PraiseDatabase instance = PraiseDatabase._();
 
   /// 지금 앱의 DB 스키마 버전. 올리면 [upgradePraiseSchema] 에 단계를 더한다.
-  static const schemaVersion = 19;
+  static const schemaVersion = 20;
   Database? _database;
 
   // 실행 파일 옆 폴더: macOS는 .app/Contents/MacOS/exe 이므로 3단계 위
@@ -123,7 +123,10 @@ Future<void> createPraiseSchema(DatabaseExecutor db) async {
     lyrics TEXT NOT NULL,
     english_lyrics TEXT NOT NULL DEFAULT '',
     uid TEXT,
-    updated_at INTEGER NOT NULL DEFAULT 0
+    updated_at INTEGER NOT NULL DEFAULT 0,
+    chord_lyrics TEXT,
+    chord_key TEXT,
+    chord_updated_at INTEGER NOT NULL DEFAULT 0
   )
 ''');
   await db.execute(_createSongUidIndex);
@@ -181,7 +184,11 @@ Future<void> createPraiseSchema(DatabaseExecutor db) async {
     song_uid        TEXT,
     song_extra_lyrics TEXT,
     bible_extra_text TEXT,
-    blank_extra_text TEXT
+    blank_extra_text TEXT,
+    song_chord_lyrics TEXT,
+    song_chord_key TEXT,
+    song_transpose INTEGER,
+    song_chord_accidental TEXT
   )
 ''');
   await db.execute(_createSongTranslations);
@@ -548,6 +555,35 @@ Future<void> upgradePraiseSchema(DatabaseExecutor db, int oldVersion) async {
     // 스냅샷이 빈 옛 곡 항목을 지금 곡으로 굳힌다. 불러올 때 라이브러리 곡을 따라가지 않게.
     await freezeContiSongSnapshots(db);
   }
+  if (oldVersion < 20) {
+    // 코드 가사(싱어·발표자 화면 전용). 곡: 코드 글·원래 조·코드 시각(곡 updated_at 과 따로).
+    // 콘티 항목: 코드 스냅샷·원래 조·조 바꾸기·♯/♭ 선호. 데이터 변환은 없다(NULL = 코드 없음).
+    for (final (column, type) in const [
+      ('chord_lyrics', 'TEXT'),
+      ('chord_key', 'TEXT'),
+      ('chord_updated_at', 'INTEGER NOT NULL DEFAULT 0'),
+    ]) {
+      await _addColumnIfMissing(
+        db,
+        'praise_songs',
+        column,
+        'ALTER TABLE praise_songs ADD COLUMN $column $type',
+      );
+    }
+    for (final (column, type) in const [
+      ('song_chord_lyrics', 'TEXT'),
+      ('song_chord_key', 'TEXT'),
+      ('song_transpose', 'INTEGER'),
+      ('song_chord_accidental', 'TEXT'),
+    ]) {
+      await _addColumnIfMissing(
+        db,
+        'worship_conti_items',
+        column,
+        'ALTER TABLE worship_conti_items ADD COLUMN $column $type',
+      );
+    }
+  }
 }
 
 /// 곡 항목 중 스냅샷 칸(제목·가사·영어 가사·uid)이 빈 행을 그 곡의 지금 값으로 채운다.
@@ -593,6 +629,8 @@ Future<void> freezeContiSongSnapshots(DatabaseExecutor db) async {
 String _migratePageFormat(String stored) {
   if (!stored.contains('###')) return stored;
   final pages = stored.split('###').map((p) => p.trim()).toList();
-  while (pages.isNotEmpty && pages.last.isEmpty) pages.removeLast();
+  while (pages.isNotEmpty && pages.last.isEmpty) {
+    pages.removeLast();
+  }
   return pages.join('\n\n');
 }

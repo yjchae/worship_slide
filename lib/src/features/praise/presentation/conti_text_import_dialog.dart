@@ -3,24 +3,31 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../../app_colors.dart';
+import '../domain/chord_lyrics.dart';
 import '../domain/conti_text_parse.dart';
 import '../domain/praise_song.dart';
+
+/// 콘티 한번에 넣기가 돌려줄 곡 하나 + 맞출 조(반음, H4). transpose: 체크 끔·적용 불가면 0.
+/// 담는 쪽은 `pick.song.copyWith(chordTranspose: pick.transpose)` 로 담는다(_withSubLyrics 뒤).
+/// 조 값 계산은 [contiKeyPlan](conti_text_parse.dart).
+typedef ContiTextPick = ({PraiseSong song, int transpose});
 
 /// 콘티 글을 붙여 넣으면 줄마다 곡을 찾아 한꺼번에 담는다.
 ///
 /// 1단계: 글 붙여 넣기 → 2단계: 줄마다 찾은 곡 확인. 같은 제목 곡이 여럿이면
 /// 고를 때까지 '담기'를 막는다. 못 찾은 줄은 직접 찾거나 건너뛴다.
-/// 돌려주는 값은 담을 곡(줄 순서대로). 취소하면 null.
+/// 돌려주는 값은 담을 곡과 맞출 조(줄 순서대로). 취소하면 null.
+/// 글에 조가 적혀 있고 곡에 코드가 있으면 그 조로 맞춘다(조 칸 체크, 기본 켬).
 class ContiTextImportDialog extends StatefulWidget {
   const ContiTextImportDialog({super.key, required this.loadSongs});
 
   /// 보관함의 모든 곡. 다이얼로그를 열 때 한 번 읽는다.
   final Future<List<PraiseSong>> Function() loadSongs;
 
-  static Future<List<PraiseSong>?> show(
+  static Future<List<ContiTextPick>?> show(
     BuildContext context, {
     required Future<List<PraiseSong>> Function() loadSongs,
-  }) => showDialog<List<PraiseSong>>(
+  }) => showDialog<List<ContiTextPick>>(
     context: context,
     builder: (_) => ContiTextImportDialog(loadSongs: loadSongs),
   );
@@ -50,7 +57,20 @@ class _Row {
   PraiseSong? chosen;
   bool skipped;
 
+  /// 글의 조로 코드를 맞출지(조 칸 체크). 후보를 바꿔도 사용자가 끈 것은 그대로 둔다.
+  bool applyKey = true;
+
   bool get decided => skipped || chosen != null;
+
+  /// 고른 곡의 조 계획. 글에 조가 없거나 곡을 안 골랐으면 null.
+  ContiKeyPlan? get keyPlan {
+    final song = chosen;
+    if (song == null || entry.key.isEmpty) return null;
+    return contiKeyPlan(entry.key, song);
+  }
+
+  /// 담을 때 맞출 반음. 적용할 수 없거나 체크를 껐으면 0.
+  int get transpose => applyKey ? (keyPlan?.transpose ?? 0) : 0;
 }
 
 class _ContiTextImportDialogState extends State<ContiTextImportDialog> {
@@ -96,8 +116,10 @@ class _ContiTextImportDialogState extends State<ContiTextImportDialog> {
   Future<void> _searchManually(_Row row) async {
     final picked = await showDialog<PraiseSong>(
       context: context,
-      builder: (_) =>
-          _SongSearchDialog(matcher: _matcher!, initialQuery: row.entry.titles.first),
+      builder: (_) => _SongSearchDialog(
+        matcher: _matcher!,
+        initialQuery: row.entry.titles.first,
+      ),
     );
     if (picked == null || !mounted) return;
     setState(() {
@@ -118,7 +140,9 @@ class _ContiTextImportDialogState extends State<ContiTextImportDialog> {
         constraints: const BoxConstraints(maxWidth: 720, maxHeight: 680),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
-          child: rows == null ? _buildInput(context) : _buildReview(context, rows),
+          child: rows == null
+              ? _buildInput(context)
+              : _buildReview(context, rows),
         ),
       ),
     );
@@ -137,7 +161,11 @@ class _ContiTextImportDialogState extends State<ContiTextImportDialog> {
         Text(
           '번호를 붙인 콘티 글을 붙여 넣으면 줄마다 곡을 찾아 순서대로 담습니다.\n'
           '끝의 조(F, G, Bb …)와 → 표시는 무시하고, (or 다른 곡)은 후보로 같이 찾습니다.',
-          style: TextStyle(fontSize: 13, height: 1.5, color: cs.onSurfaceVariant),
+          style: TextStyle(
+            fontSize: 13,
+            height: 1.5,
+            color: cs.onSurfaceVariant,
+          ),
         ),
         const SizedBox(height: 14),
         Flexible(
@@ -191,9 +219,10 @@ class _ContiTextImportDialogState extends State<ContiTextImportDialog> {
   Widget _buildReview(BuildContext context, List<_Row> rows) {
     final cs = Theme.of(context).colorScheme;
     final pending = rows.where((r) => !r.decided).length;
-    final chosen = [
+    final chosen = <ContiTextPick>[
       for (final r in rows)
-        if (!r.skipped && r.chosen != null) r.chosen!,
+        if (!r.skipped && r.chosen != null)
+          (song: r.chosen!, transpose: r.transpose),
     ];
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -224,6 +253,7 @@ class _ContiTextImportDialogState extends State<ContiTextImportDialog> {
               }),
               onSkip: () => setState(() => rows[i].skipped = true),
               onSearch: () => _searchManually(rows[i]),
+              onApplyKey: (v) => setState(() => rows[i].applyKey = v),
             ),
           ),
         ),
@@ -271,12 +301,14 @@ class _RowCard extends StatelessWidget {
     required this.onChoose,
     required this.onSkip,
     required this.onSearch,
+    required this.onApplyKey,
   });
 
   final _Row row;
   final ValueChanged<PraiseSong> onChoose;
   final VoidCallback onSkip;
   final VoidCallback onSearch;
+  final ValueChanged<bool> onApplyKey;
 
   @override
   Widget build(BuildContext context) {
@@ -291,7 +323,9 @@ class _RowCard extends StatelessWidget {
           color: needsChoice ? cs.error : cs.outlineVariant,
           width: needsChoice ? 1.5 : 1,
         ),
-        color: row.skipped ? cs.surfaceContainerHighest.withValues(alpha: 0.4) : null,
+        color: row.skipped
+            ? cs.surfaceContainerHighest.withValues(alpha: 0.4)
+            : null,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -342,6 +376,12 @@ class _RowCard extends StatelessWidget {
               selected: !row.skipped && row.chosen == song,
               onTap: () => onChoose(song),
             ),
+          if (!row.skipped && row.keyPlan != null)
+            _KeyRow(
+              plan: row.keyPlan!,
+              apply: row.applyKey,
+              onApply: onApplyKey,
+            ),
           Row(
             children: [
               TextButton.icon(
@@ -363,12 +403,89 @@ class _RowCard extends StatelessWidget {
 
   Widget _statusBadge(ColorScheme cs) {
     final (String text, Color bg, Color fg) = switch (row) {
-      _Row(skipped: true) => ('담지 않음', cs.surfaceContainerHighest, cs.onSurfaceVariant),
+      _Row(skipped: true) => (
+        '담지 않음',
+        cs.surfaceContainerHighest,
+        cs.onSurfaceVariant,
+      ),
       _Row(decided: false) => ('선택 필요', cs.errorContainer, cs.onErrorContainer),
-      _Row(kind: ContiMatchKind.partial) => ('비슷한 제목', cs.tertiaryContainer, cs.onTertiaryContainer),
+      _Row(kind: ContiMatchKind.partial) => (
+        '비슷한 제목',
+        cs.tertiaryContainer,
+        cs.onTertiaryContainer,
+      ),
       _ => ('찾음', cs.primaryContainer, cs.onPrimaryContainer),
     };
     return _Badge(text: text, background: bg, foreground: fg);
+  }
+}
+
+/// 고른 곡 아래 조 칸 (S6). 곡에 코드가 있고 글의 조로 맞출 수 있으면 `G → F (−2)` 체크,
+/// 코드가 없으면 글의 조만 흐리게, 장·단조가 다르면 표시만 한다.
+class _KeyRow extends StatelessWidget {
+  const _KeyRow({
+    required this.plan,
+    required this.apply,
+    required this.onApply,
+  });
+
+  final ContiKeyPlan plan;
+  final bool apply;
+  final ValueChanged<bool> onApply;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final muted = TextStyle(fontSize: 12, color: cs.onSurfaceVariant);
+    final from = plan.fromKey;
+    final transpose = plan.transpose;
+    final Widget body;
+    if (from == null) {
+      body = Text('조 ${plan.textKey} · 이 곡엔 코드가 없어 맞추지 않습니다', style: muted);
+    } else if (plan.modeMismatch || transpose == null) {
+      body = Text('조 ${plan.textKey} (원래 $from — 직접 맞춰 주세요)', style: muted);
+    } else {
+      final sign = transpose > 0 ? '+$transpose' : '$transpose';
+      final estimated = plan.fromEstimated ? ' (추정)' : '';
+      final label = transpose == 0
+          ? '조 $from$estimated · 원래 조 그대로'
+          : '조 $from$estimated → ${keyAfter(from, transpose)} ($sign)';
+      body = InkWell(
+        onTap: transpose == 0 ? null : () => onApply(!apply),
+        borderRadius: BorderRadius.circular(AppRadius.control),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (transpose != 0)
+              SizedBox.square(
+                dimension: 28,
+                child: Checkbox(
+                  value: apply,
+                  visualDensity: VisualDensity.compact,
+                  onChanged: (v) => onApply(v ?? false),
+                ),
+              ),
+            Text(label, style: TextStyle(fontSize: 12, color: cs.onSurface)),
+          ],
+        ),
+      );
+    }
+    final tooltip = plan.multiple ? '중간 전조는 직접 (첫 조로 맞춥니다)' : null;
+    final row = Padding(
+      padding: const EdgeInsets.only(top: 6, left: 4),
+      child: Row(
+        children: [
+          Icon(Icons.music_note_rounded, size: 14, color: cs.onSurfaceVariant),
+          const SizedBox(width: 6),
+          Flexible(child: body),
+          if (plan.multiple) ...[
+            const SizedBox(width: 6),
+            Text('· 중간 전조는 직접', style: muted),
+          ],
+        ],
+      ),
+    );
+    return tooltip == null ? row : Tooltip(message: tooltip, child: row);
   }
 }
 
@@ -410,7 +527,9 @@ class _CandidateTile extends StatelessWidget {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(AppRadius.control),
             color: selected ? cs.primaryContainer.withValues(alpha: 0.6) : null,
-            border: Border.all(color: selected ? cs.primary : cs.outlineVariant),
+            border: Border.all(
+              color: selected ? cs.primary : cs.outlineVariant,
+            ),
           ),
           child: Row(
             children: [
@@ -433,7 +552,10 @@ class _CandidateTile extends StatelessWidget {
                       details,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: cs.onSurfaceVariant,
+                      ),
                     ),
                   ],
                 ),
@@ -466,7 +588,11 @@ class _Badge extends StatelessWidget {
     ),
     child: Text(
       text,
-      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: foreground),
+      style: TextStyle(
+        fontSize: 12,
+        fontWeight: FontWeight.w600,
+        color: foreground,
+      ),
     ),
   );
 }

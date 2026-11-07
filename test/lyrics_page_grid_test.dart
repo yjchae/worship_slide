@@ -6,6 +6,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:worship_slides/src/app_theme.dart';
+import 'package:worship_slides/src/features/praise/domain/chord_lyrics.dart';
 import 'package:worship_slides/src/features/praise/domain/export_style.dart';
 import 'package:worship_slides/src/features/praise/domain/praise_song.dart';
 import 'package:worship_slides/src/features/praise/presentation/lyrics_editor_dialog.dart';
@@ -251,6 +252,7 @@ void main() {
     Future<SongEditResult?> openDialog(
       WidgetTester tester, {
       String extraLanguage = '스페인어',
+      PraiseSong? edit,
     }) async {
       await tester.binding.setSurfaceSize(const Size(1400, 900));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -267,7 +269,7 @@ void main() {
                     onPressed: () async => result = await showDialog(
                       context: context,
                       builder: (_) => LyricsEditorDialog(
-                        song: song,
+                        song: edit ?? song,
                         translations: const {'스페인어': 'Tu amor, Señor'},
                         languages: const ['영어', '스페인어'],
                         extraLanguage: extraLanguage,
@@ -371,6 +373,158 @@ void main() {
         final image = await boundary.toImage(pixelRatio: 1.5);
         final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
         File(out).writeAsBytesSync(bytes!.buffer.asUint8List());
+      });
+    });
+
+    group('코드 모드', () {
+      Future<SongEditResult?> saveAfter(
+        WidgetTester tester,
+        Future<void> Function() steps, {
+        PraiseSong? edit,
+      }) async {
+        SongEditResult? result;
+        await tester.binding.setSurfaceSize(const Size(1400, 900));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: AppThemeKind.light.theme,
+            home: Builder(
+              builder: (context) => Scaffold(
+                body: Center(
+                  child: ElevatedButton(
+                    onPressed: () async => result = await showDialog(
+                      context: context,
+                      builder: (_) =>
+                          LyricsEditorDialog(song: edit ?? song, style: style),
+                    ),
+                    child: const Text('열기'),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.tap(find.text('열기'));
+        await tester.pumpAndSettle();
+        await steps();
+        await tester.tap(find.text('저장'));
+        await tester.pumpAndSettle();
+        return result;
+      }
+
+      testWidgets('코드 모드를 켜고 그냥 저장하면 가사가 그대로고 코드는 없다', (tester) async {
+        final result = await saveAfter(tester, () async {
+          await tester.tap(find.byType(Switch).first);
+          await tester.pumpAndSettle();
+        });
+        expect(result!.$1.lyrics, song.lyrics);
+        expect(result.$1.chordLyrics, isNull);
+      });
+
+      testWidgets('원래 대괄호가 든 가사는 글자로 두고 알린다', (tester) async {
+        const bracket = PraiseSong(
+          id: 2,
+          fileName: 'b.pptx',
+          title: '후렴 곡',
+          lyrics: '[A] 할렐루야\n\n주님',
+          englishLyrics: '',
+        );
+        final result = await saveAfter(tester, () async {
+          await tester.tap(find.byType(Switch).first);
+          await tester.pumpAndSettle();
+          expect(find.textContaining('대괄호 1개는 글자로'), findsOneWidget);
+        }, edit: bracket);
+        expect(result!.$1.lyrics, bracket.lyrics);
+        expect(result.$1.chordLyrics, isNull);
+      });
+
+      testWidgets('같은 가사 페이지에 코드를 한 번에 넣는다', (tester) async {
+        const chorus = PraiseSong(
+          id: 3,
+          fileName: 'c.pptx',
+          title: '후렴 반복',
+          lyrics: '주 은혜\n놀라워\n\n1절 가사\n\n주 은혜\n놀라워',
+          englishLyrics: '',
+        );
+        final result = await saveAfter(tester, () async {
+          await tester.tap(find.byType(Switch).first);
+          await tester.pumpAndSettle();
+          await tester.enterText(
+            find.byType(TextField).at(1),
+            '[G]주 은혜\n[D]놀라워',
+          );
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('같은 가사 1페이지에도 넣기'));
+          await tester.pumpAndSettle();
+          expect(find.text('같은 가사 1페이지에도 넣기'), findsNothing);
+        }, edit: chorus);
+        expect(result!.$1.lyrics, chorus.lyrics);
+        expect(
+          result.$1.chordLyrics,
+          '[G]주 은혜\n[D]놀라워\n\n1절 가사\n\n[G]주 은혜\n[D]놀라워',
+        );
+      });
+
+      testWidgets('코드 칸에 코드를 치면 가사는 그대로, 코드 글이 실린다', (tester) async {
+        final result = await saveAfter(tester, () async {
+          await tester.tap(find.byType(Switch).first);
+          await tester.pumpAndSettle();
+          await tester.enterText(
+            find.byType(TextField).at(1),
+            '[G]주님의 사랑 넓고 [D]깊어\n나의 삶을 감싸 주시네',
+          );
+          await tester.pumpAndSettle();
+          expect(find.textContaining('코드 2개 · 코드 없는 페이지 1'), findsOneWidget);
+        });
+        expect(result!.$1.lyrics, song.lyrics);
+        expect(
+          result.$1.chordLyrics,
+          '[G]주님의 사랑 넓고 [D]깊어\n나의 삶을 감싸 주시네\n\n찬양해 찬양해',
+        );
+      });
+
+      testWidgets('평소 모드에서 나누기만 바꾸면 코드가 저절로 따라간다', (tester) async {
+        final chorded = song.copyWith(
+          chordLyrics: '[G]주님의 사랑 넓고 깊어\n나의 [C]삶을 감싸 주시네\n\n찬양해 찬양해',
+          chordKey: 'G',
+        );
+        final result = await saveAfter(tester, () async {
+          // 1페이지 둘째 줄을 다음 페이지로(페이지 경계만 바뀐다).
+          await tester.enterText(
+            find.byType(TextField).at(1),
+            '주님의 사랑 넓고 깊어\n\n나의 삶을 감싸 주시네',
+          );
+          await tester.pumpAndSettle();
+        }, edit: chorded);
+        expect(result!.$1.lyrics, '주님의 사랑 넓고 깊어\n\n나의 삶을 감싸 주시네\n\n찬양해 찬양해');
+        expect(stripChords(result.$1.chordLyrics!), result.$1.lyrics);
+        expect(countChords(result.$1.chordLyrics!), 2);
+        expect(result.$1.chordKey, 'G');
+      });
+
+      testWidgets('코드 모드 화면을 PNG 로 남긴다(디자인 확인용)', (tester) async {
+        await loadFonts();
+        await openDialog(
+          tester,
+          edit: song.copyWith(
+            chordLyrics:
+                '[G]주님의 사랑 넓고 [D/F#]깊어\n나의 [Em7]삶을 감싸 [C]주시네\n\n[G]찬양해 [Gsuss]찬양해',
+          ),
+        );
+        await tester.tap(find.byType(Switch).first);
+        await tester.pumpAndSettle();
+        final out = Platform.environment['LYRICS_EDITOR_SHOT'];
+        if (out == null) return;
+        final boundary = tester.renderObject<RenderRepaintBoundary>(
+          find.byKey(shotKey),
+        );
+        await tester.runAsync(() async {
+          final image = await boundary.toImage(pixelRatio: 1.5);
+          final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+          File(
+            '${out.replaceFirst(RegExp(r'\.png$'), '')}.chords.png',
+          ).writeAsBytesSync(bytes!.buffer.asUint8List());
+        });
       });
     });
   });

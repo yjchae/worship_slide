@@ -1,6 +1,7 @@
 import 'dart:isolate';
 
 import '../../bible/domain/bible_voice_parse.dart' show composeHangul;
+import 'chord_lyrics.dart';
 import 'praise_song.dart';
 
 /// 붙여 넣은 콘티 글의 한 줄 = 곡 하나.
@@ -249,3 +250,44 @@ class ContiSongMatcher {
 }
 
 typedef _SongKey = ({PraiseSong song, String full, String bare, String lyrics});
+
+/// 콘티 글의 조(`G`, `F#m`, `Bb`, `F-G`)로 곡의 코드를 맞출 계획 (S6 '조' 칸, §3-10).
+/// - [textKey] = 글의 첫 조(ASCII 로), [multiple] = 조 바꿈(`F-G`)이 적혀 있음 — 첫 조로 맞춘다
+/// - [fromKey] = 곡의 원래 조(정해 둔 값, 없으면 추정 — [fromEstimated])
+/// - [transpose] = 맞출 반음(−5..+6). 곡에 코드가 없거나, 원래 조를 모르거나, 장·단조가 다르면 null
+/// - [modeMismatch] = 원래 G 인데 글은 Em 처럼 장·단조가 달라 직접 맞춰야 함
+typedef ContiKeyPlan = ({
+  String textKey,
+  bool multiple,
+  String? fromKey,
+  bool fromEstimated,
+  int? transpose,
+  bool modeMismatch,
+});
+
+final _keyUnitPattern = RegExp(_keyUnit);
+
+/// 글에 조가 없으면 null.
+ContiKeyPlan? contiKeyPlan(String entryKey, PraiseSong song) {
+  final units = [
+    for (final m in _keyUnitPattern.allMatches(entryKey))
+      m.group(0)!.replaceAll('♯', '#').replaceAll('♭', 'b'),
+  ];
+  if (units.isEmpty) return null;
+  final textKey = units.first;
+  final from = song.hasChords ? song.effectiveChordKey : null;
+  final transpose = from == null ? null : semitonesBetween(from, textKey);
+  final mismatch =
+      from != null &&
+      transpose == null &&
+      isKeyName(textKey) &&
+      from.endsWith('m') != textKey.endsWith('m');
+  return (
+    textKey: textKey,
+    multiple: units.length > 1,
+    fromKey: from,
+    fromEstimated: song.chordKeyEstimated,
+    transpose: transpose,
+    modeMismatch: mismatch,
+  );
+}

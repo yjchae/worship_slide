@@ -13,6 +13,7 @@ import 'package:worship_slides/src/features/praise/data/sync_service.dart';
 import 'package:worship_slides/src/features/praise/data/sync_snapshot.dart';
 import 'package:worship_slides/src/features/praise/data/sync_store.dart';
 import 'package:worship_slides/src/features/praise/data/worship_conti_repository.dart';
+import 'package:worship_slides/src/features/praise/domain/chord_lyrics.dart';
 import 'package:worship_slides/src/features/praise/domain/praise_song.dart';
 import 'package:worship_slides/src/features/praise/domain/staging_item.dart';
 import 'package:worship_slides/src/features/praise/domain/worship_conti.dart';
@@ -1273,6 +1274,239 @@ void main() {
       // B 가 다시 쓴 파일이 A 의 삭제를 되돌리지 않는다.
       await a.sync.syncSongs();
       expect(await a.titles(), ['축복:가사']);
+    });
+  });
+
+  group('코드 (§3-8)', () {
+    Future<Database> openDb(_Pc pc) =>
+        databaseFactoryFfi.openDatabase(p.join(pc.dir.path, 'a.db'));
+
+    Future<Map<String, Object?>> rowOf(_Pc pc, String title) async {
+      final db = await openDb(pc);
+      return (await db.query(
+        'praise_songs',
+        where: 'title = ?',
+        whereArgs: [title],
+      )).single;
+    }
+
+    test('코드가 다른 PC 로 가고, 곡 시각은 그대로다', () async {
+      final a = await newPc('A');
+      final b = await newPc('B');
+      await a.repo.insertSong(song('은혜', '주 은혜\n\n놀라워'));
+      await syncAll([a, b]);
+      final before = await rowOf(b, '은혜');
+
+      final grace = (await a.songs()).single;
+      await a.repo.saveChords(
+        grace.id!,
+        chordLyrics: '[G]주 은혜\n\n[D]놀라워',
+        chordKey: 'G',
+      );
+      expect(a.sync.status.value.hasLocalChanges, isTrue);
+      await syncAll([a, b]);
+
+      final got = (await b.songs()).single;
+      expect(got.chordLyrics, '[G]주 은혜\n\n[D]놀라워');
+      expect(got.chordKey, 'G');
+      final after = await rowOf(b, '은혜');
+      expect(after['updated_at'], before['updated_at']);
+      expect((await rowOf(a, '은혜'))['updated_at'], before['updated_at']);
+      expect(
+        after['chord_updated_at'],
+        (await rowOf(a, '은혜'))['chord_updated_at'],
+      );
+    });
+
+    test('켤 때 확인은 코드만 바뀐 곡도 바뀐 찬양 한 곡으로 센다(DB 는 그대로)', () async {
+      final a = await newPc('A');
+      final b = await newPc('B');
+      await a.repo.insertSong(song('은혜', '가사'));
+      await syncAll([a, b]);
+      final grace = (await a.songs()).single;
+      await a.repo.saveChords(grace.id!, chordLyrics: '[G]가사', chordKey: null);
+      await a.sync.syncSongs();
+
+      final check = await b.sync.checkForUpdates();
+      expect(check!.songs.updatedCount, 1);
+      expect(check.songs.addedCount, 0);
+      expect((await b.songs()).single.chordLyrics, isNull);
+
+      // 가사와 코드를 같이 고쳐도 한 곡이다.
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      await a.repo.updateSong(grace.copyWith(lyrics: '가사 고침'));
+      await a.repo.saveChords(
+        grace.id!,
+        chordLyrics: '[G]가사 고침',
+        chordKey: null,
+      );
+      await a.sync.syncSongs();
+      expect((await b.sync.checkForUpdates())!.songs.updatedCount, 1);
+
+      await b.sync.syncSongs();
+      expect((await b.songs()).single.chordLyrics, '[G]가사 고침');
+      expect((await b.sync.checkForUpdates())!.hasAnything, isFalse);
+    });
+
+    test('코드를 지우면 다른 PC 에서도 지워진다', () async {
+      final a = await newPc('A');
+      final b = await newPc('B');
+      await a.repo.insertSong(song('은혜', '가사'));
+      final grace = (await a.songs()).single;
+      await a.repo.saveChords(grace.id!, chordLyrics: '[G]가사', chordKey: 'G');
+      await syncAll([a, b]);
+      expect((await b.songs()).single.hasChords, isTrue);
+
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+      await a.repo.saveChords(grace.id!, chordLyrics: null, chordKey: null);
+      await syncAll([a, b]);
+      final got = (await b.songs()).single;
+      expect(got.chordLyrics, isNull);
+      expect(got.chordKey, isNull);
+      expect((await rowOf(b, '은혜'))['chord_updated_at'] as int, greaterThan(0));
+    });
+
+    test('옛 앱(chords 없음)이 가사를 고쳐도 코드는 지워지지 않고 어긋남으로 남는다', () async {
+      final a = await newPc('A');
+      final b = await newPc('B');
+      await a.repo.insertSong(song('은혜', '주 은혜'));
+      final grace = (await a.songs()).single;
+      await a.repo.saveChords(grace.id!, chordLyrics: '[G]주 은혜', chordKey: 'G');
+      await syncAll([a, b]);
+
+      // 옛 앱 PC: 새 칸을 모르는 파일. 가사만 고쳤다.
+      final mine = await SongSyncRepository(
+        database: PraiseDatabase.forTesting(await openDb(a)),
+      ).exportSnapshot(deviceId: 'old-pc', deviceName: '옛 PC');
+      final json =
+          jsonDecode(jsonEncode(mine.toJson())) as Map<String, Object?>;
+      json.remove('chords');
+      final songs = json['songs'] as List;
+      final old = songs.single as Map<String, Object?>;
+      old['lyrics'] = '주 은혜 놀라워';
+      old['updated_at'] = (old['updated_at'] as int) + 1000;
+      await SongSyncRepository(
+        database: PraiseDatabase.forTesting(await openDb(b)),
+      ).merge([SyncSnapshot.fromJson(json)!]);
+
+      final got = (await b.songs()).single;
+      expect(got.lyrics, '주 은혜 놀라워');
+      expect(got.chordLyrics, '[G]주 은혜');
+      expect(chordsMatchLyrics(got.chordLyrics, got.lyrics), isFalse);
+      expect(got.pairedPages.single.chord, '');
+    });
+
+    test('시각이 같은 두 판은 읽는 순서와 상관없이 같은 답', () async {
+      final a = await newPc('A');
+      final b = await newPc('B');
+      await a.repo.insertSong(song('은혜', '가사'));
+      await syncAll([a, b]);
+      final uid = (await rowOf(a, '은혜'))['uid'] as String;
+      SyncSnapshot snap(String id, String chord) => SyncSnapshot(
+        deviceId: id,
+        deviceName: id,
+        songs: const [],
+        deleted: const {},
+        aliases: const {},
+        chords: [
+          SyncChord(
+            uid: uid,
+            chordLyrics: chord,
+            chordKey: null,
+            updatedAt: 5000,
+          ),
+        ],
+      );
+      final x = snap('x', '[G]가사');
+      final y = snap('y', '[A]가사');
+      await SongSyncRepository(
+        database: PraiseDatabase.forTesting(await openDb(a)),
+      ).merge([x, y]);
+      await SongSyncRepository(
+        database: PraiseDatabase.forTesting(await openDb(b)),
+      ).merge([y, x]);
+      final aChord = (await a.songs()).single.chordLyrics;
+      expect(aChord, (await b.songs()).single.chordLyrics);
+      expect(aChord, isNotNull);
+    });
+
+    test('이 PC 에 없는 곡의 코드·모양이 틀린 레코드는 버린다', () async {
+      final a = await newPc('A');
+      await a.repo.insertSong(song('은혜', '가사'));
+      await a.sync.syncSongs();
+      final raw = {
+        'format': SyncSnapshot.format,
+        'songs': [],
+        'chords': [
+          {'uid': 'f' * 32, 'chord_lyrics': '[G]x', 'updated_at': 9},
+          {'uid': 'e' * 32, 'chord_lyrics': 3, 'updated_at': 9},
+          {'uid': 'd' * 32, 'chord_lyrics': '[G]x'},
+          'junk',
+        ],
+      };
+      final snap = SyncSnapshot.fromJson(raw)!;
+      expect(snap.chords.map((c) => c.uid), ['f' * 32]);
+      final result = await SongSyncRepository(
+        database: PraiseDatabase.forTesting(await openDb(a)),
+      ).merge([snap]);
+      expect(result.changed, isFalse);
+      expect((await a.songs()).single.chordLyrics, isNull);
+    });
+
+    test('같은 곡 중복 정리: 진 행의 코드가 더 새로우면 남는 행으로 옮긴다', () async {
+      final a = await newPc('A');
+      final db = await openDb(a);
+      final keep = 'a' * 32, gone = 'b' * 32;
+      Future<void> add(String uid, int updated, String? chord, int chordAt) =>
+          db.insert('praise_songs', {
+            'file_name': '은혜.pptx',
+            'title': '은혜',
+            'lyrics': '가사',
+            'english_lyrics': '',
+            'uid': uid,
+            'updated_at': updated,
+            'chord_lyrics': chord,
+            'chord_updated_at': chordAt,
+          });
+      await add(keep, 200, null, 0); // 곡은 이 행이 이긴다(늦게 고침)
+      await add(gone, 100, '[G]가사', 50); // 코드는 이 행에만
+      await db.insert('song_uid_aliases', {'alias': gone, 'uid': keep});
+      await SongSyncRepository(
+        database: PraiseDatabase.forTesting(db),
+      ).merge([]);
+      final rows = await db.query('praise_songs');
+      expect(rows, hasLength(1));
+      expect(rows.single['uid'], keep);
+      expect(rows.single['chord_lyrics'], '[G]가사');
+      expect(rows.single['chord_updated_at'], 50);
+      expect(rows.single['updated_at'], 200);
+    });
+
+    test('따로 가져온 같은 곡이 합쳐져도(작은 uid 로) 코드가 따라간다', () async {
+      final a = await newPc('A');
+      final b = await newPc('B');
+      await a.repo.insertSong(song('은혜', '가사'));
+      await b.repo.insertSong(song('은혜', '가사'));
+      final aSong = (await a.songs()).single;
+      await a.repo.saveChords(aSong.id!, chordLyrics: '[C]가사', chordKey: null);
+      await syncAll([a, b]);
+      expect((await a.songs()), hasLength(1));
+      expect((await b.songs()), hasLength(1));
+      expect((await a.songs()).single.chordLyrics, '[C]가사');
+      expect((await b.songs()).single.chordLyrics, '[C]가사');
+    });
+
+    test('코드 칸이 없는 옛 내 파일은 "안 올린 수정"으로 보지 않는다', () async {
+      final a = await newPc('A');
+      await a.repo.insertSong(song('은혜', '가사'));
+      await a.sync.syncSongs();
+      final file = File(p.join(shared, syncDirName, '${a.sync.deviceId}.json'));
+      final json =
+          jsonDecode(await file.readAsString()) as Map<String, Object?>;
+      expect(json['chords'], isEmpty);
+      json.remove('chords');
+      await file.writeAsString(jsonEncode(json));
+      expect((await a.sync.checkForUpdates())!.localChanges, isFalse);
     });
   });
 }
