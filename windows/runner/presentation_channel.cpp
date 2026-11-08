@@ -319,7 +319,7 @@ void PresentationChannel::OpenWindow(HMONITOR chosen) {
       GetMonitorInfo(chosen, &info);
       full_device_ = MonitorDevice(chosen);
       SetWindowLongPtrW(hwnd_, GWL_STYLE, WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN);
-      SetWindowPos(hwnd_, HWND_TOPMOST, info.rcMonitor.left, info.rcMonitor.top,
+      SetWindowPos(hwnd_, HWND_TOP, info.rcMonitor.left, info.rcMonitor.top,
                    info.rcMonitor.right - info.rcMonitor.left,
                    info.rcMonitor.bottom - info.rcMonitor.top,
                    SWP_FRAMECHANGED | SWP_SHOWWINDOW);
@@ -350,7 +350,8 @@ void PresentationChannel::OpenWindow(HMONITOR chosen) {
     MONITORINFO info = { sizeof(info) };
     GetMonitorInfo(mi.second, &info);
     wr = info.rcMonitor;  // full screen including taskbar
-    exStyle = WS_EX_TOPMOST;
+    // 항상 위(WS_EX_TOPMOST)로 두지 않는다 — 다른 프로그램 창도 관객 모니터에서 그 위로 올라올 수 있게.
+    exStyle = 0;
   } else {
     wr = CenteredRect(mi.primary, 1280, 720);
     exStyle = 0;
@@ -373,7 +374,7 @@ void PresentationChannel::OpenWindow(HMONITOR chosen) {
 }
 
 void PresentationChannel::RefitToMonitor() {
-  RefitToDevice(hwnd_, full_device_, HWND_TOPMOST, 0);
+  RefitToDevice(hwnd_, full_device_, nullptr, SWP_NOZORDER);
 }
 
 void PresentationChannel::CloseWindow() {

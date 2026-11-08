@@ -2473,33 +2473,123 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   void _deleteSlide(int slideIndex) => _deleteSlides([slideIndex]);
 
+  // 발표 보기에서 지운 페이지 되돌리기(⌘/Ctrl+Z). 지울 때 새로 더한 표시만 적어 두고 되돌릴 때 그것만 뺀다 —
+  // 그 사이 다른 걸 고쳤어도(붙여 넣기·메모 등) 그대로 두고 지운 페이지만 다시 보인다.
+  final List<({Set<String> keys, Set<int> spacers, int seq})> _deleteUndo = [];
+  // ⌘/Ctrl+Z 가 옮기기·삭제 중 나중에 한 것을 되돌리도록 순서를 센다.
+  int _undoSeq = 0;
+  int _moveUndoSeq = 0;
+
   /// 발표 보기에서 여러 장을 골라 Delete 로 지울 때도 같은 길을 탄다.
-  void _deleteSlides(List<int> slideIndexes) {
-    final slides = _allSlides;
-    final targets = {
+  /// 잘못 눌러 지우는 일이 많아 한 번 더 묻는다.
+  Future<void> _deleteSlides(List<int> slideIndexes) async {
+    var slides = _allSlides;
+    // 묻는 사이 페이지 번호가 바뀔 수 있어(원본 PPT 다시 굽기 등) 키로 들고 있다가 다시 찾는다.
+    final wanted = {
       for (final i in slideIndexes)
         if (i >= 0 &&
             i < slides.length &&
             slides[i].stagingUid != _leadingBlankUid)
-          i,
+          _slideInfoKey(slides[i]),
     };
+    if (wanted.isEmpty) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('페이지 삭제'),
+        content: Text(
+          wanted.length == 1
+              ? '이 페이지를 삭제할까요?'
+              : '고른 페이지 ${wanted.length}장을 삭제할까요?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            autofocus: true,
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('삭제'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    slides = _allSlides;
+    final targets = [
+      for (var i = 0; i < slides.length; i++)
+        if (wanted.contains(_slideInfoKey(slides[i]))) i,
+    ];
     if (targets.isEmpty) return;
     // 현재 페이지보다 앞이 지워진 만큼 당겨야 관객 화면이 엉뚱한 장으로 안 바뀐다.
     final shift = targets.where((i) => i < _currentSlideIndex).length;
+    final addedKeys = <String>{};
+    final addedSpacers = <int>{};
     setState(() {
       for (final i in targets) {
         if (slides[i].isAutoSpacer) {
-          _noSpacerUids.add(slides[i].stagingUid);
+          if (_noSpacerUids.add(slides[i].stagingUid)) {
+            addedSpacers.add(slides[i].stagingUid);
+          }
         } else {
-          _deletedSlideKeys.add(
-            _slideKey(slides[i].stagingUid, slides[i].pageIndexInItem),
-          );
+          final key = _slideKey(slides[i].stagingUid, slides[i].pageIndexInItem);
+          if (_deletedSlideKeys.add(key)) addedKeys.add(key);
         }
+      }
+      if (addedKeys.isNotEmpty || addedSpacers.isNotEmpty) {
+        _deleteUndo.add((keys: addedKeys, spacers: addedSpacers, seq: ++_undoSeq));
+        if (_deleteUndo.length > 30) _deleteUndo.removeAt(0);
       }
       _currentSlideIndex -= shift;
       _clampCurrentSlideIndex();
     });
     _sendCurrentSlide();
+    _showDeleteSnack(targets.length);
+  }
+
+  void _showDeleteSnack(int count) {
+    if (!mounted) return;
+    final shortcut = Platform.isMacOS ? '⌘Z' : 'Ctrl+Z';
+    final messenger = ScaffoldMessenger.of(context)..hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text('$count장 삭제함 · $shortcut 로 되돌릴 수 있습니다'),
+        action: SnackBarAction(label: '되돌리기', onPressed: _undoDeleteSlides),
+      ),
+    );
+  }
+
+  /// ⌘/Ctrl+Z: 끌어 옮기기·페이지 삭제 중 더 나중에 한 것을 되돌린다. 되돌릴 게 없으면 false.
+  bool _undoLastSlideEdit() {
+    final deleteSeq = _deleteUndo.isEmpty ? -1 : _deleteUndo.last.seq;
+    if (_moveUndo != null && _moveUndoSeq > deleteSeq) return _undoMoveSlides();
+    return _undoDeleteSlides();
+  }
+
+  /// 마지막으로 지운 페이지를 되살린다. 되돌릴 게 없으면 false.
+  bool _undoDeleteSlides() {
+    if (_deleteUndo.isEmpty || !mounted) return false;
+    final entry = _deleteUndo.removeLast();
+    final slides = _allSlides;
+    final current = _currentSlideIndex < slides.length
+        ? slides[_currentSlideIndex]
+        : null;
+    setState(() {
+      _deletedSlideKeys.removeAll(entry.keys);
+      _noSpacerUids.removeAll(entry.spacers);
+      // 관객 화면은 보던 페이지 그대로(되살린 페이지가 앞에 끼어도 넘어가지 않게).
+      if (current != null) {
+        final key = _slideInfoKey(current);
+        final found = _allSlides.indexWhere((s) => _slideInfoKey(s) == key);
+        if (found >= 0) _currentSlideIndex = found;
+        _clampCurrentSlideIndex();
+      }
+    });
+    _sendCurrentSlide();
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    _showSnack('삭제한 페이지를 되돌렸습니다');
+    return true;
   }
 
   static final _digitKeys = <LogicalKeyboardKey, String>{
@@ -3788,6 +3878,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     });
     _moveUndo = undo..after = _VoiceUndo.capture(this);
     _moveUndoSlideKey = undoSlideKey;
+    _moveUndoSeq = ++_undoSeq;
     // 번호는 옮긴 뒤 최종 슬라이드 기준이다.
     _flashInserted(movedUids, '으로 옮김', '옮김', Icons.open_with_rounded);
     _sendCurrentSlide();
@@ -5203,6 +5294,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         ..clear()
         ..addAll(items);
       _deletedSlideKeys.clear();
+      _deleteUndo.clear();
       _noSpacerUids
         ..clear()
         ..addAll(noSpacerUids);
@@ -5650,6 +5742,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         return isSong;
       });
       _deletedSlideKeys.clear();
+      _deleteUndo.clear();
       _clampCurrentSlideIndex();
     });
     await _loadSongs();
@@ -6062,6 +6155,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               onSlideEdit: _editSlide,
                               onSlideDelete: _deleteSlide,
                               onSlidesDelete: _deleteSlides,
+                              onUndoDelete: _undoLastSlideEdit,
                               onSlidesCopy: _copySlides,
                               onPaste: _pasteSlides,
                               onSlidesMove: _moveSlides,
@@ -12635,6 +12729,7 @@ class _PresenterConsole extends StatefulWidget {
     required this.onSlideEdit,
     required this.onSlideDelete,
     required this.onSlidesDelete,
+    required this.onUndoDelete,
     required this.onSlidesCopy,
     required this.onPaste,
     required this.onSlidesMove,
@@ -12692,6 +12787,8 @@ class _PresenterConsole extends StatefulWidget {
   final ValueChanged<int> onSlideEdit;
   final ValueChanged<int> onSlideDelete;
   final ValueChanged<List<int>> onSlidesDelete;
+  // ⌘/Ctrl+Z: 끌어 옮기기·삭제 중 마지막 것 되돌리기. 되돌릴 게 없으면 false.
+  final bool Function() onUndoDelete;
   final ValueChanged<List<int>> onSlidesCopy;
   // 이 페이지(null = 현재 페이지) 바로 뒤에 붙여 넣기
   // 붙여 넣을 게 없으면 false
@@ -12962,8 +13059,8 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
       return true;
     }
     if (withCmd && key == LogicalKeyboardKey.keyZ) {
-      // 방금 끌어 옮긴 페이지를 되돌린다.
-      return widget.onUndoMove?.call() ?? false;
+      // 옮기기·삭제 중 더 나중에 한 것을 되돌린다.
+      return widget.onUndoDelete();
     }
     if (withCmd && key == LogicalKeyboardKey.keyV) {
       // 고른 페이지가 있으면 그중 가장 뒤 페이지 뒤에, 없으면 현재 페이지 뒤에 넣는다.

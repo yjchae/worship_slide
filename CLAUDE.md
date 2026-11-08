@@ -151,7 +151,9 @@ lib/
 | macOS  | `macos/Runner/MainFlutterWindow.swift` (`PresentationWindowController`) | WKWebView + 생성한 HTML/CSS |
 | Windows| `windows/runner/presentation_channel.cpp` | GDI `DrawTextW` + GDI+ 이미지 |
 
-보조 모니터가 있으면 그 화면에 borderless 전체화면(`level = .screenSaver`)으로, 없으면 1280x720 창으로 띄운다.
+보조 모니터가 있으면 그 화면에 borderless 전체화면으로, 없으면 1280x720 창으로 띄운다.
+관객 창은 **항상 위가 아니다**(macOS `level = .normal`, Windows `WS_EX_TOPMOST` 없음) — 다른 프로그램 창을 관객 모니터에 띄워 그 위에 올릴 수 있게.
+대신 다른 프로그램이 앞에 있으면 그 모니터의 메뉴 막대(macOS, 디스플레이마다 별도 Spaces)·작업 표시줄(Windows, 모든 디스플레이에 표시)이 관객 창 위에 보일 수 있다.
 
 **모니터 선택**: 앱 바 '발표 시작' 옆 모니터 버튼 → 관객·싱어 창 각각 '자동 / 모니터 N'. 네이티브 `getScreens`
 (순서 = macOS `NSScreen.screens`, Windows `EnumDisplayMonitors`)가 목록을 주고, `openWindow`·`openSingerWindow` 가
@@ -820,6 +822,9 @@ ESC = 고르기 취소, ⌘/Ctrl+C·V = 복사·붙여 넣기(`_handleEditKey`).
 붙여 넣기·끌어 옮기기·음성 넣기로 들어간 페이지(자동 여백 제외)는 8초 동안 테두리+배지로 강조하고 그 자리로 스크롤, 머리줄에 'N~M번에 붙여 넣음'(`_flashInserted`·`_InsertFlash`). 편집 탭 콘티 목록은 같은 이름 항목에 `n/m` 을 붙인다(`sameTitleOrdinals`, 화면 계산·저장 안 함).
 여백 빼기는 지운 페이지 키가 아니라 항목 uid 집합(`_noSpacerUids`, 썸네일에서 자동 여백을 지워도 여기로 간다)이고, 콘티 저장(`worship_conti_items.no_spacer`, DB version 14)·PPTX 내보내기(`no_spacer`)에도 실린다.
 고른 게 없으면 Delete 는 아무것도 안 한다(띄운 페이지 보호).
+**삭제는 한 번 더 묻는다**(`_deleteSlides`, 썸네일 X 버튼·Delete 키 공통 — 잘못 눌러 지우는 일이 많았다). 묻는 사이 번호가 바뀌어도 되게 슬라이드 키로 들고 있다가 다시 찾는다.
+지운 뒤 ⌘/Ctrl+Z(`_handleEditKey` → `_undoLastSlideEdit` → `_undoDeleteSlides`) 또는 안내 줄의 '되돌리기'로 되살린다. ⌘/Ctrl+Z 는 끌어 옮기기·삭제 중 **더 나중에 한 것**을 되돌린다(`_undoSeq`). 되돌리기 기록(`_deleteUndo`, 최대 30번)은 그 삭제가 **새로 더한** 지운 표시·여백 없음 표시만 담아
+되돌릴 때 그것만 빼므로 그 사이 다른 편집은 그대로다. 관객 화면은 보던 페이지 키로 다시 찾는다. 콘티를 불러오거나 새로 만들면 기록을 비운다.
 **끌어 놓기로 페이지 옮기기** (`_moveSlides`, 썸네일 줄·모든 페이지 격자 공통 `_ThumbDragDrop`): 썸네일을 끌어 다른 썸네일의
 왼쪽 절반(앞)·오른쪽 절반(뒤)에 놓는다. 골라 담은 페이지를 끌면 고른 것 전부가 간다(곡 통째로 = Shift+클릭으로 고른 뒤 끌기).
 외부 PPT 중간에 찬양·말씀을 끼워 넣거나 PPT 안 순서를 바꾸는 용도다. **버리는 페이지는 없다** — PPT 중간에 놓으면 PPT 를 앞·뒤 두 항목으로
