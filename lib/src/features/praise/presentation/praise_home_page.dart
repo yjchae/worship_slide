@@ -328,6 +328,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   ({String currentKey, int lastUid})? _voiceChain;
   // 마지막 넣기 직전 콘티 상태. 되돌리기 때 곡을 나눈 것까지 되돌린다.
   _VoiceUndo? _voiceUndo;
+  // 마지막 끌어 옮기기 직전 콘티(되돌리기용). 옮기기 직후 상태(after)와 지금이 같을 때만 통째로 되돌린다.
+  _VoiceUndo? _moveUndo;
+  // 옮기기 직전 관객 화면이 보던 페이지 키. 되돌린 뒤 돌아갈 곳.
+  String? _moveUndoSlideKey;
   // 발표 보기에서 방금 붙여 넣거나 옮기거나 음성으로 넣은 페이지(8초 강조). seq 가 바뀌면 그 자리로 스크롤한다.
   _InsertFlash? _insertFlash;
   Timer? _insertFlashTimer;
@@ -2471,7 +2475,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   // 발표 보기에서 지운 페이지 되돌리기(⌘/Ctrl+Z). 지울 때 새로 더한 표시만 적어 두고 되돌릴 때 그것만 뺀다 —
   // 그 사이 다른 걸 고쳤어도(붙여 넣기·메모 등) 그대로 두고 지운 페이지만 다시 보인다.
-  final List<({Set<String> keys, Set<int> spacers})> _deleteUndo = [];
+  final List<({Set<String> keys, Set<int> spacers, int seq})> _deleteUndo = [];
+  // ⌘/Ctrl+Z 가 옮기기·삭제 중 나중에 한 것을 되돌리도록 순서를 센다.
+  int _undoSeq = 0;
+  int _moveUndoSeq = 0;
 
   /// 발표 보기에서 여러 장을 골라 Delete 로 지울 때도 같은 길을 탄다.
   /// 잘못 눌러 지우는 일이 많아 한 번 더 묻는다.
@@ -2531,7 +2538,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         }
       }
       if (addedKeys.isNotEmpty || addedSpacers.isNotEmpty) {
-        _deleteUndo.add((keys: addedKeys, spacers: addedSpacers));
+        _deleteUndo.add((keys: addedKeys, spacers: addedSpacers, seq: ++_undoSeq));
         if (_deleteUndo.length > 30) _deleteUndo.removeAt(0);
       }
       _currentSlideIndex -= shift;
@@ -2551,6 +2558,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         action: SnackBarAction(label: '되돌리기', onPressed: _undoDeleteSlides),
       ),
     );
+  }
+
+  /// ⌘/Ctrl+Z: 끌어 옮기기·페이지 삭제 중 더 나중에 한 것을 되돌린다. 되돌릴 게 없으면 false.
+  bool _undoLastSlideEdit() {
+    final deleteSeq = _deleteUndo.isEmpty ? -1 : _deleteUndo.last.seq;
+    if (_moveUndo != null && _moveUndoSeq > deleteSeq) return _undoMoveSlides();
+    return _undoDeleteSlides();
   }
 
   /// 마지막으로 지운 페이지를 되살린다. 되돌릴 게 없으면 false.
@@ -3776,6 +3790,15 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     for (final s in picked) {
       (movedPages[s.stagingUid] ??= {}).add(s.pageIndexInItem);
     }
+    // 노트는 위에서 이미 뺐으므로 되돌리기용 노트는 뺀 것을 다시 넣어 둔다.
+    final undo = _VoiceUndo.capture(this);
+    for (final s in picked) {
+      final note = notes[keyOf(s)];
+      if (note != null) {
+        undo.notes[_slideKey(s.stagingUid, s.pageIndexInItem)] = note;
+      }
+    }
+    final undoSlideKey = keyOf(current);
 
     setState(() {
       // 단계마다 바뀐 슬라이드 키. 옮긴 페이지는 [placed], 나머지는 단계를 차례로 따라간다.
@@ -3853,9 +3876,55 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         _previewStagingUid = result[_currentSlideIndex].stagingUid;
       }
     });
+    _moveUndo = undo..after = _VoiceUndo.capture(this);
+    _moveUndoSlideKey = undoSlideKey;
+    _moveUndoSeq = ++_undoSeq;
     // 번호는 옮긴 뒤 최종 슬라이드 기준이다.
     _flashInserted(movedUids, '으로 옮김', '옮김', Icons.open_with_rounded);
     _sendCurrentSlide();
+  }
+
+  /// 마지막 끌어 옮기기를 되돌린다(⌘/Ctrl+Z, 머리줄 '되돌리기'). 옮긴 뒤 콘티를 다른 식으로 고쳤으면
+  /// 그 고친 것을 지우지 않게 되돌리지 않고 알린다. 관객 화면은 보던 페이지를 지킨다.
+  bool _undoMoveSlides() {
+    final undo = _moveUndo;
+    if (undo == null) return false;
+    _moveUndo = null;
+    final slides = _allSlides;
+    final nowKey = slides.isEmpty
+        ? null
+        : _slideInfoKey(slides[_currentSlideIndex.clamp(0, slides.length - 1)]);
+    var restored = false;
+    setState(() {
+      restored = undo.restore(this);
+      if (!restored) return;
+      final result = _allSlides;
+      var found = result.indexWhere((s) => _slideInfoKey(s) == nowKey);
+      if (found < 0) {
+        found = result.indexWhere((s) => _slideInfoKey(s) == _moveUndoSlideKey);
+      }
+      if (found >= 0) _currentSlideIndex = found;
+      _clampCurrentSlideIndex();
+      if (_currentSlideIndex < result.length) {
+        _previewStagingUid = result[_currentSlideIndex].stagingUid;
+      }
+    });
+    _moveUndoSlideKey = null;
+    _clearInsertFlash();
+    if (!restored) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('옮긴 뒤 콘티가 바뀌어 되돌릴 수 없습니다.')));
+      return true;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('페이지 옮기기를 되돌렸습니다.'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+    _sendCurrentSlide();
+    return true;
   }
 
   /// 방금 넣은 항목 [uids] 의 페이지(자동 여백 제외)를 8초 강조하고 머리줄에 'N~M번[verb]' 를 띄운다.
@@ -5218,6 +5287,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     // 불러온 콘티의 원본은 '원본 열어 수정' 을 누르기 전까지 지켜보지 않는다.
     _sourceWatcher.unwatchAll();
     _clearInsertFlash();
+    _moveUndo = null;
+    _moveUndoSlideKey = null;
     setState(() {
       _stagingItems
         ..clear()
@@ -6084,10 +6155,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               onSlideEdit: _editSlide,
                               onSlideDelete: _deleteSlide,
                               onSlidesDelete: _deleteSlides,
-                              onUndoDelete: _undoDeleteSlides,
+                              onUndoDelete: _undoLastSlideEdit,
                               onSlidesCopy: _copySlides,
                               onPaste: _pasteSlides,
                               onSlidesMove: _moveSlides,
+                              onUndoMove: _moveUndo == null
+                                  ? null
+                                  : _undoMoveSlides,
                               onAddPage: (kind) => _addPage(
                                 kind,
                                 _indexAfterCurrentSlide,
@@ -12659,6 +12733,7 @@ class _PresenterConsole extends StatefulWidget {
     required this.onSlidesCopy,
     required this.onPaste,
     required this.onSlidesMove,
+    this.onUndoMove,
     required this.onAddPage,
     required this.onToggleMedia,
     required this.mediaPlayback,
@@ -12712,7 +12787,7 @@ class _PresenterConsole extends StatefulWidget {
   final ValueChanged<int> onSlideEdit;
   final ValueChanged<int> onSlideDelete;
   final ValueChanged<List<int>> onSlidesDelete;
-  // ⌘/Ctrl+Z: 마지막으로 지운 페이지 되살리기. 되돌릴 게 없으면 false.
+  // ⌘/Ctrl+Z: 끌어 옮기기·삭제 중 마지막 것 되돌리기. 되돌릴 게 없으면 false.
   final bool Function() onUndoDelete;
   final ValueChanged<List<int>> onSlidesCopy;
   // 이 페이지(null = 현재 페이지) 바로 뒤에 붙여 넣기
@@ -12720,6 +12795,8 @@ class _PresenterConsole extends StatefulWidget {
   final bool Function(int? afterIndex) onPaste;
   // 썸네일 끌어 놓기: (옮길 페이지들, 이 페이지 바로 뒤로)
   final void Function(List<int> slideIndexes, int afterIndex) onSlidesMove;
+  // 방금 끌어 옮긴 페이지 되돌리기(⌘/Ctrl+Z·머리줄 버튼). null = 되돌릴 것 없음. 되돌렸으면 true.
+  final bool Function()? onUndoMove;
   final ValueChanged<_AddPageKind> onAddPage;
   final VoidCallback onToggleMedia;
   final ValueListenable<MediaPlayback?> mediaPlayback;
@@ -12872,6 +12949,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
     _gridScrollController.dispose();
     HardwareKeyboard.instance.removeHandler(_handleFindKey);
     HardwareKeyboard.instance.removeHandler(_handleEditKey);
+    _unwatchDrag();
     _searchController.dispose();
     _searchFocus.dispose();
     super.dispose();
@@ -12948,6 +13026,12 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
   /// ⌘/Ctrl+V = 붙여 넣기, Delete/Backspace = 고른 페이지 삭제, ESC = 고르기 취소.
   /// 고른 게 없으면 Delete 는 아무것도 안 한다 — 지금 띄운 페이지가 실수로 지워지면 안 된다.
   bool _handleEditKey(KeyEvent event) {
+    // 끌기 중 ESC = 끌기 취소. 포커스·탭과 상관없이 받는다(끌기가 멈춰 아무 것도 안 될 때의 탈출구).
+    if (event is KeyDownEvent &&
+        event.logicalKey == LogicalKeyboardKey.escape &&
+        (_isDragging || _dragPointer != null)) {
+      return cancelDrag();
+    }
     if (event is! KeyDownEvent ||
         widget.slides.isEmpty ||
         !widget.isActive ||
@@ -12975,6 +13059,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
       return true;
     }
     if (withCmd && key == LogicalKeyboardKey.keyZ) {
+      // 옮기기·삭제 중 더 나중에 한 것을 되돌린다.
       return widget.onUndoDelete();
     }
     if (withCmd && key == LogicalKeyboardKey.keyV) {
@@ -13012,7 +13097,75 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
   }
 
   void _endDrag() {
+    _unwatchDrag();
     if (_isDragging) setState(() => _isDragging = false);
+  }
+
+  // 끄고 있는 포인터와 마지막 위치. 끌기가 멈췄을 때(손 뗌을 놓침) 취소 신호를 보내는 데 쓴다.
+  PointerDownEvent? _dragPointer;
+  Offset? _dragPosition;
+  bool _dragWatching = false;
+  bool _dragEndSeen = false;
+
+  /// 끄는 동안 모든 포인터 이벤트를 본다. 손을 뗀 신호를 OS·창 전환 등으로 놓치면 Draggable 은
+  /// 영영 끝나지 않고(그림이 마우스를 계속 따라다님) 놓기도 안 된다. 그때 다음 신호로 알아채 취소한다:
+  /// 버튼 없이 움직임(hover) = 이미 손을 뗐다, 다른 포인터 누름 = 새로 클릭했다.
+  void _watchDrag(PointerDownEvent? pointer) {
+    _dragPointer = pointer;
+    _dragPosition = pointer?.position;
+    if (_dragWatching) return;
+    _dragWatching = true;
+    GestureBinding.instance.pointerRouter.addGlobalRoute(_onDragPointerEvent);
+  }
+
+  void _unwatchDrag() {
+    _dragPointer = null;
+    _dragPosition = null;
+    if (!_dragWatching) return;
+    _dragWatching = false;
+    GestureBinding.instance.pointerRouter.removeGlobalRoute(
+      _onDragPointerEvent,
+    );
+  }
+
+  void _onDragPointerEvent(PointerEvent event) {
+    final p = _dragPointer;
+    if (p == null) return;
+    if (event.pointer == p.pointer) {
+      _dragPosition = event.position;
+      return;
+    }
+    final released =
+        (event is PointerHoverEvent && event.device == p.device) ||
+        event is PointerDownEvent;
+    if (!released) return;
+    // 라우터가 이벤트를 돌리는 도중이라 바로 새 이벤트를 넣지 않고 다음 차례에 한다.
+    scheduleMicrotask(cancelDrag);
+  }
+
+  /// 끌고 있는 페이지를 놓지 않고 취소한다(ESC·멈춘 끌기). 끌고 있지 않으면 false.
+  bool cancelDrag() {
+    final p = _dragPointer;
+    if (!_isDragging && p == null) return false;
+    _unwatchDrag();
+    if (p != null) {
+      // Draggable 에 손 뗌 대신 '취소'를 보낸다 — 놓기 없이 끌기 그림이 사라진다.
+      final cancel = PointerCancelEvent(
+        viewId: p.viewId,
+        timeStamp: p.timeStamp,
+        pointer: p.pointer,
+        kind: p.kind,
+        device: p.device,
+        position: _dragPosition ?? p.position,
+      );
+      _dragEndSeen = false;
+      GestureBinding.instance.handlePointerEvent(cancel);
+      // 바인딩이 이 포인터를 이미 잊었으면(누른 자리 기록이 없음) 위 이벤트는 아무 데도 안 간다.
+      // 끌기 인식기에 직접 보낸다.
+      if (!_dragEndSeen) GestureBinding.instance.pointerRouter.route(cancel);
+    }
+    if (mounted && _isDragging) setState(() => _isDragging = false);
+    return true;
   }
 
   /// 썸네일 [i] 를 끌면 옮길 페이지들. 골라 담은 페이지를 끌면 고른 것 전부, 아니면 그 한 장.
@@ -13037,11 +13190,15 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
       feedbackBuilder: (_) => _dragFeedback(i, cs, thumbW),
       // 맨 앞 빈 페이지 앞에는 넣을 수 없다.
       allowBefore: i > 0,
-      onDragStateChanged: (dragging) {
+      onDragStateChanged: (dragging, pointer) {
         if (dragging) {
           _dragKeys = [
             for (final j in _dragSourcesFor(i)) _dragKey(widget.slides[j]),
           ];
+          _watchDrag(pointer);
+        } else {
+          _dragEndSeen = true;
+          _unwatchDrag();
         }
         if (_isDragging != dragging) setState(() => _isDragging = dragging);
       },
@@ -13594,6 +13751,24 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
               ),
             ),
           ),
+          if (flash.badge == '옮김' && widget.onUndoMove != null) ...[
+            const SizedBox(width: 4),
+            Tooltip(
+              message: Platform.isMacOS ? '되돌리기 (⌘Z)' : '되돌리기 (Ctrl+Z)',
+              child: TextButton.icon(
+                onPressed: () => widget.onUndoMove?.call(),
+                icon: const Icon(Icons.undo_rounded, size: 16),
+                label: const Text('되돌리기'),
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  textStyle: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ],
         if (_view.showAllPages) ...[
           const SizedBox(width: 16),
@@ -14496,7 +14671,9 @@ class _ThumbDragDrop extends StatefulWidget {
   final bool canDrag;
   final WidgetBuilder feedbackBuilder;
   final bool allowBefore;
-  final ValueChanged<bool> onDragStateChanged;
+  // 끌기 시작·끝. 시작일 때는 끄는 포인터(누른 순간)도 넘긴다 — 손 뗌을 놓쳐 끌기가 멈췄을 때 취소하려고.
+  final void Function(bool dragging, PointerDownEvent? pointer)
+  onDragStateChanged;
   final void Function(bool after) onDrop;
   final Widget child;
 
@@ -14507,6 +14684,8 @@ class _ThumbDragDrop extends StatefulWidget {
 class _ThumbDragDropState extends State<_ThumbDragDrop> {
   // 끌고 있는 것이 이 썸네일 위에 있을 때 놓을 자리. null = 위에 없음.
   bool? _after;
+  // 마지막으로 이 썸네일을 누른 포인터. 끌기가 시작되면 부모에 넘긴다.
+  PointerDownEvent? _down;
 
   bool _afterFor(Offset global) {
     if (!widget.allowBefore) return true;
@@ -14557,7 +14736,7 @@ class _ThumbDragDropState extends State<_ThumbDragDrop> {
       },
     );
     if (!widget.canDrag) return target;
-    return Draggable<_ThumbDrag>(
+    final draggable = Draggable<_ThumbDrag>(
       data: const _ThumbDrag(),
       dragAnchorStrategy: pointerDragAnchorStrategy,
       feedback: Transform.translate(
@@ -14565,12 +14744,13 @@ class _ThumbDragDropState extends State<_ThumbDragDrop> {
         child: Builder(builder: widget.feedbackBuilder),
       ),
       childWhenDragging: Opacity(opacity: 0.4, child: target),
-      onDragStarted: () => widget.onDragStateChanged(true),
+      onDragStarted: () => widget.onDragStateChanged(true, _down),
       // 끄는 동안 자동 스크롤로 이 썸네일이 목록에서 빠지면 불리지 않는다 —
       // 그래서 목록의 _EdgeAutoScroll 이 손을 뗄 때도 끈다.
-      onDragEnd: (_) => widget.onDragStateChanged(false),
+      onDragEnd: (_) => widget.onDragStateChanged(false, null),
       child: target,
     );
+    return Listener(onPointerDown: (e) => _down = e, child: draggable);
   }
 }
 
