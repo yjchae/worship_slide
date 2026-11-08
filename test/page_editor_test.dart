@@ -357,6 +357,7 @@ void main() {
     await tester.tap(find.text('열기'));
     await tester.pumpAndSettle();
 
+    expect(find.text('틀 편집'), findsOneWidget);
     expect(find.widgetWithText(TextField, '틀 이름'), findsOneWidget);
     expect(find.text('틀 배경'), findsNothing);
     await tester.tap(find.text('확인'));
@@ -365,5 +366,52 @@ void main() {
     expect(composed, hasLength(1));
     expect(result?.elements, elements);
     expect(result?.name, '생일자');
+  });
+
+  testWidgets('틀로 새로 넣기: 새 페이지 제목, 첫 빈 글 상자가 골라져 바로 입력', (tester) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    List<PageElement>? composed;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PageEditorDialog(
+          name: '주일 광고',
+          elements: [
+            PageTextElement(
+              id: 'a',
+              rect: const Rect.fromLTWH(0.1, 0.1, 0.5, 0.2),
+              text: '주일 광고',
+            ),
+            PageTextElement(
+              id: 'b',
+              rect: const Rect.fromLTWH(0.1, 0.4, 0.5, 0.2),
+            ),
+          ],
+          style: _style,
+          compose: (e, _) async {
+            composed = e;
+            return '/tmp/render.png';
+          },
+          readClipboardImage: () async => null,
+          isNew: true,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('슬라이드 편집 페이지'), findsOneWidget);
+    expect(find.text('슬라이드 편집 페이지 수정'), findsNothing);
+    final field = find.widgetWithText(TextField, '글');
+    expect(field, findsOneWidget);
+    expect(tester.widget<TextField>(field).focusNode?.hasFocus, isTrue);
+    await tester.enterText(field, '수요 예배 안내');
+    await tester.tap(find.text('확인'));
+    await tester.pumpAndSettle();
+
+    expect(
+      composed!.whereType<PageTextElement>().map((e) => (e.id, e.text)),
+      [('a', '주일 광고'), ('b', '수요 예배 안내')],
+    );
   });
 }

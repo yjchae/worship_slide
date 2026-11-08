@@ -34,8 +34,9 @@ SlideBackground usableTemplateDesign(SlideBackground design) =>
     ? design.copyWith(imagePath: null)
     : design;
 
-/// [target] 에 틀 배경(색·그림)만 입힌다. 요소([SlideBackground.pageElements])는 그대로.
-/// 헌금송·영상·설교 등 다른 값은 [target] 에서 떨어져 나간다(일반 배경이 된다).
+/// [target] 에 틀 배경(색·그림)만 입힌다. 요소([SlideBackground.pageElements])와
+/// 배경 영상([SlideBackground.videoPath]·[SlideBackground.videoDim])은 그대로.
+/// 헌금송·설교·가사 위치 등 다른 값은 [target] 에서 떨어져 나간다(일반 배경이 된다).
 SlideBackground applyTemplateBackground(
   SlideBackground? target,
   PageTemplate template,
@@ -44,6 +45,8 @@ SlideBackground applyTemplateBackground(
   return SlideBackground(
     color: d.color,
     imagePath: d.imagePath,
+    videoPath: target?.videoPath,
+    videoDim: target?.videoDim ?? SlideBackground.defaultVideoDim,
     pageElements: target?.pageElements,
   );
 }
@@ -139,12 +142,22 @@ class PageTemplateStore {
   final Directory? dir;
 
   /// 파일이 없으면 기본 3개를 만들어 저장한다. 깨졌으면 기본 3개를 돌려주되
-  /// 파일은 덮어쓰지 않는다([broken] = true, 관리 창이 알린다). 처음 [save] 때 덮어쓴다.
+  /// 파일은 덮어쓰지 않는다([broken] = true, 관리 창이 알린다). 처음 [save] 때
+  /// 깨진 파일을 `.broken.bak` 으로 남기고 덮어쓴다. 폴더를 못 열면 기본 3개(저장 안 함).
+  /// 어떤 경우에도 던지지 않는다.
   Future<({List<PageTemplate> templates, bool broken})> load(
     ExportStyle style,
   ) async {
-    final file = await _file();
-    if (!await file.exists()) {
+    final File file;
+    final bool exists;
+    try {
+      file = await _file();
+      exists = await file.exists();
+    } catch (e, st) {
+      AppLogger.instance.error('[template] 틀 폴더를 열지 못해 기본 틀로 시작', e, st);
+      return (templates: defaultPageTemplates(style), broken: false);
+    }
+    if (!exists) {
       final defaults = defaultPageTemplates(style);
       try {
         await save(defaults);
@@ -154,21 +167,38 @@ class PageTemplateStore {
       return (templates: defaults, broken: false);
     }
     try {
-      final json = jsonDecode(await file.readAsString());
-      if (json is! Map || json['templates'] is! List) {
-        throw const FormatException('templates 목록 없음');
-      }
-      return (templates: pageTemplatesFromJson(json), broken: false);
+      return (
+        templates: pageTemplatesFromJson(_decode(await file.readAsString())),
+        broken: false,
+      );
     } catch (e, st) {
       AppLogger.instance.error('[template] 틀 파일을 읽지 못해 기본 틀로 시작', e, st);
       return (templates: defaultPageTemplates(style), broken: true);
     }
   }
 
-  Future<void> save(List<PageTemplate> templates) async => atomicWriteString(
-    await _file(),
-    jsonEncode(pageTemplatesToJson(templates)),
-  );
+  /// 쓰기 전에 지금 파일이 깨졌으면 `page_templates.json.broken.bak` 으로 남긴다
+  /// (이미 있으면 그대로 — 처음 깨진 것을 지킨다). 백업을 못 하면 쓰지 않고 던진다.
+  Future<void> save(List<PageTemplate> templates) async {
+    final file = await _file();
+    if (await file.exists()) {
+      try {
+        _decode(await file.readAsString());
+      } catch (_) {
+        final bak = File('${file.path}.broken.bak');
+        if (!await bak.exists()) await file.copy(bak.path);
+      }
+    }
+    await atomicWriteString(file, jsonEncode(pageTemplatesToJson(templates)));
+  }
+
+  static Object _decode(String text) {
+    final json = jsonDecode(text);
+    if (json is! Map || json['templates'] is! List) {
+      throw const FormatException('templates 목록 없음');
+    }
+    return json;
+  }
 
   Future<File> _file() async {
     final base = dir ?? await getApplicationSupportDirectory();

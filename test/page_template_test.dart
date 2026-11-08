@@ -150,4 +150,55 @@ void main() {
     expect(r.templates.map((t) => t.name), ['주일 광고', '생일자']);
     expect(r.templates[0].design, list[0].design);
   });
+
+  test('배경만 입힐 때 대상의 배경 영상은 남긴다', () {
+    final t = (
+      id: 'a',
+      name: 't',
+      design: const SlideBackground(color: Colors.red),
+      previewPath: null,
+    );
+    final applied = applyTemplateBackground(
+      const SlideBackground(
+        color: Colors.blue,
+        videoPath: '/v.mp4',
+        videoDim: 0.6,
+        isSermon: true,
+      ),
+      t,
+    );
+    expect(applied.color, Colors.red);
+    expect(applied.videoPath, '/v.mp4');
+    expect(applied.videoDim, 0.6);
+    expect(applied.isSermon, isFalse);
+    expect(
+      applyTemplateBackground(null, t).videoDim,
+      SlideBackground.defaultVideoDim,
+    );
+  });
+
+  test('load: 폴더를 못 열어도 던지지 않고 기본 3개', () async {
+    // dir 없음 = Application Support → 테스트에선 path_provider 플러그인이 없어 던진다.
+    final r = await PageTemplateStore().load(style);
+    expect(r.broken, isFalse);
+    expect(r.templates, hasLength(3));
+  });
+
+  test('save: 깨진 파일은 .broken.bak 으로 남기고 쓴다(이미 있으면 그대로)', () async {
+    final file = File('${dir.path}/page_templates.json')
+      ..writeAsStringSync('{깨짐');
+    final bak = File('${file.path}.broken.bak');
+    final store = PageTemplateStore(dir: dir);
+    await store.save(defaultPageTemplates(style));
+    expect(bak.readAsStringSync(), '{깨짐');
+    expect((await store.load(style)).templates, hasLength(3));
+
+    file.writeAsStringSync('또 깨짐');
+    await store.save(defaultPageTemplates(style));
+    expect(bak.readAsStringSync(), '{깨짐');
+
+    bak.deleteSync();
+    await store.save(defaultPageTemplates(style)); // 멀쩡한 파일은 백업 안 함
+    expect(bak.existsSync(), isFalse);
+  });
 }

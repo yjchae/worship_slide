@@ -222,6 +222,7 @@ class PageEditorDialog extends StatefulWidget {
     required this.readClipboardImage,
     this.templates = const [],
     this.templateMode = false,
+    this.isNew = false,
   });
 
   /// 지금 페이지 이름(항목 `sourceName`). 자동 이름과 같으면 이름 칸을 비워 둔다.
@@ -249,6 +250,9 @@ class PageEditorDialog extends StatefulWidget {
   /// (광고 내용·생일자 이름 자리 — 구운 썸네일에는 안 나온다).
   final bool templateMode;
 
+  /// [elements] 가 있어도 새 페이지로 연다(틀로 새로 넣기): 새 페이지 제목, 첫 빈 글 상자를 골라 둔다.
+  final bool isNew;
+
   @override
   State<PageEditorDialog> createState() => _PageEditorDialogState();
 }
@@ -267,7 +271,7 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
     (Color(0xFFFFF176), '노랑'),
   ];
 
-  late final bool _isNew = widget.elements == null;
+  late final bool _isNew = widget.isNew || widget.elements == null;
   late final List<PageElement> _initialElements =
       widget.elements ??
       [
@@ -326,8 +330,14 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
     });
     _loadImages();
     _loadBackgroundImage();
-    if (_isNew) {
-      _selectedId = _initialElements.first.id;
+    final first =
+        _initialElements
+            .whereType<PageTextElement>()
+            .where((e) => e.text.trim().isEmpty)
+            .firstOrNull ??
+        _initialElements.firstOrNull;
+    if (_isNew && first != null) {
+      _selectedId = first.id;
       _syncFields();
       WidgetsBinding.instance.addPostFrameCallback((_) => _focusText());
     }
@@ -830,7 +840,11 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
                   child: Text(
-                    _isNew ? '슬라이드 편집 페이지' : '슬라이드 편집 페이지 수정',
+                    widget.templateMode
+                        ? '틀 편집'
+                        : _isNew
+                        ? '슬라이드 편집 페이지'
+                        : '슬라이드 편집 페이지 수정',
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                 ),

@@ -503,7 +503,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _sync.load().then((_) => _checkServerOnStartup());
     // 기본 틀 배경 = 전역 배경이라 스타일을 읽은 뒤에.
     _loadSavedStyle().whenComplete(() async {
-      final loaded = await _templateStore.load(_style);
+      ({List<PageTemplate> templates, bool broken}) loaded;
+      try {
+        loaded = await _templateStore.load(_style);
+      } catch (e, st) {
+        await AppLogger.instance.error('[template] 틀 읽기 실패', e, st);
+        loaded = (templates: defaultPageTemplates(_style), broken: true);
+      }
       if (!mounted) return;
       setState(() {
         _pageTemplates = loaded.templates;
@@ -3044,6 +3050,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     String name = '',
     required SlideBackground background,
     bool templateMode = false,
+    bool isNew = false,
   }) {
     return showDialog<PageEditorResult>(
       context: context,
@@ -3058,6 +3065,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         readClipboardImage: _pythonBridge.clipboardImage,
         templates: _pageTemplates,
         templateMode: templateMode,
+        isNew: isNew,
       ),
     );
   }
@@ -3073,6 +3081,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     final result = await _showPageEditor(
       name: template?.name ?? '',
       background: background,
+      isNew: true,
     );
     if (result == null || !mounted) return;
     final uid = _nextUid++;
