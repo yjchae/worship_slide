@@ -138,8 +138,9 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate, WKNavi
     fullScreenDisplay = screen?.displayID
     if let screen = screen {
       // 보조 모니터: 전체화면
+      // 레벨은 .normal — 항상 맨 위(.screenSaver)로 두면 다른 프로그램 창을 관객 모니터에 띄워도 그 아래에 깔렸다.
       window.styleMask = [.borderless]
-      window.level = .screenSaver
+      window.level = .normal
       window.setFrame(screen.frame, display: true)
     } else {
       // 기본 모니터만 있을 때: 1280x720 중앙 창

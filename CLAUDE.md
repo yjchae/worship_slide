@@ -151,7 +151,9 @@ lib/
 | macOS  | `macos/Runner/MainFlutterWindow.swift` (`PresentationWindowController`) | WKWebView + 생성한 HTML/CSS |
 | Windows| `windows/runner/presentation_channel.cpp` | GDI `DrawTextW` + GDI+ 이미지 |
 
-보조 모니터가 있으면 그 화면에 borderless 전체화면(`level = .screenSaver`)으로, 없으면 1280x720 창으로 띄운다.
+보조 모니터가 있으면 그 화면에 borderless 전체화면으로, 없으면 1280x720 창으로 띄운다.
+관객 창은 **항상 위가 아니다**(macOS `level = .normal`, Windows `WS_EX_TOPMOST` 없음) — 다른 프로그램 창을 관객 모니터에 띄워 그 위에 올릴 수 있게.
+대신 다른 프로그램이 앞에 있으면 그 모니터의 메뉴 막대(macOS, 디스플레이마다 별도 Spaces)·작업 표시줄(Windows, 모든 디스플레이에 표시)이 관객 창 위에 보일 수 있다.
 
 **모니터 선택**: 앱 바 '발표 시작' 옆 모니터 버튼 → 관객·싱어 창 각각 '자동 / 모니터 N'. 네이티브 `getScreens`
 (순서 = macOS `NSScreen.screens`, Windows `EnumDisplayMonitors`)가 목록을 주고, `openWindow`·`openSingerWindow` 가
