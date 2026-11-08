@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:worship_slides/src/features/praise/data/page_template_store.dart';
 import 'package:worship_slides/src/features/praise/domain/export_style.dart';
 import 'package:worship_slides/src/features/praise/domain/page_element.dart';
+import 'package:worship_slides/src/features/praise/domain/slide_background.dart';
 import 'package:worship_slides/src/features/praise/presentation/page_editor_dialog.dart';
 
 const _style = ExportStyle(
@@ -237,5 +239,131 @@ void main() {
 
     expect(find.textContaining('클립보드 그림을 읽지 못했습니다'), findsNothing);
     expect(find.widgetWithText(TextField, '알림'), findsOneWidget);
+  });
+
+  testWidgets('틀 배경 칩: 누르면 배경 색만 바뀌고 글 상자는 그대로', (tester) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    const red = Color(0xFFCC2200);
+    final PageTemplate template = (
+      id: 't1',
+      name: '주일 광고',
+      design: const SlideBackground(color: red, pageElements: []),
+      previewPath: null,
+    );
+    final box = PageTextElement(
+      id: 'a',
+      rect: const Rect.fromLTWH(0.1, 0.1, 0.5, 0.2),
+      text: '광고',
+    );
+    PageEditorResult? result;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () async {
+              result = await showDialog<PageEditorResult>(
+                context: context,
+                builder: (_) => PageEditorDialog(
+                  elements: [box],
+                  background: const SlideBackground(color: Colors.black),
+                  style: _style,
+                  compose: (_, _) async => '/tmp/render.png',
+                  readClipboardImage: () async => null,
+                  templates: [template],
+                ),
+              );
+            },
+            child: const Text('열기'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('열기'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('틀 배경'), findsOneWidget);
+    expect(find.byIcon(Icons.check), findsNothing);
+    await tester.tap(find.widgetWithText(ActionChip, '주일 광고'));
+    await tester.pump();
+    expect(find.byIcon(Icons.check), findsOneWidget);
+    await tester.tap(find.text('확인'));
+    await tester.pumpAndSettle();
+
+    expect(result?.background.color, red);
+    expect(result?.elements, [box]);
+  });
+
+  testWidgets('틀이 없으면 틀 배경 줄이 없다', (tester) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PageEditorDialog(
+          elements: const [],
+          style: _style,
+          compose: (_, _) async => '/tmp/render.png',
+          readClipboardImage: () async => null,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('페이지 배경'), findsOneWidget);
+    expect(find.text('틀 배경'), findsNothing);
+  });
+
+  testWidgets('틀 편집: 이름 칸은 틀 이름, 칩 없음, 빈 글 상자도 남긴다', (tester) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final elements = [
+      PageTextElement(
+        id: 'a',
+        rect: const Rect.fromLTWH(0.1, 0.1, 0.5, 0.2),
+        text: '생일을 축하합니다',
+      ),
+      PageTextElement(id: 'b', rect: const Rect.fromLTWH(0.1, 0.4, 0.5, 0.2)),
+    ];
+    List<PageElement>? composed;
+    PageEditorResult? result;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () async {
+              result = await showDialog<PageEditorResult>(
+                context: context,
+                builder: (_) => PageEditorDialog(
+                  name: '생일자',
+                  elements: elements,
+                  style: _style,
+                  compose: (e, _) async {
+                    composed = e;
+                    return '/tmp/render.png';
+                  },
+                  readClipboardImage: () async => null,
+                  templates: defaultPageTemplates(_style),
+                  templateMode: true,
+                ),
+              );
+            },
+            child: const Text('열기'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('열기'));
+    await tester.pumpAndSettle();
+
+    expect(find.widgetWithText(TextField, '틀 이름'), findsOneWidget);
+    expect(find.text('틀 배경'), findsNothing);
+    await tester.tap(find.text('확인'));
+    await tester.pumpAndSettle();
+
+    expect(composed, hasLength(1));
+    expect(result?.elements, elements);
+    expect(result?.name, '생일자');
   });
 }

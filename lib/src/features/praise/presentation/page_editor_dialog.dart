@@ -11,11 +11,13 @@ import 'package:path/path.dart' as p;
 
 import '../data/app_logger.dart';
 import '../data/background_image_library.dart';
+import '../data/page_template_store.dart';
 import '../domain/export_style.dart';
 import '../domain/page_element.dart';
 import '../domain/slide_background.dart';
 import 'background_image_gallery.dart';
 import 'page_canvas.dart';
+import 'page_template_dialog.dart';
 import 'style_fields.dart';
 
 /// 편집 창 결과: 페이지 이름(빈칸이면 자동 이름) + 요소 + 구운 PNG + 페이지 배경.
@@ -218,6 +220,8 @@ class PageEditorDialog extends StatefulWidget {
     required this.style,
     required this.compose,
     required this.readClipboardImage,
+    this.templates = const [],
+    this.templateMode = false,
   });
 
   /// 지금 페이지 이름(항목 `sourceName`). 자동 이름과 같으면 이름 칸을 비워 둔다.
@@ -237,6 +241,13 @@ class PageEditorDialog extends StatefulWidget {
 
   /// 클립보드 그림 경로(없으면 null). `PythonBridge.clipboardImage`.
   final Future<String?> Function() readClipboardImage;
+
+  /// '페이지 배경' 패널의 '틀 배경' 칩(색·그림만 가져온다). 비면 줄째 숨긴다.
+  final List<PageTemplate> templates;
+
+  /// 페이지 틀을 고친다: 이름 칸이 '틀 이름', 틀 칩 없음, 빈 글 상자도 결과에 남긴다
+  /// (광고 내용·생일자 이름 자리 — 구운 썸네일에는 안 나온다).
+  final bool templateMode;
 
   @override
   State<PageEditorDialog> createState() => _PageEditorDialogState();
@@ -779,7 +790,7 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
         name: _nameController.text.trim().isEmpty
             ? pageAutoName(elements)
             : _nameController.text.trim(),
-        elements: elements,
+        elements: widget.templateMode ? _elements : elements,
         imagePath: path,
         background: _background,
       ));
@@ -1296,9 +1307,11 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
             TextField(
               controller: _nameController,
               decoration: InputDecoration(
-                labelText: '페이지 이름',
+                labelText: widget.templateMode ? '틀 이름' : '페이지 이름',
                 hintText: pageAutoName(_elements),
-                helperText: '콘티 목록에 보이는 이름입니다. 관객 화면에는 나오지 않습니다.',
+                helperText: widget.templateMode
+                    ? '새 페이지 추가 메뉴에 보이는 이름입니다.'
+                    : '콘티 목록에 보이는 이름입니다. 관객 화면에는 나오지 않습니다.',
                 helperMaxLines: 3,
                 border: const OutlineInputBorder(),
                 isDense: true,
@@ -1329,6 +1342,20 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
       Divider(color: cs.outlineVariant),
       Text('페이지 배경', style: label),
       const SizedBox(height: 6),
+      if (!widget.templateMode && widget.templates.isNotEmpty) ...[
+        PageTemplateChips(
+          templates: widget.templates,
+          current: _background,
+          hint: '틀의 배경 색·그림만 가져옵니다. 글 상자는 그대로입니다.',
+          onSelected: (t) {
+            final d = usableTemplateDesign(t.design);
+            _setBackground(
+              _background.copyWith(color: d.color, imagePath: d.imagePath),
+            );
+          },
+        ),
+        const SizedBox(height: 12),
+      ],
       Text('색', style: label),
       const SizedBox(height: 6),
       ColorField(

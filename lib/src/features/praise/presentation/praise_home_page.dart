@@ -29,6 +29,7 @@ import '../data/b_screen_store.dart';
 import '../data/export_style_store.dart';
 import '../data/offering_background_composer.dart';
 import '../data/offering_design_store.dart';
+import '../data/page_template_store.dart';
 import '../data/sermon_design_store.dart';
 import '../data/background_image_library.dart';
 import '../data/libreoffice_installer.dart';
@@ -62,6 +63,7 @@ import 'offering_dialog.dart';
 import 'offering_overlay_painter.dart';
 import 'page_canvas.dart';
 import 'page_editor_dialog.dart';
+import 'page_template_dialog.dart';
 import 'presentation_timer.dart';
 import 'singer_view_data.dart';
 import 'slide_backdrop.dart';
@@ -372,6 +374,11 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   // 설교 제목 페이지 기본 디자인. 마지막으로 쓴 디자인을 다음 설교 페이지가 이어받는다.
   final SermonDesignStore _sermonStore = SermonDesignStore();
   SlideBackground? _sermonDesign;
+  // 페이지 틀(예배 시작·광고·생일자). '새 페이지 추가'·틀 배경 칩이 쓴다. 넣을 때 복사한다.
+  final PageTemplateStore _templateStore = PageTemplateStore();
+  List<PageTemplate> _pageTemplates = const [];
+  // 틀 파일이 깨져 기본 틀로 시작했는지(관리 창이 알린다, 저장하면 풀린다).
+  bool _templatesBroken = false;
   PresenterPointerMode _pointerMode = PresenterPointerMode.off;
   double _pointerSize = 100;
   // 관객 화면 확대. 확대 영역은 슬라이드와 같은 비율이라 크기 하나(가로 비율)면 된다.
@@ -494,7 +501,15 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _repository.onSongsChanged = _sync.markLocalChanged;
     // 자동으로 하는 건 켤 때 한 번 서버를 보는 것뿐이다.
     _sync.load().then((_) => _checkServerOnStartup());
-    _loadSavedStyle();
+    // 기본 틀 배경 = 전역 배경이라 스타일을 읽은 뒤에.
+    _loadSavedStyle().whenComplete(() async {
+      final loaded = await _templateStore.load(_style);
+      if (!mounted) return;
+      setState(() {
+        _pageTemplates = loaded.templates;
+        _templatesBroken = loaded.broken;
+      });
+    });
     _loadOfferingDesign();
     _sermonStore.load().then((v) {
       if (mounted && v != null) setState(() => _sermonDesign = v);
@@ -2533,12 +2548,19 @@ class _PraiseHomePageState extends State<PraiseHomePage>
             addedSpacers.add(slides[i].stagingUid);
           }
         } else {
-          final key = _slideKey(slides[i].stagingUid, slides[i].pageIndexInItem);
+          final key = _slideKey(
+            slides[i].stagingUid,
+            slides[i].pageIndexInItem,
+          );
           if (_deletedSlideKeys.add(key)) addedKeys.add(key);
         }
       }
       if (addedKeys.isNotEmpty || addedSpacers.isNotEmpty) {
-        _deleteUndo.add((keys: addedKeys, spacers: addedSpacers, seq: ++_undoSeq));
+        _deleteUndo.add((
+          keys: addedKeys,
+          spacers: addedSpacers,
+          seq: ++_undoSeq,
+        ));
         if (_deleteUndo.length > 30) _deleteUndo.removeAt(0);
       }
       _currentSlideIndex -= shift;
@@ -2977,15 +2999,18 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   // 재생한다(음악은 소리만이라 문구·배경이 보인다). 저장·복사·나누기는 빈 페이지와 같다.
 
   Future<void> _addPage(
-    _AddPageKind kind,
+    _AddPage choice,
     int Function() insertAt, {
     required FutureOr<void> Function() onBlank,
   }) async {
+    final kind = choice.kind;
     final media = kind.media;
     if (kind == _AddPageKind.blank) {
       await onBlank();
-    } else if (kind == _AddPageKind.free) {
-      await _addFreePage(insertAt);
+    } else if (kind == _AddPageKind.free || kind == _AddPageKind.template) {
+      await _addFreePage(insertAt, template: choice.template);
+    } else if (kind == _AddPageKind.manageTemplates) {
+      await _managePageTemplates();
     } else if (media != null) {
       final result = await _showMediaDialog(kind: media);
       if (result == null || !mounted) return;
@@ -3018,6 +3043,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   Future<PageEditorResult?> _showPageEditor({
     String name = '',
     required SlideBackground background,
+    bool templateMode = false,
   }) {
     return showDialog<PageEditorResult>(
       context: context,
@@ -3030,13 +3056,24 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         compose: (elements, bg) =>
             _composeFreePage(bg.copyWith(pageElements: elements)),
         readClipboardImage: _pythonBridge.clipboardImage,
+        templates: _pageTemplates,
+        templateMode: templateMode,
       ),
     );
   }
 
-  Future<void> _addFreePage(int Function() insertAt) async {
-    final background = SlideBackground.fromStyle(_style);
-    final result = await _showPageEditor(background: background);
+  /// [template] 이 있으면 그 배경·요소를 복사해 편집 창을 채운다(틀과 이어지지 않는다).
+  Future<void> _addFreePage(
+    int Function() insertAt, {
+    PageTemplate? template,
+  }) async {
+    final background = template == null
+        ? SlideBackground.fromStyle(_style)
+        : usableTemplateDesign(template.design);
+    final result = await _showPageEditor(
+      name: template?.name ?? '',
+      background: background,
+    );
     if (result == null || !mounted) return;
     final uid = _nextUid++;
     setState(() {
@@ -3053,6 +3090,55 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       _previewStagingUid = uid;
     });
     await _sendCurrentSlide();
+  }
+
+  // ── 페이지 틀 ─────────────────────────────────────────────────────────
+
+  Future<void> _managePageTemplates() => showDialog<void>(
+    context: context,
+    builder: (_) => PageTemplateDialog(
+      templates: _pageTemplates,
+      broken: _templatesBroken,
+      edit: _editPageTemplate,
+      save: _savePageTemplates,
+    ),
+  );
+
+  /// 틀 편집 창(null = 새 틀: 전역 배경 + '제목' 글 상자). 구운 PNG 는 관리 창 썸네일이 된다.
+  Future<PageTemplate?> _editPageTemplate(PageTemplate? template) async {
+    final result = await _showPageEditor(
+      name: template?.name ?? '',
+      background: template == null
+          ? SlideBackground.fromStyle(_style)
+          : usableTemplateDesign(template.design),
+      templateMode: true,
+    );
+    if (result == null) return null;
+    return (
+      id: template?.id ?? newPageTemplateId(),
+      name: result.name,
+      design: templateDesign(
+        result.background.copyWith(pageElements: result.elements),
+      ),
+      previewPath: result.imagePath,
+    );
+  }
+
+  Future<bool> _savePageTemplates(List<PageTemplate> templates) async {
+    try {
+      await _templateStore.save(templates);
+    } catch (e, st) {
+      await AppLogger.instance.error('[template] 틀 저장 실패', e, st);
+      _showSnack('틀을 저장하지 못했습니다. 다시 시도해 주세요.');
+      return false;
+    }
+    if (mounted) {
+      setState(() {
+        _pageTemplates = templates;
+        _templatesBroken = false;
+      });
+    }
+    return true;
   }
 
   /// 편집 페이지를 다시 연다. uid 는 그대로라 메모·여백 설정이 남고 장 수도 늘 1장이다.
@@ -4054,6 +4140,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         swatches: _swatches,
         imageLibrary: _backgroundImages,
         videoLibrary: _backgroundVideos,
+        templates: _pageTemplates,
       ),
     );
     if (result == null || !mounted) return;
@@ -6100,8 +6187,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               onNewConti: _newConti,
                               onSaveConti: _saveConti,
                               onLoadConti: _loadContiDialog,
-                              onAddBlank: (kind) => _addPage(
-                                kind,
+                              pageTemplates: _pageTemplates,
+                              onAddBlank: (choice) => _addPage(
+                                choice,
                                 _indexAfterSelectedItem,
                                 onBlank: _addBlankItem,
                               ),
@@ -6162,8 +6250,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               onUndoMove: _moveUndo == null
                                   ? null
                                   : _undoMoveSlides,
-                              onAddPage: (kind) => _addPage(
-                                kind,
+                              pageTemplates: _pageTemplates,
+                              onAddPage: (choice) => _addPage(
+                                choice,
                                 _indexAfterCurrentSlide,
                                 onBlank: _addBlankAfterCurrentSlide,
                               ),
@@ -6311,6 +6400,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                                     ),
                               offeringDesign: _offeringDesign,
                               onEditOffering: _editOfferingDesign,
+                              pageTemplates: _pageTemplates,
+                              onManageTemplates: _managePageTemplates,
                               imageLibrary: _backgroundImages,
                               videoLibrary: _backgroundVideos,
                               onResetTextLayout: _resetTextLayout,
@@ -7148,6 +7239,7 @@ class _StagingPanel extends StatelessWidget {
     required this.onSaveConti,
     required this.onLoadConti,
     required this.onAddBlank,
+    this.pageTemplates = const [],
     required this.onLinkB,
     required this.onUnlinkB,
     required this.onTranspose,
@@ -7192,7 +7284,8 @@ class _StagingPanel extends StatelessWidget {
   final VoidCallback onNewConti;
   final VoidCallback onSaveConti;
   final VoidCallback onLoadConti;
-  final ValueChanged<_AddPageKind> onAddBlank;
+  final ValueChanged<_AddPage> onAddBlank;
+  final List<PageTemplate> pageTemplates;
 
   @override
   Widget build(BuildContext context) {
@@ -7358,13 +7451,13 @@ class _StagingPanel extends StatelessWidget {
                   style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
                 ),
                 const SizedBox(width: 4),
-                PopupMenuButton<_AddPageKind>(
+                PopupMenuButton<_AddPage>(
                   icon: const Icon(Icons.add_box_outlined, size: 18),
                   tooltip: '새 페이지 추가',
                   style: compactIcon,
                   iconColor: cs.onSurfaceVariant,
                   onSelected: onAddBlank,
-                  itemBuilder: (_) => _addPageMenuItems,
+                  itemBuilder: (_) => _addPageMenuItems(pageTemplates),
                 ),
                 IconButton(
                   icon: const Icon(Icons.playlist_add_rounded, size: 18),
@@ -9306,6 +9399,8 @@ class _DesignRibbon extends StatefulWidget {
     required this.preview,
     required this.offeringDesign,
     required this.onEditOffering,
+    required this.pageTemplates,
+    required this.onManageTemplates,
     required this.imageLibrary,
     required this.videoLibrary,
     required this.onResetTextLayout,
@@ -9335,6 +9430,10 @@ class _DesignRibbon extends StatefulWidget {
   /// 등록된 헌금송 디자인(계좌 등). '공통' 탭의 헌금송 묶음에서 연다.
   final OfferingDesign offeringDesign;
   final VoidCallback onEditOffering;
+
+  /// 페이지 틀. '공통' 탭의 페이지 틀 묶음에서 관리 창을 연다.
+  final List<PageTemplate> pageTemplates;
+  final VoidCallback onManageTemplates;
 
   /// 공통 배경 이미지 모음. '공통' 탭의 전체 배경 이미지를 여기서 고른다.
   final BackgroundImageLibrary imageLibrary;
@@ -9594,6 +9693,20 @@ class _DesignRibbonState extends State<_DesignRibbon> {
               child: _OfferingDesignButton(
                 design: widget.offeringDesign,
                 onPressed: widget.onEditOffering,
+              ),
+            ),
+          ], width: 320),
+        ],
+      ),
+      _RibbonGroup(
+        label: '페이지 틀',
+        columns: [
+          _column([
+            _PropertyRow(
+              label: '틀 관리',
+              child: PageTemplateField(
+                templates: widget.pageTemplates,
+                onPressed: widget.onManageTemplates,
               ),
             ),
           ], width: 320),
@@ -12036,16 +12149,12 @@ class _BackgroundBadge extends StatelessWidget {
   }
 }
 
-/// 콘티 항목 하나의 배경만 따로 정하는 다이얼로그.
-///
-/// "전역 배경 사용"이면 오버라이드를 지우고 전역 디자인을 따른다. 끄고 색·이미지를
-/// 고르면 그 항목(과 뒤에 자동으로 붙는 여백)만 다른 배경으로 나간다.
-/// 결과로 `(background: null)` 을 돌려주면 "오버라이드 없음", 다이얼로그를 그냥
-/// 닫으면 null 이라 아무것도 바꾸지 않는다.
 /// 편집 탭·발표 보기 '새 페이지 추가' 메뉴에서 고르는 페이지 종류.
 enum _AddPageKind {
   blank,
   free,
+  template,
+  manageTemplates,
   video,
   audio,
   youtube;
@@ -12058,9 +12167,15 @@ enum _AddPageKind {
   };
 }
 
-const List<PopupMenuEntry<_AddPageKind>> _addPageMenuItems = [
-  PopupMenuItem(
-    value: _AddPageKind.blank,
+/// 메뉴 값: 종류 + (틀 항목이면) 고른 틀.
+typedef _AddPage = ({_AddPageKind kind, PageTemplate? template});
+
+/// 빈 → 편집 → 틀들 → '페이지 틀 관리…' → 동영상·음악·유튜브.
+List<PopupMenuEntry<_AddPage>> _addPageMenuItems(
+  List<PageTemplate> templates,
+) => [
+  const PopupMenuItem(
+    value: (kind: _AddPageKind.blank, template: null),
     child: ListTile(
       leading: Icon(Icons.crop_landscape_outlined),
       title: Text('빈 페이지'),
@@ -12068,8 +12183,8 @@ const List<PopupMenuEntry<_AddPageKind>> _addPageMenuItems = [
       dense: true,
     ),
   ),
-  PopupMenuItem(
-    value: _AddPageKind.free,
+  const PopupMenuItem(
+    value: (kind: _AddPageKind.free, template: null),
     child: ListTile(
       leading: Icon(Icons.dashboard_customize_outlined),
       title: Text('슬라이드 편집 페이지'),
@@ -12077,9 +12192,32 @@ const List<PopupMenuEntry<_AddPageKind>> _addPageMenuItems = [
       dense: true,
     ),
   ),
-  PopupMenuDivider(),
+  const PopupMenuDivider(),
+  for (final t in templates)
+    PopupMenuItem(
+      value: (kind: _AddPageKind.template, template: t),
+      child: ListTile(
+        leading: const Icon(Icons.web_stories_outlined),
+        title: Text(t.name, overflow: TextOverflow.ellipsis),
+        dense: true,
+      ),
+    ),
   PopupMenuItem(
-    value: _AddPageKind.video,
+    value: (kind: _AddPageKind.manageTemplates, template: null),
+    child: Builder(
+      builder: (context) {
+        final muted = Theme.of(context).colorScheme.onSurfaceVariant;
+        return ListTile(
+          leading: Icon(Icons.tune, color: muted),
+          title: Text('페이지 틀 관리…', style: TextStyle(color: muted)),
+          dense: true,
+        );
+      },
+    ),
+  ),
+  const PopupMenuDivider(),
+  const PopupMenuItem(
+    value: (kind: _AddPageKind.video, template: null),
     child: ListTile(
       leading: Icon(Icons.movie_outlined),
       title: Text('동영상 페이지'),
@@ -12087,8 +12225,8 @@ const List<PopupMenuEntry<_AddPageKind>> _addPageMenuItems = [
       dense: true,
     ),
   ),
-  PopupMenuItem(
-    value: _AddPageKind.audio,
+  const PopupMenuItem(
+    value: (kind: _AddPageKind.audio, template: null),
     child: ListTile(
       leading: Icon(Icons.music_note_outlined),
       title: Text('음악 페이지'),
@@ -12096,8 +12234,8 @@ const List<PopupMenuEntry<_AddPageKind>> _addPageMenuItems = [
       dense: true,
     ),
   ),
-  PopupMenuItem(
-    value: _AddPageKind.youtube,
+  const PopupMenuItem(
+    value: (kind: _AddPageKind.youtube, template: null),
     child: ListTile(
       leading: Icon(Icons.smart_display_outlined),
       title: Text('유튜브 페이지'),
@@ -12409,6 +12547,12 @@ class _SermonPageDialogState extends State<_SermonPageDialog> {
   }
 }
 
+/// 콘티 항목 하나의 배경만 따로 정하는 다이얼로그.
+///
+/// "전역 배경 사용"이면 오버라이드를 지우고 전역 디자인을 따른다. 끄고 색·이미지를
+/// 고르면 그 항목(과 뒤에 자동으로 붙는 여백)만 다른 배경으로 나간다.
+/// 결과로 `(background: null)` 을 돌려주면 "오버라이드 없음", 다이얼로그를 그냥
+/// 닫으면 null 이라 아무것도 바꾸지 않는다.
 class _ItemBackgroundDialog extends StatefulWidget {
   const _ItemBackgroundDialog({
     required this.item,
@@ -12417,9 +12561,11 @@ class _ItemBackgroundDialog extends StatefulWidget {
     required this.swatches,
     required this.imageLibrary,
     required this.videoLibrary,
+    this.templates = const [],
   });
 
   final StagingItem item;
+  final List<PageTemplate> templates;
   final SlideBackground? initial;
   final ExportStyle globalStyle;
   final List<Color> swatches;
@@ -12483,6 +12629,20 @@ class _ItemBackgroundDialogState extends State<_ItemBackgroundDialog> {
                 ),
                 onChanged: (value) => setState(() => _useCustom = value),
               ),
+              // 스위치가 꺼져 있어도 누를 수 있게 흐려지는 묶음 밖에 둔다.
+              if (widget.templates.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                PageTemplateChips(
+                  templates: widget.templates,
+                  current: _useCustom ? _background : null,
+                  hint: '틀의 배경 색·그림만 가져옵니다.',
+                  onSelected: (t) => setState(() {
+                    _useCustom = true;
+                    _background = applyTemplateBackground(_background, t);
+                  }),
+                ),
+                const SizedBox(height: 4),
+              ],
               const SizedBox(height: 8),
               AnimatedOpacity(
                 opacity: _useCustom ? 1 : 0.4,
@@ -12735,6 +12895,7 @@ class _PresenterConsole extends StatefulWidget {
     required this.onSlidesMove,
     this.onUndoMove,
     required this.onAddPage,
+    this.pageTemplates = const [],
     required this.onToggleMedia,
     required this.mediaPlayback,
     required this.onSeekMedia,
@@ -12797,7 +12958,8 @@ class _PresenterConsole extends StatefulWidget {
   final void Function(List<int> slideIndexes, int afterIndex) onSlidesMove;
   // 방금 끌어 옮긴 페이지 되돌리기(⌘/Ctrl+Z·머리줄 버튼). null = 되돌릴 것 없음. 되돌렸으면 true.
   final bool Function()? onUndoMove;
-  final ValueChanged<_AddPageKind> onAddPage;
+  final ValueChanged<_AddPage> onAddPage;
+  final List<PageTemplate> pageTemplates;
   final VoidCallback onToggleMedia;
   final ValueListenable<MediaPlayback?> mediaPlayback;
   final ValueChanged<double> onSeekMedia;
@@ -13837,11 +13999,11 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
           tooltip: '다음 (→ Space)',
         ),
         const SizedBox(width: 4),
-        PopupMenuButton<_AddPageKind>(
+        PopupMenuButton<_AddPage>(
           icon: const Icon(Icons.note_add_outlined),
           tooltip: '새 페이지 추가 (현재 항목 뒤)',
           onSelected: widget.onAddPage,
-          itemBuilder: (_) => _addPageMenuItems,
+          itemBuilder: (_) => _addPageMenuItems(widget.pageTemplates),
         ),
         IconButton(
           onPressed: widget.onToggleVoice,

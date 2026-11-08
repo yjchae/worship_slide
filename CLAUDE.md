@@ -27,7 +27,8 @@ flutter test test/conti_text_parse_test.dart # 콘티 한번에 넣기: 콘티 �
 flutter test test/extra_language_test.dart # 추가 보조 언어(세 번째 줄) 페이지·콘티 저장·스타일·설교자 화면
 flutter test test/b_screen_test.dart # 통역 화면(B): 칸 계산·폴더 대응표·보조 칸 올리기
 flutter test test/page_image_test.dart # 슬라이드 편집 페이지: 요소 JSON·clamp·배경 page_elements·.wsconti 경로·화면 밖 PNG 굽기
-flutter test test/page_editor_test.dart # 슬라이드 편집 창: 손잡이 크기 계산·되돌리기·자동 이름
+flutter test test/page_editor_test.dart # 슬라이드 편집 창: 손잡이 크기 계산·되돌리기·자동 이름·틀 배경 칩·틀 편집 모드
+flutter test test/page_template_test.dart # 페이지 틀: JSON 왕복·깨진 항목·기본 3개·그림 없으면 색만·틀 배경 입히기
 flutter test test/chord_lyrics_test.dart # 코드 가사 순수 함수: 문법·strip·이스케이프·페이지 짝·조 바꾸기·다시 맞추기·코드 위 가사 변환
 flutter test test/chord_repository_test.dart test/chord_conti_test.dart test/chord_leak_test.dart # 코드 저장 길(saveChords)·콘티 스냅샷·관객/PPTX 누출 없음
 flutter test test/chord_sheet_test.dart  # 코드 악보 조각·ChordSheetView 배치·싱어 chord_lines/key_label·조 배지
@@ -84,6 +85,7 @@ lib/
       b_screen_store.dart            -- 통역 화면(B) 설정·폴더 대응표 → b_screen.json, 칸 계산 bSplitRects, bImagePath
       screen_choice_store.dart       -- 발표·싱어 창 모니터 선택 → screen_choice.json
       sermon_design_store.dart       -- 설교 제목 페이지 마지막 디자인 → sermon_design.json
+      page_template_store.dart       -- 페이지 틀(예배 시작·주일 광고·생일자 등) → page_templates.json, 기본 3개·틀 배경 입히기 순수 함수
       singer_web_server.dart         -- 휴대폰 싱어·리모컨 HTTP 서버(SSE) + cloudflared 임시 터널
       app_logger.dart                -- Application Support/logs/app.log (앱 내 "로그 보기"용)
       font_library.dart              -- 내장 무료 폰트를 Application Support/fonts 로 복사해 올린다
@@ -107,6 +109,7 @@ lib/
       singer_view_data.dart          -- 싱어 화면에 보낼 현재+다음 페이지 JSON 표현
       page_canvas.dart               -- 슬라이드 편집 페이지 PageCanvas(편집 창·굽기 공용) + PageComposer(1920x1080 PNG 굽기·캐시)
       page_editor_dialog.dart        -- 슬라이드 편집 창 PageEditorDialog: 요소 놓기·손잡이·되돌리기, 창 안에서 compose 콜백으로 굽는다
+      page_template_dialog.dart      -- 페이지 틀 관리 창(목록·새 틀·편집·삭제) + '틀 배경' 칩 줄 PageTemplateChips + 리본 칸
       style_fields.dart              -- 공용 입력 부품 FieldBox·ColorField·HexColorDialog·FontFamilyPicker
       slide_render_view.dart         -- 미리보기/썸네일용 Flutter 슬라이드 렌더러 (textOnly = 가사 PNG 굽기용)
       slide_text_layout.dart         -- 가사 상자 글자(원본→보조→추가 보조) + 넘침 측정. 렌더러와 넘침 경고가 같이 쓴다
@@ -577,6 +580,12 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   - 편집 창 `PageEditorDialog`(`presentation/page_editor_dialog.dart`)는 '완료' 때 창 안에서 `compose` 콜백으로 굽고, 실패하면 창을 닫지 않는다. 다시 고쳐도 항목 uid 는 그대로
   - 콘티 불러오기·뒤에 붙이기 때 구운 PNG 가 없으면 요소 목록으로 다시 굽는다(`_restoreFreePages`, `app.log` `[page]`)
   - 2차 '이미지 페이지'(`image_rect`·제목 키, 렌더러 네 곳 변경)는 되돌렸다(`SlideBackground.imageRect` 등도 지웠다)
+  - **페이지 틀** (기획 `.claude-office/work/20261108-1745-fixed-backgrounds/`): 예배 시작·주일 광고·생일자처럼 자주 쓰는 편집 페이지의 시작값(이름 + 배경 색·그림 + 요소)을
+    `page_templates.json`(`PageTemplateStore`, 처음 켜면 기본 3개 = 그때 전역 배경)에 둔다. 리본 '공통' '페이지 틀' 묶음·'새 페이지 추가' 메뉴 '페이지 틀 관리…' → `PageTemplateDialog`.
+    틀 편집은 같은 `PageEditorDialog(templateMode: true)` — 이름 칸 '틀 이름', 빈 글 상자(광고 내용·생일자 이름 자리)도 남기고, 구운 PNG 는 썸네일(`previewPath`)이 된다.
+    메뉴에서 틀을 고르면 틀로 채운 편집 창 → 평범한 편집 페이지로 **복사해** 넣는다(틀과 이어지지 않아 틀을 고쳐도 넣은 페이지는 그대로, 콘티·`.wsconti` 형식 그대로).
+    편집 창 '페이지 배경'과 항목 배경 다이얼로그의 '틀 배경' 칩은 색·그림만 가져온다(요소 유지, 헌금송·영상은 떨어짐 — `applyTemplateBackground`). 그림 파일이 없으면 색만(`usableTemplateDesign`).
+    파일이 깨지면 기본 3개로 시작하고 원래 파일은 처음 저장할 때까지 두며 관리 창에 빨간 줄로 알린다. PC 사이 동기화는 없다
 - **표시용 제목** (`PraiseSong.displayTitle`): 발표 슬라이드 제목·콘티 목록·PPTX 는 '(와이드 스크린)'·'와이드스크린'·오타('와일드스크린',
   '와이드 스크림')·'(와이드)'·'.ppt' 를 뗀 제목을 쓴다. DB 제목은 그대로 둔다 — `song_translations` 가 제목을 키로 쓴다
 - **문단 안 줄바꿈**: 가져오기(`extract_lines_from_shape`)는 run 과 `<a:br>` 만 이어 붙여 `<a:br>` 에서 줄을 나눈다(필드 `<a:fld>` 는 뺀다).
