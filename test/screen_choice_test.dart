@@ -2,8 +2,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:worship_slides/src/features/praise/data/screen_choice_store.dart';
 
 void main() {
-  ScreenInfo s(int i, String name) =>
-      ScreenInfo(index: i, name: name, width: 1920, height: 1080, isMain: false);
+  ScreenInfo s(int i, String name) => ScreenInfo(
+    index: i,
+    name: name,
+    width: 1920,
+    height: 1080,
+    isMain: false,
+  );
 
   test('고른 모니터를 번호·이름으로 찾고, 없으면 자동(-1)', () {
     final screens = [s(0, 'Built-in'), s(1, 'DELL'), s(2, 'DELL')];

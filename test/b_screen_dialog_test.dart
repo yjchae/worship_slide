@@ -42,7 +42,10 @@ void main() {
     await tester.enterText(find.byType(TextField), 'ftp://x');
     await tester.tap(find.text('저장'));
     await tester.pumpAndSettle();
-    expect(find.text('http:// 또는 https:// 로 시작하는 올바른 주소를 넣어 주세요.'), findsOneWidget);
+    expect(
+      find.text('http:// 또는 https:// 로 시작하는 올바른 주소를 넣어 주세요.'),
+      findsOneWidget,
+    );
     expect(result, isNull);
   });
 

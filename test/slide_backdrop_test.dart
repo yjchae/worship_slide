@@ -36,19 +36,22 @@ const _style = ExportStyle(
   bibleTitleVerticalPosition: VerticalTextPosition.bottom,
 );
 
-SlidePageData _page(String text, {SlideBackdrop? backdrop, SlideMedia? media}) =>
-    SlidePageData(
-      mainText: text,
-      englishText: '',
-      title: '불을 내려주소서',
-      isBible: false,
-      pageIndex: 0,
-      totalPages: 3,
-      style: _style,
-      media: media,
-      mediaGroup: 7,
-      backdrop: backdrop,
-    );
+SlidePageData _page(
+  String text, {
+  SlideBackdrop? backdrop,
+  SlideMedia? media,
+}) => SlidePageData(
+  mainText: text,
+  englishText: '',
+  title: '불을 내려주소서',
+  isBible: false,
+  pageIndex: 0,
+  totalPages: 3,
+  style: _style,
+  media: media,
+  mediaGroup: 7,
+  backdrop: backdrop,
+);
 
 void main() {
   test('배경 영상은 JSON 에 저장되고 .wsconti 로는 나가지 않는다', () {

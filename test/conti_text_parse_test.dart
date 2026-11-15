@@ -49,13 +49,15 @@ void main() {
 
     test('번호 줄이 있으면 설명 줄은 빼고, 없으면 모든 줄을 곡으로 본다', () {
       expect(
-        parseContiText('인도: 홍길동\n1. 생수의 강이 G\n(헌금송 뒤)').map((e) => e.titles.first),
+        parseContiText(
+          '인도: 홍길동\n1. 생수의 강이 G\n(헌금송 뒤)',
+        ).map((e) => e.titles.first),
         ['생수의 강이'],
       );
-      expect(
-        parseContiText('생수의 강이 G\n신부의 노래').map((e) => e.titles.first),
-        ['생수의 강이', '신부의 노래'],
-      );
+      expect(parseContiText('생수의 강이 G\n신부의 노래').map((e) => e.titles.first), [
+        '생수의 강이',
+        '신부의 노래',
+      ]);
     });
   });
 
@@ -91,7 +93,10 @@ void main() {
     test('번호 뒤 한두 자리 숫자로 시작하는 제목도 번호 줄이다', () {
       final entries = parseContiText('1 7 Days\n2 10 Thousand Reasons G');
       expect(entries.map((e) => e.number), [1, 2]);
-      expect(entries.map((e) => e.titles.first), ['7 Days', '10 Thousand Reasons']);
+      expect(entries.map((e) => e.titles.first), [
+        '7 Days',
+        '10 Thousand Reasons',
+      ]);
       expect(entries[1].key, 'G');
     });
 
@@ -115,7 +120,9 @@ void main() {
     });
 
     test('번호 목록 안 숫자 제목은 그대로 남는다', () {
-      expect(parseContiText('1. 10000 Reasons G').single.titles, ['10000 Reasons']);
+      expect(parseContiText('1. 10000 Reasons G').single.titles, [
+        '10000 Reasons',
+      ]);
     });
 
     test('(or …) 가 조처럼 보이는 낱말로 끝나도 괄호가 깨지지 않는다', () {
@@ -126,7 +133,9 @@ void main() {
 
     test('꺾쇠 뒤에 글이 더 붙은 머리말도 뺀다', () {
       expect(
-        parseContiText('<11.01 주일 콘티> 인도 홍길동\n생수의 강이').map((e) => e.titles.first),
+        parseContiText(
+          '<11.01 주일 콘티> 인도 홍길동\n생수의 강이',
+        ).map((e) => e.titles.first),
         ['생수의 강이'],
       );
     });
@@ -149,13 +158,16 @@ void main() {
       _song(7, 'Here I Am'),
     ];
     final matcher = ContiSongMatcher(songs);
-    ContiSongMatch matchLine(String line) => matcher.match(parseContiText(line).single);
+    ContiSongMatch matchLine(String line) =>
+        matcher.match(parseContiText(line).single);
 
     test('띄어쓰기를 무시하고 똑같은 제목을 찾는다', () {
       final m = matchLine('1. 아침에 주의 인자하심을 F');
       expect(m.kind, ContiMatchKind.exact);
       expect(m.candidates.map((s) => s.id), [1]);
-      expect(matchLine('6. -> 그날에 예수 주 다시오셔서 G').candidates.map((s) => s.id), [6]);
+      expect(matchLine('6. -> 그날에 예수 주 다시오셔서 G').candidates.map((s) => s.id), [
+        6,
+      ]);
     });
 
     test('같은 제목 곡이 여럿이면 모두 후보로 준다', () {
@@ -185,16 +197,19 @@ void main() {
 
     test('NFD 제목의 곡도 찾는다', () {
       final nfdTitle = '생수의 ${String.fromCharCodes([0x1100, 0x1161, 0x11BC])}이';
-      final m = ContiSongMatcher([_song(9, nfdTitle)]).match(
-        parseContiText('1. 생수의 강이 G').single,
-      );
+      final m = ContiSongMatcher([
+        _song(9, nfdTitle),
+      ]).match(parseContiText('1. 생수의 강이 G').single);
       expect(m.candidates.map((s) => s.id), [9]);
     });
 
     test('build 는 다른 isolate 에서 만들어도 같은 결과를 준다', () async {
       final built = await ContiSongMatcher.build(songs);
       expect(
-        built.match(parseContiText('5. 신부의 노래 G').single).candidates.map((s) => s.id),
+        built
+            .match(parseContiText('5. 신부의 노래 G').single)
+            .candidates
+            .map((s) => s.id),
         [4, 5],
       );
     });

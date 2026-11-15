@@ -57,7 +57,10 @@ void main() {
       () => UpdateService.applyUpdateFiles(src, install),
       throwsA(isA<FileSystemException>()),
     );
-    expect(File(p.join(install, 'ppt_tool.exe')).readAsStringSync(), 'old tool');
+    expect(
+      File(p.join(install, 'ppt_tool.exe')).readAsStringSync(),
+      'old tool',
+    );
     expect(File(p.join(install, 'ppt_tool.exe.old')).existsSync(), isFalse);
   }, skip: Platform.isWindows ? 'chmod 없음' : null);
 }

@@ -12,6 +12,7 @@ import '../data/background_image_library.dart';
 import '../data/fnv_hash.dart';
 import '../domain/export_style.dart';
 import '../domain/page_element.dart';
+import 'page_rich_text.dart';
 import '../domain/slide_background.dart';
 import 'lyrics_overlay_renderer.dart';
 
@@ -95,16 +96,10 @@ class PageCanvas extends StatelessWidget {
     alignment: Alignment.topCenter,
     minHeight: 0,
     maxHeight: double.infinity,
-    child: Text(
-      e.text,
+    child: Text.rich(
+      pageTextSpan(e, fontScale),
       textAlign: e.align,
       textScaler: TextScaler.noScaling,
-      style: TextStyle(
-        fontFamily: e.fontFamily,
-        fontSize: e.fontSize * fontScale,
-        color: e.color,
-        fontWeight: e.bold ? FontWeight.w700 : FontWeight.w400,
-      ),
     ),
   );
 }

@@ -103,7 +103,10 @@ String backdropPlayerHtml({
       'fadeOut': SlideBackdrop.fadeOut,
     }),
   );
-  return _backdropTemplate.replaceFirst('/*CONFIG*/null', 'JSON.parse($config)');
+  return _backdropTemplate.replaceFirst(
+    '/*CONFIG*/null',
+    'JSON.parse($config)',
+  );
 }
 
 const _backdropTemplate = r'''<!DOCTYPE html><html><head><meta charset="utf-8">

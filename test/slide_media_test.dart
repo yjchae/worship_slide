@@ -54,8 +54,11 @@ void main() {
     expect(SlideMedia.decode(null), isNull);
     // 페이드는 범위 안으로
     expect(
-      SlideMedia.fromJson({'kind': 'audio', 'source': 'x', 'fade_in': 99})!
-          .fadeIn,
+      SlideMedia.fromJson({
+        'kind': 'audio',
+        'source': 'x',
+        'fade_in': 99,
+      })!.fadeIn,
       SlideMedia.maxFade,
     );
   });

@@ -320,7 +320,8 @@ class SlideRenderView extends StatelessWidget {
                                 textAlign: textAlign,
                                 text: SlideTextLayout.bodySpan(
                                   data,
-                                  fontScale: fontScale *
+                                  fontScale:
+                                      fontScale *
                                       SlideTextLayout.fitScale(data),
                                   originalOnly: data.originalOnly,
                                 ),

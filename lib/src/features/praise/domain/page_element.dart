@@ -89,6 +89,9 @@ sealed class PageElement {
           fontFamily: family is String && family.isNotEmpty
               ? family
               : PageTextElement.defaultFontFamily,
+          rich: raw['rich'] is String && (raw['rich'] as String).isNotEmpty
+              ? raw['rich'] as String
+              : null,
         );
     }
     return null;
@@ -160,9 +163,15 @@ final class PageTextElement extends PageElement {
     this.bold = false,
     this.align = TextAlign.center,
     this.fontFamily = defaultFontFamily,
+    this.rich,
   });
 
+  /// 글 전체(서식 뺀 평문). 비었는지·넘침·페이지 이름은 이걸로 본다.
   final String text;
+
+  /// 부분 서식이 든 글: flutter_quill Delta ops 의 JSON 문자열(null = 서식 없는 평문).
+  /// 렌더는 `pageTextSpan`. [text] 는 늘 이 글의 평문과 같게 둔다.
+  final String? rich;
 
   /// 슬라이드 높이 540pt 기준(1920x1080 에서는 ×2 px).
   final double fontSize;
@@ -188,6 +197,7 @@ final class PageTextElement extends PageElement {
     bool? bold,
     TextAlign? align,
     String? fontFamily,
+    Object? rich = _keep,
   }) => PageTextElement(
     id: id ?? this.id,
     rect: rect ?? this.rect,
@@ -197,7 +207,10 @@ final class PageTextElement extends PageElement {
     bold: bold ?? this.bold,
     align: align ?? this.align,
     fontFamily: fontFamily ?? this.fontFamily,
+    rich: identical(rich, _keep) ? this.rich : rich as String?,
   );
+
+  static const Object _keep = Object();
 
   @override
   Map<String, dynamic> toJson() => {
@@ -214,6 +227,7 @@ final class PageTextElement extends PageElement {
       _ => 'center',
     },
     'font_family': fontFamily,
+    'rich': ?rich,
   };
 
   @override
@@ -226,9 +240,19 @@ final class PageTextElement extends PageElement {
       other.color == color &&
       other.bold == bold &&
       other.align == align &&
-      other.fontFamily == fontFamily;
+      other.fontFamily == fontFamily &&
+      other.rich == rich;
 
   @override
-  int get hashCode =>
-      Object.hash(id, rect, text, fontSize, color, bold, align, fontFamily);
+  int get hashCode => Object.hash(
+    id,
+    rect,
+    text,
+    fontSize,
+    color,
+    bold,
+    align,
+    fontFamily,
+    rich,
+  );
 }

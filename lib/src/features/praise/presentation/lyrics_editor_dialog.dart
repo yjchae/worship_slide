@@ -1567,26 +1567,27 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
             onTapChar: (line, offset) => _pickChordAt(row, line, offset),
           ),
         ),
-        if (_rowHasChords(row)) ...() {
-          // 후렴처럼 같은 가사가 또 나오는데 아직 코드가 다르면(없으면) 한 번에 넣는다.
-          final same = [
-            for (final r in _sameLyricsRows(row))
-              if (_grid.cell(r, 0) != text) r,
-          ];
-          if (same.isEmpty) return const <Widget>[];
-          return [
-            const SizedBox(height: 4),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: _cellTool(
-                Icons.library_add_outlined,
-                '같은 가사 ${same.length}페이지에도 넣기',
-                '${same.map((r) => '${r + 1}').join(', ')}페이지에 이 페이지 코드를 그대로 넣습니다',
-                () => _pasteChordsInto(text, same),
+        if (_rowHasChords(row))
+          ...() {
+            // 후렴처럼 같은 가사가 또 나오는데 아직 코드가 다르면(없으면) 한 번에 넣는다.
+            final same = [
+              for (final r in _sameLyricsRows(row))
+                if (_grid.cell(r, 0) != text) r,
+            ];
+            if (same.isEmpty) return const <Widget>[];
+            return [
+              const SizedBox(height: 4),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: _cellTool(
+                  Icons.library_add_outlined,
+                  '같은 가사 ${same.length}페이지에도 넣기',
+                  '${same.map((r) => '${r + 1}').join(', ')}페이지에 이 페이지 코드를 그대로 넣습니다',
+                  () => _pasteChordsInto(text, same),
+                ),
               ),
-            ),
-          ];
-        }(),
+            ];
+          }(),
       ],
     ];
   }

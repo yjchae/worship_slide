@@ -13,8 +13,7 @@ void main() {
       '(와일드스크린 그 사랑 감사해)': '그 사랑 감사해',
       '내 영혼의 그윽히 깊은 데서(와이드).ppt': '내 영혼의 그윽히 깊은 데서',
       '우리하나되어(와이드)': '우리하나되어',
-      '(와이드스크린) 그 이름(your name)_ 아침이 밝아 올 때에':
-          '그 이름(your name)_ 아침이 밝아 올 때에',
+      '(와이드스크린) 그 이름(your name)_ 아침이 밝아 올 때에': '그 이름(your name)_ 아침이 밝아 올 때에',
     };
     cases.forEach((input, expected) {
       expect(PraiseSong.cleanDisplayTitle(input), expected, reason: input);

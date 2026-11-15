@@ -80,11 +80,17 @@ class SlideTextLayout {
     double fontScale,
     bool originalOnly,
   ) {
-    final span = bodySpan(data, fontScale: fontScale, originalOnly: originalOnly);
+    final span = bodySpan(
+      data,
+      fontScale: fontScale,
+      originalOnly: originalOnly,
+    );
     final blocks = <(String, TextStyle, double)>[];
     for (final c in span.children!.cast<TextSpan>()) {
       final style = c.style!;
-      final text = blocks.isEmpty ? c.text! : c.text!.substring(1); // 앞의 '\n' 뺀다
+      final text = blocks.isEmpty
+          ? c.text!
+          : c.text!.substring(1); // 앞의 '\n' 뺀다
       blocks.add((text, style, style.fontSize! * 1.7));
     }
     return blocks;

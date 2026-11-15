@@ -27,6 +27,7 @@ flutter test test/conti_text_parse_test.dart # 콘티 한번에 넣기: 콘티 �
 flutter test test/extra_language_test.dart # 추가 보조 언어(세 번째 줄) 페이지·콘티 저장·스타일·설교자 화면
 flutter test test/b_screen_test.dart # 통역 화면(B): 칸 계산·폴더 대응표·보조 칸 올리기
 flutter test test/page_image_test.dart # 슬라이드 편집 페이지: 요소 JSON·clamp·배경 page_elements·.wsconti 경로·화면 밖 PNG 굽기
+flutter test test/page_rich_text_test.dart # 글 상자 부분 서식(Quill Delta → TextSpan): 색 8자리·bold·글머리·번호·깨진 rich
 flutter test test/page_editor_test.dart # 슬라이드 편집 창: 손잡이 크기 계산·되돌리기·자동 이름·틀 배경 칩·틀 편집 모드
 flutter test test/page_template_test.dart # 페이지 틀: JSON 왕복·깨진 항목·기본 3개·그림 없으면 색만·틀 배경 입히기
 flutter test test/chord_lyrics_test.dart # 코드 가사 순수 함수: 문법·strip·이스케이프·페이지 짝·조 바꾸기·다시 맞추기·코드 위 가사 변환
@@ -570,6 +571,7 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   - 요소 `PageElement`(`domain/page_element.dart`, sealed: `PageImageElement(path)` / `PageTextElement(text, fontSize(540pt 기준), color, bold, align, fontFamily)`),
     `rect` 0~1(`clampRect` = w·h 0.02~2, 슬라이드 안 5% 이상), 뒤 요소가 위. 저장은 항목 배경 JSON `page_elements`(`SlideBackground.pageElements`, 마이그레이션 없음),
     판별 `isFreePage`. '배경' 버튼으로 색을 바꿔도 `withPageElementsOf` 로 요소를 옮겨 붙이고 다시 굽는다. 틀린 요소는 읽을 때 버린다
+  - **글 상자 부분 서식**: 편집 창 글 칸은 `flutter_quill`(툴바 + `QuillEditor`, `Localizations.override` 로 Quill 번역만 창 안에 끼움). `PageTextElement.rich`(Delta ops JSON 문자열, 서식이 하나도 없으면 null)에 서식 글을, `text` 에 평문을 같이 둔다(비었는지·넘침·이름은 `text`). 렌더는 `pageTextSpan`(`page_rich_text.dart`) 하나 — 편집 창 미리보기·굽기·넘침 측정이 같이 쓴다. 지원: 굵게·기울임·밑줄·취소선·색·크기(pt)·글머리·번호. 정렬·글꼴은 상자 단위 그대로. 렌더러 네 곳·PPTX 는 여전히 구운 PNG 만 본다. `test/page_rich_text_test.dart`
   - 항목은 `ImageStagingItem(imagePaths: [구운 PNG], sourceName: 페이지 이름, sourcePath: null)` — 복사·옮기기·저장·PPTX(그림 한 장)는 손댈 게 없고 옛 앱에서도 보인다
   - 굽기 `PageComposer.compose`(`presentation/page_canvas.dart`): 편집 창과 같은 `PageCanvas`(1920x1080 논리 크기 + FittedBox, 배경 색 → 배경 그림 cover → 요소,
     주변 테마·글자 배율 안 탐)를 `renderWidgetToImage` 로. **그림은 미리 디코딩한 `ui.Image`(`PageComposer.loadImages`, 긴 변 2560)** — `Image.file` 은 화면 밖에서 빈칸으로 찍힌다.

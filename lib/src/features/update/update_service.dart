@@ -75,8 +75,8 @@ class UpdateService {
     final platformId = Platform.isMacOS
         ? 'macos'
         : Platform.isWindows
-            ? 'windows'
-            : null;
+        ? 'windows'
+        : null;
 
     if (platformId != null) {
       for (final asset in assets) {
@@ -189,11 +189,7 @@ rm -f "$zipPath"
 rm -f "$scriptPath"
 ''');
     await Process.run('chmod', ['+x', scriptPath]);
-    await Process.start(
-      'bash',
-      [scriptPath],
-      mode: ProcessStartMode.detached,
-    );
+    await Process.start('bash', [scriptPath], mode: ProcessStartMode.detached);
     exit(0);
   }
 
@@ -225,7 +221,9 @@ rm -f "$scriptPath"
       ]);
     } on ProcessException catch (e) {
       await log.info('[update] tar.exe 실행 실패: $e');
-      throw Exception('압축 풀기 도구(tar.exe)를 찾지 못했습니다. Windows 10 1803 이상이 필요합니다.');
+      throw Exception(
+        '압축 풀기 도구(tar.exe)를 찾지 못했습니다. Windows 10 1803 이상이 필요합니다.',
+      );
     }
     if (tar.exitCode != 0) {
       throw Exception('압축 풀기 실패: ${tar.stderr}');

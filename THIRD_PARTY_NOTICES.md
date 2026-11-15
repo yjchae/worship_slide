@@ -18,6 +18,7 @@ Worship Slides 가 사용하거나 배포본에 포함하는 외부 소프트웨
 | [path_provider](https://pub.dev/packages/path_provider) | 앱 데이터 폴더 찾기 | BSD-3-Clause |
 | [package_info_plus](https://pub.dev/packages/package_info_plus) | 앱 버전 읽기 | BSD-3-Clause |
 | [http](https://pub.dev/packages/http) | 업데이트 확인·구글 드라이브 요청 | BSD-3-Clause |
+| [flutter_quill](https://pub.dev/packages/flutter_quill) | 슬라이드 편집 글 상자의 부분 서식 편집기 (함께 오는 quill_native_bridge·url_launcher·file_selector 계열 플러그인 포함 — 라이선스는 각 패키지 확인 필요, 미확인) | MIT |
 | [qr_flutter](https://pub.dev/packages/qr_flutter) · [qr](https://pub.dev/packages/qr) | 휴대폰 접속 QR 코드 | BSD-3-Clause |
 | [cupertino_icons](https://pub.dev/packages/cupertino_icons) | 아이콘 | MIT |
 

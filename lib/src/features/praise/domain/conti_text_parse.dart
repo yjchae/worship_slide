@@ -83,7 +83,10 @@ const _keyChain = '$_keyUnit(?:\\s*(?:-|~|→|->|/|>)\\s*$_keyUnit)*';
 final _trailingKey = RegExp(
   '\\s+(?:\\(\\s*(?:[Kk]ey\\s*)?($_keyChain)\\s*\\)|(?:[Kk]ey\\s*)?($_keyChain))\\s*\$',
 );
-final _orAlternative = RegExp(r'\(\s*(?:or|또는|혹은)\s+([^()]+)\)', caseSensitive: false);
+final _orAlternative = RegExp(
+  r'\(\s*(?:or|또는|혹은)\s+([^()]+)\)',
+  caseSensitive: false,
+);
 
 ContiTextEntry? _parseBody(String line, String body, int? number) {
   var rest = body.replaceFirst(_leadingMarks, '').trim();
@@ -99,7 +102,10 @@ ContiTextEntry? _parseBody(String line, String body, int? number) {
   final alternatives = [
     for (final m in _orAlternative.allMatches(rest)) m.group(1)!.trim(),
   ];
-  final main = rest.replaceAll(_orAlternative, ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+  final main = rest
+      .replaceAll(_orAlternative, ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
   final titles = [
     if (main.isNotEmpty) main,
     ...alternatives.where((t) => t.isNotEmpty),
@@ -112,9 +118,8 @@ ContiTextEntry? _parseBody(String line, String body, int? number) {
 
 /// 제목 비교용: 한글 자모 합치기(NFD → NFC) + 소문자 + 글자·숫자만 (띄어쓰기·문장부호 무시).
 /// '갈 길을 밝히 보이시니!' 와 '갈길을밝히보이시니' 가 같아진다.
-String normalizeSongTitle(String title) => composeHangul(
-  title,
-).toLowerCase().replaceAll(_nonWord, '');
+String normalizeSongTitle(String title) =>
+    composeHangul(title).toLowerCase().replaceAll(_nonWord, '');
 
 final _nonWord = RegExp(r'[^\p{L}\p{N}]', unicode: true);
 
@@ -186,7 +191,9 @@ class ContiSongMatcher {
         candidates.addAll(exact);
       } else if (partial.isNotEmpty) {
         allExact = false;
-        candidates.addAll(_byLengthGap(partial, entry.titles[i]).take(_maxPartial));
+        candidates.addAll(
+          _byLengthGap(partial, entry.titles[i]).take(_maxPartial),
+        );
       }
     }
     if (candidates.isEmpty) {

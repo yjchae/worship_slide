@@ -6,7 +6,8 @@ import 'dart:io';
 class ClaudeTranslator {
   /// Finder 로 띄운 macOS 앱은 PATH 에 ~/.local/bin·Homebrew 가 없어서 직접 찾는다.
   static String _executable() {
-    final home = Platform.environment['HOME'] ??
+    final home =
+        Platform.environment['HOME'] ??
         Platform.environment['USERPROFILE'] ??
         '';
     for (final path in [

@@ -175,8 +175,7 @@ void main() {
   });
 
   test('normalizeEditableLyrics → pairedPages 왕복 변환이 일치한다', () {
-    String rt(String raw) =>
-        normalizeEditableLyrics(lyricsToEditText(raw));
+    String rt(String raw) => normalizeEditableLyrics(lyricsToEditText(raw));
 
     expect(rt('1절\n\n2절\n\n3절'), '1절\n\n2절\n\n3절');
     expect(rt('\n\n첫 가사'), '\n\n첫 가사');
@@ -273,7 +272,10 @@ void main() {
 
     // 범위 밖 값은 잘린다 (미리보기·발표 창·PPTX가 같은 범위를 쓴다)
     expect(_offsetStyle.copyWith(textOffsetY: 99).textOffsetY, kMaxTextOffsetY);
-    expect(_offsetStyle.copyWith(textOffsetY: -99).textOffsetY, kMinTextOffsetY);
+    expect(
+      _offsetStyle.copyWith(textOffsetY: -99).textOffsetY,
+      kMinTextOffsetY,
+    );
     expect(
       _offsetStyle.copyWith(titleOffsetY: 99).titleOffsetY,
       kMaxTextOffsetY,
@@ -511,8 +513,14 @@ void main() {
     );
     const colorOnly = SlideBackground(color: Color(0xFF0F4C5C));
 
-    expect(SlideBackground.decode(SlideBackground.encode(withImage)), withImage);
-    expect(SlideBackground.decode(SlideBackground.encode(colorOnly)), colorOnly);
+    expect(
+      SlideBackground.decode(SlideBackground.encode(withImage)),
+      withImage,
+    );
+    expect(
+      SlideBackground.decode(SlideBackground.encode(colorOnly)),
+      colorOnly,
+    );
     // 색만 있는 배경은 image_path 칸을 아예 안 쓴다.
     expect(colorOnly.toJson().containsKey('image_path'), isFalse);
     expect(colorOnly.hasImage, isFalse);
@@ -536,7 +544,9 @@ void main() {
   });
 
   test('빈 문자열 이미지 경로는 "이미지 없음"으로 읽는다', () {
-    final decoded = SlideBackground.decode('{"color":"#123456","image_path":""}');
+    final decoded = SlideBackground.decode(
+      '{"color":"#123456","image_path":""}',
+    );
 
     expect(decoded, const SlideBackground(color: Color(0xFF123456)));
     expect(decoded!.hasImage, isFalse);

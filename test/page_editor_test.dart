@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_quill/flutter_quill.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:worship_slides/src/features/praise/data/page_template_store.dart';
 import 'package:worship_slides/src/features/praise/domain/export_style.dart';
@@ -30,6 +31,15 @@ const _style = ExportStyle(
   bibleTitleHorizontalPosition: HorizontalPosition.right,
   bibleTitleVerticalPosition: VerticalTextPosition.bottom,
 );
+
+QuillController _quill(WidgetTester t) =>
+    t.widget<QuillEditor>(find.byType(QuillEditor)).controller;
+
+/// 글 칸(Quill)의 글을 통째로 바꾼다.
+void _typeInQuill(WidgetTester t, String text) {
+  final c = _quill(t);
+  c.replaceText(0, c.document.length - 1, text, null);
+}
 
 void main() {
   const start = Rect.fromLTWH(0.2, 0.2, 0.4, 0.2);
@@ -188,9 +198,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // 처음엔 '제목' 글 상자가 골라져 '글' 칸에 들어 있다.
-    final field = find.widgetWithText(TextField, '글');
-    expect(field, findsOneWidget);
-    await tester.enterText(field, '광고');
+    _typeInQuill(tester, '광고');
     await tester.pump();
     // 글 상자 하나 더 → 빈 글 상자는 확인 때 빠진다.
     await tester.tap(find.byTooltip('글 상자 추가 (고른 글 상자와 같은 글꼴·색)'));
@@ -202,6 +210,55 @@ void main() {
     expect((composed!.single as PageTextElement).text, '광고');
     expect(result?.name, '광고');
     expect(result?.imagePath, '/tmp/render.png');
+  });
+
+  testWidgets('서식을 입힌 뒤 창 되돌리기: 입력칸에도 서식이 남지 않는다', (tester) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    List<PageElement>? composed;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () => showDialog<PageEditorResult>(
+              context: context,
+              builder: (_) => PageEditorDialog(
+                style: _style,
+                compose: (elements, _) async {
+                  composed = elements;
+                  return '/tmp/render.png';
+                },
+                readClipboardImage: () async => null,
+              ),
+            ),
+            child: const Text('열기'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('열기'));
+    await tester.pumpAndSettle();
+
+    final c = _quill(tester);
+    c.replaceText(0, 0, '광고', null);
+    await tester.pump();
+    // 입력 묶음을 끊고(포커스 이탈) 서식만 따로 한 번 입힌다.
+    c.formatText(0, 1, Attribute.bold);
+    await tester.pump();
+    expect(c.document.toDelta().toJson().first['attributes'], isNotNull);
+
+    await tester.tap(find.byTooltip(RegExp('^되돌리기')));
+    await tester.pump();
+    // 요소가 서식 없는 상태로 돌아가면 입력칸도 같이 서식이 없다.
+    final hasAttr = c.document.toDelta().toJson().any(
+      (op) => op['attributes'] != null,
+    );
+    expect(hasAttr, isFalse);
+
+    await tester.tap(find.text('확인'));
+    await tester.pumpAndSettle();
+    expect((composed!.single as PageTextElement).rich, isNull);
   });
 
   testWidgets('클립보드 그림 읽기가 실패해도 글자가 있으면 글 상자로 넣는다', (tester) async {
@@ -238,7 +295,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.textContaining('클립보드 그림을 읽지 못했습니다'), findsNothing);
-    expect(find.widgetWithText(TextField, '알림'), findsOneWidget);
+    expect(_quill(tester).document.toPlainText(), '알림\n');
   });
 
   testWidgets('틀 배경 칩: 누르면 배경 색만 바뀌고 글 상자는 그대로', (tester) async {
@@ -402,16 +459,17 @@ void main() {
 
     expect(find.text('슬라이드 편집 페이지'), findsOneWidget);
     expect(find.text('슬라이드 편집 페이지 수정'), findsNothing);
-    final field = find.widgetWithText(TextField, '글');
-    expect(field, findsOneWidget);
-    expect(tester.widget<TextField>(field).focusNode?.hasFocus, isTrue);
-    await tester.enterText(field, '수요 예배 안내');
+    expect(
+      tester.widget<QuillEditor>(find.byType(QuillEditor)).focusNode.hasFocus,
+      isTrue,
+    );
+    _typeInQuill(tester, '수요 예배 안내');
     await tester.tap(find.text('확인'));
     await tester.pumpAndSettle();
 
-    expect(
-      composed!.whereType<PageTextElement>().map((e) => (e.id, e.text)),
-      [('a', '주일 광고'), ('b', '수요 예배 안내')],
-    );
+    expect(composed!.whereType<PageTextElement>().map((e) => (e.id, e.text)), [
+      ('a', '주일 광고'),
+      ('b', '수요 예배 안내'),
+    ]);
   });
 }

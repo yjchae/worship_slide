@@ -30,7 +30,9 @@ void main() {
       final info = readFontInfo(File(f.path).readAsBytesSync());
       expect(info, isNotNull, reason: f.path);
       // ignore: avoid_print
-      print('${f.path}: ${info!.family} / ${info.displayName} / ${info.weight}');
+      print(
+        '${f.path}: ${info!.family} / ${info.displayName} / ${info.weight}',
+      );
     }
   });
 }

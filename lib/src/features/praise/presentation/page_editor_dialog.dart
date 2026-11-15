@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
@@ -6,6 +7,7 @@ import 'dart:ui' as ui;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show listEquals, visibleForTesting;
 import 'package:flutter/material.dart';
+import 'package:flutter_quill/flutter_quill.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 
@@ -17,6 +19,7 @@ import '../domain/page_element.dart';
 import '../domain/slide_background.dart';
 import 'background_image_gallery.dart';
 import 'page_canvas.dart';
+import 'page_rich_text.dart';
 import 'page_template_dialog.dart';
 import 'style_fields.dart';
 
@@ -292,7 +295,8 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
       ? ''
       : widget.name;
   late final _nameController = TextEditingController(text: _initialName);
-  final _textController = TextEditingController();
+  final _quill = QuillController.basic();
+  bool _syncingQuill = false;
   final _sizeController = TextEditingController();
   final _history = PageEditHistory();
 
@@ -328,6 +332,7 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
     _textFocus.addListener(() {
       if (!_textFocus.hasFocus) _editSession = false;
     });
+    _quill.addListener(_onQuillChanged);
     _loadImages();
     _loadBackgroundImage();
     final first =
@@ -401,7 +406,7 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
     }
     _images.clear(); // 닫힌 뒤 끝나는 _addImageFiles 가 두 번 해제하지 않게
     _nameController.dispose();
-    _textController.dispose();
+    _quill.dispose();
     _sizeController.dispose();
     _rootFocus.dispose();
     _canvasFocus.dispose();
@@ -422,9 +427,10 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
       _nameController.text.trim() != _initialName;
 
   bool get _inTextField =>
+      _textFocus.hasFocus ||
       FocusManager.instance.primaryFocus?.context
-          ?.findAncestorWidgetOfExactType<EditableText>() !=
-      null;
+              ?.findAncestorWidgetOfExactType<EditableText>() !=
+          null;
 
   bool get _isMac => Platform.isMacOS;
 
@@ -455,7 +461,7 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
   void _syncFields() {
     final e = _selected;
     if (e is PageTextElement) {
-      if (_textController.text != e.text) _textController.text = e.text;
+      _loadQuill(e);
       _sizeController.text = e.fontSize.round().toString();
     }
   }
@@ -463,10 +469,54 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
   void _focusText() {
     if (_selected is! PageTextElement) return;
     _textFocus.requestFocus();
-    _textController.selection = TextSelection(
-      baseOffset: 0,
-      extentOffset: _textController.text.length,
+    _quill.updateSelection(
+      TextSelection(baseOffset: 0, extentOffset: _quill.document.length - 1),
+      ChangeSource.local,
     );
+  }
+
+  /// Quill 문서의 서식 글(Delta JSON). 서식이 하나도 없으면 null — 요소의 rich 와 같은 기준.
+  String? _quillRich() {
+    final delta = _quill.document.toDelta().toJson();
+    return delta.any((op) => op['attributes'] != null)
+        ? jsonEncode(delta)
+        : null;
+  }
+
+  /// 고른 글 상자의 글을 Quill 문서로 옮긴다(이미 같으면 그대로 — 커서 유지).
+  void _loadQuill(PageTextElement e) {
+    if (_quill.document.toPlainText().trimRightNewline() == e.text &&
+        _quillRich() == e.rich) {
+      return;
+    }
+    _syncingQuill = true;
+    try {
+      // fromJson: insert 로 만들면 그 삽입이 Quill undo 기록에 남아 Ctrl+Z 가 글을 지운다.
+      _quill.document = Document.fromJson(
+        e.rich == null
+            ? [
+                {'insert': '${e.text}\n'},
+              ]
+            : jsonDecode(e.rich!) as List,
+      );
+    } catch (_) {
+      _quill.document = Document.fromJson([
+        {'insert': '${e.text}\n'},
+      ]);
+    } finally {
+      _syncingQuill = false;
+    }
+  }
+
+  /// 입력·서식이 바뀌면 고른 글 상자에 평문(text)과 서식 글(rich)을 같이 담는다.
+  void _onQuillChanged() {
+    if (_syncingQuill) return;
+    final current = _selected;
+    if (current is! PageTextElement) return;
+    final plain = _quill.document.toPlainText().trimRightNewline();
+    final rich = _quillRich();
+    if (plain == current.text && rich == current.rich) return;
+    _replaceInSession(current.copyWith(text: plain, rich: rich));
   }
 
   void _showMessage(String text, {bool error = false, bool autoClear = false}) {
@@ -1410,22 +1460,76 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
     TextStyle? label,
   ) {
     return [
-      TextField(
-        controller: _textController,
-        focusNode: _textFocus,
-        minLines: 3,
-        maxLines: 10,
-        decoration: const InputDecoration(
-          labelText: '글',
-          border: OutlineInputBorder(),
-          isDense: true,
+      Localizations.override(
+        context: context,
+        delegates: const [FlutterQuillLocalizations.delegate],
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            QuillSimpleToolbar(
+              controller: _quill,
+              config: QuillSimpleToolbarConfig(
+                multiRowsDisplay: true,
+                showDividers: false,
+                showFontFamily: false,
+                showSmallButton: false,
+                showInlineCode: false,
+                showBackgroundColorButton: false,
+                showClearFormat: true,
+                showAlignmentButtons: false,
+                showHeaderStyle: false,
+                showListCheck: false,
+                showCodeBlock: false,
+                showQuote: false,
+                showIndent: false,
+                showLink: false,
+                showDirection: false,
+                showSearchButton: false,
+                showSubscript: false,
+                showSuperscript: false,
+                showLineHeightButton: false,
+                buttonOptions: QuillSimpleToolbarButtonOptions(
+                  fontSize: QuillToolbarFontSizeButtonOptions(
+                    items: {
+                      for (final n in const [
+                        24,
+                        30,
+                        36,
+                        40,
+                        48,
+                        60,
+                        72,
+                        96,
+                        120,
+                      ])
+                        '${n}pt': '$n',
+                    },
+                    defaultDisplayText: '${e.fontSize.round()}pt',
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Container(
+              height: 150,
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                border: Border.all(color: cs.outline),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: QuillEditor.basic(
+                controller: _quill,
+                focusNode: _textFocus,
+                config: const QuillEditorConfig(placeholder: '글'),
+              ),
+            ),
+          ],
         ),
-        onChanged: (text) {
-          final current = _selected;
-          if (current is PageTextElement) {
-            _replaceInSession(current.copyWith(text: text));
-          }
-        },
+      ),
+      const SizedBox(height: 4),
+      Text(
+        '글자를 드래그해 골라 굵게·색·크기를 바꿉니다. 고르지 않은 글은 아래 상자 설정을 따릅니다.',
+        style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
       ),
       const SizedBox(height: 16),
       Text('글자 크기 ${e.fontSize.round()}pt', style: label),
@@ -1585,14 +1689,7 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
   bool _textOverflows(PageTextElement e) {
     if (e.text.isEmpty) return false;
     final painter = TextPainter(
-      text: TextSpan(
-        text: e.text,
-        style: TextStyle(
-          fontFamily: e.fontFamily,
-          fontSize: e.fontSize * PageCanvas.fontScale,
-          fontWeight: e.bold ? FontWeight.w700 : FontWeight.w400,
-        ),
-      ),
+      text: pageTextSpan(e, PageCanvas.fontScale),
       textAlign: e.align,
       textDirection: TextDirection.ltr,
       textScaler: TextScaler.noScaling,
@@ -1710,4 +1807,9 @@ class _DashedBorderPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_DashedBorderPainter old) => old.color != color;
+}
+
+extension on String {
+  /// Quill 문서 평문은 늘 줄바꿈 하나로 끝난다 — 그 하나만 뗀다.
+  String trimRightNewline() => endsWith('\n') ? substring(0, length - 1) : this;
 }
