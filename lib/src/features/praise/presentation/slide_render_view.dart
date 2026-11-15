@@ -309,15 +309,22 @@ class SlideRenderView extends StatelessWidget {
                       width: w * SlideTextLayout.boxW(isBible) / _slideW,
                       child: DefaultTextStyle(
                         style: const TextStyle(),
-                        child: RichText(
-                          textAlign: textAlign,
-                          text: SlideTextLayout.bodySpan(
-                            data,
-                            fontScale:
-                                fontScale * SlideTextLayout.fitScale(data),
-                            originalOnly: data.originalOnly,
-                          ),
-                        ),
+                        child: isBible
+                            ? SlideTextLayout.bibleBody(
+                                data,
+                                fontScale:
+                                    fontScale * SlideTextLayout.fitScale(data),
+                                originalOnly: data.originalOnly,
+                              )
+                            : RichText(
+                                textAlign: textAlign,
+                                text: SlideTextLayout.bodySpan(
+                                  data,
+                                  fontScale: fontScale *
+                                      SlideTextLayout.fitScale(data),
+                                  originalOnly: data.originalOnly,
+                                ),
+                              ),
                       ),
                     ),
                   ),

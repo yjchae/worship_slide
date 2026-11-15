@@ -608,14 +608,54 @@ void PresentationChannel::Paint(HDC hdc, RECT cli) const {
   UINT calcFlags = hf | DT_WORDBREAK | DT_NOPREFIX | DT_CALCRECT;
   UINT drawFlags = hf | DT_WORDBREAK | DT_NOPREFIX;
 
+  // 성경만: 절 번호 밑으로 줄이 감기도록 내어쓰기(PPTX 와 같은 1.7em). 찬양은 그대로 한 번에 그린다.
+  // 줄마다 첫 공백 앞(절 번호)은 왼쪽에, 나머지는 번호 폭만큼 들여 그린다.
+  auto blockPaint = [&](const std::wstring& text, int y, bool draw, int fontPt) -> int {
+    if (!slide_.isBible) {
+      RECT r = { bodyLeft, y, bodyRight, y + bodyBoxH };
+      DrawTextW(hdc, text.c_str(), -1, &r, draw ? drawFlags : calcFlags);
+      return r.bottom - r.top;
+    }
+    int total = 0;
+    size_t pos = 0;
+    while (pos <= text.size()) {
+      size_t nl = text.find(L'\n', pos);
+      std::wstring line = text.substr(pos, nl == std::wstring::npos ? std::wstring::npos : nl - pos);
+      size_t sp = line.find(L' ');
+      std::wstring num = sp == std::wstring::npos ? L"" : line.substr(0, sp);
+      std::wstring rest = sp == std::wstring::npos ? line : line.substr(sp + 1);
+      // 들여쓰기 = 절 번호 + 공백의 실제 글자 폭(글꼴·번호 자릿수에 맞는다).
+      int indent = 0;
+      if (!num.empty()) {
+        std::wstring numSp = num + L" ";
+        SIZE sz = {};
+        GetTextExtentPoint32W(hdc, numSp.c_str(), (int)numSp.size(), &sz);
+        indent = sz.cx;
+      }
+      RECT r = { bodyLeft + indent, y + total, bodyRight, y + total + bodyBoxH };
+      if (rest.empty()) rest = L" ";
+      DrawTextW(hdc, rest.c_str(), -1, &r, calcFlags);
+      int h = r.bottom - r.top;
+      if (draw) {
+        RECT n = { bodyLeft, y + total, bodyLeft + indent, y + total + h };
+        if (!num.empty())
+          DrawTextW(hdc, num.c_str(), -1, &n, DT_LEFT | DT_NOPREFIX | DT_SINGLELINE);
+        RECT d = { bodyLeft + indent, y + total, bodyRight, y + total + h };
+        DrawTextW(hdc, rest.c_str(), -1, &d, drawFlags);
+      }
+      total += h;
+      if (nl == std::wstring::npos) break;
+      pos = nl + 1;
+    }
+    return total;
+  };
+
   // Measure main text
   HFONT mainFont = makeFont(slide_.mainSz, true);
   HFONT old      = (HFONT)SelectObject(hdc, mainFont);
 
-  RECT mainCalc = { bodyLeft, bodyTop, bodyRight, bodyTop + bodyBoxH };
-  if (!slide_.main.empty())
-    DrawTextW(hdc, slide_.main.c_str(), -1, &mainCalc, calcFlags);
-  int mainH = slide_.main.empty() ? 0 : mainCalc.bottom - mainCalc.top;
+  int mainH = slide_.main.empty() ? 0
+      : blockPaint(slide_.main, bodyTop, false, (int)slide_.mainSz);
 
   // Measure english text
   int engGap = 0, engH = 0;
@@ -625,9 +665,7 @@ void PresentationChannel::Paint(HDC hdc, RECT cli) const {
     engGap  = (int)(slide_.mainSz * H / 540.0 * 0.4 + 0.5);
     engFont = makeFont(slide_.engSz, true);
     SelectObject(hdc, engFont);
-    engCalc = { bodyLeft, bodyTop, bodyRight, bodyTop + bodyBoxH };
-    DrawTextW(hdc, slide_.english.c_str(), -1, &engCalc, calcFlags);
-    engH = engCalc.bottom - engCalc.top;
+    engH = blockPaint(slide_.english, bodyTop, false, (int)slide_.engSz);
   }
 
   // Measure extra text (추가 보조 언어, 셋째 줄). 보조 줄과 같은 간격을 둔다.
@@ -637,9 +675,7 @@ void PresentationChannel::Paint(HDC hdc, RECT cli) const {
     extraGap  = (int)(slide_.mainSz * H / 540.0 * 0.4 + 0.5);
     extraFont = makeFont(slide_.extraSz, true);
     SelectObject(hdc, extraFont);
-    RECT extraCalc = { bodyLeft, bodyTop, bodyRight, bodyTop + bodyBoxH };
-    DrawTextW(hdc, slide_.extra.c_str(), -1, &extraCalc, calcFlags);
-    extraH = extraCalc.bottom - extraCalc.top;
+    extraH = blockPaint(slide_.extra, bodyTop, false, (int)slide_.extraSz);
   }
 
   int totalH = mainH + (engFont ? engGap + engH : 0)
@@ -658,8 +694,7 @@ void PresentationChannel::Paint(HDC hdc, RECT cli) const {
   SelectObject(hdc, mainFont);
   SetTextColor(hdc, slide_.txt);
   if (!slide_.main.empty()) {
-    RECT r = { bodyLeft, startY, bodyRight, startY + mainH + bodyBoxH };
-    DrawTextW(hdc, slide_.main.c_str(), -1, &r, drawFlags);
+    blockPaint(slide_.main, startY, true, (int)slide_.mainSz);
   }
 
   // Draw english text
@@ -667,8 +702,7 @@ void PresentationChannel::Paint(HDC hdc, RECT cli) const {
     SelectObject(hdc, engFont);
     SetTextColor(hdc, slide_.eng);
     int ey = startY + mainH + engGap;
-    RECT r = { bodyLeft, ey, bodyRight, ey + engH + bodyBoxH };
-    DrawTextW(hdc, slide_.english.c_str(), -1, &r, drawFlags);
+    blockPaint(slide_.english, ey, true, (int)slide_.engSz);
   }
 
   // Draw extra text
@@ -676,8 +710,7 @@ void PresentationChannel::Paint(HDC hdc, RECT cli) const {
     SelectObject(hdc, extraFont);
     SetTextColor(hdc, slide_.extraClr);
     int xy = startY + mainH + (engFont ? engGap + engH : 0) + extraGap;
-    RECT r = { bodyLeft, xy, bodyRight, xy + extraH + bodyBoxH };
-    DrawTextW(hdc, slide_.extra.c_str(), -1, &r, drawFlags);
+    blockPaint(slide_.extra, xy, true, (int)slide_.extraSz);
   }
 
   SelectObject(hdc, old);

@@ -745,12 +745,21 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate, WKNavi
       titlePositionCSS = "\(titleHorizCSS)\(titleVertCSS)"
     }
 
+    // 성경만 절마다 블록으로 감싸 번호 밑으로 줄이 감기게 한다(내어쓰기). 찬양은 <br> 그대로.
+    func linesHTML(_ t: String) -> String {
+      isBible
+        ? t.components(separatedBy: "\n").map { line -> String in
+            guard let sp = line.firstIndex(of: " ") else { return "<div class=\"v\"><span class=\"t\">\(line.isEmpty ? "&nbsp;" : line)</span></div>" }
+            return "<div class=\"v\"><span class=\"n\">\(line[..<sp])&nbsp;</span><span class=\"t\">\(line[line.index(after: sp)...])</span></div>"
+          }.joined()
+        : t.replacingOccurrences(of: "\n", with: "<br>")
+    }
     let englishSection = (includeEnglish && !englishText.isEmpty) ? """
-      <div class="english-text">\(englishText.replacingOccurrences(of: "\n", with: "<br>"))</div>
+      <div class="english-text">\(linesHTML(englishText))</div>
     """ : ""
 
     let extraSection = (includeExtra && !extraText.isEmpty) ? """
-      <div class="extra-text">\(extraText.replacingOccurrences(of: "\n", with: "<br>"))</div>
+      <div class="extra-text">\(linesHTML(extraText))</div>
     """ : ""
 
     let titleSection = showTitle ? """
@@ -783,11 +792,12 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate, WKNavi
       .extra-text{color:\(extraColor);font-size:calc(\(extraFontSize)/540*100vh);
         font-weight:700;line-height:1.3;text-align:\(textAlign);
         margin-top:0.4em;white-space:pre-wrap;width:100%;}
+      .v{display:flex;}.v .n{flex:none;white-space:pre;}.v .t{flex:1;min-width:0;}
       \(Self.pointerCSS)
     </style></head><body>
       <div id="stage">
         <div class="body-box">
-          <div class="main-text">\(mainText.replacingOccurrences(of: "\n", with: "<br>"))</div>
+          <div class="main-text">\(linesHTML(mainText))</div>
           \(englishSection)
           \(extraSection)
         </div>

@@ -73,6 +73,69 @@ class SlideTextLayout {
     );
   }
 
+  /// 성경만: 절 번호 밑으로 줄이 감기는 내어쓰기(PPTX 와 같은 1.7em). 찬양은 [bodySpan] 그대로.
+  /// 줄마다 첫 공백 앞(절 번호)을 따로 두고 나머지를 번호 폭만큼 들여 그린다.
+  static List<(String, TextStyle, double)> _bibleBlocks(
+    SlidePageData data,
+    double fontScale,
+    bool originalOnly,
+  ) {
+    final span = bodySpan(data, fontScale: fontScale, originalOnly: originalOnly);
+    final blocks = <(String, TextStyle, double)>[];
+    for (final c in span.children!.cast<TextSpan>()) {
+      final style = c.style!;
+      final text = blocks.isEmpty ? c.text! : c.text!.substring(1); // 앞의 '\n' 뺀다
+      blocks.add((text, style, style.fontSize! * 1.7));
+    }
+    return blocks;
+  }
+
+  static (String, String) _splitNum(String line) {
+    final i = line.indexOf(' ');
+    return i < 0 ? ('', line) : (line.substring(0, i), line.substring(i + 1));
+  }
+
+  static Widget bibleBody(
+    SlidePageData data, {
+    double fontScale = 1,
+    bool originalOnly = false,
+  }) {
+    final align = textAlign(data);
+    final blocks = _bibleBlocks(data, fontScale, originalOnly);
+    final bodySize = data.style.bibleFontSize * fontScale;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (var b = 0; b < blocks.length; b++) ...[
+          if (b > 0) SizedBox(height: bodySize * _blockGap),
+          for (final line in blocks[b].$1.split('\n'))
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: blocks[b].$3,
+                  child: Text(
+                    _splitNum(line).$1,
+                    style: blocks[b].$2,
+                    softWrap: false,
+                    overflow: TextOverflow.visible,
+                  ),
+                ),
+                Expanded(
+                  child: Text(
+                    _splitNum(line).$2,
+                    style: blocks[b].$2,
+                    textAlign: align,
+                  ),
+                ),
+              ],
+            ),
+        ],
+      ],
+    );
+  }
+
   static bool showsSub(SlidePageData data) =>
       data.style.includeEnglishLyrics && data.englishText.isNotEmpty;
 
@@ -97,19 +160,33 @@ class SlideTextLayout {
     if (data.mainText.isEmpty && !showsSub(data) && !showsExtra(data)) {
       return 0;
     }
-    final painter = TextPainter(
-      text: bodySpan(data, fontScale: scale),
-      textAlign: textAlign(data),
-      textDirection: TextDirection.ltr,
-    )..layout(maxWidth: boxW(data.isBible) * 72);
-    // 발표 창은 보조·추가 보조 블록 앞에 틈을 둔다(macOS margin-top 0.4em, Windows 본문 크기 × 0.4).
-    // 미리보기 글자 배치엔 없지만 실제 화면 높이엔 들어가므로 더 큰 쪽(본문 × 0.4)으로 더해 잰다.
+    var textHeight = 0.0;
+    if (data.isBible) {
+      for (final b in _bibleBlocks(data, scale, false)) {
+        for (final line in b.$1.split('\n')) {
+          final p = TextPainter(
+            text: TextSpan(text: _splitNum(line).$2, style: b.$2),
+            textAlign: textAlign(data),
+            textDirection: TextDirection.ltr,
+          )..layout(maxWidth: boxW(true) * 72 - b.$3);
+          textHeight += p.height;
+          p.dispose();
+        }
+      }
+    } else {
+      final painter = TextPainter(
+        text: bodySpan(data, fontScale: scale),
+        textAlign: textAlign(data),
+        textDirection: TextDirection.ltr,
+      )..layout(maxWidth: boxW(false) * 72);
+      textHeight = painter.height;
+      painter.dispose();
+    }
     final blocks = (showsSub(data) ? 1 : 0) + (showsExtra(data) ? 1 : 0);
     final bodyFontSize = data.isBible
         ? data.style.bibleFontSize
         : data.style.fontSize;
-    final height = painter.height + blocks * bodyFontSize * scale * _blockGap;
-    painter.dispose();
+    final height = textHeight + blocks * bodyFontSize * scale * _blockGap;
     return height / (lyricsBoxH * 72);
   }
 
