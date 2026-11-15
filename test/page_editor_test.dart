@@ -261,6 +261,47 @@ void main() {
     expect((composed!.single as PageTextElement).rich, isNull);
   });
 
+  testWidgets('모두 기본값으로: 크기·색·굵기 직접 지정만 지우고 기울임은 남긴다', (tester) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () => showDialog<PageEditorResult>(
+              context: context,
+              builder: (_) => PageEditorDialog(
+                style: _style,
+                compose: (elements, _) async => '/tmp/render.png',
+                readClipboardImage: () async => null,
+              ),
+            ),
+            child: const Text('열기'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('열기'));
+    await tester.pumpAndSettle();
+
+    final c = _quill(tester);
+    c.replaceText(0, 0, '광고입니다', null);
+    c.formatText(0, 2, Attribute.italic);
+    c.formatText(0, 2, const SizeAttribute('60'));
+    c.formatText(0, 2, const ColorAttribute('#FFFF0000'));
+    await tester.pump();
+    expect(find.textContaining('직접 바꾼 글자 1곳'), findsOneWidget);
+
+    await tester.ensureVisible(find.text('모두 기본값으로'));
+    await tester.tap(find.text('모두 기본값으로'));
+    await tester.pump();
+
+    final attrs = c.document.toDelta().toJson().first['attributes'] as Map?;
+    expect(attrs, {'italic': true});
+    expect(find.text('모두 기본값으로'), findsNothing);
+  });
+
   testWidgets('클립보드 그림 읽기가 실패해도 글자가 있으면 글 상자로 넣는다', (tester) async {
     tester.view.physicalSize = const Size(1600, 1000);
     tester.view.devicePixelRatio = 1;

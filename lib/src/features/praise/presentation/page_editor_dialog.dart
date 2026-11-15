@@ -508,6 +508,51 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
     }
   }
 
+  TextStyle _previewBase(PageTextElement e) => TextStyle(
+    fontFamily: e.fontFamily,
+    fontSize: e.fontSize,
+    color: e.color,
+    fontWeight: e.bold ? FontWeight.w700 : FontWeight.w400,
+    height: 1.2,
+  );
+
+  /// 미리보기 입력칸 글자 배율(슬라이드 pt → 패널 폭에 맞춘 비율).
+  static const _previewScale = 0.35;
+
+  static const _directKeys = ['size', 'color', 'bold'];
+
+  /// 크기·색·굵기를 직접 지정한 글 덩어리 수.
+  int _directFormatCount() => _quill.document.toDelta().toJson().where((op) {
+    final a = op['attributes'];
+    return a is Map && _directKeys.any(a.containsKey);
+  }).length;
+
+  /// 글 전체에서 크기·색·굵기 직접 지정만 지운다(기울임·밑줄·취소선·목록은 그대로).
+  /// 창 되돌리기로 한 번에 되돌아가게 묶음을 끊고 시작한다.
+  void _clearDirectFormats() {
+    _editSession = false;
+    var offset = 0;
+    for (final op in _quill.document.toDelta().toJson()) {
+      final len = (op['insert'] as String).length;
+      final a = op['attributes'];
+      if (a is Map) {
+        for (final key in _directKeys.where(a.containsKey)) {
+          _quill.formatText(
+            offset,
+            len,
+            Attribute.clone(switch (key) {
+              'size' => Attribute.size,
+              'color' => Attribute.color,
+              _ => Attribute.bold,
+            }, null),
+          );
+        }
+      }
+      offset += len;
+    }
+    _editSession = false;
+  }
+
   /// 입력·서식이 바뀌면 고른 글 상자에 평문(text)과 서식 글(rich)을 같이 담는다.
   void _onQuillChanged() {
     if (_syncingQuill) return;
@@ -919,7 +964,7 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
                       ),
                       VerticalDivider(width: 1, color: cs.outlineVariant),
                       SizedBox(
-                        width: 280,
+                        width: 320,
                         child: _blockWhileComposing(
                           FocusTraversalOrder(
                             order: const NumericFocusOrder(3),
@@ -1460,6 +1505,11 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
     TextStyle? label,
   ) {
     return [
+      Text(
+        _quill.selection.isCollapsed ? '고른 글자 (글자를 드래그해 고르세요)' : '고른 글자',
+        style: label?.copyWith(fontWeight: FontWeight.w700),
+      ),
+      const SizedBox(height: 6),
       Localizations.override(
         context: context,
         delegates: const [FlutterQuillLocalizations.delegate],
@@ -1471,6 +1521,8 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
               config: QuillSimpleToolbarConfig(
                 multiRowsDisplay: true,
                 showDividers: false,
+                showUndo: false,
+                showRedo: false,
                 showFontFamily: false,
                 showSmallButton: false,
                 showInlineCode: false,
@@ -1489,8 +1541,32 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
                 showSuperscript: false,
                 showLineHeightButton: false,
                 buttonOptions: QuillSimpleToolbarButtonOptions(
+                  bold: const QuillToolbarToggleStyleButtonOptions(
+                    tooltip: '굵게',
+                  ),
+                  italic: const QuillToolbarToggleStyleButtonOptions(
+                    tooltip: '기울임',
+                  ),
+                  underLine: const QuillToolbarToggleStyleButtonOptions(
+                    tooltip: '밑줄',
+                  ),
+                  strikeThrough: const QuillToolbarToggleStyleButtonOptions(
+                    tooltip: '취소선',
+                  ),
+                  listBullets: const QuillToolbarToggleStyleButtonOptions(
+                    tooltip: '글머리 기호',
+                  ),
+                  listNumbers: const QuillToolbarToggleStyleButtonOptions(
+                    tooltip: '번호 목록',
+                  ),
+                  color: const QuillToolbarColorButtonOptions(tooltip: '글자 색'),
+                  clearFormat: const QuillToolbarClearFormatButtonOptions(
+                    tooltip: '고른 글자의 서식 지우기',
+                  ),
                   fontSize: QuillToolbarFontSizeButtonOptions(
+                    tooltip: '글자 크기 (슬라이드 기준 pt)',
                     items: {
+                      '기본값으로': '0',
                       for (final n in const [
                         24,
                         30,
@@ -1510,17 +1586,46 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
               ),
             ),
             const SizedBox(height: 6),
+            // 슬라이드와 같은 글꼴·기본 색·페이지 배경 색(앱 테마가 아니라 슬라이드 색 — 의도된 예외).
+            // 크기는 비율만 보이게 줄여 그린다(textScaler).
             Container(
-              height: 150,
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
+                color: _background.color,
                 border: Border.all(color: cs.outline),
                 borderRadius: BorderRadius.circular(4),
               ),
-              child: QuillEditor.basic(
-                controller: _quill,
-                focusNode: _textFocus,
-                config: const QuillEditorConfig(placeholder: '글'),
+              child: MediaQuery(
+                data: MediaQuery.of(
+                  context,
+                ).copyWith(textScaler: const TextScaler.linear(_previewScale)),
+                child: QuillEditor.basic(
+                  controller: _quill,
+                  focusNode: _textFocus,
+                  config: QuillEditorConfig(
+                    placeholder: '글을 입력하세요',
+                    minHeight: 120,
+                    maxHeight: 220,
+                    customStyles: DefaultStyles(
+                      paragraph: DefaultTextBlockStyle(
+                        _previewBase(e),
+                        HorizontalSpacing.zero,
+                        VerticalSpacing.zero,
+                        VerticalSpacing.zero,
+                        null,
+                      ),
+                      // 목록 줄도 같은 글꼴·색 — 안 넣으면 앱 테마 글자색이 슬라이드 배경에 묻힌다.
+                      lists: DefaultListBlockStyle(
+                        _previewBase(e),
+                        HorizontalSpacing.zero,
+                        VerticalSpacing.zero,
+                        VerticalSpacing.zero,
+                        null,
+                        null,
+                      ),
+                    ),
+                  ),
+                ),
               ),
             ),
           ],
@@ -1528,11 +1633,28 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
       ),
       const SizedBox(height: 4),
       Text(
-        '글자를 드래그해 골라 굵게·색·크기를 바꿉니다. 고르지 않은 글은 아래 상자 설정을 따릅니다.',
+        '미리보기는 줄여서 보여 줍니다. 실제 크기는 캔버스에서 확인하세요.'
+        '${(e.rich?.contains('"list"') ?? false) ? ' 목록 기호는 슬라이드에서 글머리 문자로 표시됩니다.' : ''}',
         style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
       ),
-      const SizedBox(height: 16),
-      Text('글자 크기 ${e.fontSize.round()}pt', style: label),
+      if (_directFormatCount() > 0) ...[
+        const SizedBox(height: 12),
+        Text(
+          '직접 바꾼 글자 ${_directFormatCount()}곳(크기·색·굵기)은 아래 기본값을 따르지 않습니다.',
+          style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+        ),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton(
+            onPressed: _clearDirectFormats,
+            child: const Text('모두 기본값으로'),
+          ),
+        ),
+      ],
+      const Divider(height: 28),
+      Text('상자 전체 기본값', style: label?.copyWith(fontWeight: FontWeight.w700)),
+      const SizedBox(height: 12),
+      Text('기본 글자 크기 ${e.fontSize.round()}pt', style: label),
       Row(
         children: [
           Expanded(
@@ -1579,7 +1701,7 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
         ],
       ),
       const SizedBox(height: 12),
-      Text('색', style: label),
+      Text('기본 글자 색', style: label),
       const SizedBox(height: 6),
       Wrap(
         spacing: 8,
@@ -1629,11 +1751,13 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
         ],
       ),
       const SizedBox(height: 12),
+      Text('기본 굵게 · 상자 정렬', style: label),
+      const SizedBox(height: 6),
       Row(
         children: [
           IconButton(
             icon: const Icon(Icons.format_bold_rounded),
-            tooltip: '굵게',
+            tooltip: '기본 굵게',
             isSelected: e.bold,
             style: IconButton.styleFrom(
               backgroundColor: e.bold ? cs.secondaryContainer : null,
