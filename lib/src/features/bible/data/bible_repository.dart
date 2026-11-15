@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import '../../praise/data/praise_database.dart';
 import '../domain/bible_text_search.dart';
+import '../domain/bible_voice_parse.dart' show composeHangul;
 import '../domain/bible_verse.dart';
 
 class BibleRepository {
@@ -191,7 +192,7 @@ class BibleRepository {
     String jsonString, {
     required String version,
   }) async {
-    final normalizedVersion = version.trim();
+    final normalizedVersion = composeHangul(version.trim());
     if (normalizedVersion.isEmpty) {
       throw Exception('성경 버전 이름을 입력해 주세요.');
     }
@@ -202,11 +203,20 @@ class BibleRepository {
 
     final db = await _db.database;
     await db.transaction((txn) async {
-      await txn.delete(
-        'bible_verses',
-        where: 'bible_version = ?',
-        whereArgs: [normalizedVersion],
+      // DB 역본 이름이 자모가 풀린 꼴(NFD)일 수 있어, 합쳐서 같은 이름이면 같은 역본으로 보고 지운다.
+      final rows = await txn.rawQuery(
+        'SELECT DISTINCT bible_version FROM bible_verses',
       );
+      for (final r in rows) {
+        final name = r['bible_version'] as String;
+        if (composeHangul(name) == normalizedVersion) {
+          await txn.delete(
+            'bible_verses',
+            where: 'bible_version = ?',
+            whereArgs: [name],
+          );
+        }
+      }
       for (final v in verses) {
         await txn.insert('bible_verses', {
           'bible_version': normalizedVersion,
