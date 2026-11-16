@@ -74,6 +74,7 @@ import 'slide_text_layout.dart';
 import 'cloud_conti_dialog.dart';
 import 'conti_text_import_dialog.dart';
 import 'sync_dialog.dart';
+import 'heard_bubble.dart';
 
 class PraiseHomePage extends StatefulWidget {
   const PraiseHomePage({super.key});
@@ -314,6 +315,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   // 발표 보기 성경 음성 검색. null = 꺼짐. 켜 두는 동안 계속 듣는다.
   final SpeechListener _speech = SpeechListener();
   final ValueNotifier<_VoiceState?> _voice = ValueNotifier(null);
+  // 들린 말 말풍선(성경 음성 검색과 따로 켠다, 마이크는 같이 쓴다). 2차(싱어 전송)도 이 값을 읽는다.
+  final ValueNotifier<HeardBubble?> _bubble = ValueNotifier(null);
+  bool _bubbleOn = false;
+  bool _micOpen = false;
+  Future<String?>? _micStart;
+  int _bubbleSeq = 0;
+  Timer? _bubbleTimer;
   List<String> _voiceVersions = const [];
   // 이어 말하기("17절")·역본은 켤 때마다 새로 시작한다.
   String _voiceVersion = '';
@@ -474,6 +482,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   @override
   void initState() {
     super.initState();
+    // 말풍선은 켤 때마다 무조건 켜진 채로 시작한다(끈 값은 저장하지 않는다).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_bubbleOn) _toggleBubble();
+    });
     // 일시정지·리셋·목표를 바꾸면 싱어 화면(네이티브·휴대폰)도 바로 맞춘다.
     _presenterView.timer.addListener(_sendSingerView);
     _singerWeb.running.addListener(_clearMessageIfServerOff);
@@ -577,7 +589,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   @override
   void dispose() {
     _insertFlashTimer?.cancel();
+    _bubbleTimer?.cancel();
     _speech.stop();
+    _bubble.dispose();
     _voice.dispose();
     _presenterView.timer.removeListener(_sendSingerView);
     _singerWeb.running.removeListener(_clearMessageIfServerOff);
@@ -3565,12 +3579,52 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _voiceBooks.clear();
     _voiceChain = null;
     _voiceUndo = null;
+    setState(() {
+      _voice.value = _VoiceState(
+        version: _voiceVersion,
+        message: '구절을 말하면 다음 장에 넣습니다',
+      );
+    });
+    final error = await _startMic(versions);
+    if (error == null) return;
+    if (!mounted) return;
+    AppLogger.instance.info('[voice] 못 켬: $error');
+    setState(() => _voice.value = null);
+    _showSnack('음성 인식을 켤 수 없습니다: $error');
+  }
+
+  Future<void> _stopVoice() async {
+    setState(() => _voice.value = null);
+    if (!_bubbleOn) await _stopMic();
+  }
+
+  Future<void> _stopMic() async {
+    _micOpen = false;
+    await _speech.stop();
+  }
+
+  /// 마이크를 연다(성경 음성 검색·말풍선이 같이 쓴다). 켰으면 null, 못 켰으면 이유.
+  Future<String?> _startMic(List<String> versions) {
+    // 이미 열려 있으면 그대로 쓴다(콜백이 상태를 읽으므로 다시 켤 필요 없다 — 다시 켜면 그 사이 말이 끊긴다).
+    if (_micOpen) return Future.value(null);
+    // 켜는 중이면 같은 요청을 같이 기다린다(두 번 start 하지 않게).
+    return _micStart ??= _openMic(
+      versions,
+    ).whenComplete(() => _micStart = null);
+  }
+
+  Future<String?> _openMic(List<String> versions) async {
     _speech
       ..onPartial = (text) {
+        if (!mounted) return;
         final v = _voice.value;
         if (v != null) _voice.value = v.copyWith(heard: text);
+        if (_bubbleOn && text.isNotEmpty) _showBubble(text);
       }
       ..onFinal = (text) {
+        if (!mounted) return;
+        if (_bubbleOn && text.isNotEmpty) _showBubble(text, isFinal: true);
+        if (_voice.value == null) return;
         // 하나가 실패해도 다음 마디는 처리되게 오류를 여기서 받는다.
         _voiceQueue = _voiceQueue
             .then((_) => _onVoiceHeard(text))
@@ -3580,35 +3634,77 @@ class _PraiseHomePageState extends State<PraiseHomePage>
             );
       }
       ..onError = (message) {
-        if (_voice.value == null) return;
+        if (!mounted || (_voice.value == null && !_bubbleOn)) return;
         AppLogger.instance.info('[voice] 멈춤: $message');
-        setState(() => _voice.value = null);
-        _showSnack('성경 음성 검색이 꺼졌습니다: $message');
+        _micOpen = false;
+        final voiceWasOn = _voice.value != null;
+        final bubbleWasOn = _bubbleOn;
+        setState(() {
+          _voice.value = null;
+          _bubbleOn = false;
+        });
+        if (bubbleWasOn) _showBubble(message, isError: true, hold: 5);
+        if (voiceWasOn) _showSnack('성경 음성 검색이 꺼졌습니다: $message');
       };
-    setState(() {
-      _voice.value = _VoiceState(
-        version: _voiceVersion,
-        message: '구절을 말하면 다음 장에 넣습니다',
-      );
-    });
     final error = await _speech.start(
       grammar: bibleVoiceGrammar(versions),
       hints: [...bibleCanonKorean, ...versions, '장', '절', '편'],
     );
-    if (error == null) {
-      // 권한 창이 떠 있는 사이에 다시 눌러 껐으면 켜진 마이크를 끈다.
-      if (_voice.value == null || !mounted) await _speech.stop();
-      return;
-    }
-    if (!mounted) return;
-    AppLogger.instance.info('[voice] 못 켬: $error');
-    setState(() => _voice.value = null);
-    _showSnack('음성 인식을 켤 수 없습니다: $error');
+    if (error != null) return error;
+    _micOpen = true;
+    // 권한 창이 떠 있는 사이에 다시 눌러 껐으면 켜진 마이크를 끈다.
+    if ((_voice.value == null && !_bubbleOn) || !mounted) await _stopMic();
+    return null;
   }
 
-  Future<void> _stopVoice() async {
-    setState(() => _voice.value = null);
-    await _speech.stop();
+  /// 말풍선에 글을 띄우고 [hold] 초 뒤 사라지게 한다(새 글이 오면 다시 센다). 페이지 setState 없음.
+  void _showBubble(
+    String text, {
+    bool isFinal = false,
+    bool isError = false,
+    int hold = 3,
+  }) {
+    _bubbleTimer?.cancel();
+    _bubble.value = HeardBubble(
+      text,
+      isFinal: isFinal,
+      isError: isError,
+      seq: ++_bubbleSeq,
+    );
+    _bubbleTimer = Timer(Duration(seconds: hold), () => _bubble.value = null);
+  }
+
+  Future<void> _toggleBubble() async {
+    if (_bubbleOn) {
+      await _stopBubble();
+      return;
+    }
+    setState(() => _bubbleOn = true);
+    _showBubble('마이크를 켜는 중…', hold: 10);
+    final seq = _bubbleSeq;
+    // 성경 데이터가 없어도 켠다(문법에만 쓰인다).
+    var versions = const <String>[];
+    try {
+      versions = await _bibleRepository.getVersions();
+    } catch (e) {
+      AppLogger.instance.info('[voice] 역본 목록 못 읽음(문법 없이 켬): $e');
+    }
+    final error = await _startMic(versions);
+    if (!mounted || !_bubbleOn) return;
+    if (error != null) {
+      AppLogger.instance.info('[voice] 말풍선 못 켬: $error');
+      setState(() => _bubbleOn = false);
+      _showBubble(error, isError: true, hold: 5);
+      return;
+    }
+    if (_bubbleSeq == seq) _showBubble('듣는 중…', hold: 2);
+  }
+
+  Future<void> _stopBubble() async {
+    _bubbleTimer?.cancel();
+    _bubble.value = const HeardBubble('');
+    setState(() => _bubbleOn = false);
+    if (_voice.value == null) await _stopMic();
   }
 
   void _voiceMessage(String message, {bool error = false}) {
@@ -6309,6 +6405,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               isActive: _mainTabController.index == 1,
                               voice: _voice,
                               onToggleVoice: _toggleVoice,
+                              bubbleOn: _bubbleOn,
+                              onToggleBubble: _toggleBubble,
                               onShowVoiceInsert: _showVoiceInsert,
                               onUndoVoiceInsert: _undoVoiceInsert,
                               onTransposeChanged: (uid, n) =>
@@ -6496,6 +6594,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                   },
                 ),
               ),
+              HeardBubbleOverlay(bubble: _bubble),
             ],
           ),
         ),
@@ -12935,6 +13034,8 @@ class _PresenterConsole extends StatefulWidget {
     required this.isActive,
     required this.voice,
     required this.onToggleVoice,
+    required this.bubbleOn,
+    required this.onToggleBubble,
     required this.onShowVoiceInsert,
     required this.onUndoVoiceInsert,
     required this.onTransposeChanged,
@@ -13004,6 +13105,8 @@ class _PresenterConsole extends StatefulWidget {
   // 성경 음성 검색. 값이 null 이면 꺼짐.
   final ValueListenable<_VoiceState?> voice;
   final VoidCallback onToggleVoice;
+  final bool bubbleOn;
+  final VoidCallback onToggleBubble;
   final VoidCallback onShowVoiceInsert;
   final VoidCallback onUndoVoiceInsert;
   // 코드 있는 곡 항목의 조 값(반음)을 바꾼다. 관객 화면은 그대로, 싱어·휴대폰만 다시 보낸다.
@@ -14027,6 +14130,16 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
               ? '성경 음성 검색 끄기'
               : '성경 음성 검색 (말한 구절을 다음 장에 넣기)',
           color: widget.voice.value != null ? cs.primary : null,
+        ),
+        IconButton(
+          onPressed: widget.onToggleBubble,
+          icon: Icon(
+            widget.bubbleOn
+                ? Icons.chat_bubble_rounded
+                : Icons.chat_bubble_outline_rounded,
+          ),
+          tooltip: widget.bubbleOn ? '말풍선 끄기' : '말풍선 켜기 (들리는 말을 화면 위에 보여 줍니다)',
+          color: widget.bubbleOn ? cs.primary : null,
         ),
         IconButton(
           onPressed: () =>
