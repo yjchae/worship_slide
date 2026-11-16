@@ -187,6 +187,27 @@ class BibleRepository {
     return target[index];
   }
 
+  /// [version] 한 역본 전체를 임포트 형식 A(`[{book,chapter,verse,text}]`) JSON 으로. 동기화용.
+  Future<String> exportVersionJson(String version) async {
+    final db = await _db.database;
+    final rows = await db.query(
+      'bible_verses',
+      columns: ['book_name', 'chapter', 'verse', 'text'],
+      where: 'bible_version = ?',
+      whereArgs: [version],
+      orderBy: 'id',
+    );
+    return jsonEncode([
+      for (final r in rows)
+        {
+          'book': r['book_name'],
+          'chapter': r['chapter'],
+          'verse': r['verse'],
+          'text': r['text'],
+        },
+    ]);
+  }
+
   // JSON 임포트 — 기존 데이터 삭제 후 재삽입
   Future<int> importFromJson(
     String jsonString, {

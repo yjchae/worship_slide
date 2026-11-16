@@ -5609,6 +5609,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       if (result.addedCount > 0) '새 찬양 ${result.addedCount}곡',
       if (result.updatedCount > 0) '바뀐 찬양 ${result.updatedCount}곡',
       if (result.deletedCount > 0) '지운 찬양 ${result.deletedCount}곡',
+      if (_sync.lastBiblesAdded > 0)
+        '받은 성경 ${_sync.lastBiblesAdded}개(성경 탭을 다시 열면 보입니다)',
     ];
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(

@@ -121,6 +121,24 @@ class _SyncDialogState extends State<SyncDialog> {
                 _FolderBox(status: status),
                 const SizedBox(height: 12),
                 _StatusLine(status: status),
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  dense: true,
+                  value: widget.service.bibleUpload,
+                  onChanged: (v) async {
+                    await widget.service.setBibleUpload(v ?? false);
+                    if (mounted) setState(() {});
+                  },
+                  title: const Text(
+                    '이 PC 의 성경을 올립니다',
+                    style: TextStyle(fontSize: 13),
+                  ),
+                  subtitle: Text(
+                    '성경을 관리하는 PC 한 대만 켜세요. 꺼진 PC 는 성경을 받기만 합니다.',
+                    style: muted,
+                  ),
+                ),
               ] else ...[
                 TextField(
                   controller: _keyController,

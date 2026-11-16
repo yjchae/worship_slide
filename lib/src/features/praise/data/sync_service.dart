@@ -7,11 +7,14 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../../bible/data/bible_repository.dart';
+import '../../bible/domain/bible_voice_parse.dart' show composeHangul;
 import '../domain/worship_conti.dart';
 import 'app_logger.dart';
 import 'atomic_file.dart';
 import 'conti_cloud_repository.dart';
 import 'drive_sync_store.dart';
+import 'fnv_hash.dart';
 import 'praise_database.dart';
 import 'song_sync_repository.dart';
 import 'sync_snapshot.dart';
@@ -100,11 +103,13 @@ class SyncService {
     SongSyncRepository? songs,
     ContiCloudRepository? contiCloud,
     WorshipContiRepository? contis,
+    BibleRepository? bibles,
     Future<Directory> Function()? settingsDirectory,
     String? deviceName,
     DateTime Function()? clock,
   }) : _songs = songs ?? SongSyncRepository(),
        _contis = contis ?? WorshipContiRepository(),
+       _bibles = bibles ?? BibleRepository(),
        _settingsDirectory = settingsDirectory ?? getApplicationSupportDirectory,
        _deviceName = deviceName ?? Platform.localHostname,
        _clock = clock ?? DateTime.now {
@@ -116,6 +121,7 @@ class SyncService {
 
   final SongSyncRepository _songs;
   final WorshipContiRepository _contis;
+  final BibleRepository _bibles;
   late final ContiCloudRepository _cloud;
   final Future<Directory> Function() _settingsDirectory;
   final String _deviceName;
@@ -176,6 +182,15 @@ class SyncService {
         _lastWrittenAt = json['written_at'] is int
             ? json['written_at'] as int
             : null;
+        bibleUpload = json['bible_upload'] == true;
+        final bibleSeen = json['bible_seen'];
+        if (bibleSeen is Map) {
+          _bibleSeen.addAll({
+            for (final e in bibleSeen.entries)
+              if (e.key is String && e.value is String)
+                e.key as String: e.value as String,
+          });
+        }
         final seen = json['seen_contis'];
         if (seen is List) _seenContis.addAll(seen.whereType<String>());
       }
@@ -259,6 +274,8 @@ class SyncService {
         final result = await _songs.merge(read.snapshots);
         merged = true;
         await _writeOwn(dirs.store, dirs.own);
+        final bibles = await _syncBibles(dirs.store);
+        lastBiblesAdded = bibles.added;
         _setStatus(
           status.value.copyWith(
             syncing: false,
@@ -267,9 +284,14 @@ class SyncService {
             hasLocalChanges: _localChangeCount != changesAtStart,
             peers: _peerNames(read.snapshots),
             lastError: () => null,
-            warning: () => read.unreadable == 0
+            warning: () => read.unreadable == 0 && bibles.failed == 0
                 ? null
-                : '다른 PC 파일 ${read.unreadable}개를 읽지 못했습니다. 잠시 뒤에 다시 눌러 주세요.',
+                : [
+                    if (read.unreadable > 0)
+                      '다른 PC 파일 ${read.unreadable}개를 읽지 못했습니다.',
+                    if (bibles.failed > 0) '성경 ${bibles.failed}개를 맞추지 못했습니다.',
+                    '잠시 뒤에 다시 눌러 주세요.',
+                  ].join(' '),
           ),
         );
         if (result.changed) {
@@ -288,6 +310,119 @@ class SyncService {
         return null;
       }
     });
+  }
+
+  /// 마지막 '찬양 동기화'에서 새로 받은 성경 역본 수(화면이 알리는 데 쓴다).
+  int lastBiblesAdded = 0;
+
+  /// 이 PC 가 성경을 드라이브에 올린다(성경을 올리는 PC 한 대만 켠다). 꺼져 있으면 받기만 한다.
+  bool bibleUpload = false;
+
+  /// 받은 성경 파일 이름 → 그때 드라이브 파일의 크기:수정 시각. 달라지면(올리는 PC 가 다시 올림) 다시 받아 바꾼다.
+  final _bibleSeen = <String, String>{};
+
+  Future<void> setBibleUpload(bool value) => _enqueue(() async {
+    bibleUpload = value;
+    await _saveSettings();
+  });
+
+  static const _biblePrefix = 'bible_';
+
+  /// 역본 이름 → 드라이브 파일 이름. 이름은 16진수로 넣어 둔다(받기 전에 어느 역본인지 알려고).
+  static String _bibleFile(String version) =>
+      '$_biblePrefix${utf8.encode(composeHangul(version)).map((b) => b.toRadixString(16).padLeft(2, '0')).join()}.json.gz';
+
+  static String? _bibleVersionOf(String file) {
+    final hex = file.substring(
+      _biblePrefix.length,
+      file.length - '.json.gz'.length,
+    );
+    if (hex.isEmpty || hex.length.isOdd) return null;
+    try {
+      return utf8.decode([
+        for (var i = 0; i < hex.length; i += 2)
+          int.parse(hex.substring(i, i + 2), radix: 16),
+      ]);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 성경 역본 맞추기: [bibleUpload] 인 PC 만 올린다(없거나 내용이 달라졌으면). 모든 PC 는 이 PC 에 없거나 올리는 PC 가 다시 올린 역본을 받아 바꾼다.
+  /// 한 역본이 실패해도 나머지는 계속한다. 손으로 끊으면 그대로 던진다.
+  Future<({int added, int failed})> _syncBibles(SyncStore store) async {
+    try {
+      return await _syncBiblesIn(store);
+    } catch (error, stack) {
+      // 목록을 못 읽는 등 — 이미 끝난 찬양 동기화까지 실패로 만들지 않는다.
+      if (isCancelled(error)) rethrow;
+      await AppLogger.instance.error('성경 동기화 실패', error, stack);
+      return (added: 0, failed: 1);
+    }
+  }
+
+  Future<({int added, int failed})> _syncBiblesIn(SyncStore store) async {
+    var added = 0, failed = 0;
+    final cloud = {
+      for (final e in await store.list())
+        if (e.name.startsWith(_biblePrefix) && e.name.endsWith('.json.gz'))
+          e.name: e,
+    };
+    final local = {
+      for (final v in await _bibles.getVersions()) _bibleFile(v): v,
+    };
+    final dir = await Directory.systemTemp.createTemp('ws_bible_');
+    try {
+      final temp = File(p.join(dir.path, 'bible.json.gz'));
+      for (final e
+          in bibleUpload ? local.entries : const <MapEntry<String, String>>[]) {
+        try {
+          final json = await _bibles.exportVersionJson(e.value);
+          final bytes = await Isolate.run(() => gzip.encode(utf8.encode(json)));
+          // 올린 내용의 해시를 기억해 안 바뀐 역본은 다시 올리지 않는다(드라이브에서 지워졌으면 다시 올린다).
+          final hash = fnvHex(bytes);
+          if (cloud.containsKey(e.key) && _bibleSeen['up:${e.key}'] == hash) {
+            continue;
+          }
+          await temp.writeAsBytes(bytes);
+          final up = await store.upload(e.key, temp);
+          // 내가 올린 것은 내 것이다 — 올리기를 끄고 나서 같은 파일을 다시 받아 덮어쓰지 않게.
+          _bibleSeen['up:${e.key}'] = hash;
+          _bibleSeen[e.key] =
+              '${up.size}:${up.modified.millisecondsSinceEpoch}';
+          await _saveSettings();
+        } catch (error, stack) {
+          if (isCancelled(error)) rethrow;
+          failed += 1;
+          await AppLogger.instance.error('성경 올리기 실패 ${e.value}', error, stack);
+        }
+      }
+      for (final e in cloud.entries) {
+        if (bibleUpload) break; // 올리는 PC 는 받지 않는다.
+        final sig =
+            '${e.value.size}:${e.value.modified.millisecondsSinceEpoch}';
+        if (local.containsKey(e.key) && _bibleSeen[e.key] == sig) continue;
+        final version = _bibleVersionOf(e.key);
+        if (version == null) continue;
+        try {
+          await store.download(e.value, temp);
+          final json = await Isolate.run(
+            () => utf8.decode(gzip.decode(temp.readAsBytesSync())),
+          );
+          await _bibles.importFromJson(json, version: version);
+          added += 1;
+          _bibleSeen[e.key] = sig;
+          await _saveSettings();
+        } catch (error, stack) {
+          if (isCancelled(error)) rethrow;
+          failed += 1;
+          await AppLogger.instance.error('성경 받기 실패 $version', error, stack);
+        }
+      }
+    } finally {
+      await dir.delete(recursive: true).catchError((_) => dir);
+    }
+    return (added: added, failed: failed);
   }
 
   /// **프로그램을 켤 때 한 번.** 서버에 새 찬양·바뀐 찬양·새 콘티가 있는지만 본다(DB 는 그대로).
@@ -471,6 +606,8 @@ class SyncService {
         jsonEncode({
           'device_id': _deviceId,
           'written_at': _lastWrittenAt,
+          'bible_upload': bibleUpload,
+          'bible_seen': _bibleSeen,
           'seen_contis': _seenContis.toList()..sort(),
         }),
       );

@@ -5,6 +5,7 @@ import 'dart:isolate';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:worship_slides/src/features/bible/data/bible_repository.dart';
 import 'package:worship_slides/src/features/praise/data/conti_cloud_repository.dart';
 import 'package:worship_slides/src/features/praise/data/praise_database.dart';
 import 'package:worship_slides/src/features/praise/data/praise_repository.dart';
@@ -26,6 +27,8 @@ class _Pc {
   final WorshipContiRepository contis;
   final SyncService sync;
   final Directory dir;
+
+  late final BibleRepository bible;
 
   Future<List<PraiseSong>> songs() => repo.searchSongs('');
 
@@ -61,9 +64,11 @@ void main() {
       database: database,
       supportDirectory: () async => dir,
     );
+    final bible = BibleRepository(database: database);
     final sync = SyncService(
       songs: SongSyncRepository(database: database),
       contis: contis,
+      bibles: bible,
       settingsDirectory: () async => dir,
       deviceName: name,
       clock: () => now,
@@ -74,7 +79,7 @@ void main() {
     // 앱과 같이: 곡을 고치면 동기화에 알린다(상태 표시만, 자동으로 맞추지 않는다).
     final repo = PraiseRepository(database: database)
       ..onSongsChanged = sync.markLocalChanged;
-    return _Pc(repo, contis, sync, dir);
+    return _Pc(repo, contis, sync, dir)..bible = bible;
   }
 
   PraiseSong song(String title, String lyrics, [String english = '']) =>
@@ -96,6 +101,56 @@ void main() {
       }
     }
   }
+
+  test('성경은 올리기를 켠 PC 에서만 올라가고, 다른 PC 는 받기만 한다', () async {
+    final a = await newPc('a');
+    final b = await newPc('b');
+    await a.bible.importFromJson(
+      '[{"book":"창세기","chapter":1,"verse":1,"text":"태초에"}]',
+      version: '새번역',
+    );
+    await syncAll([a, b]);
+    // 올리기를 켜지 않은 PC 는 올리지 않는다.
+    expect(await b.bible.getVersions(), isEmpty);
+    await a.sync.setBibleUpload(true);
+    await syncAll([a, b]);
+    expect(await b.bible.getVersions(), ['새번역']);
+    // 올리는 PC 가 역본을 고쳐 다시 올리면 받는 PC 도 그 내용으로 바뀐다.
+    await b.bible.importFromJson(
+      '[{"book":"창세기","chapter":1,"verse":1,"text":"옛것"}]',
+      version: '새번역',
+    );
+    await a.bible.importFromJson(
+      '[{"book":"창세기","chapter":1,"verse":1,"text":"새것입니다"}]',
+      version: '새번역',
+    );
+    await syncAll([a, b]);
+    expect(
+      (await b.bible.getVerses(
+        version: '새번역',
+        bookName: '창세기',
+        chapter: 1,
+      )).single.text,
+      '새것입니다',
+    );
+    expect(await a.bible.countVerses(), 1);
+
+    // 올리기를 끈 뒤 이 PC 에서 고친 역본을, 내가 올린 사본으로 되덮지 않는다.
+    await a.sync.setBibleUpload(false);
+    await a.bible.importFromJson(
+      '[{"book":"창세기","chapter":1,"verse":1,"text":"로컬수정"}]',
+      version: '새번역',
+    );
+    await syncAll([a]);
+    expect(
+      (await a.bible.getVerses(
+        version: '새번역',
+        bookName: '창세기',
+        chapter: 1,
+      )).single.text,
+      '로컬수정',
+    );
+  });
 
   test('추가·수정·삭제가 다른 PC 로 넘어간다', () async {
     final a = await newPc('A');
@@ -485,6 +540,7 @@ void main() {
       final sync = SyncService(
         songs: SongSyncRepository(database: database),
         contis: contis,
+        bibles: BibleRepository(database: database),
         settingsDirectory: () async => dir,
         deviceName: name,
         clock: () => now,
@@ -537,6 +593,7 @@ void main() {
       final sync = SyncService(
         songs: SongSyncRepository(database: PraiseDatabase.forTesting(db)),
         contis: WorshipContiRepository(database: PraiseDatabase.forTesting(db)),
+        bibles: BibleRepository(database: PraiseDatabase.forTesting(db)),
         settingsDirectory: () async => dir,
         deviceName: 'X',
       );
@@ -1174,6 +1231,7 @@ void main() {
       final sync = SyncService(
         songs: SongSyncRepository(database: database),
         contis: contis,
+        bibles: BibleRepository(database: database),
         settingsDirectory: () async => pc.dir,
         deviceName: name,
         clock: () => now,
@@ -1236,6 +1294,7 @@ void main() {
             database: database,
             supportDirectory: () async => a.dir,
           ),
+          bibles: BibleRepository(database: database),
           settingsDirectory: () async => a.dir,
           deviceName: 'B',
           clock: () => now,
