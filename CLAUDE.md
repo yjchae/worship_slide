@@ -358,8 +358,8 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   항목은 성경 검색 탭 담기와 같은 `_bibleItemsFor`(보조·추가 역본·페이지당 절 수 `_BibleSearchPanelState._versesPerPage`).
   말 → 구절은 순수 함수 `parseBibleVoice`(`bible_voice_parse.dart`, 정경 66권 순서 번호 → 역본 책 이름, 한글 수사, 책 없이 한글 수사로 시작하는
   말은 글 맨 앞일 때만, `N:N` 은 책이 있을 때만 — '오후 3:30'). macOS 는 1.2초 말이 끊기면 그 마디를 `final` 로 넘기고 새 요청으로 잇는다(50초 상한, 온디바이스가 되면 켠다).
-  Windows 는 받아쓰기('온라인 음성 인식' 설정 필요) 대신 Dart 가 만든 SRGS 문법(`bibleVoiceGrammar`, 앞뒤 GARBAGE)으로 오프라인으로 듣고
-  확신도 Medium 미만은 버린다. 한국어 음성 언어 팩이 필요하다. 켜기·끄기는 한 번에 하나씩(`State::op`), 늦은 켜기는 뒤 요청이 있으면 건너뛴다.
+  Windows 는 말풍선(들리는 말 전부)이 중요해서 자유 받아쓰기(`SpeechRecognitionTopicConstraint` Dictation, '온라인 음성 인식' 설정 필요)를 먼저 쓰고, 안 되면 Dart 가 만든 SRGS 문법(`bibleVoiceGrammar`, 앞뒤 GARBAGE)으로 오프라인으로 듣고
+  확신도 Medium 미만은 버린다(문법일 때만). 한국어 음성 언어 팩이 필요하다. 켜기·끄기는 한 번에 하나씩(`State::op`), 늦은 켜기는 뒤 요청이 있으면 건너뛴다.
   macOS 는 입력 장치가 바뀌면(`AVAudioEngineConfigurationChange`) 새 장치로 다시 켜고, 없으면(샘플레이트 0) 켜지 않는다 — 그대로 `installTap` 하면 잡을 수 없는 예외로 앱이 죽는다. C++ 은 오류 코드만 보내고 한글 안내는 `SpeechListener._describe`.
   **실제 음성 인식은 사람이 말해 봐야 확인된다**(Windows 는 PR CI 컴파일만)
 - **콘티 한번에 넣기** (예배 콘티 머리줄의 목록+ 버튼, `ContiTextImportDialog`): 단톡방에 올리는 콘티 글을 붙여 넣으면 줄마다 곡을 찾아 콘티 끝에 담는다.
