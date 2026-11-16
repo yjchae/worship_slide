@@ -41,6 +41,7 @@ class PraiseDatabase {
       onCreate: (db, version) => createPraiseSchema(db),
       onUpgrade: (db, oldVersion, newVersion) =>
           upgradePraiseSchema(db, oldVersion),
+      onOpen: ensureItemGroupColumn,
     );
     return _database!;
   }
@@ -188,7 +189,8 @@ Future<void> createPraiseSchema(DatabaseExecutor db) async {
     song_chord_lyrics TEXT,
     song_chord_key TEXT,
     song_transpose INTEGER,
-    song_chord_accidental TEXT
+    song_chord_accidental TEXT,
+    item_group TEXT
   )
 ''');
   await db.execute(_createSongTranslations);
@@ -585,6 +587,15 @@ Future<void> upgradePraiseSchema(DatabaseExecutor db, int oldVersion) async {
     }
   }
 }
+
+/// 콘티 항목 그룹 이름 칸(`item_group`, NULL = 그룹 없음). 스키마 버전을 올리지 않으려고
+/// DB 를 열 때마다 없으면 더한다 — 옛 앱은 모르는 칸을 그냥 지나가므로 새 DB 를 그대로 연다.
+Future<void> ensureItemGroupColumn(DatabaseExecutor db) => _addColumnIfMissing(
+  db,
+  'worship_conti_items',
+  'item_group',
+  'ALTER TABLE worship_conti_items ADD COLUMN item_group TEXT',
+);
 
 /// 곡 항목 중 스냅샷 칸(제목·가사·영어 가사·uid)이 빈 행을 그 곡의 지금 값으로 채운다.
 Future<void> freezeContiSongSnapshots(DatabaseExecutor db) async {

@@ -23,6 +23,7 @@ class LoadContiResult {
     this.notes = const {},
     this.backgrounds = const {},
     this.noSpacerUids = const {},
+    this.itemGroups = const {},
   });
   final List<({int uid, StagingItem item})> items;
   final int missingCount;
@@ -32,6 +33,16 @@ class LoadContiResult {
   final Map<int, SlideBackground> backgrounds;
   // 뒤 자동 여백을 지운 항목 uid.
   final Set<int> noSpacerUids;
+  // 항목 uid → 그룹 이름(정리된 값). 없는 항목은 그룹 없음.
+  final Map<int, String> itemGroups;
+}
+
+/// 그룹 이름 정리: 앞뒤 공백 제거, 12자(글자 기준) 초과는 자름, 빈 값 = null(그룹 없음).
+String? normalizeItemGroup(String? name) {
+  final t = name?.trim() ?? '';
+  if (t.isEmpty) return null;
+  final r = t.runes.toList();
+  return r.length <= 12 ? t : String.fromCharCodes(r.take(12)).trim();
 }
 
 // 메모는 항목별로 {"페이지": "메모"} JSON 한 칸에 담는다.
@@ -80,6 +91,7 @@ class WorshipContiRepository {
     Map<String, String> notes = const {},
     Map<int, SlideBackground> backgrounds = const {},
     Set<int> noSpacerUids = const {},
+    Map<int, String> itemGroups = const {},
     String? overwriteUid,
   }) async {
     final db = await _db.database;
@@ -208,6 +220,7 @@ class WorshipContiRepository {
           backgrounds[stagingItems[i].uid],
         );
         if (noSpacerUids.contains(stagingItems[i].uid)) row['no_spacer'] = 1;
+        row['item_group'] = normalizeItemGroup(itemGroups[stagingItems[i].uid]);
         await txn.insert('worship_conti_items', row);
       }
       return contiId;
@@ -268,6 +281,7 @@ class WorshipContiRepository {
     final notes = <String, String>{};
     final backgrounds = <int, SlideBackground>{};
     final noSpacerUids = <int>{};
+    final itemGroups = <int, String>{};
 
     for (final row in itemRows) {
       final addedBefore = result.length;
@@ -372,6 +386,8 @@ class WorshipContiRepository {
         final background = SlideBackground.decode(row['background']);
         if (background != null) backgrounds[result.last.uid] = background;
         if (row['no_spacer'] == 1) noSpacerUids.add(result.last.uid);
+        final group = normalizeItemGroup(row['item_group'] as String?);
+        if (group != null) itemGroups[result.last.uid] = group;
       }
     }
 
@@ -381,6 +397,7 @@ class WorshipContiRepository {
       notes: notes,
       backgrounds: backgrounds,
       noSpacerUids: noSpacerUids,
+      itemGroups: itemGroups,
     );
   }
 
@@ -601,6 +618,10 @@ class WorshipContiRepository {
           row['song_chord_accidental'] = ChordAccidental.fromDb(
             row['song_chord_accidental'],
           ).dbValue;
+        }
+        if (row.containsKey('item_group')) {
+          final g = row['item_group'];
+          row['item_group'] = normalizeItemGroup(g is String ? g : null);
         }
         final songUid = row['song_uid'];
         if (songUid is String) row['song_id'] = songIdByUid(songUid);
