@@ -493,10 +493,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   @override
   void initState() {
     super.initState();
-    // 말풍선은 켤 때마다 무조건 켜진 채로 시작한다(끈 값은 저장하지 않는다).
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && !_bubbleOn) _toggleBubble();
-    });
+    // 말풍선(토크백)은 기본 꺼짐 — 시작하자마자 음성 인식 권한을 묻지 않도록 버튼을 눌러야 켜진다.
     // 일시정지·리셋·목표를 바꾸면 싱어 화면(네이티브·휴대폰)도 바로 맞춘다.
     _presenterView.timer.addListener(_sendSingerView);
     _singerWeb.running.addListener(_clearMessageIfServerOff);
