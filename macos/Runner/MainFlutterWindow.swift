@@ -792,7 +792,7 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate, WKNavi
       .extra-text{color:\(extraColor);font-size:calc(\(extraFontSize)/540*100vh);
         font-weight:700;line-height:1.3;text-align:\(textAlign);
         margin-top:0.4em;white-space:pre-wrap;width:100%;}
-      .v{display:flex;}.v .n{flex:none;white-space:pre;}.v .t{flex:1;min-width:0;}
+      .v{display:flex;}.v .n{flex:none;white-space:pre;}.v .t{flex:1;min-width:0;word-break:keep-all;}
       \(Self.pointerCSS)
     </style></head><body>
       <div id="stage">
