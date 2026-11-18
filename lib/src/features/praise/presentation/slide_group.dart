@@ -41,9 +41,18 @@ List<SlideGroupSection> slideGroupSections(List<String?> groups) {
   return out;
 }
 
+/// 구간 앞에 머리줄이 있는지. 그룹 구간은 늘 있고, 그룹 없는 구간은 그룹이 끝난 뒤 이어질 때(첫 구간이 아닐 때)만
+/// 있다 — 그룹 하나만 만들어도 뒤의 모든 항목이 그 그룹처럼 보이지 않게 경계를 그린다.
+bool sectionHasHeader(SlideGroupSection s, {required bool first}) =>
+    s.name != null || !first;
+
+/// 머리줄에 쓸 이름. 그룹 없는 구간은 [noGroupLabel].
+const String noGroupLabel = '그룹 없음';
+
 /// 구간 앞에 놓이는 머리 영역 높이(간격 + 이름 줄). 첫 구간은 간격이 없다.
 double sectionLeadHeight(SlideGroupSection s, {required bool first}) =>
-    (first ? 0 : slideGroupGap) + (s.name != null ? slideGroupHeaderHeight : 0);
+    (first ? 0 : slideGroupGap) +
+    (sectionHasHeader(s, first: first) ? slideGroupHeaderHeight : 0);
 
 /// 구간의 줄 수. 구간마다 새 줄에서 시작하므로 열 수로 올림한다(5열 6장 = 2줄).
 int sectionRows(SlideGroupSection s, int cols) => (s.count + cols - 1) ~/ cols;

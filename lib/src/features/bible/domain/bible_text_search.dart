@@ -188,3 +188,57 @@ BibleReference? parseBibleReference(String reference, List<String> versions) {
     verses: verses,
   );
 }
+
+/// 참조 문자열 `역본 책 장:절`. 이어진 절은 `16-18`, 아니면 `9,11`. [verses] 가 비면 ''.
+String buildBibleReference(
+  String version,
+  String book,
+  int chapter,
+  List<int> verses,
+) {
+  if (verses.isEmpty) return '';
+  verses = [...verses]..sort();
+  if (verses.length == 1) return '$version $book $chapter:${verses.first}';
+  var contiguous = true;
+  for (var i = 1; i < verses.length; i++) {
+    if (verses[i] != verses[i - 1] + 1) {
+      contiguous = false;
+      break;
+    }
+  }
+  final verseStr = contiguous
+      ? '${verses.first}-${verses.last}'
+      : verses.join(',');
+  return '$version $book $chapter:$verseStr';
+}
+
+/// 성경 항목 하나의 본문 역본을 [newVersion] 으로 바꾼 결과(참조·본문·그 역본에 없어 빠진 절).
+typedef BibleVersionSwitch = ({
+  String reference,
+  String text,
+  List<int> missing,
+});
+
+/// [ref] 의 절들을 [newVersion] 의 같은 장([verses] = {절: 본문}, [newBook] = 그 역본 책 이름)으로 다시 만든다.
+/// 그 역본에 없는 절은 참조에서 뺀다(`missing`). 하나도 없으면 null — 바꾸지 않는다.
+/// 보조·추가 칸은 전역 역본 기준으로 따로 다시 읽어 붙인다(여기서는 다루지 않는다).
+BibleVersionSwitch? switchBibleVersion(
+  BibleReference ref,
+  String newVersion,
+  String newBook,
+  Map<int, String> verses,
+) {
+  final present = [
+    for (final v in ref.verses)
+      if (verses.containsKey(v)) v,
+  ];
+  if (present.isEmpty) return null;
+  return (
+    reference: buildBibleReference(newVersion, newBook, ref.chapter, present),
+    text: verseNumbersText(present, verses),
+    missing: [
+      for (final v in ref.verses)
+        if (!verses.containsKey(v)) v,
+    ],
+  );
+}

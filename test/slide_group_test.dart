@@ -1,5 +1,4 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:worship_slides/src/features/praise/presentation/conti_group_widgets.dart';
 import 'package:worship_slides/src/features/praise/presentation/slide_group.dart';
 
 void main() {
@@ -28,19 +27,27 @@ void main() {
     expect(y(6), 236 + 12 + 28 + 50);
   });
 
-  test('그룹 없는 구간은 머리줄 없이 간격만', () {
-    final s = slideGroupSections([null, 'a']);
+  test('맨 앞 그룹 없는 구간은 머리줄 없이, 그룹 뒤에 이어지는 그룹 없는 구간은 머리줄이 있다', () {
+    final s = slideGroupSections([null, 'a', null]);
+    expect(sectionHasHeader(s[0], first: true), isFalse);
+    expect(sectionHasHeader(s[1], first: false), isTrue);
+    expect(sectionHasHeader(s[2], first: false), isTrue);
+    expect(sectionLeadHeight(s[0], first: true), 0);
+    expect(sectionLeadHeight(s[2], first: false), 12 + 28);
+    // 그룹 a 앞(간격 12 + 머리 28) → a 끝 → 그룹 없음 머리 → 칸
     expect(
       sectionedCenterY(s, 1, cols: 3, cellH: 10, spacing: 2),
       10 + 12 + 28 + 5,
     );
+    expect(
+      sectionedCenterY(s, 2, cols: 3, cellH: 10, spacing: 2),
+      10 + 12 + 28 + 10 + 12 + 28 + 5,
+    );
   });
 
-  test('번호 범위 오류 문구', () {
-    expect(groupRangeError(1, 3, 12), isNull);
-    expect(groupRangeError(0, 3, 12), '1~12 사이 번호를 넣어 주세요.');
-    expect(groupRangeError(1, 13, 12), '1~12 사이 번호를 넣어 주세요.');
-    expect(groupRangeError(null, 3, 12), '1~12 사이 번호를 넣어 주세요.');
-    expect(groupRangeError(4, 3, 12), '시작 번호는 끝 번호보다 클 수 없습니다.');
+  test('그룹이 하나도 없으면 구간 하나, 머리줄 없음', () {
+    final s = slideGroupSections([null, null, null]);
+    expect(s.length, 1);
+    expect(sectionHasHeader(s[0], first: true), isFalse);
   });
 }

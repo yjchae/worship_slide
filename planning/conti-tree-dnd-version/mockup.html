@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8">
+<title>목업: 콘티 트리 · 끌어 놓기 · 성경 역본 바꾸기</title>
+<style>
+:root{--bg:#f6f6f7;--card:#fff;--line:#e2e2e5;--line2:#c9c9ce;--tx:#1d1d20;--tx2:#6b6b73;--pri:#2b2b30;--sel:#ececef;--hov:#f2f2f4;--ins:#2b2b30;--warn:#b3261e;--warnbg:#fbeceb;--note:#f0f0f2}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:13px/1.45 "Pretendard",-apple-system,"Apple SD Gothic Neo",sans-serif;padding:24px}
+h1{font-size:20px;margin:0 0 4px}h2{font-size:17px;margin:36px 0 4px}h3{font-size:13px;margin:0 0 8px;color:var(--tx2);font-weight:600}
+.lead{color:var(--tx2);margin:0 0 16px}
+.screen{background:#fafafa;border:1px solid var(--line);border-radius:12px;padding:20px;margin:12px 0}
+.grid{display:flex;flex-wrap:wrap;gap:20px;align-items:flex-start}
+.var{width:400px}.var.wide{width:560px}
+.cap{font-size:12px;color:var(--tx2);margin:6px 2px 0}
+.cap b{color:var(--tx)}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden;position:relative}
+.ph{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--line);font-weight:600}
+.ph .sp{flex:1}
+.btn{border:1px solid var(--line2);background:#fff;border-radius:6px;padding:3px 9px;font:inherit;font-size:12px;color:var(--tx)}
+.btn.pri{background:var(--pri);color:#fff;border-color:var(--pri)}
+.btn.danger{color:var(--warn);border-color:#e3b5b1}
+.btn.focus,.focus{outline:2px solid var(--pri);outline-offset:1px}
+.row{display:flex;align-items:center;gap:8px;padding:0 10px;height:38px;border-bottom:1px solid #f0f0f2;position:relative}
+.row.in{padding-left:34px}
+.row.in::before{content:"";position:absolute;left:21px;top:0;bottom:0;border-left:1px solid var(--line2)}
+.num{width:20px;color:var(--tx2);font-size:11px;text-align:right}
+.tag{font-size:10.5px;border:1px solid var(--line2);border-radius:4px;padding:0 5px;color:var(--tx2);white-space:nowrap}
+.ttl{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.meta{color:var(--tx2);font-size:11px}
+.grip{color:var(--tx2);cursor:grab;width:18px;text-align:center;letter-spacing:-2px;border-radius:4px}
+.row:hover,.row.hover{background:var(--hov)}
+.gh{display:flex;align-items:center;gap:6px;padding:0 10px;height:36px;background:var(--note);border-bottom:1px solid var(--line);font-weight:600;position:relative}
+.gh .arrow{width:16px;text-align:center;color:var(--tx2)}
+.gh .cnt{font-weight:400;color:var(--tx2);font-size:11px}
+.gh .rng{font-weight:400;color:var(--tx2);font-size:11px}
+.gh .more{margin-left:auto;width:24px;height:24px;border-radius:6px;text-align:center;line-height:22px;color:var(--tx2)}
+.gh .more.on{background:var(--sel);color:var(--tx)}
+.gh .sp{flex:1}
+.empty{padding:9px 10px 9px 34px;color:var(--tx2);font-size:12px;border-bottom:1px solid #f0f0f2;font-style:italic}
+.ins-line{position:absolute;left:8px;right:8px;height:0;border-top:3px solid var(--ins);z-index:3}
+.ins-line::before{content:"";position:absolute;left:-4px;top:-6px;width:9px;height:9px;border-radius:50%;background:var(--ins)}
+.ins-line.in{left:32px}
+.drop-in{outline:2px solid var(--pri);outline-offset:-2px;background:var(--sel)!important}
+.flash{background:#e8e8ec!important;box-shadow:inset 3px 0 0 var(--pri)}
+.badge{font-size:10.5px;background:var(--pri);color:#fff;border-radius:9px;padding:0 7px}
+.ghost{position:absolute;z-index:5;background:#fff;border:1px solid var(--pri);border-radius:8px;padding:5px 10px;box-shadow:0 6px 18px rgba(0,0,0,.18);font-size:12px;opacity:.95}
+.dim{opacity:.4}
+.dlg{background:#fff;border:1px solid var(--line2);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.15);padding:18px;width:360px}
+.dlg h4{margin:0 0 8px;font-size:15px}.dlg p{margin:0 0 10px;color:var(--tx2)}
+.dlg .acts{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+.inp{width:100%;border:1px solid var(--line2);border-radius:6px;padding:7px 9px;font:inherit;background:#fff}
+.inp.err{border-color:var(--warn)}.errtx{color:var(--warn);font-size:12px;margin-top:4px}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.chip{border:1px solid var(--line2);border-radius:14px;padding:1px 9px;font-size:12px}
+.menu{position:absolute;background:#fff;border:1px solid var(--line2);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.15);padding:4px;width:190px;z-index:6}
+.menu div{padding:6px 10px;border-radius:5px}.menu div.h{background:var(--sel)}.menu div.dis{color:#aaa}.menu div.dg{color:var(--warn)}.menu hr{border:0;border-top:1px solid var(--line);margin:4px 0}
+.menu small{color:var(--tx2);display:block;font-size:11px}
+.verse{display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid #f0f0f2}
+.verse .vn{width:22px;color:var(--tx2);font-size:11px;text-align:right}
+.verse .tx{flex:1}
+.cb{width:15px;height:15px;border:1.5px solid var(--line2);border-radius:3px;background:#fff;display:inline-block;text-align:center;font-size:11px;line-height:12px}
+.cb.on{background:var(--pri);border-color:var(--pri);color:#fff}
+.verse.chk{background:var(--sel)}
+.pv{background:#1d1d20;color:#fff;border-radius:8px;padding:22px 16px;text-align:center;font-size:14px;line-height:1.6}
+.slidehead{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.vchip{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line2);border-radius:14px;padding:2px 6px 2px 10px;background:#fff;font-size:12px}
+.vchip.dis{color:#aaa;background:#f4f4f5}
+.stat{display:flex;gap:10px;align-items:center;padding:7px 12px;background:var(--note);border-top:1px solid var(--line);font-size:12px}
+.stat a{text-decoration:underline;font-weight:600;color:var(--tx)}
+.note{background:var(--warnbg);border:1px solid #ecc6c3;color:#7a1d17;border-radius:8px;padding:8px 12px;font-size:12px}
+.info{background:var(--note);border:1px solid var(--line);border-radius:8px;padding:8px 12px;font-size:12px}
+table{border-collapse:collapse;width:100%;background:#fff}td,th{border:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:top;font-size:12.5px}th{background:var(--note)}
+ul.ac{list-style:none;padding:0;margin:0}ul.ac li{padding:3px 0}ul.ac li::before{content:"\2610  ";color:var(--tx2)}
+code{background:var(--note);padding:0 4px;border-radius:3px}
+.flow{display:flex;gap:6px;flex-wrap:wrap;align-items:center}.flow span.n{background:#fff;border:1px solid var(--line2);border-radius:6px;padding:3px 9px}
+nav a{margin-right:12px;color:var(--tx)}
+</style></head><body>
+<h1>콘티 트리 · 끌어 놓기 · 성경 역본 바꾸기 — 화면 목업</h1>
+<p class="lead">정적 목업(기능 없음). 색은 앱 colorScheme 의 무채색 톤(바탕·선·선택색·진한 강조 하나)만 쓴다. 초록·와인 강조 없음. 삭제 계열만 오류색(<code>colorScheme.error</code>). 기획: plan.md · 기술: tech-frontend.md · tech-backend.md</p>
+<nav><a href="#s1">S1 트리</a><a href="#s2">S2 끌기</a><a href="#s3">S3 절 손잡이</a><a href="#s4">S4 역본</a><a href="#spec">상태·문구·접근성·수용 기준·결정</a></nav>
+
+<!-- ===================== S1 ===================== -->
+<h2 id="s1">S1. 편집 탭 콘티 목록 트리</h2>
+<p class="lead">자리: 편집 탭 '예배 콘티' 패널(기존 <code>_StagingPanel</code>). 머리줄 = 제목 · 항목 수 · [그룹 만들기] · 기존 버튼들. 행 = 번호(전체 번호 유지) · 종류 태그 · 제목 · 메타 · 끌기 손잡이. 그룹 안 행은 들여쓰기 + 왼쪽 세로선.</p>
+<div class="screen" id="screen-s1"><div class="grid">
+
+<div class="var"><h3>1-A 기본 (펼침 · 접힘 · 그룹 밖 항목)</h3>
+<div class="panel">
+ <div class="ph">예배 콘티 <span class="meta">9개 항목</span><span class="sp"></span><button class="btn">＋ 그룹 만들기</button><button class="btn">목록＋</button></div>
+ <div class="gh"><span class="arrow">▾</span><b>시작곡</b><span class="cnt">3개</span><span class="rng">1~3번</span><span class="more">⋯</span></div>
+ <div class="row in"><span class="num">1</span><span class="tag">곡</span><span class="ttl">주 은혜임을</span><span class="meta">G · 4쪽</span><span class="grip">⠿</span></div>
+ <div class="row in"><span class="num">2</span><span class="tag">곡</span><span class="ttl">하나님의 열심</span><span class="meta">A · 5쪽</span><span class="grip">⠿</span></div>
+ <div class="row in"><span class="num">3</span><span class="tag">빈 페이지</span><span class="ttl">광고 자리</span><span class="meta">1쪽</span><span class="grip">⠿</span></div>
+ <div class="gh"><span class="arrow">▾</span><b>말씀</b><span class="cnt">2개</span><span class="rng">4~5번</span><span class="more">⋯</span></div>
+ <div class="row in"><span class="num">4</span><span class="tag">성경</span><span class="ttl">새번역 요한복음 3:16-18</span><span class="meta">1쪽</span><span class="grip">⠿</span></div>
+ <div class="row in"><span class="num">5</span><span class="tag">PPT</span><span class="ttl">설교 요약.pptx</span><span class="meta">6쪽</span><span class="grip">⠿</span></div>
+ <div class="gh"><span class="arrow">▸</span><b>헌신송</b><span class="cnt">2개 숨김</span><span class="rng">6~7번</span><span class="more">⋯</span></div>
+ <div class="row"><span class="num">8</span><span class="tag">곡</span><span class="ttl">축복송</span><span class="meta">C · 3쪽</span><span class="grip">⠿</span></div>
+ <div class="row"><span class="num">9</span><span class="tag">편집</span><span class="ttl">생일자 소개</span><span class="meta">1쪽</span><span class="grip">⠿</span></div>
+</div>
+<div class="cap"><b>그룹 머리줄</b>: ▸/▾ 접기 · 이름 · 항목 수 · 번호 범위 · ⋯. 머리줄 클릭 = 접기/펼치기, 이름 더블클릭 = 이름 바꾸기. 접힌 그룹은 '2개 숨김'. 그룹 밖 항목(8·9번)은 들여쓰기 없음.</div></div>
+
+<div class="var"><h3>1-B hover · 빈 그룹 · 키보드 포커스</h3>
+<div class="panel">
+ <div class="ph">예배 콘티 <span class="meta">3개 항목</span><span class="sp"></span><button class="btn">＋ 그룹 만들기</button></div>
+ <div class="gh"><span class="arrow">▾</span><b>시작곡</b><span class="cnt">1개</span><span class="rng">1번</span><span class="more on">⋯</span></div>
+ <div class="row in hover"><span class="num">1</span><span class="tag">곡</span><span class="ttl">주 은혜임을</span><span class="meta">G · 4쪽</span><span class="grip" style="background:var(--sel);color:var(--tx)">⠿</span></div>
+ <div class="gh"><span class="arrow">▾</span><b>새 그룹</b><span class="cnt">0개</span><span class="more">⋯</span></div>
+ <div class="empty">비어 있습니다. 곡이나 성경을 여기로 끌어 놓으세요.</div>
+ <div class="row focus" style="outline-offset:-2px"><span class="num">2</span><span class="tag">성경</span><span class="ttl">개역개정 시편 23:1-6</span><span class="meta">1쪽</span><span class="grip">⠿</span></div>
+ <div class="row"><span class="num">3</span><span class="tag">곡</span><span class="ttl">감사해</span><span class="meta">D · 3쪽</span><span class="grip">⠿</span></div>
+</div>
+<div class="cap"><b>hover</b>: 행 바탕 연한 회색 + 손잡이·⋯ 진해짐. <b>빈 그룹</b>: 항목 수 '0개' + 안내 줄(저장되지 않음, 아래 안내). <b>포커스</b>: 2px 진한 외곽선(2번 행).</div>
+<div class="info" style="margin-top:8px">빈 그룹은 저장하지 않는다. 콘티 저장 때 빈 그룹이 있으면 저장 후 한 줄 안내: <b>"비어 있는 그룹 1개는 저장되지 않았습니다."</b></div></div>
+
+<div class="var"><h3>1-C 그룹 만들기 이름 입력 창</h3>
+<div class="dlg"><h4>그룹 만들기</h4>
+<p>고른 항목이 있으면 그 항목이 그룹에 들어갑니다. 없으면 빈 그룹이 만들어집니다.</p>
+<input class="inp" value="" placeholder="그룹 이름 (최대 12자)"><div class="chips"><span class="chip">시작곡</span><span class="chip">말씀</span><span class="chip">헌신송</span><span class="chip">광고</span></div>
+<div class="acts"><button class="btn">취소</button><button class="btn pri">만들기</button></div></div>
+<div class="cap"><b>기본</b>: 이름 칸에 포커스, '만들기'는 이름이 비면 비활성. Enter = 만들기, Esc = 취소.</div>
+<div class="dlg" style="margin-top:12px"><h4>그룹 만들기</h4>
+<input class="inp err" value="말씀"><div class="errtx">이미 같은 이름의 그룹이 있습니다. 다른 이름을 써 주세요.</div>
+<div class="acts"><button class="btn">취소</button><button class="btn pri" style="opacity:.4">만들기</button></div></div>
+<div class="cap"><b>오류</b>: 같은 이름이 이미 있으면(이어 붙는 것으로 오인 방지) 거절. 이름 바꾸기 창도 같은 창·같은 오류.</div></div>
+
+<div class="var"><h3>1-D ⋯ 메뉴</h3>
+<div class="panel" style="height:250px">
+ <div class="gh"><span class="arrow">▾</span><b>말씀</b><span class="cnt">2개</span><span class="rng">4~5번</span><span class="more on">⋯</span></div>
+ <div class="row in dim"><span class="num">4</span><span class="tag">성경</span><span class="ttl">새번역 요한복음 3:16-18</span></div>
+ <div class="menu" style="right:10px;top:34px">
+  <div class="h">이름 바꾸기…</div>
+  <div>위로 이동 <small>앞 그룹·항목 위로</small></div>
+  <div class="dis">아래로 이동 <small>맨 아래라 옮길 수 없음</small></div>
+  <hr>
+  <div>그룹 풀기 <small>항목은 그대로 남습니다</small></div>
+  <div class="dg">그룹과 항목 삭제…</div>
+ </div></div>
+<div class="cap">'위로/아래로 이동'은 그룹째 이동의 키보드 대안(끌기 없이). 맨 위·맨 아래면 해당 항목 비활성 + 이유 한 줄. 화살표 ↑↓ 이동, Enter 실행, Esc 닫기.</div>
+
+<div class="dlg" style="margin-top:12px"><h4>'말씀' 그룹과 항목 2개를 삭제할까요?</h4>
+<p>그룹 안의 성경 1개, PPT 1개가 콘티에서 사라집니다. 저장한 콘티는 그대로입니다. 삭제 직후 '되돌리기'로 되살릴 수 있습니다.</p>
+<div class="acts"><button class="btn focus">취소</button><button class="btn danger">그룹과 항목 삭제</button></div></div>
+<div class="cap"><b>삭제 확인</b>: 기본 포커스 = '취소'(Enter 로 실수 삭제 방지). 풀기는 확인 없이 바로(항목이 남고 되돌리기 가능).</div></div>
+
+</div></div>
+
+<!-- ===================== S2 ===================== -->
+<h2 id="s2">S2. 끌기 상태</h2>
+<p class="lead">끄는 동안 행은 위/아래 절반으로 판정. 삽입 선은 진한 가로선(3px) + 왼쪽 점. 그룹 안에 놓이는 선은 들여쓴 위치에서 시작, 그룹 밖은 바깥 위치에서 시작해 "어느 그룹에 드는지"가 선의 들여쓰기로 보인다.</p>
+<div class="screen" id="screen-s2"><div class="grid">
+
+<div class="var"><h3>2-A 곡 검색 결과를 행 사이에 (그룹 안)</h3>
+<div class="panel" style="height:300px">
+ <div class="ph">예배 콘티</div>
+ <div class="gh"><span class="arrow">▾</span><b>시작곡</b><span class="cnt">2개</span><span class="more">⋯</span></div>
+ <div class="row in"><span class="num">1</span><span class="tag">곡</span><span class="ttl">주 은혜임을</span><span class="grip">⠿</span></div>
+ <div style="position:relative;height:0"><div class="ins-line in"></div></div>
+ <div class="row in"><span class="num">2</span><span class="tag">곡</span><span class="ttl">하나님의 열심</span><span class="grip">⠿</span></div>
+ <div class="gh"><span class="arrow">▾</span><b>말씀</b><span class="cnt">1개</span><span class="more">⋯</span></div>
+ <div class="row in"><span class="num">3</span><span class="tag">성경</span><span class="ttl">새번역 요한복음 3:16</span><span class="grip">⠿</span></div>
+ <div class="ghost" style="left:150px;top:150px">♪ 은혜 아니면</div>
+</div>
+<div class="cap">끄는 그림 = 칩(곡 제목, 성경은 '요 3:16 외 2절'). 1~2번 사이 선이 들여써져 있으면 '시작곡 그룹 안, 2번 앞'. 놓으면 그 그룹에 들고 8초 강조(2-E).</div></div>
+
+<div class="var"><h3>2-B 그룹 머리줄 위에 놓기 (그룹 안으로)</h3>
+<div class="panel" style="height:300px">
+ <div class="ph">예배 콘티</div>
+ <div class="gh drop-in"><span class="arrow">▾</span><b>말씀</b><span class="cnt">1개</span><span class="more">⋯</span><span class="badge" style="margin-left:6px">'말씀'에 넣기</span></div>
+ <div class="row in"><span class="num">1</span><span class="tag">성경</span><span class="ttl">새번역 요한복음 3:16</span><span class="grip">⠿</span></div>
+ <div class="row"><span class="num">2</span><span class="tag">곡</span><span class="ttl">감사해</span><span class="grip">⠿</span></div>
+ <div class="ghost" style="left:170px;top:60px">♪ 은혜 아니면</div>
+</div>
+<div class="cap">머리줄 <b>아래 절반</b> = 그룹 맨 앞에 넣기: 머리줄 전체 진한 외곽선 + 배지 "'말씀'에 넣기". <b>접힌 그룹</b>에 놓으면 맨 끝에 들고(자동 펼침 안 함) 머리줄 수가 '3개 숨김' → '4개 숨김'으로 바뀌며 머리줄이 8초 강조.</div></div>
+
+<div class="var"><h3>2-C 그룹 밖으로 빼기 · 머리줄 위 절반</h3>
+<div class="panel" style="height:300px">
+ <div class="ph">예배 콘티</div>
+ <div class="gh"><span class="arrow">▾</span><b>시작곡</b><span class="cnt">2개</span><span class="more">⋯</span></div>
+ <div class="row in dim"><span class="num">1</span><span class="tag">곡</span><span class="ttl">주 은혜임을</span><span class="grip">⠿</span></div>
+ <div class="row in"><span class="num">2</span><span class="tag">곡</span><span class="ttl">하나님의 열심</span><span class="grip">⠿</span></div>
+ <div style="position:relative;height:0"><div class="ins-line"></div></div>
+ <div class="gh"><span class="arrow">▾</span><b>말씀</b><span class="cnt">1개</span><span class="more">⋯</span></div>
+ <div class="row in"><span class="num">3</span><span class="tag">성경</span><span class="ttl">새번역 요한복음 3:16</span><span class="grip">⠿</span></div>
+ <div class="ghost" style="left:130px;top:96px">1번 · 주 은혜임을</div>
+</div>
+<div class="cap">끌고 있는 원래 행(1번)은 흐리게. 선이 <b>왼쪽 끝부터</b> 시작 = 그룹 밖(2번 뒤·'말씀' 머리줄 앞). 놓으면 1번이 '시작곡'에서 나와 그룹 없음 항목이 됨. 항목 하나 남은 그룹도 그대로 유지.</div></div>
+
+<div class="var"><h3>2-D 그룹째 이동</h3>
+<div class="panel" style="height:300px">
+ <div class="ph">예배 콘티</div>
+ <div class="gh dim"><span class="arrow">▾</span><b>시작곡</b><span class="cnt">2개</span><span class="more">⋯</span></div>
+ <div class="row in dim"><span class="num">1</span><span class="tag">곡</span><span class="ttl">주 은혜임을</span></div>
+ <div class="row in dim"><span class="num">2</span><span class="tag">곡</span><span class="ttl">하나님의 열심</span></div>
+ <div class="gh"><span class="arrow">▾</span><b>말씀</b><span class="cnt">1개</span><span class="more">⋯</span></div>
+ <div class="row in"><span class="num">3</span><span class="tag">성경</span><span class="ttl">새번역 요한복음 3:16</span></div>
+ <div style="position:relative;height:0"><div class="ins-line"></div></div>
+ <div class="row"><span class="num">4</span><span class="tag">곡</span><span class="ttl">감사해</span></div>
+ <div class="ghost" style="left:120px;top:78px">'시작곡' 그룹 (2개 항목)</div>
+</div>
+<div class="cap">머리줄의 ⠿ 손잡이(머리줄 hover 때 표시)를 끈다. 그룹 전체가 흐려지고, 끄는 그림은 "'시작곡' 그룹 (2개 항목)". <b>다른 그룹 내부 선에는 놓을 수 없음</b>(그룹 안의 그룹 = 중첩 금지): 그룹 안 행 위에서는 선이 그룹 경계(밖)로만 붙고, 같은 그룹 안에선 금지 표시.</div>
+<div class="note" style="margin-top:8px">그룹 안에 그룹을 놓으려는 경우: 선 대신 놓기 불가 커서 + 상태 줄 "그룹은 다른 그룹 안에 넣을 수 없습니다."</div></div>
+
+<div class="var"><h3>2-E 놓은 직후 8초 강조</h3>
+<div class="panel" style="height:230px">
+ <div class="ph">예배 콘티 <span class="sp"></span><span class="meta">3번에 담았습니다 · <a href="#" style="color:var(--tx)">되돌리기</a></span></div>
+ <div class="gh"><span class="arrow">▾</span><b>시작곡</b><span class="cnt">3개</span><span class="more">⋯</span></div>
+ <div class="row in"><span class="num">1</span><span class="tag">곡</span><span class="ttl">주 은혜임을</span></div>
+ <div class="row in"><span class="num">2</span><span class="tag">곡</span><span class="ttl">하나님의 열심</span></div>
+ <div class="row in flash"><span class="num">3</span><span class="tag">곡</span><span class="ttl">은혜 아니면</span><span class="badge">방금 담음</span><span class="grip">⠿</span></div>
+ <div class="row"><span class="num">4</span><span class="tag">성경</span><span class="ttl">새번역 요한복음 3:16</span></div>
+</div>
+<div class="cap">새 항목: 왼쪽 굵은 막대 + 연한 바탕 + 배지 '방금 담음'을 <b>8초</b>(발표 보기 '붙여 넣음' 강조와 같은 시간·모양). 그 자리로 스크롤. 성경 여러 절이면 'N~M번에 담았습니다'. 같은 시간 안에 또 놓으면 새 항목으로 교체.</div></div>
+
+<div class="var"><h3>2-F 성경 절을 끌어 콘티에 (검색 탭 → 콘티)</h3>
+<div class="panel" style="height:300px">
+ <div class="ph">예배 콘티</div>
+ <div class="row"><span class="num">1</span><span class="tag">곡</span><span class="ttl">주 은혜임을</span></div>
+ <div style="position:relative;height:0"><div class="ins-line"></div></div>
+ <div class="row"><span class="num">2</span><span class="tag">곡</span><span class="ttl">하나님의 열심</span></div>
+ <div class="ghost" style="left:140px;top:60px">요 3:16-18 · 절 3개 → 1페이지</div>
+</div>
+<div class="cap">검색 탭의 절 손잡이(S3)에서 끌어 오면 같은 선. 놓으면 페이지 수만큼 항목이 그 자리에 순서대로 들어가고 스낵바 "성경 1페이지를 담았습니다". 읽는 동안(수백 ms) 같은 자리에 '담는 중…' 줄이 잠깐 보이고, 그 사이 기준 항목이 지워졌으면 맨 끝에 담고 "기준 자리가 사라져 맨 끝에 담았습니다."</div></div>
+
+<div class="var"><h3>2-G 빈 콘티 · 패널 빈 곳 · 오류</h3>
+<div class="panel" style="height:150px">
+ <div class="ph">예배 콘티 <span class="meta">0개 항목</span></div>
+ <div class="drop-in" style="padding:34px 12px;text-align:center;color:var(--tx2)">곡이나 성경을 여기로 끌어 놓으세요.<br>더블클릭이나 '담기' 버튼은 맨 끝에 담습니다.</div>
+</div>
+<div class="cap"><b>빈 콘티/목록 아래 빈 곳</b>에 놓으면 맨 끝(그룹 없음). 놓을 수 있는 동안 패널 전체 외곽선.</div>
+<div class="note" style="margin-top:8px"><b>오류</b>: 곡을 못 읽음 → "곡 '은혜 아니면'을 담지 못했습니다. 다시 시도해 주세요." (아무것도 안 바뀜). 발표 중엔 관객 화면은 그대로이고 상태 줄에 '다음 페이지 목록만 갱신'.</div>
+<div class="info" style="margin-top:8px">ESC 로 끌기 취소(기존 발표 보기와 같음). 끌다 멈춤(손 뗌 신호 놓침)은 기존 <code>cancelDrag</code> 규칙 재사용.</div></div>
+
+</div></div>
+
+<!-- ===================== S3 ===================== -->
+<h2 id="s3">S3. 성경 절 행의 끌기 손잡이</h2>
+<p class="lead">절 행 <b>맨 왼쪽</b>에 ⠿ 손잡이를 따로 둔다. 체크박스(클릭 = 선택 토글)·절 글 영역(더블클릭 = 담기)과 겹치지 않는 별도 칸이라 제스처 충돌이 없다(추천 12번). 손잡이를 잡고 끌 때만 끌기가 시작된다.</p>
+<div class="screen" id="screen-s3"><div class="grid">
+<div class="var wide"><h3>3-A 기본 · hover · 체크됨 · 끌기 중</h3>
+<div class="panel">
+ <div class="ph">요한복음 3장 <span class="meta">새번역</span><span class="sp"></span><span class="meta">3절 선택</span><button class="btn pri">담기</button></div>
+ <div class="verse"><span class="grip" title="끌어서 콘티에 담기" style="opacity:.35">⠿</span><span class="cb"></span><span class="vn">15</span><span class="tx">그러면 그를 믿는 사람마다 영생을 얻을 것이다.</span></div>
+ <div class="verse chk"><span class="grip" style="color:var(--tx)">⠿</span><span class="cb on">✓</span><span class="vn">16</span><span class="tx">하나님이 세상을 이처럼 사랑하셔서, 외아들을 주셨다.</span></div>
+ <div class="verse chk"><span class="grip">⠿</span><span class="cb on">✓</span><span class="vn">17</span><span class="tx">하나님이 아들을 세상에 보내신 것은 …</span></div>
+ <div class="verse chk"><span class="grip">⠿</span><span class="cb on">✓</span><span class="vn">18</span><span class="tx">그를 믿는 사람은 심판을 받지 않는다. …</span></div>
+ <div class="verse hover"><span class="grip" style="background:var(--sel);color:var(--tx);cursor:grab">⠿</span><span class="cb"></span><span class="vn">19</span><span class="tx">그 심판은 이러하다. …</span></div>
+</div>
+<div class="cap"><b>기본</b> 손잡이 연한 회색(35%) → <b>행 hover</b> 진해짐 + 툴팁 "끌어서 콘티에 담기". <b>끌기 규칙</b>: 체크된 절의 손잡이를 끌면 체크된 절 전체(16~18절), 체크 안 된 절(19절)의 손잡이를 끌면 그 절만(체크는 바뀌지 않음). 끄는 그림 = "요 3:16-18 · 3절". 담은 뒤 체크 해제.</div>
+<div class="ghost" style="position:relative;display:inline-block;margin-top:10px">요 3:16-18 · 3절 → 1페이지</div></div>
+<div class="var"><h3>3-B 상태</h3>
+<table><tr><th>상태</th><th>모양 / 동작</th></tr>
+<tr><td>기본</td><td>손잡이 35% 회색</td></tr>
+<tr><td>hover</td><td>손잡이 100%·배경 칩, 커서 grab, 툴팁</td></tr>
+<tr><td>포커스(Tab)</td><td>손잡이 2px 외곽선. Enter/Space = 이 절(체크 있으면 체크 전체)을 콘티 맨 끝에 담기(끌기 못 하는 사용자 대안)</td></tr>
+<tr><td>끌기 중</td><td>원래 행 흐리게, 칩 따라다님, 콘티 패널에 선 표시(S2)</td></tr>
+<tr><td>체크 클릭 / 글 영역 클릭</td><td>기존 그대로(체크 토글). 손잡이 클릭만 해선 아무 일 없음</td></tr>
+<tr><td>오류</td><td>끌기 중 놓은 뒤 장을 못 읽음 → 스낵바 "성경 본문을 읽지 못해 담지 못했습니다." (콘티 그대로)</td></tr>
+<tr><td>빈 값</td><td>본문 검색 결과 줄(여러 책·장)에도 같은 손잡이. 결과 0개면 손잡이 없음</td></tr></table></div>
+</div></div>
+
+<!-- ===================== S4 ===================== -->
+<h2 id="s4">S4. 발표 보기: 성경 역본 바꾸기</h2>
+<p class="lead">자리: 현재 슬라이드 머리줄(현재 슬라이드 번호·제목 줄). <b>현재 슬라이드가 성경 페이지일 때만</b> 제목 오른쪽에 역본 칩이 나타난다. 곡·PPT·빈 페이지·편집·미디어에서는 칩 자체가 없다. (정확한 줄 위치는 "확인 필요": tech-frontend 가 가리킨 툴바 줄 vs 머리줄 — 이 목업은 머리줄 추천.)</p>
+<div class="screen" id="screen-s4"><div class="grid">
+
+<div class="var wide"><h3>4-A 칩 기본</h3>
+<div class="panel">
+ <div class="slidehead"><b>4번 · 요한복음 3:16-18</b><span class="meta">성경</span><span class="vchip">역본 새번역 ▾</span><span class="sp" style="flex:1"></span><span class="meta">발표 중</span></div>
+ <div style="padding:14px"><div class="pv">새번역 요한복음 3:16-18<br>하나님이 세상을 이처럼 사랑하셔서 …</div></div>
+ <div class="stat">상태 줄: 준비됨</div>
+</div>
+<div class="cap">칩은 현재 항목의 <b>주 역본</b>을 보여 준다. 누르면 드롭다운. 발표 중에 바꾸면 관객 화면이 바로 바뀐다.</div></div>
+
+<div class="var"><h3>4-B 드롭다운 (66권 아닌 역본 비활성)</h3>
+<div class="panel" style="height:250px">
+ <div class="slidehead"><b>4번 · 요한복음 3:16-18</b><span class="vchip focus">역본 새번역 ▾</span></div>
+ <div class="menu" style="left:150px;top:44px;width:260px">
+  <div>개역개정</div>
+  <div class="h">✓ 새번역 <small>현재</small></div>
+  <div>KJV</div>
+  <div class="dis">쉬운성경(간추림) <small>성경 66권이 아니라 바꿀 수 없음</small></div>
+  <hr>
+  <div class="dis">□ 모든 성경 항목에도 적용 <small>(선택 시 아래 확인창에 항목 수가 나옵니다)</small></div>
+ </div></div>
+<div class="cap">비활성 항목은 회색 + 이유 한 줄(툴팁이 아닌 항상 보이는 보조 글). 현재 역본 = 체크 + '현재'. 보조·추가 역본과 같은 역본을 고르면 확인창 문구에 "보조 칸은 비워집니다"가 붙는다. 맨 아래 체크는 결정 1(추천: 항목 단위 기본 + 선택 체크).</div></div>
+
+<div class="var"><h3>4-C 확인창 (손으로 고친 본문이 있을 때)</h3>
+<div class="dlg"><h4>역본을 바꾸면 고친 본문이 사라집니다</h4>
+<p>이 성경 페이지의 본문은 직접 고친 내용이 있습니다. '개역개정' 본문으로 다시 만들면 고친 내용이 덮어쓰입니다. 바꾼 직후 '되돌리기'로 돌릴 수 있습니다.</p>
+<div class="acts"><button class="btn focus">취소</button><button class="btn pri">개역개정으로 바꾸기</button></div></div>
+<div class="cap">고친 본문이 없으면 확인 없이 바로 바뀐다. 기본 포커스 = 취소. 모든 성경 항목에도 적용을 켰으면 제목이 "성경 항목 4개의 역본을 바꿀까요?"로, 고친 본문 N개 안내가 붙는다.</div></div>
+
+<div class="var"><h3>4-D 안 풀리는 경우 안내 (아무것도 바뀌지 않음)</h3>
+<div class="note" style="margin-bottom:8px"><b>참조를 읽을 수 없을 때</b><br>"이 페이지의 성경 참조('개역개정 요한복음 3:16')를 읽을 수 없어 역본을 바꾸지 못했습니다. 성경 검색에서 다시 담아 주세요."</div>
+<div class="note" style="margin-bottom:8px"><b>그 역본에 그 책이 없을 때</b><br>"'KJV' 에서 '요한복음'을 찾지 못해 바꾸지 못했습니다."</div>
+<div class="note" style="margin-bottom:8px"><b>절이 모자랄 때</b><br>"'KJV' 에 3:18 이 없어 바꾸지 못했습니다. (역본마다 절 번호가 다를 수 있습니다.)" — 일부 절만 있으면 있는 절만으로 바꾸고 "3:18 은 이 역본에 없어 빠졌습니다."</div>
+<div class="note"><b>항목이 그 사이 바뀜</b><br>"읽는 동안 이 페이지가 수정되어 바꾸지 않았습니다."</div>
+<div class="cap">모두 스낵바(상단 상태 줄), 6초. 칩은 원래 역본 그대로.</div></div>
+
+<div class="var wide"><h3>4-E 바꾼 뒤 상태 줄 '되돌리기'</h3>
+<div class="panel">
+ <div class="slidehead"><b>4번 · 요한복음 3:16-18</b><span class="vchip">역본 개역개정 ▾</span></div>
+ <div style="padding:14px"><div class="pv">개역개정 요한복음 3:16-18<br>하나님이 세상을 이처럼 사랑하사 …</div></div>
+ <div class="stat">4번 성경을 '새번역'에서 '개역개정'으로 바꿨습니다. <a href="#">되돌리기</a><span class="meta" style="margin-left:auto">⌘Z · 1회</span></div>
+</div>
+<div class="cap">되돌리기는 마지막 한 번. 그 사이 이 항목을 또 고쳤으면 "그 사이 수정되어 되돌릴 수 없습니다." 안내. 다음 편집을 하거나 콘티를 불러오면 줄이 사라짐. 로딩: 장 읽는 동안 칩에 '바꾸는 중…' 표시, 칩 비활성.</div></div>
+
+</div></div>
+
+<!-- ===================== SPEC ===================== -->
+<h2 id="spec">상태 · 문구 · 접근성 · 수용 기준 · 결정</h2>
+<div class="screen">
+<h3>화면 흐름</h3>
+<div class="flow"><span class="n">검색 탭: 곡/성경 절 끌기</span>→<span class="n">콘티 행 사이/그룹 머리줄에 놓기</span>→<span class="n">8초 강조 + 스낵바</span>→<span class="n">그룹 머리줄 ⋯ 로 정리</span>→<span class="n">발표 보기: 성경 페이지 역본 칩</span>→<span class="n">상태 줄 되돌리기</span></div>
+<h3 style="margin-top:16px">상태 표</h3>
+<table><tr><th>화면</th><th>기본</th><th>hover</th><th>끌기 중</th><th>빈 값</th><th>오류/막힘</th></tr>
+<tr><td>그룹 머리줄</td><td>회색 바탕, ▾/▸·이름·N개·번호 범위</td><td>⋯·손잡이 진해짐</td><td>놓을 수 있으면 진한 외곽선+배지</td><td>'0개' + 안내 줄</td><td>중첩 놓기 불가 커서+문구</td></tr>
+<tr><td>항목 행</td><td>들여쓴 행·번호·태그·손잡이</td><td>연한 회색 바탕</td><td>원래 행 흐림</td><td>빈 콘티 안내 문구</td><td>발표 중 편집도 허용(관객 화면 유지)</td></tr>
+<tr><td>절 행</td><td>손잡이 35%</td><td>손잡이 100%</td><td>행 흐림+칩</td><td>결과 0 = 손잡이 없음</td><td>본문 읽기 실패 스낵바</td></tr>
+<tr><td>역본 칩</td><td>'역본 새번역 ▾'</td><td>외곽선 진해짐</td><td>-</td><td>성경 아닌 페이지는 칩 없음</td><td>비활성 항목+이유, 안 풀림 안내</td></tr></table>
+
+<h3 style="margin-top:16px">문구 (그대로 사용)</h3>
+<table><tr><th>위치</th><th>문구</th></tr>
+<tr><td>머리줄 버튼</td><td>＋ 그룹 만들기 (툴팁: 새 그룹을 만듭니다. 항목을 고른 상태면 그 항목이 들어갑니다.)</td></tr>
+<tr><td>그룹 이름 입력 창</td><td>제목 '그룹 만들기' / 이름 바꾸기는 '그룹 이름 바꾸기' · 자리표시 '그룹 이름 (최대 12자)' · 버튼 '취소' '만들기'/'바꾸기' · 오류 '이미 같은 이름의 그룹이 있습니다. 다른 이름을 써 주세요.'</td></tr>
+<tr><td>⋯ 메뉴</td><td>이름 바꾸기… / 위로 이동 / 아래로 이동 / 그룹 풀기(항목은 그대로 남습니다) / 그룹과 항목 삭제…</td></tr>
+<tr><td>삭제 확인</td><td>제목 "'말씀' 그룹과 항목 2개를 삭제할까요?" · 본문 "그룹 안의 성경 1개, PPT 1개가 콘티에서 사라집니다. 저장한 콘티는 그대로입니다." · 버튼 '취소' / '그룹과 항목 삭제'</td></tr>
+<tr><td>스낵바</td><td>"그룹 '말씀'을 풀었습니다. 항목 2개는 그대로입니다. [되돌리기]" · "3번에 담았습니다" · "4~6번에 담았습니다" · "성경 1페이지를 담았습니다" · "기준 자리가 사라져 맨 끝에 담았습니다."</td></tr>
+<tr><td>빈 그룹</td><td>안내 줄 "비어 있습니다. 곡이나 성경을 여기로 끌어 놓으세요." · 저장 때 "비어 있는 그룹 1개는 저장되지 않았습니다."</td></tr>
+<tr><td>빈 콘티</td><td>"곡이나 성경을 여기로 끌어 놓으세요. 더블클릭이나 '담기' 버튼은 맨 끝에 담습니다."</td></tr>
+<tr><td>역본</td><td>칩 '역본 새번역' · 비활성 이유 '성경 66권이 아니라 바꿀 수 없음' · 확인 제목 '역본을 바꾸면 고친 본문이 사라집니다' · 버튼 '취소' / '개역개정으로 바꾸기' · 상태 줄 "4번 성경을 '새번역'에서 '개역개정'으로 바꿨습니다. [되돌리기]"</td></tr></table>
+
+<h3 style="margin-top:16px">키보드 · 접근성</h3>
+<ul>
+<li>그룹 머리줄 = 포커스 가능(Tab), 역할 '버튼(접힘 상태 expanded/collapsed)'. 스크린리더 이름 "시작곡 그룹, 항목 3개, 펼쳐짐". ←/→ 접기·펼치기(또는 Enter/Space), F2 이름 바꾸기, ⋯ 는 Shift+F10/Menu 키 또는 Tab 으로 별도 포커스.</li>
+<li>항목 행 이름 "3번, 곡, 주 은혜임을, 시작곡 그룹". 손잡이 이름 "주 은혜임을 끌어서 옮기기". 끌기를 못 하는 사용자 대안: 손잡이에 포커스 후 Alt+↑/↓ = 한 칸 이동(그룹 경계를 넘으면 안/밖 전환), ⋯ 메뉴의 위/아래 이동은 그룹용. 절 손잡이 Enter = 맨 끝에 담기.</li>
+<li>삽입 선·강조는 색뿐 아니라 굵기·배지 글자·외곽선으로 구분(색각 무관). 대비 4.5:1 이상(회색 보조 글 #6b6b73 on 흰색 ≈ 5:1). 삭제 계열은 오류색 + 글자('삭제').</li>
+<li>포커스 표시 2px 외곽선, 모든 테마에서 <code>colorScheme.primary</code>. 끌기 결과는 스낵바 글로 안내(스크린리더가 읽음).</li>
+<li>ESC = 끌기 취소·메뉴·창 닫기. 확인창 기본 포커스 = 취소. 발표 단축키(←/→/Space)는 목록·칩에 포커스가 있어도 기존 규칙(Tab 으로 버튼 위에서도 넘김)이 유지되도록 확인 필요.</li>
+<li>색은 하드코딩하지 말고 colorScheme(surface·outlineVariant·surfaceContainerHighest·primary·error)에서 가져온다. 이 목업의 색은 밝은 테마 기준 예시.</li>
+</ul>
+
+<h3 style="margin-top:16px">화면 수용 기준</h3>
+<ul class="ac">
+<li>편집 탭 목록에 그룹 머리줄(▸/▾·이름·N개·⋯)과 들여쓴 항목 행이 보이고, 그룹 밖 항목은 들여쓰기 없이 보인다.</li>
+<li>항목 번호는 접어도 전체 번호가 유지되고, 접힌 머리줄에 '(N개 숨김)'과 번호 범위가 보인다.</li>
+<li>머리줄 '그룹 만들기' → 이름 창 → 고른 항목이 들어간 그룹 또는 '0개' 빈 그룹이 생긴다. 같은 이름이면 오류 문구로 막힌다.</li>
+<li>⋯ 메뉴에 이름 바꾸기·위로 이동·아래로 이동·그룹 풀기·그룹과 항목 삭제가 있고, 맨 위/맨 아래 이동은 비활성 + 이유가 보인다.</li>
+<li>그룹 풀기는 확인 없이 항목을 유지하며 되돌리기가 뜨고, '그룹과 항목 삭제'는 확인창(기본 포커스 취소)을 거친다.</li>
+<li>곡 검색 결과를 끌면 콘티 행 사이에 선이 나타나고, 놓으면 그 자리에 담긴다. 선의 들여쓰기로 그룹 안/밖이 구분된다.</li>
+<li>그룹 머리줄 아래 절반에 놓으면 그룹 안 맨 앞(접힌 그룹은 맨 끝), 위 절반에 놓으면 그룹 밖. 놓을 수 있는 머리줄은 외곽선 + "'이름'에 넣기" 배지.</li>
+<li>콘티 항목을 끌어 그룹에 넣고/빼고, 머리줄 손잡이로 그룹째 옮길 수 있다. 그룹 안에 그룹은 놓을 수 없다(문구 표시).</li>
+<li>놓은 항목은 8초 동안 '방금 담음' 배지 + 막대로 강조되고 그 자리로 스크롤된다.</li>
+<li>빈 콘티·목록 아래 빈 곳·더블클릭·'담기' 버튼은 모두 맨 끝에 담는다.</li>
+<li>성경 절 행 맨 왼쪽에 ⠿ 손잡이가 있고, 체크박스 클릭은 체크만 토글하며 손잡이만 끌기를 시작한다. 체크된 절의 손잡이는 체크 전체를, 안 체크된 절의 손잡이는 그 절만 끈다.</li>
+<li>발표 보기 현재 슬라이드가 성경 페이지일 때만 역본 칩이 보이고, 곡·PPT·빈 페이지에서는 보이지 않는다.</li>
+<li>드롭다운에서 66권이 아닌 역본은 비활성이며 이유가 항상 보인다.</li>
+<li>손으로 고친 본문이 있을 때만 확인창이 뜨고, 없으면 바로 바뀐다. 바꾼 뒤 상태 줄에 '되돌리기'가 보이고 누르면 이전 역본으로 돌아간다.</li>
+<li>안 풀리는 경우(참조 불가·책 없음·절 부족) 문구가 위 표대로 나오고 칩·본문은 바뀌지 않는다.</li>
+<li>Tab 으로 머리줄·손잡이·⋯·칩에 닿을 수 있고 포커스 외곽선이 보인다. 스크린리더 이름이 위 접근성 항목과 같다.</li>
+<li>7개 앱 테마에서 삽입 선·강조·비활성 글이 모두 구분되어 읽힌다(colorScheme 사용, 하드코딩 색 없음).</li>
+</ul>
+
+<h3 style="margin-top:16px">결정 필요 항목</h3>
+<ol>
+<li>그룹째 이동 입력 — 머리줄 손잡이 끌기 + ⋯ 위/아래 메뉴 둘 다 / 끌기만 · 추천: 둘 다 (끌기 못 하는 사용자·긴 목록 대안, 비용 작음). 참고: tech-frontend 는 v1 제외를 제안했으나 plan.md 가 포함이라 plan 기준으로 그림.</li>
+<li>빈 그룹 저장 — 세션만(안내 문구 표시) / 저장 · 추천: 세션만 (plan 추천. 저장은 스키마 칸 추가, 되돌리기 어려움). 단 저장 때 "저장되지 않았습니다" 안내가 필수.</li>
+<li>역본 칩 위치 — 현재 슬라이드 머리줄 / 툴바 줄 / 썸네일 메뉴 · 추천: 머리줄(성경일 때만, 현재 항목과 가까워 어느 항목이 바뀌는지 분명). 확인 필요.</li>
+<li>손잡이 키보드 이동(Alt+↑/↓) 포함 여부 — v1 포함 / 후속 · 추천: 후속(끌기 + 절 Enter 담기 + 그룹 ⋯ 이동으로 v1 최소 접근성 확보). 필요하면 올림.</li>
+<li>그룹 만들기 시 고른 항목 처리 — 고른 항목을 넣기 / 항상 빈 그룹 · 추천: 고른 게 있으면 넣기(칩 일일이 누르는 불편 해소). 편집 탭 목록은 현재 다중 선택이 없어 '고른 항목' = 현재 고른 한 개로 제한(확인 필요).</li>
+<li>'모든 성경 항목에도 적용' 체크 — 4-B 드롭다운에 포함 / 제외 · 추천: 포함(기본 꺼짐, plan 결정 1 과 같음).</li>
+<li>옛 칩(ItemGroupChip) — 안정화 뒤 제거(plan) / 즉시 숨김 · 추천: plan 대로 안정화 뒤 제거. 그때까지 트리 안 행에서는 칩을 숨겨 시각 중복을 줄인다.</li>
+</ol>
+</div>
+</body></html>

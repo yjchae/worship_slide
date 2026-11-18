@@ -26,7 +26,8 @@ flutter test test/move_pages_test.dart # 발표 보기 페이지 옮기기·나�
 flutter test test/conti_text_parse_test.dart # 콘티 한번에 넣기: 콘티 글 → 번호·제목·조·(or 곡) + 곡 찾기
 flutter test test/extra_language_test.dart # 추가 보조 언어(세 번째 줄) 페이지·콘티 저장·스타일·설교자 화면
 flutter test test/conti_group_test.dart # 콘티 항목 그룹: item_group 칸 추가(옛 DB)·저장·불러오기·이름 정규화
-flutter test test/slide_group_test.dart # 발표 보기 격자 그룹 구간·머리줄 높이 계산
+flutter test test/slide_group_test.dart # 발표 보기 격자 그룹 구간·머리줄 높이 계산(그룹 끝 '그룹 없음' 머리줄)
+flutter test test/conti_tree_test.dart test/conti_tree_page_test.dart # 콘티 폴더 트리: 순수 함수·불변식·끌어 넣기/빼기/그룹째/접기 위젯·실제 페이지
 flutter test test/thumb_click_test.dart # 썸네일 원클릭=고르기·더블클릭=이동·끌기·빈 곳 클릭 제스처가 서로 안 막는지
 flutter test test/b_screen_test.dart # 통역 화면(B): 칸 계산·폴더 대응표·보조 칸 올리기
 flutter test test/page_image_test.dart # 슬라이드 편집 페이지: 요소 JSON·clamp·배경 page_elements·.wsconti 경로·화면 밖 PNG 굽기
@@ -107,6 +108,7 @@ lib/
       staging_item.dart              -- sealed StagingItem: Song / Bible / Image / Blank
       worship_conti.dart             -- 콘티 모델
       conti_text_parse.dart          -- 콘티 글 파싱(parseContiText) + 제목으로 곡 찾기(ContiSongMatcher, 띄어쓰기·문장부호 무시)
+      conti_tree.dart                -- 콘티 폴더 트리 순수 함수: 행 계산·놓을 자리·항목/그룹 이동·만들기·풀기·이름·여백 없음 규칙
     presentation/
       praise_home_page.dart          -- 단일 화면(약 12,400줄). 검색·성경·디자인·콘티·발표 제어 전부 여기
       slide_page_data.dart           -- 발표 창에 보낼 한 페이지의 JSON 표현
@@ -118,6 +120,9 @@ lib/
       slide_render_view.dart         -- 미리보기/썸네일용 Flutter 슬라이드 렌더러 (textOnly = 가사 PNG 굽기용)
       slide_text_layout.dart         -- 가사 상자 글자(원본→보조→추가 보조) + 넘침 측정. 렌더러와 넘침 경고가 같이 쓴다
       lyrics_editor_dialog.dart      -- 가사 수정 창: 페이지 표(좌 원본·가운데 보조·우 추가 보조) / 통째로
+      conti_insert_target.dart       -- 콘티 행 위에 찬양·성경 절·콘티 항목(ContiRowDrag)을 끌어 놓을 자리(위 절반 = 앞·아래 절반 = 뒤, 삽입 선) ContiInsertTarget + 순수 판정 dropAfterHalf·insertIndexFor + BibleVerseDrag
+      conti_tree_widgets.dart        -- 콘티 폴더 트리 목록: ContiTreeList(자동 스크롤·맨 끝 놓기 칸)·ContiGroupHeader·ContiDragHandle + EdgeAutoScroll
+      conti_group_widgets.dart       -- 그룹 이름 입력창 showGroupNameDialog
       conti_text_import_dialog.dart  -- 콘티 한번에 넣기: 콘티 글 붙여 넣기 → 줄마다 찾은 곡 확인(같은 제목 여럿이면 고르기) → 콘티 끝에 담기
       lyrics_page_grid.dart          -- 페이지 표 순수 모델(나누기·밀기·당기기·합치기) + 가사 페이지 형식 함수
       (data/claude_translator.dart  -- 가사 수정 창 '번역·변환': 원본 페이지 → 로컬 Claude Code CLI(`claude -p --json-schema`, API 키 없음)로 보조·추가 보조 칸 채우기.
@@ -349,6 +354,7 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   범위 = 전체 / 구약(앞 39권) / 신약(뒤 27권) / 책 하나. 66권이 아닌 역본은 구약·신약 칸을 숨긴다(`mapBookName` 과 같은 순서 가정).
   결과 줄의 '이 장 보기' = 장절 모드로 그 장을 열고 그 절을 골라 둔다. 본문 모드에선 여러 책·장을 같이 고를 수 있어서
   페이지는 (책, 장)마다 따로 만든다(`bibleVersePages`) — 장절 모드는 묶음이 하나라 예전과 같다
+- **발표 보기 성경 본문 역본 바꾸기** (기획 `planning/conti-tree-dnd-version/`, A 단계): 현재 슬라이드가 성경 페이지(자동 여백 제외)일 때만 머리줄 '역본 ○○ ▾' 칩이 나온다. 고르면 `_changeBibleVersion` 이 그 항목의 참조 앞 역본·본문을 새 역본 같은 장으로 다시 만들고(`switchBibleVersion`, `bible_text_search.dart` 순수 함수 — 그 역본에 없는 절은 참조에서 빼고 알림, 하나도 없으면 안 바꿈), 보조·추가 칸은 **전역** `bibleSubVersion`/`bibleExtraVersion` 기준으로 다시 읽는다(새 주 역본과 같으면 비고, 되돌리면 다시 찬다). uid·배경·메모·그룹·위치는 그대로, 보던 슬라이드는 슬라이드 키로 다시 찾고 `_sendCurrentSlide` 로 관객 화면에 반영. 66권이 아닌 역본은 메뉴에서 비활성(`_bibleBookCounts`). 손으로 고친 본문은 구별할 수 없어 확인창 대신 스낵바 '되돌리기'·⌘/Ctrl+Z 로 돌린다 — `_moveUndo`/`_undoSeq` 스택을 같이 써서(직전 1회, 그 사이 콘티가 바뀌었으면 되돌리지 않고 알림) 엉뚱한 삭제·옮기기가 먼저 돌아가지 않는다. 항목 스냅샷이 바뀔 뿐이라 저장·`.wsconti`·PPTX 는 그대로. 읽는 사이 항목이 고쳐졌으면 덮지 않는다. `test/bible_version_switch_test.dart`
 - **성경 음성 검색** (기획 `planning/bible-voice-search/plan.md`): 발표 보기 툴바의 말하는 사람 아이콘. 켜 두면 계속 듣고
   "다니엘 3장 1절에서 10절"·"시편 107편 5절"·"17절"(앞 책·장 이어 말하기)을 들으면 그 구절 페이지를 **현재 페이지 바로 뒤**에 넣는다
   (붙여 넣기와 같은 `_insertItemsAfterSlide`, 관객 화면은 그대로 — 상태 줄 '바로 띄우기'·'되돌리기'). 발표 보기 탭을 떠나면 끈다.
@@ -405,9 +411,28 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   보조 언어 다시 입히기의 기준 곡은 검색 결과가 아니라 DB 에서 id 로 읽는다(`PraiseRepository.songsByIds`)
 - **콘티 그룹** (시작곡·말씀·헌신송 같은 구간 이름): 콘티 항목마다 그룹 이름 하나(`worship_conti_items.item_group`, NULL = 없음).
   스키마 버전은 20 그대로 — 열 때마다 `ensureItemGroupColumn`(`onOpen`, 멱등)이 칸이 없으면 더한다(옛 DB·옛 앱 호환). 작업 콘티는 항목 uid → 이름 맵(`_itemGroups`)을 `_noSpacerUids` 와 같은 자리에서 같이 옮긴다.
-  이름 정규화는 `normalizeItemGroup`(data), 그룹 칩·번호 범위 지정·이름 목록은 `conti_group_widgets.dart`, 발표 보기 '모든 페이지' 격자의 구간·머리줄 높이 계산은 순수 함수 `slide_group.dart`.
-  썸네일 줄에는 그룹이 시작되는 페이지에만 이름 라벨. 붙여 넣기·끌기·음성으로 넣은 항목은 놓은 자리 항목의 그룹에 든다(그룹 마지막 뒤여도 앞 그룹 — 의도).
+  이름 정규화는 `normalizeItemGroup`(data), 그룹 이름 입력창(`showGroupNameDialog`)은 `conti_group_widgets.dart`, 발표 보기 '모든 페이지' 격자의 구간·머리줄 높이 계산은 순수 함수 `slide_group.dart`.
+  **격자 머리줄**: 그룹 구간은 늘 있고, 그룹이 끝난 뒤 이어지는 그룹 없는 구간에도 흐린 '그룹 없음' 머리줄이 있다(`sectionHasHeader` — 맨 앞 그룹 없는 구간만 없음. 그룹 하나만 만들면 뒤의 모든 항목이 그 그룹처럼 보이던 문제).
+  썸네일 줄에는 그룹이 시작되는 페이지에만 이름 라벨. 붙여 넣기·끌기·음성으로 넣은 항목은 놓은 자리 항목의 그룹에 든다(그룹 마지막 뒤여도 앞 그룹 — 의도). 편집 탭의 빈·편집·동영상 페이지 추가는 앞뒤 항목이 같은 그룹 안일 때만 그 그룹에 든다(`_groupInside` — 안 그러면 그룹 구간이 갈라진다).
+  - **폴더 트리 (편집 탭 콘티 목록, 기획 `planning/conti-tree-dnd-version/` C 단계)**: 데이터는 평면 목록 + `_itemGroups` 그대로(DB·`.wsconti`·스키마 20 불변)이고 화면만 트리다.
+    불변식 = 한 그룹의 항목은 목록에서 이어진다 — 끌어 넣기·빼기·그룹째 이동은 목록을 실제로 재배치한다. 중첩 없음(1단계). 순수 함수는 `domain/conti_tree.dart`
+    (`contiRows` 행 계산, `resolveDrop` 놓을 자리, `moveItemTo`·`moveGroupTo`·`groupStepIndex`·`createGroupWith`·`ungroup`·`renameGroup`·`uniqueGroupName`·`validGroupAt`), 목록 위젯은 `conti_tree_widgets.dart`
+    (`ContiTreeList` = 스크롤 + 가장자리 자동 스크롤 + 목록 아래 빈 자리 '맨 끝에 놓기', `ContiGroupHeader`, `ContiDragHandle`, `EdgeAutoScroll`) — `ReorderableListView` 는 걷어 냈다.
+    - 행: 그룹 머리줄(▸/▾·폴더 아이콘·이름·항목 수 배지·⋯ 메뉴) + 소속 항목은 들여쓰고 세로 가이드선. 그룹 밖 항목은 그대로. 번호는 접어도 전체 번호를 유지한다.
+    - 그룹 식별 = (이름, 구간 시작 uid)(`groupKey`, `ContiGroupRun.startUid`). 옛 콘티에서 떨어진 같은 이름은 별개 그룹이고 이름 바꾸기·풀기·삭제도 그 구간만 건드린다. 만들기·이름 바꾸기는 이미 있는 이름이면 거절한다.
+      뒤에 붙이기(`_appendConti`)는 이미 있는 이름과 겹치는 붙은 그룹에 ' (2)' 를 달아 한 그룹으로 합쳐지지 않게 한다.
+    - 놓을 자리: 항목 행 위/아래 절반 = 그 앞/뒤(그 항목의 그룹), 머리줄 위 절반 = 그룹 밖 앞, 머리줄 아래 절반 = 그룹 맨 앞(접힌 그룹은 맨 끝), 그룹 마지막 항목 아래 절반 = 그룹 끝, 목록 아래 빈 자리 = 맨 끝·그룹 밖.
+      곡·성경 절 끌기(B 단계 `ContiInsertTarget`)도 같은 규칙(`_dropOnConti(data, ContiSpot)`)이고 그룹은 읽은 뒤에도 그 자리가 그 그룹에 닿아 있을 때만 쓴다(`validGroupAt`). 그룹째 끌 때는 다른 그룹 안 행이면 그 그룹 블록 앞/뒤.
+    - '그룹 만들기'(콘티 머리줄 폴더+ 버튼, `_createGroup`): 이름 입력창에 '고른 항목 넣기' 체크(고른 항목이 있을 때, 기본 켬). 끄면 빈 그룹 — **세션 한정**(`_emptyGroups`, 목록 맨 끝에 머리줄만, 저장하면 사라진다고 저장 안내에 적는다)이고 접힘(`_collapsedGroups`)도 세션 한정이다.
+      ⋯ 메뉴: 이름 바꾸기 / 위·아래로 이동 / 그룹 풀기(항목 유지) / 그룹과 항목 삭제(확인). 예전 항목별 그룹 칩·번호 범위 지정은 트리가 대체해 없앴다(가운데 항목만 지정하면 그룹이 쪼개졌다).
+    - 이동·그룹 연산은 `_trackedEdit` 한 곳을 지난다: 보던 슬라이드를 키로 다시 찾고(발표 중 관객 화면 유지), `_moveUndo`/`_undoSeq` 에 올려 ⌘/Ctrl+Z·스낵바 '되돌리기'가 되돌린다(`_VoiceUndo` 가 `emptyGroups` 도 담는다). 옮기기는 `_mediaGroups` 를 잃지 않고 '여백 없음' 은 예전 순서 바꾸기와 같은 규칙(`moveBlock`).
+      발표 중 그룹과 항목을 삭제해 보던 슬라이드가 사라지면 가까운 슬라이드로 간다. `test/conti_tree_test.dart`(순수 함수·불변식 무작위·목록 위젯 제스처), `test/conti_tree_page_test.dart`(실제 페이지)
   **썸네일 클릭 체계**: 원클릭 = 고르기(약 0.3초 뒤 확정 — 더블클릭과 가르려고), 더블클릭 = 고르기 해제 + 그 페이지로 이동, 빈 곳 클릭 = 해제. 선택 체크 배지는 좌상단(우상단은 hover 수정·삭제 버튼 자리)
+  **편집 탭 콘티 목록 다중 선택**: 클릭 = 하나(미리보기), Shift+클릭 = 앵커(마지막으로 클릭한 항목)~클릭 범위, ⌘/Ctrl+클릭 = 하나씩 더하기·빼기(Shift+⌘/Ctrl = 기존에 범위 더하기). 순수 함수 `applyContiSelect`(`conti_tree.dart`). 범위·선택은 **보이는 항목만** — 그룹 머리줄·접힌 그룹 안 항목은 안 들고(접힌 그룹을 가로지르는 범위는 건너뛴다), 앵커가 안 보이면 그 항목 하나. 상태는 `_stagingSelected`+`_stagingAnchor`이고 미리보기 항목이 그 안에 있을 때만 유효하다(다른 경로로 미리보기가 바뀌면 미리보기 하나로 돌아감, `_selectedUids`). 고른 항목은 끌면 한 덩어리로 이동(`ContiRowDrag.uids`·`moveItemsTo`: 목록 순서 유지, 이어진 것끼리는 '여백 없음' 표시까지 한 블록으로, 그룹 안·밖 포함), 편집 탭에서 Delete/Backspace = 확인 후 일괄 삭제(`_handleContiDeleteKey`, 입력칸 포커스면 글자로), '그룹 만들기' = 고른 전부 넣기(`createGroupWithItems`, 가장 앞 항목 자리). 이동·삭제는 `_trackedEdit` 되돌리기. 행의 X 버튼은 그 항목 하나만 지운다. `test/conti_multi_select_test.dart`
+- **끌어 놓아 콘티 원하는 자리에 담기** (기획 `planning/conti-tree-dnd-version/` B 단계): 찬양 검색 결과(`Draggable<PraiseSong>`)와 성경 검색 절 앞의 끌기 손잡이(`BibleVerseDrag` — 체크 토글과 안 겹치게 별도 손잡이, 고른 절 중 하나를 끌면 고른 전부)를 콘티 행(`ContiInsertTarget`, 행 위 절반 = 앞·아래 절반 = 뒤, 선 표시)에 놓으면 `_dropOnConti` → `_insertItemsAt` 이 그 자리에 넣는다.
+  행 위 DragTarget 오버레이이고 가장 안쪽 DragTarget 이 이겨서 패널 전체 '맨 끝에 놓기'·더블클릭·담기 버튼(맨 끝)은 행 밖·기존 길에서만 일한다(`test/conti_insert_target_test.dart`). 콘티 항목 순서 바꾸기·그룹 이동은 위 폴더 트리가 같은 `ContiInsertTarget` 으로 받는다.
+  성경은 놓은 뒤 DB 를 읽는 동안 콘티가 바뀔 수 있어 **자리를 읽은 뒤 기준 uid 로 다시 찾고** 없으면 맨 끝. 그룹은 기준 항목의 것을 이어받고, 여백은 예전 순서 바꾸기처럼 앞 항목의 '여백 없음' 표시만 풀어 사이에 둔다(끝에 넣을 땐 안 건드림).
+  발표 중이면 보던 슬라이드를 `_slideInfoKey` 로 다시 찾아 관객 화면은 그대로이고 싱어 '다음'만 갱신한다. 놓은 항목은 2초 강조(`_contiFlashUids`, 발표 보기용 `_flashInserted` 와 별개). 되돌리기는 없다.
 - **새 콘티** (예배 콘티 머리줄, `_newConti`): 확인 후 담긴 항목만 비운다(`_replaceConti`, 불러오기와 같은 초기화). 저장한 콘티는 그대로고 발표 중에는 막는다
 - **콘티 불러오기 뒤에 붙이기** (`_appendConti`): 항목이 있으면 취소·뒤에 붙이기·교체를 묻는다. 붙이기는 불러온 항목·메모·배경·여백 없음을 맨 끝에 더할 뿐이라 기존 항목 표시·원본 감시·보던 페이지·저장본 연결(`_linkedConti`)이 그대로고, 빠진 항목 수는 `_linkedMissing` 에 더한다. 발표 중에도 된다(관객 화면은 그대로, 싱어 '다음'만 갱신)
 - **통역 화면 (내부 이름 B, macOS 만, 기획 `.claude-office/work/20261031-2207-split-screen-subtitle/`)**: 앱 하나에서 관객 창과 같이 넘어가는 세 번째 창. 모니터를 직접 골라야 하고(자동 없음) 그 모니터 전체를 차지한 뒤 **창 안에서** 슬라이드 칸과 자막 칸을 나눈다.
