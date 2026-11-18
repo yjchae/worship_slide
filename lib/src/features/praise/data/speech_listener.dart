@@ -28,7 +28,7 @@ class SpeechListener {
   /// 듣기가 멈췄다(권한 거부·장치 없음 등). 다시 켜려면 [start].
   void Function(String message)? onError;
 
-  /// 켰으면 null, 못 켰으면 이유. [grammar] 는 Windows 용 SRGS(macOS 는 무시).
+  /// 켰으면 null, 못 켰으면 이유. [grammar] 는 Windows 용 SRGS(macOS 는 무시). Windows 는 자유 받아쓰기를 먼저 쓰고, '온라인 음성 인식'이 꺼져 있어 안 될 때만 이 문법으로 듣는다.
   Future<String?> start({
     required String grammar,
     required List<String> hints,

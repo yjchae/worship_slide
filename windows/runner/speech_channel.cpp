@@ -85,21 +85,45 @@ void SpeechChannel::Start(const std::shared_ptr<State>& state, unsigned seq, std
     } else if (!KoreanSupported()) {
       done->error = "no_korean";
     } else {
-      // 문법은 파일로만 넘길 수 있다. 앱 패키지가 아니라 ApplicationData 를 못 써서 임시 폴더에 둔다.
-      wchar_t temp[MAX_PATH];
-      GetTempPathW(MAX_PATH, temp);
-      std::wstring path = std::wstring(temp) + L"worship_bible_voice.grxml";
-      {
-        std::ofstream out(path, std::ios::binary | std::ios::trunc);
-        out << grammar;
+      // 말풍선(들리는 말 전부)이 성경 검색보다 중요해서 자유 받아쓰기를 먼저 쓴다.
+      // '온라인 음성 인식' 설정이 꺼져 있으면 컴파일이 실패하므로 그때만 성경 문법으로 물러난다.
+      SpeechRecognizer recognizer{nullptr};
+      bool dictation = false;
+      auto compile = [&](bool dict) -> bool {
+        SpeechRecognizer r(winrt::Windows::Globalization::Language(L"ko-KR"));
+        if (dict) {
+          r.Constraints().Append(SpeechRecognitionTopicConstraint(
+              SpeechRecognitionScenario::Dictation, L"dictation"));
+        } else {
+          // 문법은 파일로만 넘길 수 있다. 앱 패키지가 아니라 ApplicationData 를 못 써서 임시 폴더에 둔다.
+          wchar_t temp[MAX_PATH];
+          GetTempPathW(MAX_PATH, temp);
+          std::wstring path = std::wstring(temp) + L"worship_bible_voice.grxml";
+          {
+            std::ofstream out(path, std::ios::binary | std::ios::trunc);
+            out << grammar;
+          }
+          auto file = StorageFile::GetFileFromPathAsync(winrt::hstring(path)).get();
+          r.Constraints().Append(SpeechRecognitionGrammarFileConstraint(file, L"bible"));
+        }
+        auto compiled = r.CompileConstraintsAsync().get();
+        if (compiled.Status() != SpeechRecognitionResultStatus::Success) {
+          r.Close();
+          return false;
+        }
+        recognizer = r;
+        dictation = dict;
+        return true;
+      };
+      bool ok = false;
+      try {
+        ok = compile(true);
+      } catch (...) {
+        ok = false;
       }
-      auto file = StorageFile::GetFileFromPathAsync(winrt::hstring(path)).get();
-      SpeechRecognizer recognizer(winrt::Windows::Globalization::Language(L"ko-KR"));
-      recognizer.Constraints().Append(SpeechRecognitionGrammarFileConstraint(file, L"bible"));
-      auto compiled = recognizer.CompileConstraintsAsync().get();
-      if (compiled.Status() != SpeechRecognitionResultStatus::Success) {
+      if (!ok) ok = compile(false);
+      if (!ok) {
         done->error = "grammar";
-        recognizer.Close();
       } else {
         auto session = recognizer.ContinuousRecognitionSession();
         // 조용해도 끝내지 않는다(설교 내내 켜 둔다).
@@ -109,12 +133,13 @@ void SpeechChannel::Start(const std::shared_ptr<State>& state, unsigned seq, std
               Post(hwnd, "partial", "text", winrt::to_string(args.Hypothesis().Text()));
             });
         session.ResultGenerated(
-            [hwnd](const auto&, const SpeechContinuousRecognitionResultGeneratedEventArgs& args) {
+            [hwnd, dictation](const auto&, const SpeechContinuousRecognitionResultGeneratedEventArgs& args) {
               const auto result = args.Result();
               // 문법 인식기는 아무 소리나 문법에 억지로 맞추므로 확신이 낮은 것은 버린다.
               if (result.Status() != SpeechRecognitionResultStatus::Success) return;
               const auto confidence = result.Confidence();
-              if (confidence != SpeechRecognitionConfidence::High &&
+              // 받아쓰기는 확신도가 낮아도 말풍선에 보이게 둔다(문법 인식기만 거른다).
+              if (!dictation && confidence != SpeechRecognitionConfidence::High &&
                   confidence != SpeechRecognitionConfidence::Medium) {
                 Post(hwnd, "partial", "text", "");
                 return;

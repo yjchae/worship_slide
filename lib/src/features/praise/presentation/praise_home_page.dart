@@ -67,13 +67,17 @@ import 'page_template_dialog.dart';
 import 'presentation_timer.dart';
 import 'singer_view_data.dart';
 import 'slide_backdrop.dart';
+import 'conti_group_widgets.dart';
+import 'slide_group.dart';
 import 'slide_page_data.dart';
+import 'thumb_select.dart';
 import 'slide_render_view.dart';
 import 'style_fields.dart';
 import 'slide_text_layout.dart';
 import 'cloud_conti_dialog.dart';
 import 'conti_text_import_dialog.dart';
 import 'sync_dialog.dart';
+import 'heard_bubble.dart';
 
 class PraiseHomePage extends StatefulWidget {
   const PraiseHomePage({super.key});
@@ -192,6 +196,7 @@ class _VoiceUndo {
   _VoiceUndo.capture(_PraiseHomePageState s)
     : items = List.of(s._stagingItems),
       noSpacer = Set.of(s._noSpacerUids),
+      itemGroups = Map.of(s._itemGroups),
       backgrounds = Map.of(s._itemBackgrounds),
       notes = Map.of(s._slideNotes),
       deleted = Set.of(s._deletedSlideKeys),
@@ -199,6 +204,7 @@ class _VoiceUndo {
 
   final List<({int uid, StagingItem item})> items;
   final Set<int> noSpacer;
+  final Map<int, String> itemGroups;
   final Map<int, SlideBackground> backgrounds;
   final Map<String, String> notes;
   final Set<String> deleted;
@@ -219,6 +225,7 @@ class _VoiceUndo {
       }
     }
     return setEquals(noSpacer, o.noSpacer) &&
+        mapEquals(itemGroups, o.itemGroups) &&
         mapEquals(backgrounds, o.backgrounds) &&
         mapEquals(notes, o.notes) &&
         setEquals(deleted, o.deleted) &&
@@ -237,6 +244,9 @@ class _VoiceUndo {
     s._noSpacerUids
       ..clear()
       ..addAll(noSpacer);
+    s._itemGroups
+      ..clear()
+      ..addAll(itemGroups);
     s._itemBackgrounds
       ..clear()
       ..addAll(backgrounds);
@@ -314,6 +324,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   // 발표 보기 성경 음성 검색. null = 꺼짐. 켜 두는 동안 계속 듣는다.
   final SpeechListener _speech = SpeechListener();
   final ValueNotifier<_VoiceState?> _voice = ValueNotifier(null);
+  // 들린 말 말풍선(성경 음성 검색과 따로 켠다, 마이크는 같이 쓴다). 2차(싱어 전송)도 이 값을 읽는다.
+  final ValueNotifier<HeardBubble?> _bubble = ValueNotifier(null);
+  bool _bubbleOn = false;
+  bool _micOpen = false;
+  Future<String?>? _micStart;
+  int _bubbleSeq = 0;
+  Timer? _bubbleTimer;
   List<String> _voiceVersions = const [];
   // 이어 말하기("17절")·역본은 켤 때마다 새로 시작한다.
   String _voiceVersion = '';
@@ -367,6 +384,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   final Map<int, SlideBackground> _itemBackgrounds = {};
   // 뒤 자동 여백을 뺀 항목 uid(곡 중간 붙여 넣기, 여백 페이지 삭제). 저장·PPTX 에도 실린다.
   final Set<int> _noSpacerUids = {};
+  // 항목 uid → 그룹 이름(시작곡·말씀 …). 같은 이름이 이어진 항목이 한 그룹이다. 저장·불러오기 대상.
+  final Map<int, String> _itemGroups = {};
   // 헌금송 기본 디자인(배경·은행·계좌). 항목에 적용할 때 여기서 시작해 높낮이만 곡마다 맞춘다.
   OfferingDesign _offeringDesign = const OfferingDesign();
   // offering_design.json 이 있으면(한 번이라도 등록했으면) true. 배경·계좌 없이 등록해도 된다.
@@ -474,6 +493,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   @override
   void initState() {
     super.initState();
+    // 말풍선(토크백)은 기본 꺼짐 — 시작하자마자 음성 인식 권한을 묻지 않도록 버튼을 눌러야 켜진다.
     // 일시정지·리셋·목표를 바꾸면 싱어 화면(네이티브·휴대폰)도 바로 맞춘다.
     _presenterView.timer.addListener(_sendSingerView);
     _singerWeb.running.addListener(_clearMessageIfServerOff);
@@ -577,7 +597,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   @override
   void dispose() {
     _insertFlashTimer?.cancel();
+    _bubbleTimer?.cancel();
     _speech.stop();
+    _bubble.dispose();
     _voice.dispose();
     _presenterView.timer.removeListener(_sendSingerView);
     _singerWeb.running.removeListener(_clearMessageIfServerOff);
@@ -3435,6 +3457,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     final background = _itemBackgrounds[uid];
     final group = _mediaGroupOf(uid);
     final wasJoined = _noSpacerUids.remove(uid);
+    final itemGroup = _itemGroups[uid];
     // 뒤에 자동 여백이 붙어 있던 항목인지(곡·PPT 이고, 마지막 항목이 아니고, 이어 붙이지 않았음).
     final hadSpacer = !wasJoined && index < _stagingItems.length - 1;
     final oldNotes = <int, String>{};
@@ -3457,6 +3480,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         if (k < pieces.length - 1) _noSpacerUids.add(pieceUid);
         if (pieceUid != uid) {
           if (background != null) _itemBackgrounds[pieceUid] = background;
+          if (itemGroup != null) _itemGroups[pieceUid] = itemGroup;
           _mediaGroups[pieceUid] = group;
         }
         final from = pieces[k].from;
@@ -3482,6 +3506,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         placed.add((uid: spacerUid, item: const BlankStagingItem()));
         partUids.last.add(spacerUid);
         if (background != null) _itemBackgrounds[spacerUid] = background;
+        if (itemGroup != null) _itemGroups[spacerUid] = itemGroup;
         spacerNoteKey = _slideKey(spacerUid, 0);
       }
       spacerKey = '${_slideKey(placed.last.uid, 0)}:false';
@@ -3565,12 +3590,52 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _voiceBooks.clear();
     _voiceChain = null;
     _voiceUndo = null;
+    setState(() {
+      _voice.value = _VoiceState(
+        version: _voiceVersion,
+        message: '구절을 말하면 다음 장에 넣습니다',
+      );
+    });
+    final error = await _startMic(versions);
+    if (error == null) return;
+    if (!mounted) return;
+    AppLogger.instance.info('[voice] 못 켬: $error');
+    setState(() => _voice.value = null);
+    _showSnack('음성 인식을 켤 수 없습니다: $error');
+  }
+
+  Future<void> _stopVoice() async {
+    setState(() => _voice.value = null);
+    if (!_bubbleOn) await _stopMic();
+  }
+
+  Future<void> _stopMic() async {
+    _micOpen = false;
+    await _speech.stop();
+  }
+
+  /// 마이크를 연다(성경 음성 검색·말풍선이 같이 쓴다). 켰으면 null, 못 켰으면 이유.
+  Future<String?> _startMic(List<String> versions) {
+    // 이미 열려 있으면 그대로 쓴다(콜백이 상태를 읽으므로 다시 켤 필요 없다 — 다시 켜면 그 사이 말이 끊긴다).
+    if (_micOpen) return Future.value(null);
+    // 켜는 중이면 같은 요청을 같이 기다린다(두 번 start 하지 않게).
+    return _micStart ??= _openMic(
+      versions,
+    ).whenComplete(() => _micStart = null);
+  }
+
+  Future<String?> _openMic(List<String> versions) async {
     _speech
       ..onPartial = (text) {
+        if (!mounted) return;
         final v = _voice.value;
         if (v != null) _voice.value = v.copyWith(heard: text);
+        if (_bubbleOn && text.isNotEmpty) _showBubble(text);
       }
       ..onFinal = (text) {
+        if (!mounted) return;
+        if (_bubbleOn && text.isNotEmpty) _showBubble(text, isFinal: true);
+        if (_voice.value == null) return;
         // 하나가 실패해도 다음 마디는 처리되게 오류를 여기서 받는다.
         _voiceQueue = _voiceQueue
             .then((_) => _onVoiceHeard(text))
@@ -3580,35 +3645,77 @@ class _PraiseHomePageState extends State<PraiseHomePage>
             );
       }
       ..onError = (message) {
-        if (_voice.value == null) return;
+        if (!mounted || (_voice.value == null && !_bubbleOn)) return;
         AppLogger.instance.info('[voice] 멈춤: $message');
-        setState(() => _voice.value = null);
-        _showSnack('성경 음성 검색이 꺼졌습니다: $message');
+        _micOpen = false;
+        final voiceWasOn = _voice.value != null;
+        final bubbleWasOn = _bubbleOn;
+        setState(() {
+          _voice.value = null;
+          _bubbleOn = false;
+        });
+        if (bubbleWasOn) _showBubble(message, isError: true, hold: 5);
+        if (voiceWasOn) _showSnack('성경 음성 검색이 꺼졌습니다: $message');
       };
-    setState(() {
-      _voice.value = _VoiceState(
-        version: _voiceVersion,
-        message: '구절을 말하면 다음 장에 넣습니다',
-      );
-    });
     final error = await _speech.start(
       grammar: bibleVoiceGrammar(versions),
       hints: [...bibleCanonKorean, ...versions, '장', '절', '편'],
     );
-    if (error == null) {
-      // 권한 창이 떠 있는 사이에 다시 눌러 껐으면 켜진 마이크를 끈다.
-      if (_voice.value == null || !mounted) await _speech.stop();
-      return;
-    }
-    if (!mounted) return;
-    AppLogger.instance.info('[voice] 못 켬: $error');
-    setState(() => _voice.value = null);
-    _showSnack('음성 인식을 켤 수 없습니다: $error');
+    if (error != null) return error;
+    _micOpen = true;
+    // 권한 창이 떠 있는 사이에 다시 눌러 껐으면 켜진 마이크를 끈다.
+    if ((_voice.value == null && !_bubbleOn) || !mounted) await _stopMic();
+    return null;
   }
 
-  Future<void> _stopVoice() async {
-    setState(() => _voice.value = null);
-    await _speech.stop();
+  /// 말풍선에 글을 띄우고 [hold] 초 뒤 사라지게 한다(새 글이 오면 다시 센다). 페이지 setState 없음.
+  void _showBubble(
+    String text, {
+    bool isFinal = false,
+    bool isError = false,
+    int hold = 3,
+  }) {
+    _bubbleTimer?.cancel();
+    _bubble.value = HeardBubble(
+      text,
+      isFinal: isFinal,
+      isError: isError,
+      seq: ++_bubbleSeq,
+    );
+    _bubbleTimer = Timer(Duration(seconds: hold), () => _bubble.value = null);
+  }
+
+  Future<void> _toggleBubble() async {
+    if (_bubbleOn) {
+      await _stopBubble();
+      return;
+    }
+    setState(() => _bubbleOn = true);
+    _showBubble('마이크를 켜는 중…', hold: 10);
+    final seq = _bubbleSeq;
+    // 성경 데이터가 없어도 켠다(문법에만 쓰인다).
+    var versions = const <String>[];
+    try {
+      versions = await _bibleRepository.getVersions();
+    } catch (e) {
+      AppLogger.instance.info('[voice] 역본 목록 못 읽음(문법 없이 켬): $e');
+    }
+    final error = await _startMic(versions);
+    if (!mounted || !_bubbleOn) return;
+    if (error != null) {
+      AppLogger.instance.info('[voice] 말풍선 못 켬: $error');
+      setState(() => _bubbleOn = false);
+      _showBubble(error, isError: true, hold: 5);
+      return;
+    }
+    if (_bubbleSeq == seq) _showBubble('듣는 중…', hold: 2);
+  }
+
+  Future<void> _stopBubble() async {
+    _bubbleTimer?.cancel();
+    _bubble.value = const HeardBubble('');
+    setState(() => _bubbleOn = false);
+    if (_voice.value == null) await _stopMic();
   }
 
   void _voiceMessage(String message, {bool error = false}) {
@@ -3814,10 +3921,15 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     // 나눴으면 앞부분의 마지막 조각, 아니면 놓은 페이지의 항목
     final headUid = onPage ? _stagingItems[insertAt - 1].uid : null;
     if (headUid != null) _noSpacerUids.add(headUid);
+    // 넣은 항목은 놓은 자리 항목의 그룹에 든다(그룹 한가운데에 넣으면 그룹이 둘로 갈리지 않게).
+    // 그룹 마지막 페이지 뒤에 넣어도 앞 그룹에 든다 — 의도(그룹을 잇는 쪽이 자연스럽다).
+    final insertGroup =
+        _itemGroups[headUid ?? (at >= 0 ? _stagingItems[at].uid : -1)];
     final uids = <int>[];
     for (final c in pieces) {
       final uid = _nextUid++;
       uids.add(uid);
+      if (insertGroup != null) _itemGroups[uid] = insertGroup;
       _stagingItems.insert(insertAt++, (uid: uid, item: c.item));
       if (c.background != null) _itemBackgrounds[uid] = c.background!;
       _noSpacerUids.add(uid);
@@ -4097,6 +4209,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       final joined = _noSpacerUids.remove(e.uid);
       if (!joined && i > 0) _noSpacerUids.remove(_stagingItems[i - 1].uid);
       _mediaGroups.remove(e.uid);
+      _itemGroups.remove(e.uid);
       _stagingItems.removeAt(i);
     }
     if (prune) _pruneSourceWatches();
@@ -4848,8 +4961,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   void _onStagingReorder(int oldIndex, int newIndex) {
     setState(() {
       final entry = _stagingItems[oldIndex];
+      final group = _itemGroups[entry.uid];
       _removeStagingWhere((e) => e.uid == entry.uid);
       _stagingItems.insert(newIndex, entry);
+      if (group != null) _itemGroups[entry.uid] = group;
       // 옮긴 자리 앞 항목과는 여백을 둔다.
       if (newIndex > 0) _noSpacerUids.remove(_stagingItems[newIndex - 1].uid);
       _clampCurrentSlideIndex();
@@ -5264,6 +5379,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         notes: _effectiveSlideNotes,
         backgrounds: _itemBackgrounds,
         noSpacerUids: _noSpacerUids,
+        itemGroups: _itemGroups,
         overwriteUid: choice.overwrite ? linked!.uid : null,
       );
       final uid = await _contiRepository.contiUid(id);
@@ -5375,6 +5491,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   void _replaceConti(
     List<({int uid, StagingItem item})> items, {
     Set<int> noSpacerUids = const {},
+    Map<int, String> itemGroups = const {},
     Map<String, String> notes = const {},
     Map<int, SlideBackground> backgrounds = const {},
     WorshipConti? linked,
@@ -5394,6 +5511,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       _noSpacerUids
         ..clear()
         ..addAll(noSpacerUids);
+      _itemGroups
+        ..clear()
+        ..addAll(itemGroups);
       _mediaGroups.clear();
       _slideNotes
         ..clear()
@@ -5407,6 +5527,64 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       _linkedConti = linked;
       _linkedMissing = missing;
     });
+  }
+
+  /// 항목 하나의 그룹을 바꾼다(null = 그룹 없음).
+  void _setItemGroup(int uid, String? name) {
+    final group = normalizeItemGroup(name);
+    setState(() {
+      if (group == null) {
+        _itemGroups.remove(uid);
+      } else {
+        _itemGroups[uid] = group;
+      }
+    });
+  }
+
+  /// 콘티 머리줄 '그룹 지정 (번호 범위)'. 직전 지정은 상태 줄의 '되돌리기'로 한 번 되돌린다.
+  Future<void> _assignGroupRange() async {
+    if (_stagingItems.isEmpty) return;
+    final r = await showGroupRangeDialog(
+      context,
+      itemCount: _stagingItems.length,
+      usedNames: _itemGroups.values,
+    );
+    if (r == null || !mounted) return;
+    final before = Map.of(_itemGroups);
+    setState(() {
+      for (var i = r.from - 1; i < r.to && i < _stagingItems.length; i++) {
+        final uid = _stagingItems[i].uid;
+        if (r.name == null) {
+          _itemGroups.remove(uid);
+        } else {
+          _itemGroups[uid] = r.name!;
+        }
+      }
+    });
+    final messenger = ScaffoldMessenger.of(context)..clearSnackBars();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          r.name == null
+              ? '${r.from}~${r.to}번의 그룹을 없앴습니다.'
+              : '${r.from}~${r.to}번을 "${r.name}"으로 지정했습니다.',
+        ),
+        action: SnackBarAction(
+          label: '되돌리기',
+          onPressed: () {
+            if (!mounted) return;
+            final alive = {for (final e in _stagingItems) e.uid};
+            setState(() {
+              _itemGroups
+                ..clear()
+                ..addEntries(
+                  before.entries.where((e) => alive.contains(e.key)),
+                );
+            });
+          },
+        ),
+      ),
+    );
   }
 
   /// '새 콘티' 버튼: 담긴 항목을 한 번에 비운다. 관객 화면이 끊기지 않게 발표 중에는 막는다.
@@ -5458,6 +5636,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     setState(() {
       _stagingItems.addAll(result.items);
       _noSpacerUids.addAll(result.noSpacerUids);
+      _itemGroups.addAll(result.itemGroups);
       _slideNotes.addAll(result.notes);
       _itemBackgrounds.addAll(result.backgrounds);
       // loadConti 는 실제로 담은 항목에만 uid 를 쓴다.
@@ -5547,6 +5726,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _replaceConti(
       result.items,
       noSpacerUids: result.noSpacerUids,
+      itemGroups: result.itemGroups,
       notes: result.notes,
       backgrounds: result.backgrounds,
       linked: linked,
@@ -6189,6 +6369,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               onRemove: _removeFromStaging,
                               onDropSong: _addSongToStaging,
                               onImportText: _importContiText,
+                              itemGroups: _itemGroups,
+                              onGroupChanged: _setItemGroup,
+                              onGroupRange: _assignGroupRange,
                               isCollapsed: _isStagingCollapsed,
                               onToggleCollapsed: () => setState(
                                 () =>
@@ -6226,6 +6409,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
                             final presenterConsole = _PresenterConsole(
                               slides: slides,
+                              slideGroups: [
+                                for (final s in slides)
+                                  _itemGroups[s.stagingUid],
+                              ],
                               currentIndex: _currentSlideIndex.clamp(
                                 0,
                                 slides.isEmpty ? 0 : slides.length - 1,
@@ -6309,6 +6496,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               isActive: _mainTabController.index == 1,
                               voice: _voice,
                               onToggleVoice: _toggleVoice,
+                              bubbleOn: _bubbleOn,
+                              onToggleBubble: _toggleBubble,
                               onShowVoiceInsert: _showVoiceInsert,
                               onUndoVoiceInsert: _undoVoiceInsert,
                               onTransposeChanged: (uid, n) =>
@@ -6496,6 +6685,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                   },
                 ),
               ),
+              HeardBubbleOverlay(bubble: _bubble),
             ],
           ),
         ),
@@ -7243,6 +7433,9 @@ class _StagingPanel extends StatelessWidget {
     required this.onRemove,
     required this.onDropSong,
     required this.onImportText,
+    required this.itemGroups,
+    required this.onGroupChanged,
+    required this.onGroupRange,
     required this.onSelect,
     required this.isCollapsed,
     required this.onToggleCollapsed,
@@ -7289,6 +7482,10 @@ class _StagingPanel extends StatelessWidget {
   final ValueChanged<PraiseSong> onDropSong;
   // 콘티 글을 붙여 넣어 곡을 한꺼번에 담기
   final VoidCallback onImportText;
+  // 항목 uid → 그룹 이름. 칩에서 바꾸고, 머리줄 버튼으로 번호 범위를 한꺼번에 지정한다.
+  final Map<int, String> itemGroups;
+  final void Function(int uid, String? name) onGroupChanged;
+  final VoidCallback onGroupRange;
   final ValueChanged<int> onSelect;
   final bool isCollapsed;
   final VoidCallback onToggleCollapsed;
@@ -7476,6 +7673,15 @@ class _StagingPanel extends StatelessWidget {
                   style: compactIcon,
                   color: cs.onSurfaceVariant,
                   onPressed: onImportText,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.label_outline, size: 18),
+                  tooltip: stagingItems.isEmpty
+                      ? '담긴 항목이 없습니다'
+                      : '그룹 지정 (번호 범위)',
+                  style: compactIcon,
+                  color: cs.onSurfaceVariant,
+                  onPressed: stagingItems.isEmpty ? null : onGroupRange,
                 ),
                 IconButton(
                   icon: const Icon(Icons.note_add_outlined, size: 18),
@@ -7685,6 +7891,23 @@ class _StagingPanel extends StatelessWidget {
                                                   fontWeight: FontWeight.w500,
                                                 ),
                                               ),
+                                            ),
+                                            ItemGroupChip(
+                                              group: itemGroups[entry.uid],
+                                              usedNames: itemGroups.values,
+                                              dimmed:
+                                                  index > 0 &&
+                                                  itemGroups[entry.uid] !=
+                                                      null &&
+                                                  itemGroups[entry.uid] ==
+                                                      itemGroups[stagingItems[index -
+                                                              1]
+                                                          .uid],
+                                              onChanged: (name) =>
+                                                  onGroupChanged(
+                                                    entry.uid,
+                                                    name,
+                                                  ),
                                             ),
                                             if (ordinals[index] case (
                                               :final n,
@@ -11248,6 +11471,7 @@ class _SlideThumbnail extends StatefulWidget {
     this.isEditable = true,
     this.chordBadge = false,
     required this.onTap,
+    this.onDoubleTap,
     required this.onEdit,
     required this.onDelete,
   });
@@ -11263,6 +11487,8 @@ class _SlideThumbnail extends StatefulWidget {
   final int index;
   final bool isEditable;
   final VoidCallback onTap;
+  // 있으면 원클릭(onTap)은 더블클릭이 아닌지 가린 뒤(약 0.3초) 불린다.
+  final VoidCallback? onDoubleTap;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
 
@@ -11291,149 +11517,128 @@ class _SlideThumbnailState extends State<_SlideThumbnail> {
         ? bRatio
         : null;
 
-    return GestureDetector(
-      onTap: widget.onTap,
-      child: MouseRegion(
-        onEnter: (_) => setState(() => _hovered = true),
-        onExit: (_) => setState(() => _hovered = false),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Expanded(
-              child: Stack(
-                children: [
-                  // 선택: 진한 테두리 + 안쪽 바탕색 틈. 슬라이드가 어두워도
-                  // 테두리가 슬라이드에 묻히지 않게 틈을 둔다.
-                  Container(
-                    padding: EdgeInsets.all(widget.isSelected ? 2 : 0),
-                    decoration: BoxDecoration(
-                      color: widget.isSelected ? cs.surface : null,
-                      borderRadius: BorderRadius.circular(AppRadius.control),
-                      border: Border.all(
-                        color: widget.isSelected
-                            ? cs.primary
-                            : cs.outlineVariant,
-                        width: widget.isSelected ? 3.5 : 1,
-                      ),
-                      boxShadow: widget.isSelected
-                          ? [
-                              BoxShadow(
-                                color: cs.primary.withValues(alpha: 0.5),
-                                blurRadius: 10,
-                                spreadRadius: 2,
-                              ),
-                            ]
-                          : null,
-                    ),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(AppRadius.control),
-                      child: AspectRatio(
-                        aspectRatio: _aspectRatio,
-                        child: ConsoleSlideView(data: widget.data),
-                      ),
-                    ),
-                  ),
-                  if (widget.chordBadge)
-                    Positioned(
-                      bottom: 4,
-                      left: 4,
-                      child: Tooltip(
-                        message: "코드 있는 곡 (발표 보기 '코드 보기'·싱어 화면에서 보입니다)",
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 5,
-                            vertical: 1,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.6),
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                          child: const Text(
-                            '♪',
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w800,
-                              color: chordKeyBadgeColor,
-                            ),
-                          ),
+    return Tooltip(
+      message: widget.onDoubleTap == null ? '' : '클릭: 선택 / 더블클릭: 이동',
+      waitDuration: const Duration(milliseconds: 1200),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        onDoubleTap: widget.onDoubleTap,
+        child: MouseRegion(
+          onEnter: (_) => setState(() => _hovered = true),
+          onExit: (_) => setState(() => _hovered = false),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Stack(
+                  children: [
+                    // 선택: 진한 테두리 + 안쪽 바탕색 틈. 슬라이드가 어두워도
+                    // 테두리가 슬라이드에 묻히지 않게 틈을 둔다.
+                    Container(
+                      padding: EdgeInsets.all(widget.isSelected ? 2 : 0),
+                      decoration: BoxDecoration(
+                        color: widget.isSelected ? cs.surface : null,
+                        borderRadius: BorderRadius.circular(AppRadius.control),
+                        border: Border.all(
+                          color: widget.isSelected
+                              ? cs.primary
+                              : cs.outlineVariant,
+                          width: widget.isSelected ? 3.5 : 1,
                         ),
-                      ),
-                    ),
-                  if (overflow != null) ...[
-                    Positioned.fill(
-                      child: IgnorePointer(
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            border: Border.all(color: cs.error, width: 2),
-                            borderRadius: BorderRadius.circular(
-                              AppRadius.control,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      bottom: 4,
-                      right: 4,
-                      child: Tooltip(
-                        message:
-                            '${ratio > threshold ? '관객' : '통역'} 화면에서 가사가 상자를 넘습니다 '
-                            '(${SlideTextLayout.overflowLabel(overflow)})',
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 1,
-                          ),
-                          decoration: BoxDecoration(
-                            color: cs.error,
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                          child: Text(
-                            '넘침',
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w800,
-                              color: cs.onError,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                  if (_hovered)
-                    Positioned(
-                      top: 4,
-                      right: 4,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          GestureDetector(
-                            onTap: widget.onDelete,
-                            child: Container(
-                              padding: const EdgeInsets.all(5),
-                              decoration: BoxDecoration(
-                                color: cs.surface.withValues(alpha: 0.92),
-                                borderRadius: BorderRadius.circular(
-                                  AppRadius.control,
+                        boxShadow: widget.isSelected
+                            ? [
+                                BoxShadow(
+                                  color: cs.primary.withValues(alpha: 0.5),
+                                  blurRadius: 10,
+                                  spreadRadius: 2,
                                 ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.2),
-                                    blurRadius: 4,
-                                  ),
-                                ],
-                              ),
-                              child: Icon(
-                                Icons.delete_outline_rounded,
-                                size: 13,
-                                color: cs.error,
+                              ]
+                            : null,
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(AppRadius.control),
+                        child: AspectRatio(
+                          aspectRatio: _aspectRatio,
+                          child: ConsoleSlideView(data: widget.data),
+                        ),
+                      ),
+                    ),
+                    if (widget.chordBadge)
+                      Positioned(
+                        bottom: 4,
+                        left: 4,
+                        child: Tooltip(
+                          message: "코드 있는 곡 (발표 보기 '코드 보기'·싱어 화면에서 보입니다)",
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 5,
+                              vertical: 1,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.6),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: const Text(
+                              '♪',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w800,
+                                color: chordKeyBadgeColor,
                               ),
                             ),
                           ),
-                          if (widget.isEditable) ...[
-                            const SizedBox(width: 4),
+                        ),
+                      ),
+                    if (overflow != null) ...[
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              border: Border.all(color: cs.error, width: 2),
+                              borderRadius: BorderRadius.circular(
+                                AppRadius.control,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        bottom: 4,
+                        right: 4,
+                        child: Tooltip(
+                          message:
+                              '${ratio > threshold ? '관객' : '통역'} 화면에서 가사가 상자를 넘습니다 '
+                              '(${SlideTextLayout.overflowLabel(overflow)})',
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 1,
+                            ),
+                            decoration: BoxDecoration(
+                              color: cs.error,
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text(
+                              '넘침',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w800,
+                                color: cs.onError,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                    if (_hovered)
+                      Positioned(
+                        top: 4,
+                        right: 4,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
                             GestureDetector(
-                              onTap: widget.onEdit,
+                              onTap: widget.onDelete,
                               child: Container(
                                 padding: const EdgeInsets.all(5),
                                 decoration: BoxDecoration(
@@ -11451,41 +11656,71 @@ class _SlideThumbnailState extends State<_SlideThumbnail> {
                                   ],
                                 ),
                                 child: Icon(
-                                  Icons.edit_rounded,
+                                  Icons.delete_outline_rounded,
                                   size: 13,
-                                  color: cs.primary,
+                                  color: cs.error,
                                 ),
                               ),
                             ),
+                            if (widget.isEditable) ...[
+                              const SizedBox(width: 4),
+                              GestureDetector(
+                                onTap: widget.onEdit,
+                                child: Container(
+                                  padding: const EdgeInsets.all(5),
+                                  decoration: BoxDecoration(
+                                    color: cs.surface.withValues(alpha: 0.92),
+                                    borderRadius: BorderRadius.circular(
+                                      AppRadius.control,
+                                    ),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withValues(
+                                          alpha: 0.2,
+                                        ),
+                                        blurRadius: 4,
+                                      ),
+                                    ],
+                                  ),
+                                  child: Icon(
+                                    Icons.edit_rounded,
+                                    size: 13,
+                                    color: cs.primary,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ],
-                        ],
+                        ),
                       ),
-                    ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 3),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-              decoration: widget.isSelected
-                  ? BoxDecoration(
-                      color: cs.primary,
-                      borderRadius: BorderRadius.circular(8),
-                    )
-                  : null,
-              child: Text(
-                '${widget.index + 1}',
-                style: TextStyle(
-                  fontSize: 11,
-                  height: 1.3,
-                  color: widget.isSelected ? cs.onPrimary : cs.onSurfaceVariant,
-                  fontWeight: widget.isSelected
-                      ? FontWeight.w700
-                      : FontWeight.normal,
+                  ],
                 ),
               ),
-            ),
-          ],
+              const SizedBox(height: 3),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                decoration: widget.isSelected
+                    ? BoxDecoration(
+                        color: cs.primary,
+                        borderRadius: BorderRadius.circular(8),
+                      )
+                    : null,
+                child: Text(
+                  '${widget.index + 1}',
+                  style: TextStyle(
+                    fontSize: 11,
+                    height: 1.3,
+                    color: widget.isSelected
+                        ? cs.onPrimary
+                        : cs.onSurfaceVariant,
+                    fontWeight: widget.isSelected
+                        ? FontWeight.w700
+                        : FontWeight.normal,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -12886,6 +13121,7 @@ enum PresenterPointerMode { hand, dot, off }
 class _PresenterConsole extends StatefulWidget {
   const _PresenterConsole({
     required this.slides,
+    required this.slideGroups,
     required this.currentIndex,
     required this.style,
     required this.isPresentationOpen,
@@ -12935,6 +13171,8 @@ class _PresenterConsole extends StatefulWidget {
     required this.isActive,
     required this.voice,
     required this.onToggleVoice,
+    required this.bubbleOn,
+    required this.onToggleBubble,
     required this.onShowVoiceInsert,
     required this.onUndoVoiceInsert,
     required this.onTransposeChanged,
@@ -12942,6 +13180,8 @@ class _PresenterConsole extends StatefulWidget {
   });
 
   final List<_SlideInfo> slides;
+  // 슬라이드마다의 그룹 이름(null = 없음). slides 와 같은 길이다. 자동 여백은 앞 항목 그룹.
+  final List<String?> slideGroups;
   final int currentIndex;
   final ExportStyle style;
   final bool isPresentationOpen;
@@ -13004,6 +13244,8 @@ class _PresenterConsole extends StatefulWidget {
   // 성경 음성 검색. 값이 null 이면 꺼짐.
   final ValueListenable<_VoiceState?> voice;
   final VoidCallback onToggleVoice;
+  final bool bubbleOn;
+  final VoidCallback onToggleBubble;
   final VoidCallback onShowVoiceInsert;
   final VoidCallback onUndoVoiceInsert;
   // 코드 있는 곡 항목의 조 값(반음)을 바꾼다. 관객 화면은 그대로, 싱어·휴대폰만 다시 보낸다.
@@ -13168,24 +13410,36 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
     return true;
   }
 
-  /// 썸네일 클릭. ⌘/Ctrl = 하나씩 골라 담기, Shift = 범위로 담기, 그냥 클릭 = 그 페이지로.
+  /// 썸네일 클릭. ⌘/Ctrl = 하나씩 골라 담기, Shift = 범위로 담기, 그냥 클릭 = 그 페이지 하나만 고르기.
+  /// 관객 화면은 바꾸지 않는다 — 옮기는 것은 더블클릭([_onThumbDoubleTap])이다.
   void _onThumbTap(int i) {
-    final keyboard = HardwareKeyboard.instance;
-    if (keyboard.isShiftPressed) {
-      final anchor = _markAnchor ?? widget.currentIndex;
-      setState(() {
-        final (a, b) = anchor <= i ? (anchor, i) : (i, anchor);
-        _marked.addAll([for (var k = a; k <= b; k++) k]);
-      });
-      return;
-    }
-    if (keyboard.isMetaPressed || keyboard.isControlPressed) {
-      setState(() {
-        if (!_marked.remove(i)) _marked.add(i);
-        _markAnchor = i;
-      });
-      return;
-    }
+    final r = applyThumbSelect(
+      marked: _marked,
+      anchor: _markAnchor,
+      currentIndex: widget.currentIndex,
+      i: i,
+      shift: _tapShift,
+      toggle: _tapToggle,
+    );
+    setState(() {
+      _marked
+        ..clear()
+        ..addAll(r.marked);
+      _markAnchor = r.anchor;
+    });
+  }
+
+  // onTap 은 더블클릭 대기(약 300ms)로 늦게 불려서 그때 키를 보면 일찍 뗀 키를 놓친다 — 누른 순간 적어 둔다.
+  bool _tapShift = false;
+  bool _tapToggle = false;
+  void _recordTapMods() {
+    final k = HardwareKeyboard.instance;
+    _tapShift = k.isShiftPressed;
+    _tapToggle = k.isMetaPressed || k.isControlPressed;
+  }
+
+  /// 썸네일 더블클릭 = 그 페이지로 이동(고르기는 푼다).
+  void _onThumbDoubleTap(int i) {
     if (_marked.isNotEmpty || _markAnchor != null) {
       setState(() {
         _marked.clear();
@@ -13193,6 +13447,15 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
       });
     }
     widget.onSlideSelected(i);
+  }
+
+  /// 빈 곳 클릭 = 고르기 해제.
+  void _clearMarks() {
+    if (_marked.isEmpty && _markAnchor == null) return;
+    setState(() {
+      _marked.clear();
+      _markAnchor = null;
+    });
   }
 
   /// 썸네일 편집 단축키. ⌘/Ctrl+C = 고른 페이지(없으면 현재 페이지) 복사,
@@ -13441,35 +13704,43 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
     );
   }
 
-  /// 골라 담은 썸네일에 체크 표시와 테두리를 두른다.
+  /// 고른 썸네일에 옅은 덮개와 좌상단 체크 배지를 얹는다(색만으로 알리지 않는다).
+  /// 우상단은 hover 수정·삭제 버튼 자리라 비운다.
   Widget _markedMark(int i, ColorScheme cs, Widget child) {
     if (!_marked.contains(i)) return child;
-    return Stack(
-      children: [
-        child,
-        Positioned.fill(
-          child: IgnorePointer(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: cs.secondary.withValues(alpha: 0.18),
-                border: Border.all(color: cs.secondary, width: 3),
-                borderRadius: BorderRadius.circular(AppRadius.control),
-              ),
-              child: Align(
-                alignment: Alignment.bottomLeft,
-                child: Padding(
-                  padding: const EdgeInsets.all(4),
-                  child: Icon(
-                    Icons.check_circle_rounded,
-                    size: 18,
-                    color: cs.secondary,
+    return Semantics(
+      selected: true,
+      label: '${i + 1}번 페이지, 선택됨',
+      child: Stack(
+        children: [
+          child,
+          Positioned.fill(
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: cs.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(AppRadius.control),
+                ),
+                child: Align(
+                  alignment: Alignment.topLeft,
+                  child: Padding(
+                    padding: const EdgeInsets.all(4),
+                    child: Container(
+                      width: 16,
+                      height: 16,
+                      decoration: BoxDecoration(
+                        color: cs.primary,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(Icons.check, size: 12, color: cs.onPrimary),
+                    ),
                   ),
                 ),
               ),
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -13576,7 +13847,8 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
           ),
         ),
         Positioned(
-          top: 4,
+          // 좌상단 체크 배지·그룹 라벨(높이 16) 아래로 비킨다.
+          top: 22,
           left: 0,
           right: 0,
           child: IgnorePointer(
@@ -13627,14 +13899,28 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
   }
 
   /// 모든 페이지 보기에서 현재 페이지가 있는 줄을 가운데로.
+  // 그룹 이름이 이어진 구간. 그룹이 없으면 전체가 한 구간이라 평평한 격자와 같다.
+  List<SlideGroupSection> get _sections => slideGroupSections(
+    widget.slideGroups.length == widget.slides.length
+        ? widget.slideGroups
+        : List<String?>.filled(widget.slides.length, null),
+  );
+
   void _scrollGridToCurrent({bool animate = true}) =>
       _scrollGridTo(widget.currentIndex, animate: animate);
 
   void _scrollGridTo(int index, {bool animate = true}) {
     final g = _gridLayout;
     if (!_gridScrollController.hasClients || g == null) return;
-    final row = index ~/ g.cols;
-    final target = _gridPad + row * (g.cellH + _gridSpacing) + g.cellH / 2;
+    final target =
+        _gridPad +
+        sectionedCenterY(
+          _sections,
+          index,
+          cols: g.cols,
+          cellH: g.cellH,
+          spacing: _gridSpacing,
+        );
     _scrollToCenter(_gridScrollController, target, animate: animate);
   }
 
@@ -14027,6 +14313,16 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
               ? '성경 음성 검색 끄기'
               : '성경 음성 검색 (말한 구절을 다음 장에 넣기)',
           color: widget.voice.value != null ? cs.primary : null,
+        ),
+        IconButton(
+          onPressed: widget.onToggleBubble,
+          icon: Icon(
+            widget.bubbleOn
+                ? Icons.chat_bubble_rounded
+                : Icons.chat_bubble_outline_rounded,
+          ),
+          tooltip: widget.bubbleOn ? '말풍선 끄기' : '말풍선 켜기 (들리는 말을 화면 위에 보여 줍니다)',
+          color: widget.bubbleOn ? cs.primary : null,
         ),
         IconButton(
           onPressed: () =>
@@ -14603,12 +14899,120 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
     );
   }
 
+  // 방금 누른 곳이 썸네일인지(빈 곳 클릭과 가르는 표시).
+  bool _thumbPointerDown = false;
+
+  Widget _gridCell(int i, ColorScheme cs, double tw) => Listener(
+    onPointerDown: (_) {
+      _thumbPointerDown = true;
+      _recordTapMods();
+    },
+    child: _dragDrop(
+      i,
+      cs,
+      tw,
+      _foundMark(
+        i,
+        cs,
+        _markedMark(
+          i,
+          cs,
+          _SlideThumbnail(
+            data: _pageDataFor(i),
+            bData: _bOverflowDataFor(i),
+            isSelected: i == widget.currentIndex,
+            index: i,
+            isEditable: !widget.slides[i].isAutoSpacer,
+            chordBadge: _isFirstChordPage(i),
+            // 한 번 = 고르기, 두 번 = 그 페이지로 이동. 보기 전환은 버튼으로만.
+            onTap: () => _onThumbTap(i),
+            onDoubleTap: () => _onThumbDoubleTap(i),
+            onEdit: () => widget.onSlideEdit(i),
+            onDelete: () => widget.onSlideDelete(i),
+          ),
+        ),
+      ),
+    ),
+  );
+
+  /// 그룹 구간 하나의 머리 영역(구간 사이 간격 + 이름 줄).
+  Widget _groupLead(
+    ColorScheme cs,
+    SlideGroupSection s, {
+    required bool first,
+  }) {
+    final name = s.name;
+    return SliverToBoxAdapter(
+      child: SizedBox(
+        height: sectionLeadHeight(s, first: first),
+        child: name == null
+            ? null
+            : Column(
+                children: [
+                  if (!first) const SizedBox(height: slideGroupGap),
+                  Expanded(
+                    child: Semantics(
+                      header: true,
+                      label: '$name 그룹, ${s.count}장',
+                      excludeSemantics: true,
+                      child: Container(
+                        alignment: Alignment.bottomLeft,
+                        padding: const EdgeInsets.only(bottom: 4, left: 2),
+                        decoration: BoxDecoration(
+                          border: Border(
+                            bottom: BorderSide(color: cs.outlineVariant),
+                          ),
+                        ),
+                        child: Text.rich(
+                          TextSpan(
+                            text: name,
+                            style: Theme.of(context).textTheme.labelLarge
+                                ?.copyWith(fontWeight: FontWeight.w700),
+                            children: [
+                              TextSpan(
+                                text: '  · ${s.count}장',
+                                style: TextStyle(
+                                  color: cs.onSurfaceVariant,
+                                  fontWeight: FontWeight.normal,
+                                ),
+                              ),
+                            ],
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+      ),
+    );
+  }
+
   Widget _allPagesGrid(ColorScheme cs) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 4),
+          child: Align(
+            alignment: Alignment.centerRight,
+            child: Text(
+              _marked.isEmpty
+                  ? '클릭 = 선택 · 더블클릭 = 이동'
+                  : '${_marked.length}장 선택됨 · Delete 삭제 · 더블클릭 = 이동',
+              style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+            ),
+          ),
+        ),
         Expanded(
           child: Listener(
+            // 썸네일이 아닌 곳을 누르면 고르기를 푼다(썸네일 Listener 가 먼저 불려 표시를 세운다).
+            onPointerDown: (_) {
+              if (!_thumbPointerDown) _clearMarks();
+              _thumbPointerDown = false;
+            },
             onPointerSignal: (event) {
               if (event is PointerScrollEvent &&
                   (HardwareKeyboard.instance.isControlPressed ||
@@ -14631,10 +15035,12 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
                 final tw = (avail - (cols - 1) * spacing) / cols;
                 final cellH = tw / _thumbAspect + labelH;
                 _gridLayout = (cols: cols, cellH: cellH);
+                final sections = _sections;
 
-                // 처음 열 때·확대/축소·창 크기를 바꿀 때 현재 페이지를 가운데로.
+                // 처음 열 때·확대/축소·창 크기·그룹 구성을 바꿀 때 현재 페이지를 가운데로.
                 final layoutKey =
-                    '$cols/${cellH.toStringAsFixed(1)}/${constraints.maxHeight}';
+                    '$cols/${cellH.toStringAsFixed(1)}/${constraints.maxHeight}/'
+                    '${Object.hashAll(sections)}';
                 if (!_gridScrollController.hasClients) _gridLayoutKey = null;
                 if (layoutKey != _gridLayoutKey) {
                   _gridLayoutKey = layoutKey;
@@ -14642,47 +15048,47 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
                     (_) => _scrollGridToCurrent(animate: false),
                   );
                 }
+                final delegate = SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: cols,
+                  crossAxisSpacing: spacing,
+                  mainAxisSpacing: spacing,
+                  childAspectRatio: (tw / cellH).clamp(0.1, 100.0),
+                );
 
+                // 그룹마다 새 줄에서 시작한다(구간마다 SliverGrid 하나). 그룹이 없으면 구간 하나라
+                // 예전 평평한 격자와 같다. 빈 곳을 누르면 고르기를 푼다.
                 return _EdgeAutoScroll(
                   controller: _gridScrollController,
                   axis: Axis.vertical,
                   isActive: _isDragging,
                   onPointerEnd: _endDrag,
-                  child: GridView.builder(
+                  child: CustomScrollView(
                     controller: _gridScrollController,
-                    padding: const EdgeInsets.all(pad),
-                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: cols,
-                      crossAxisSpacing: spacing,
-                      mainAxisSpacing: spacing,
-                      childAspectRatio: (tw / cellH).clamp(0.1, 100.0),
-                    ),
-                    itemCount: widget.slides.length,
-                    itemBuilder: (context, i) => _dragDrop(
-                      i,
-                      cs,
-                      tw,
-                      _foundMark(
-                        i,
-                        cs,
-                        _markedMark(
-                          i,
-                          cs,
-                          _SlideThumbnail(
-                            data: _pageDataFor(i),
-                            bData: _bOverflowDataFor(i),
-                            isSelected: i == widget.currentIndex,
-                            index: i,
-                            isEditable: !widget.slides[i].isAutoSpacer,
-                            chordBadge: _isFirstChordPage(i),
-                            // 누른 페이지로 넘기기만 한다. 보기 전환은 버튼으로만.
-                            onTap: () => _onThumbTap(i),
-                            onEdit: () => widget.onSlideEdit(i),
-                            onDelete: () => widget.onSlideDelete(i),
-                          ),
+                    slivers: [
+                      SliverPadding(
+                        padding: const EdgeInsets.all(pad),
+                        sliver: SliverMainAxisGroup(
+                          slivers: [
+                            for (var k = 0; k < sections.length; k++) ...[
+                              if (sectionLeadHeight(
+                                    sections[k],
+                                    first: k == 0,
+                                  ) >
+                                  0)
+                                _groupLead(cs, sections[k], first: k == 0),
+                              SliverGrid(
+                                gridDelegate: delegate,
+                                delegate: SliverChildBuilderDelegate(
+                                  (context, n) =>
+                                      _gridCell(sections[k].start + n, cs, tw),
+                                  childCount: sections[k].count,
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
                       ),
-                    ),
+                    ],
                   ),
                 );
               },
@@ -14771,6 +15177,14 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
       itemCount: widget.slides.length,
       itemBuilder: (context, i) {
         final hasNote = (widget.notes[_keyAt(i)] ?? '').isNotEmpty;
+        // 그룹이 시작되는 썸네일에만 이름 라벨.
+        final groups = widget.slideGroups;
+        final groupLabel =
+            i < groups.length &&
+                groups[i] != null &&
+                (i == 0 || groups[i - 1] != groups[i])
+            ? groups[i]
+            : null;
         return Padding(
           padding: const EdgeInsets.only(right: _stripSpacing),
           child: _dragDrop(
@@ -14782,7 +15196,9 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
               cs,
               SizedBox(
                 width: thumbW,
-                child: Stack(
+                child: Listener(
+                  onPointerDown: (_) => _recordTapMods(),
+                  child: Stack(
                   children: [
                     // 편집 탭의 슬라이드 순서와 같은 썸네일. 마우스를 올리면
                     // 수정·삭제 버튼이 그대로 나온다.
@@ -14797,14 +15213,45 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
                         isEditable: !widget.slides[i].isAutoSpacer,
                         chordBadge: _isFirstChordPage(i),
                         onTap: () => _onThumbTap(i),
+                        onDoubleTap: () => _onThumbDoubleTap(i),
                         onEdit: () => widget.onSlideEdit(i),
                         onDelete: () => widget.onSlideDelete(i),
                       ),
                     ),
                     // 수정/삭제 버튼이 오른쪽 위에 뜨므로 메모 표시는 왼쪽에.
+                    if (groupLabel != null)
+                      Positioned(
+                        top: 0,
+                        // 왼쪽은 선택 배지, 오른쪽은 hover 버튼 자리를 비운다.
+                        left: _marked.contains(i) ? 22 : 0,
+                        right: 56,
+                        child: IgnorePointer(
+                          child: Container(
+                            height: 16,
+                            alignment: Alignment.centerLeft,
+                            padding: const EdgeInsets.symmetric(horizontal: 5),
+                            decoration: BoxDecoration(
+                              color: cs.surfaceContainerHighest,
+                              borderRadius: const BorderRadius.vertical(
+                                top: Radius.circular(AppRadius.control),
+                              ),
+                            ),
+                            child: Text(
+                              groupLabel,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                color: cs.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                     if (hasNote)
                       Positioned(
-                        top: 3,
+                        top: _marked.contains(i) ? 22 : (groupLabel != null ? 19 : 3),
                         left: 3,
                         child: Icon(
                           Icons.sticky_note_2_rounded,
@@ -14813,6 +15260,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
                         ),
                       ),
                   ],
+                ),
                 ),
               ),
             ),

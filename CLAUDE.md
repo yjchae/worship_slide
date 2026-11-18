@@ -25,6 +25,9 @@ flutter test test/bible_voice_parse_test.dart # 성경 음성 검색: 말 → �
 flutter test test/move_pages_test.dart # 발표 보기 페이지 옮기기·나누기
 flutter test test/conti_text_parse_test.dart # 콘티 한번에 넣기: 콘티 글 → 번호·제목·조·(or 곡) + 곡 찾기
 flutter test test/extra_language_test.dart # 추가 보조 언어(세 번째 줄) 페이지·콘티 저장·스타일·설교자 화면
+flutter test test/conti_group_test.dart # 콘티 항목 그룹: item_group 칸 추가(옛 DB)·저장·불러오기·이름 정규화
+flutter test test/slide_group_test.dart # 발표 보기 격자 그룹 구간·머리줄 높이 계산
+flutter test test/thumb_click_test.dart # 썸네일 원클릭=고르기·더블클릭=이동·끌기·빈 곳 클릭 제스처가 서로 안 막는지
 flutter test test/b_screen_test.dart # 통역 화면(B): 칸 계산·폴더 대응표·보조 칸 올리기
 flutter test test/page_image_test.dart # 슬라이드 편집 페이지: 요소 JSON·clamp·배경 page_elements·.wsconti 경로·화면 밖 PNG 굽기
 flutter test test/page_rich_text_test.dart # 글 상자 부분 서식(Quill Delta → TextSpan): 색 8자리·bold·글머리·번호·깨진 rich
@@ -358,8 +361,8 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   항목은 성경 검색 탭 담기와 같은 `_bibleItemsFor`(보조·추가 역본·페이지당 절 수 `_BibleSearchPanelState._versesPerPage`).
   말 → 구절은 순수 함수 `parseBibleVoice`(`bible_voice_parse.dart`, 정경 66권 순서 번호 → 역본 책 이름, 한글 수사, 책 없이 한글 수사로 시작하는
   말은 글 맨 앞일 때만, `N:N` 은 책이 있을 때만 — '오후 3:30'). macOS 는 1.2초 말이 끊기면 그 마디를 `final` 로 넘기고 새 요청으로 잇는다(50초 상한, 온디바이스가 되면 켠다).
-  Windows 는 받아쓰기('온라인 음성 인식' 설정 필요) 대신 Dart 가 만든 SRGS 문법(`bibleVoiceGrammar`, 앞뒤 GARBAGE)으로 오프라인으로 듣고
-  확신도 Medium 미만은 버린다. 한국어 음성 언어 팩이 필요하다. 켜기·끄기는 한 번에 하나씩(`State::op`), 늦은 켜기는 뒤 요청이 있으면 건너뛴다.
+  Windows 는 말풍선(들리는 말 전부)이 중요해서 자유 받아쓰기(`SpeechRecognitionTopicConstraint` Dictation, '온라인 음성 인식' 설정 필요)를 먼저 쓰고, 안 되면 Dart 가 만든 SRGS 문법(`bibleVoiceGrammar`, 앞뒤 GARBAGE)으로 오프라인으로 듣고
+  확신도 Medium 미만은 버린다(문법일 때만). 한국어 음성 언어 팩이 필요하다. 켜기·끄기는 한 번에 하나씩(`State::op`), 늦은 켜기는 뒤 요청이 있으면 건너뛴다.
   macOS 는 입력 장치가 바뀌면(`AVAudioEngineConfigurationChange`) 새 장치로 다시 켜고, 없으면(샘플레이트 0) 켜지 않는다 — 그대로 `installTap` 하면 잡을 수 없는 예외로 앱이 죽는다. C++ 은 오류 코드만 보내고 한글 안내는 `SpeechListener._describe`.
   **실제 음성 인식은 사람이 말해 봐야 확인된다**(Windows 는 PR CI 컴파일만)
 - **콘티 한번에 넣기** (예배 콘티 머리줄의 목록+ 버튼, `ContiTextImportDialog`): 단톡방에 올리는 콘티 글을 붙여 넣으면 줄마다 곡을 찾아 콘티 끝에 담는다.
@@ -400,6 +403,11 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   원본(라이브러리) 곡을 고쳐도 작업 콘티는 저절로 안 바뀐다 — 곡 전체를 담은 항목(가사가 고치기 전 원본과 같은 것)이 있으면
   '콘티도 바꿀까요'를 묻고 기본은 그대로 두기다(`_offerStagedSongUpdate`). 바꾸면 보던 페이지는 (항목, 페이지)로 다시 찾는다.
   보조 언어 다시 입히기의 기준 곡은 검색 결과가 아니라 DB 에서 id 로 읽는다(`PraiseRepository.songsByIds`)
+- **콘티 그룹** (시작곡·말씀·헌신송 같은 구간 이름): 콘티 항목마다 그룹 이름 하나(`worship_conti_items.item_group`, NULL = 없음).
+  스키마 버전은 20 그대로 — 열 때마다 `ensureItemGroupColumn`(`onOpen`, 멱등)이 칸이 없으면 더한다(옛 DB·옛 앱 호환). 작업 콘티는 항목 uid → 이름 맵(`_itemGroups`)을 `_noSpacerUids` 와 같은 자리에서 같이 옮긴다.
+  이름 정규화는 `normalizeItemGroup`(data), 그룹 칩·번호 범위 지정·이름 목록은 `conti_group_widgets.dart`, 발표 보기 '모든 페이지' 격자의 구간·머리줄 높이 계산은 순수 함수 `slide_group.dart`.
+  썸네일 줄에는 그룹이 시작되는 페이지에만 이름 라벨. 붙여 넣기·끌기·음성으로 넣은 항목은 놓은 자리 항목의 그룹에 든다(그룹 마지막 뒤여도 앞 그룹 — 의도).
+  **썸네일 클릭 체계**: 원클릭 = 고르기(약 0.3초 뒤 확정 — 더블클릭과 가르려고), 더블클릭 = 고르기 해제 + 그 페이지로 이동, 빈 곳 클릭 = 해제. 선택 체크 배지는 좌상단(우상단은 hover 수정·삭제 버튼 자리)
 - **새 콘티** (예배 콘티 머리줄, `_newConti`): 확인 후 담긴 항목만 비운다(`_replaceConti`, 불러오기와 같은 초기화). 저장한 콘티는 그대로고 발표 중에는 막는다
 - **콘티 불러오기 뒤에 붙이기** (`_appendConti`): 항목이 있으면 취소·뒤에 붙이기·교체를 묻는다. 붙이기는 불러온 항목·메모·배경·여백 없음을 맨 끝에 더할 뿐이라 기존 항목 표시·원본 감시·보던 페이지·저장본 연결(`_linkedConti`)이 그대로고, 빠진 항목 수는 `_linkedMissing` 에 더한다. 발표 중에도 된다(관객 화면은 그대로, 싱어 '다음'만 갱신)
 - **통역 화면 (내부 이름 B, macOS 만, 기획 `.claude-office/work/20261031-2207-split-screen-subtitle/`)**: 앱 하나에서 관객 창과 같이 넘어가는 세 번째 창. 모니터를 직접 골라야 하고(자동 없음) 그 모니터 전체를 차지한 뒤 **창 안에서** 슬라이드 칸과 자막 칸을 나눈다.
