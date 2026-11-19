@@ -9768,25 +9768,82 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
     });
   }
 
+  /// 역본을 바꿔도 넣어 둔 검색값(책·장·절·본문 검색어·범위 책)은 그대로 두고 새 역본으로 다시 찾는다.
+  /// 책 이름은 역본마다 다르므로(창세기/Genesis) 같은 자리의 책으로 옮긴다. 지우기는 [_clearSearch].
   Future<void> _selectVersion(String? version) async {
     if (version == null || version == _selectedVersion) return;
+    final oldBooks = _bookNames;
+    _searchDebounce?.cancel();
+    _textSearchSeq++;
     setState(() {
       _selectedVersion = version;
-      _selectedBook = null;
-      _bookNames = const [];
+      // 옛 역본의 절(id)이 남아 다른 역본 결과와 섞이지 않게 결과·선택만 비운다.
       _verses = const [];
       _textResult = BibleSearchResult.empty;
       _selectedVerseIds.clear();
       _lastSelectedVerseIndex = null;
+      _focusVerseId = null;
     });
-    _setBookText('');
     final books = await widget.bibleRepository.getBookNamesForVersion(version);
-    if (!mounted) return;
+    // 기다리는 사이 다른 역본을 또 골랐으면 그쪽에 맡긴다.
+    if (!mounted || _selectedVersion != version) return;
+    final book = _mapBook(_selectedBook, oldBooks, books);
+    final scopeBook = _mapBook(_scopeBook, oldBooks, books);
+    // 책을 아직 못 고른 채 치던 글자는 그대로 두고, 고른 책은 새 역본 이름으로 바꾼다.
+    if (_selectedBook != null) _setBookText(book ?? '');
     setState(() {
       _bookNames = books;
+      _selectedBook = book;
+      _scopeBook = scopeBook;
+      _bookFieldRevision++; // Autocomplete 는 처음 글자만 받으므로 새로 만든다
       _fixScopeForBooks();
     });
-    if (_isTextMode) _searchText();
+    if (_isTextMode) {
+      _searchText();
+    } else if (book != null && _chapterController.text.trim().isNotEmpty) {
+      _search(showMessages: false);
+    }
+  }
+
+  /// [from] 역본 책 목록의 [book] 과 같은 책을 [to] 목록에서 찾는다 (`mapBookName` 과 같은 규칙:
+  /// 이름이 같으면 그대로, 아니면 정경 순서상 같은 자리, 권 수가 다르면 null).
+  static String? _mapBook(String? book, List<String> from, List<String> to) {
+    if (book == null) return null;
+    if (to.contains(book)) return book;
+    if (from.length != to.length) return null;
+    final index = from.indexOf(book);
+    return index < 0 ? null : to[index];
+  }
+
+  /// 검색 칸 옆 지우기 버튼: 넣어 둔 검색값과 결과를 모두 비운다 (역본·장절/본문 모드·범위는 그대로).
+  void _clearSearch() {
+    _searchDebounce?.cancel();
+    _textSearchSeq++;
+    _isSyncingBookController = true;
+    _chapterController.clear();
+    _verseController.clear();
+    _isSyncingBookController = false;
+    _setBookText('');
+    _queuedTextQuery = '';
+    _textQueryController.clear();
+    setState(() {
+      _selectedBook = null;
+      _bookFieldRevision++; // Autocomplete 는 처음 글자만 받으므로 새로 만든다
+      _verses = const [];
+      _textResult = BibleSearchResult.empty;
+      _textTerms = const [];
+      _selectedVerseIds.clear();
+      _lastSelectedVerseIndex = null;
+      _focusVerseId = null;
+    });
+  }
+
+  Widget _buildClearButton() {
+    return IconButton(
+      icon: const Icon(Icons.clear_all_rounded),
+      tooltip: '검색 지우기',
+      onPressed: _clearSearch,
+    );
   }
 
   @override
@@ -10094,6 +10151,8 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
             onSubmitted: (_) => _search(),
           ),
         ),
+        const SizedBox(width: 4),
+        _buildClearButton(),
       ],
     );
   }
@@ -10134,6 +10193,8 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
             },
           ),
         ),
+        const SizedBox(width: 4),
+        _buildClearButton(),
       ],
     );
   }
