@@ -185,6 +185,14 @@ class ChordSheetView extends StatelessWidget {
       at.putIfAbsent(c.offset.clamp(0, line.text.length), () => []).add(c.name);
     }
     final cells = <Widget>[
+      // 첫 글자 왼쪽 빈자리: 누르면 0 자리(첫 글자 위)에 넣는다. 코드는 첫 글자 위에 그려진다.
+      _CharCell(
+        chord: null,
+        text: '  ',
+        lyric: lyric,
+        chordStyle: chord,
+        onTap: () => onTapChar!(index, 0),
+      ),
       for (var o = 0; o < line.text.length; o++)
         _CharCell(
           chord: at[o]?.join(' '),
@@ -196,7 +204,7 @@ class ChordSheetView extends StatelessWidget {
       // 줄 끝 자리(마지막 글자 오른쪽). 코드만 있는 줄은 이 칸 하나뿐이다.
       _CharCell(
         chord: at[line.text.length]?.join(' '),
-        text: line.text.isEmpty ? '  ' : ' ',
+        text: '    ', // 글자 서너 칸 폭 — 가사 뒤 빈자리도 누르기 쉽게
         lyric: lyric,
         chordStyle: chord,
         onTap: () => onTapChar!(index, line.text.length),
