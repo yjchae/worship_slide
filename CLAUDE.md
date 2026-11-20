@@ -37,6 +37,7 @@ flutter test test/page_template_test.dart # 페이지 틀: JSON 왕복·깨진 �
 flutter test test/chord_lyrics_test.dart # 코드 가사 순수 함수: 문법·strip·이스케이프·페이지 짝·조 바꾸기·다시 맞추기·코드 위 가사 변환
 flutter test test/chord_repository_test.dart test/chord_conti_test.dart test/chord_leak_test.dart # 코드 저장 길(saveChords)·콘티 스냅샷·관객/PPTX 누출 없음
 flutter test test/chord_sheet_test.dart  # 코드 악보 조각·ChordSheetView 배치·싱어 chord_lines/key_label·조 배지
+flutter test test/auto_advance_timer_test.dart # 발표 자동 넘기기 타이머: 반복·한 번·멈춤·간격 칸
 flutter test test/lyrics_page_grid_test.dart # 가사 수정 창 페이지 표·넘침 측정 (LYRICS_EDITOR_SHOT=경로 면 창을 PNG 로)
 python3 python/test_render.py    # render 명령 self-check (LibreOffice 없으면 skip)
 python3 python/test_animation.py # 애니메이션 단계 펼치기 self-check (LibreOffice 불필요)
@@ -129,6 +130,7 @@ lib/
                                         언어 이름에 '발음'이 들면 로마자 발음, 아니면 번역. claude 가 깔려 있고 로그인된 PC 에서만 된다)
       slide_backdrop.dart            -- 배경 영상(가사 뒤 반복 재생) 레이어 페이지 HTML + 발표 창 media JSON
       lyrics_overlay_renderer.dart   -- 배경 영상 위에 얹을 가사 투명 PNG 굽기(화면 밖 위젯 렌더)
+      auto_advance_timer.dart        -- 발표 자동 넘기기 타이머(정한 간격마다 onElapsed, 반복/한 번). auto_advance_box.dart = 발표 보기 오른쪽 칸 UI
       presentation_timer.dart        -- 발표 경과 시간(기준 시각 방식). 발표 보기 시계·싱어 화면이 같이 본다
       offering_dialog.dart           -- 헌금송 디자인 등록 / 항목에 적용(높낮이) 다이얼로그
       media_player_html.dart         -- 발표 창 미디어 레이어 페이지 HTML·페이드 JS (mediaPlayerHtml)
@@ -836,6 +838,10 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   밝은·어두운은 원래 상수 그대로, 나머지는 `_tinted()` 로 바탕·선·강조·선택색만 바꿔 만든다. `primary` 는 흰 바탕 위 아이콘·글자로도 쓰이므로 늘 진하게 둔다.
   위젯에 색을 직접 박지 말고 `colorScheme` 을 쓴다 — 그래야 모든 테마를 따라간다.
   테마 색은 바탕·구분선·테두리(`outlineVariant`/`outline`)·탭 밑줄·포커스(`secondary`)·선택 표시(`*Container`)에만 싣는다
+- **자동 넘기기** (발표 보기 오른쪽 칸 '경과 시간' 아래, `AutoAdvanceBox`): 간격(분·초, 1초 이상)·반복/한 번·시작/멈춤. 발표 중에만 시작할 수 있다.
+  시간이 차면 `_autoAdvanceSlide` → `_nextSlide`(키보드 → 와 같은 길이라 관객·싱어·휴대폰이 같이 넘어간다). 다음 마감은 '지난 마감 + 간격'이라
+  2번에서 5분 반복으로 시작하면 5분에 3번, 10분에 4번이다. 손으로 넘겨도 박자는 그대로(마감을 다시 잡지 않는다), 도는 중에 간격을 바꾸면 그때부터 새로 센다.
+  마지막 페이지에 닿거나 발표가 끝나면(`_resetPresentationState`) 멈춘다. 타이머는 `PresenterViewState.autoAdvance` 에 있어 탭을 옮겨도 돈다. 설정은 저장하지 않는다(실행 동안만)
 - **발표 보기 썸네일 줄 높이**: 현재 슬라이드와 아래 썸네일 줄 사이 막대를 끌어 바꾼다
   (`PresenterViewState.stripHeight`, 최소 80, 현재 슬라이드 쪽에 180 은 남긴다)
 

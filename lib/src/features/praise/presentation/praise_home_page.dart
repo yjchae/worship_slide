@@ -65,6 +65,8 @@ import 'offering_overlay_painter.dart';
 import 'page_canvas.dart';
 import 'page_editor_dialog.dart';
 import 'page_template_dialog.dart';
+import 'auto_advance_box.dart';
+import 'auto_advance_timer.dart';
 import 'presentation_timer.dart';
 import 'singer_view_data.dart';
 import 'slide_backdrop.dart';
@@ -518,6 +520,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     // 말풍선(토크백)은 기본 꺼짐 — 시작하자마자 음성 인식 권한을 묻지 않도록 버튼을 눌러야 켜진다.
     // 일시정지·리셋·목표를 바꾸면 싱어 화면(네이티브·휴대폰)도 바로 맞춘다.
     _presenterView.timer.addListener(_sendSingerView);
+    _presenterView.autoAdvance.onElapsed = _autoAdvanceSlide;
     _singerWeb.running.addListener(_clearMessageIfServerOff);
     _exitListener = AppLifecycleListener(
       onExitRequested: () async {
@@ -628,6 +631,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _presenterView.timer.removeListener(_sendSingerView);
     _singerWeb.running.removeListener(_clearMessageIfServerOff);
     _presenterView.timer.dispose();
+    _presenterView.autoAdvance.dispose();
     _exitListener.dispose();
     _mediaPlayback.dispose();
     _remoteSyncTimer?.cancel();
@@ -1466,6 +1470,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   void _resetPresentationState() {
     if (_isPresentationOpen) _presenterView.timer.stop();
+    // 발표가 끝나면 자동 넘기기도 멈춘다(다음 발표에서 저절로 넘어가지 않게).
+    _presenterView.autoAdvance.stop();
     _isPresentationOpen = false;
     _slideJumpBuffer = '';
     _isBOpen = false;
@@ -2432,6 +2438,29 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       _previewStagingUid = slides[_currentSlideIndex].stagingUid;
     });
     await _sendCurrentSlide();
+  }
+
+  // 자동 넘기기 타이머가 시간이 찼을 때. 발표 중이 아니거나 마지막 페이지면 멈춘다.
+  Future<void> _autoAdvanceSlide() async {
+    final timer = _presenterView.autoAdvance;
+    if (!mounted || !_isPresentationOpen) {
+      timer.stop();
+      return;
+    }
+    final last = _allSlides.length - 1;
+    if (_currentSlideIndex >= last) {
+      timer.stop();
+      _showSnack('마지막 페이지라 자동 넘기기를 멈췄습니다.');
+      return;
+    }
+    await _nextSlide();
+    // 반복 중에 마지막 페이지에 닿았으면 더 넘길 곳이 없으니 여기서 멈춘다.
+    if (mounted &&
+        _currentSlideIndex >= _allSlides.length - 1 &&
+        timer.isRunning) {
+      timer.stop();
+      _showSnack('마지막 페이지에 닿아 자동 넘기기를 멈췄습니다.');
+    }
   }
 
   Future<void> _editSlide(int slideIndex) async {
@@ -13920,6 +13949,8 @@ class PresenterViewState {
   // singerChords = macOS 싱어 창에 코드 보내기, chordView = 현재 슬라이드 칸을 코드 악보로.
   bool singerChords = false;
   bool chordView = false;
+  // 자동 넘기기(정한 시간마다 다음 페이지). 홈 화면이 onElapsed 를 붙이고, 발표가 끝나면 멈춘다.
+  final AutoAdvanceTimer autoAdvance = AutoAdvanceTimer();
 }
 
 /// 발표 보기 곡 찾기 범위: 제목만 / 가사(원본·보조 언어)만.
@@ -15492,6 +15523,11 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
           _ElapsedClock(
             isRunning: widget.isPresentationOpen,
             timer: _view.timer,
+          ),
+          const SizedBox(height: 14),
+          AutoAdvanceBox(
+            timer: _view.autoAdvance,
+            presenting: widget.isPresentationOpen,
           ),
           const SizedBox(height: 14),
           _pointerBox(cs),
