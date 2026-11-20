@@ -2447,19 +2447,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       timer.stop();
       return;
     }
-    final last = _allSlides.length - 1;
-    if (_currentSlideIndex >= last) {
-      timer.stop();
-      _showSnack('마지막 페이지라 자동 넘기기를 멈췄습니다.');
-      return;
-    }
     await _nextSlide();
-    // 반복 중에 마지막 페이지에 닿았으면 더 넘길 곳이 없으니 여기서 멈춘다.
+    // 마지막 페이지에 닿았으면(이미 끝이었어도) 더 넘길 곳이 없으니 여기서 멈춘다.
     if (mounted &&
         _currentSlideIndex >= _allSlides.length - 1 &&
         timer.isRunning) {
       timer.stop();
-      _showSnack('마지막 페이지에 닿아 자동 넘기기를 멈췄습니다.');
+      _showSnack('마지막 페이지라 자동 넘기기를 멈췄습니다.');
     }
   }
 

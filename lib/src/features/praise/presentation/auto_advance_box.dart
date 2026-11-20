@@ -44,16 +44,6 @@ class _AutoAdvanceBoxState extends State<AutoAdvanceBox> {
   }
 
   @override
-  void didUpdateWidget(covariant AutoAdvanceBox oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.timer != widget.timer) {
-      oldWidget.timer.removeListener(_onTimerChanged);
-      widget.timer.addListener(_onTimerChanged);
-    }
-    _syncTicker();
-  }
-
-  @override
   void dispose() {
     _timer.removeListener(_onTimerChanged);
     _ticker?.cancel();
@@ -81,17 +71,12 @@ class _AutoAdvanceBoxState extends State<AutoAdvanceBox> {
   }
 
   // 입력하는 즉시 반영한다(엔터를 안 쳐도 시작 버튼이 새 값으로 돈다).
-  void _applyInterval() {
-    final m = int.tryParse(_minutes.text) ?? 0;
-    final s = int.tryParse(_seconds.text) ?? 0;
-    _timer.setInterval(Duration(minutes: m, seconds: s));
-  }
+  Duration get _typed => Duration(
+    minutes: int.tryParse(_minutes.text) ?? 0,
+    seconds: int.tryParse(_seconds.text) ?? 0,
+  );
 
-  bool get _inputValid {
-    final m = int.tryParse(_minutes.text) ?? 0;
-    final s = int.tryParse(_seconds.text) ?? 0;
-    return Duration(minutes: m, seconds: s) >= AutoAdvanceTimer.minInterval;
-  }
+  bool get _inputValid => _typed >= AutoAdvanceTimer.minInterval;
 
   static String _fmt(Duration d) {
     // 0.4초 남았을 때 00:00 이 보이지 않게 올림한다.
@@ -106,6 +91,13 @@ class _AutoAdvanceBoxState extends State<AutoAdvanceBox> {
     final cs = Theme.of(context).colorScheme;
     final running = _timer.isRunning;
     final canStart = widget.presenting && _inputValid;
+    Widget unit(String s) => Padding(
+      padding: const EdgeInsets.only(left: 4),
+      child: Text(
+        s,
+        style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+      ),
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -138,54 +130,21 @@ class _AutoAdvanceBoxState extends State<AutoAdvanceBox> {
         Row(
           children: [
             _numberField(_minutes, key: const ValueKey('auto-advance-min')),
+            unit('분'),
             const SizedBox(width: 4),
-            Text(
-              '분',
-              style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
-            ),
-            const SizedBox(width: 8),
             _numberField(_seconds, key: const ValueKey('auto-advance-sec')),
-            const SizedBox(width: 4),
-            Text(
-              '초',
-              style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
-            ),
+            unit('초'),
             const Spacer(),
-            Tooltip(
-              message: '켜면 시간이 찰 때마다 계속 넘깁니다. 끄면 한 번만 넘기고 멈춥니다.',
-              child: InkWell(
-                borderRadius: BorderRadius.circular(6),
-                onTap: () => _timer.setRepeat(!_timer.repeat),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 4,
-                    vertical: 2,
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.repeat_rounded,
-                        size: 16,
-                        color: _timer.repeat
-                            ? cs.primary
-                            : cs.onSurfaceVariant.withValues(alpha: 0.5),
-                      ),
-                      const SizedBox(width: 3),
-                      Text(
-                        _timer.repeat ? '반복' : '한 번',
-                        key: const ValueKey('auto-advance-repeat'),
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: _timer.repeat
-                              ? cs.primary
-                              : cs.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+            FilterChip(
+              key: const ValueKey('auto-advance-repeat'),
+              tooltip: '켜면 시간이 찰 때마다 계속 넘깁니다. 끄면 한 번만 넘기고 멈춥니다.',
+              avatar: const Icon(Icons.repeat_rounded, size: 16),
+              label: Text(_timer.repeat ? '반복' : '한 번'),
+              labelStyle: const TextStyle(fontSize: 11),
+              visualDensity: VisualDensity.compact,
+              showCheckmark: false,
+              selected: _timer.repeat,
+              onSelected: _timer.setRepeat,
             ),
           ],
         ),
@@ -199,18 +158,13 @@ class _AutoAdvanceBoxState extends State<AutoAdvanceBox> {
                   icon: const Icon(Icons.stop_rounded, size: 18),
                   label: const Text('자동 넘기기 멈춤'),
                 )
-              : _maybeTooltip(
-                  widget.presenting
-                      ? (_inputValid ? null : '1초 이상으로 정해 주세요')
+              : Tooltip(
+                  message: widget.presenting
+                      ? (_inputValid ? '' : '1초 이상으로 정해 주세요')
                       : '발표를 시작해야 쓸 수 있습니다',
-                  FilledButton.tonalIcon(
+                  child: FilledButton.tonalIcon(
                     key: const ValueKey('auto-advance-start'),
-                    onPressed: canStart
-                        ? () {
-                            _applyInterval();
-                            _timer.start();
-                          }
-                        : null,
+                    onPressed: canStart ? _timer.start : null,
                     icon: const Icon(Icons.timer_outlined, size: 18),
                     label: const Text('자동 넘기기 시작'),
                   ),
@@ -219,9 +173,6 @@ class _AutoAdvanceBoxState extends State<AutoAdvanceBox> {
       ],
     );
   }
-
-  static Widget _maybeTooltip(String? message, Widget child) =>
-      message == null ? child : Tooltip(message: message, child: child);
 
   Widget _numberField(TextEditingController controller, {Key? key}) {
     return SizedBox(
@@ -242,7 +193,7 @@ class _AutoAdvanceBoxState extends State<AutoAdvanceBox> {
           contentPadding: EdgeInsets.symmetric(vertical: 6),
           border: OutlineInputBorder(),
         ),
-        onChanged: (_) => setState(_applyInterval),
+        onChanged: (_) => setState(() => _timer.setInterval(_typed)),
       ),
     );
   }
