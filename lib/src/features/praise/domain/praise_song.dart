@@ -1,12 +1,16 @@
 import 'chord_lyrics.dart';
+import 'song_form.dart';
 
 /// 곡 한 페이지의 언어별 가사: 원본 · 보조 · 추가 보조 + 그 페이지 코드 글.
 /// [chord] 는 원본 가사와 짝이 맞는 코드 글(§3-5 표시 규칙), '' = 이 페이지 코드 없음.
+/// [form] 은 송폼 라벨 글(`V2,PC`, `song_form.dart` 의 `labelsToText`), '' = 라벨 없음.
+/// 칸을 하나 더하면 만드는 곳(`pairedPages`·`_songWithPages` 등)을 모두 고쳐야 한다.
 typedef LyricsPage = ({
   String korean,
   String english,
   String extra,
   String chord,
+  String form,
 });
 
 extension LyricsPageX on LyricsPage {
@@ -29,6 +33,7 @@ class PraiseSong {
     this.chordKey,
     this.chordTranspose = 0,
     this.chordAccidental = ChordAccidental.auto,
+    this.songForm,
   });
 
   final int? id;
@@ -54,6 +59,10 @@ class PraiseSong {
   /// ♯/♭ 표기 선호. 콘티 스냅샷 전용 / 콘티 `song_chord_accidental`.
   final ChordAccidental chordAccidental;
 
+  /// 송폼(페이지별 구성 라벨, `song_form.dart`). null = 없음. DB `praise_songs.song_form` /
+  /// 콘티 `song_form` 스냅샷. 관객 화면·PPTX 로는 가지 않는다. 글이 바뀐 페이지의 라벨은 숨긴다.
+  final SongForm? songForm;
+
   bool get hasChords => chordLyrics != null && chordLyrics!.isNotEmpty;
 
   /// 원래 조(정해 둔 값, 없으면 추정). 코드가 없으면 null.
@@ -77,6 +86,7 @@ class PraiseSong {
     Object? chordKey = _keep,
     int? chordTranspose,
     ChordAccidental? chordAccidental,
+    Object? songForm = _keep,
   }) {
     return PraiseSong(
       id: id,
@@ -93,6 +103,9 @@ class PraiseSong {
           : _nullIfEmpty(chordKey as String?),
       chordTranspose: chordTranspose ?? this.chordTranspose,
       chordAccidental: chordAccidental ?? this.chordAccidental,
+      songForm: identical(songForm, _keep)
+          ? this.songForm
+          : songForm as SongForm?,
     );
   }
 
@@ -108,6 +121,7 @@ class PraiseSong {
     final cs = hasChords
         ? matchedChordPages(chordLyrics, lyrics)
         : const <String?>[];
+    final forms = matchedForm(songForm, ks).labels;
     final len = [
       ks.length,
       es.length,
@@ -121,6 +135,7 @@ class PraiseSong {
           english: at(es, i),
           extra: at(xs, i),
           chord: i < cs.length ? cs[i] ?? '' : '',
+          form: i < ks.length ? labelsToText(forms[i]) : '',
         ),
     ];
     while (result.isNotEmpty && result.last.isEmptyPage) {
@@ -146,8 +161,8 @@ class PraiseSong {
     return pages;
   }
 
-  /// 코드 칸(chord_*)은 넣지 않는다 — `updateSong`·`insertSong` 처럼 가사만 고치는 길이
-  /// 코드를 덮지 않게. 코드는 `PraiseRepository.saveChords` 로만 쓴다.
+  /// 코드 칸(chord_*)·송폼 칸은 넣지 않는다 — `updateSong`·`insertSong` 처럼 가사만 고치는 길이
+  /// 덮지 않게. 코드는 `saveChords`, 송폼은 `saveSongForm` 으로만 쓴다.
   Map<String, Object?> toMap() {
     return {
       'id': id,
@@ -194,6 +209,7 @@ class PraiseSong {
       englishLyrics: (map['english_lyrics'] as String?) ?? '',
       chordLyrics: _nullIfEmpty(map['chord_lyrics'] as String?),
       chordKey: _nullIfEmpty(map['chord_key'] as String?),
+      songForm: SongForm.parse(map['song_form']),
     );
   }
 

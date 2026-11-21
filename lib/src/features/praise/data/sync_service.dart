@@ -699,6 +699,7 @@ class SyncService {
     'translations',
     'translation_deleted',
     'chords',
+    'forms',
   ];
 
   /// 드라이브의 내 파일이 지금 이 PC 의 찬양과 같은지. 다르면 이 PC 에서 고친 찬양을 아직 안
@@ -733,10 +734,13 @@ class SyncService {
       }
       if (stored is! Map) return false;
       final theirs = stored;
-      // 'chords' 는 새 칸이라 옛 파일엔 없다 — 없음과 빈 목록은 같게 본다(올린 뒤 처음 켤 때 헛알림 방지).
+      // 'chords'·'forms' 는 새 칸이라 옛 파일엔 없다 — 없음과 빈 목록은 같게 본다(올린 뒤 처음 켤 때 헛알림 방지).
       return _songKeys.every(
         (key) =>
-            jsonEncode(theirs[key] ?? (key == 'chords' ? const [] : null)) ==
+            jsonEncode(
+              theirs[key] ??
+                  (key == 'chords' || key == 'forms' ? const [] : null),
+            ) ==
             jsonEncode(mine[key]),
       );
     });

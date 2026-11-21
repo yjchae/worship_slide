@@ -16,6 +16,7 @@ import 'package:worship_slides/src/features/praise/data/sync_store.dart';
 import 'package:worship_slides/src/features/praise/data/worship_conti_repository.dart';
 import 'package:worship_slides/src/features/praise/domain/chord_lyrics.dart';
 import 'package:worship_slides/src/features/praise/domain/praise_song.dart';
+import 'package:worship_slides/src/features/praise/domain/song_form.dart';
 import 'package:worship_slides/src/features/praise/domain/staging_item.dart';
 import 'package:worship_slides/src/features/praise/domain/worship_conti.dart';
 
@@ -1566,6 +1567,105 @@ void main() {
       json.remove('chords');
       await file.writeAsString(jsonEncode(json));
       expect((await a.sync.checkForUpdates())!.localChanges, isFalse);
+    });
+  });
+
+  group('송폼', () {
+    Future<Database> openDb(_Pc pc) =>
+        databaseFactoryFfi.openDatabase(p.join(pc.dir.path, 'a.db'));
+
+    Future<Map<String, Object?>> rowOf(_Pc pc, String title) async =>
+        (await (await openDb(pc)).query(
+          'praise_songs',
+          where: 'title = ?',
+          whereArgs: [title],
+        )).single;
+
+    final formA = SongForm([(key: 'k1', labels: labelsFromText('V1,PC'))]);
+    final formB = SongForm([(key: 'k1', labels: labelsFromText('C'))]);
+
+    test('A 가 등록하면 B 에서 보이고 곡 시각은 그대로다', () async {
+      final a = await newPc('A');
+      final b = await newPc('B');
+      await a.repo.insertSong(song('은혜', '가사'));
+      await syncAll([a, b]);
+      final before = await rowOf(b, '은혜');
+      await a.repo.saveSongForm((await a.songs()).single.id!, formA);
+      expect(a.sync.status.value.hasLocalChanges, isTrue);
+      await syncAll([a, b]);
+      expect((await b.songs()).single.songForm, formA);
+      expect((await rowOf(b, '은혜'))['updated_at'], before['updated_at']);
+    });
+
+    test('나중에 고친 쪽이 이기고, 지우면 다른 PC 에서도 지워진다', () async {
+      final a = await newPc('A');
+      final b = await newPc('B');
+      await a.repo.insertSong(song('은혜', '가사'));
+      await syncAll([a, b]);
+      await a.repo.saveSongForm((await a.songs()).single.id!, formA);
+      await syncAll([a, b]);
+      await Future<void>.delayed(const Duration(milliseconds: 3));
+      await b.repo.saveSongForm((await b.songs()).single.id!, formB);
+      await syncAll([a, b]);
+      expect((await a.songs()).single.songForm, formB);
+      await Future<void>.delayed(const Duration(milliseconds: 3));
+      await a.repo.saveSongForm((await a.songs()).single.id!, null);
+      await syncAll([a, b]);
+      expect((await b.songs()).single.songForm, isNull);
+      expect(
+        (await rowOf(b, '은혜'))['song_form_updated_at'] as int,
+        greaterThan(0),
+      );
+    });
+
+    test('켤 때 확인은 송폼만 바뀐 곡도 바뀐 찬양 한 곡으로 센다(DB 는 그대로)', () async {
+      final a = await newPc('A');
+      final b = await newPc('B');
+      await a.repo.insertSong(song('은혜', '가사'));
+      await syncAll([a, b]);
+      await a.repo.saveSongForm((await a.songs()).single.id!, formA);
+      await a.sync.syncSongs();
+      final check = await b.sync.checkForUpdates();
+      expect(check!.songs.updatedCount, 1);
+      expect((await b.songs()).single.songForm, isNull);
+      await b.sync.syncSongs();
+      expect((await b.sync.checkForUpdates())!.hasAnything, isFalse);
+    });
+
+    test('옛 앱(forms 없음)이 가사를 고쳐도 송폼은 지워지지 않는다', () async {
+      final a = await newPc('A');
+      final b = await newPc('B');
+      await a.repo.insertSong(song('은혜', '가사'));
+      await a.repo.saveSongForm((await a.songs()).single.id!, formA);
+      await syncAll([a, b]);
+      final file = File(p.join(shared, syncDirName, '${a.sync.deviceId}.json'));
+      final json =
+          jsonDecode(await file.readAsString()) as Map<String, Object?>;
+      expect(json['forms'], isNotEmpty);
+      json.remove('forms');
+      (json['songs'] as List).cast<Map>().single['lyrics'] = '가사 고침';
+      await file.writeAsString(jsonEncode(json));
+      await b.sync.syncSongs();
+      expect((await b.songs()).single.songForm, formA);
+    });
+
+    test('따로 가져온 같은 곡이 합쳐져도 송폼이 따라가고, 모양 틀린 레코드는 버린다', () async {
+      final a = await newPc('A');
+      final b = await newPc('B');
+      await a.repo.insertSong(song('은혜', '가사'));
+      await b.repo.insertSong(song('은혜', '가사'));
+      await a.repo.saveSongForm((await a.songs()).single.id!, formA);
+      await syncAll([a, b]);
+      expect(await a.songs(), hasLength(1));
+      expect((await b.songs()).single.songForm, formA);
+      expect(
+        SyncForm.fromJson({'uid': 'x', 'song_form': 5, 'updated_at': 9}),
+        isNull,
+      );
+      expect(
+        SyncForm.fromJson({'uid': 'x', 'song_form': '', 'updated_at': 0}),
+        isNull,
+      );
     });
   });
 }

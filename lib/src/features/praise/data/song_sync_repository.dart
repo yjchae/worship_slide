@@ -68,6 +68,15 @@ class SongSyncRepository {
               updatedAt: row['chord_updated_at'] as int,
             ),
       ],
+      forms: [
+        for (final row in rows)
+          if (((row['song_form_updated_at'] as int?) ?? 0) > 0)
+            SyncForm(
+              uid: row['uid'] as String,
+              form: row['song_form'] as String?,
+              updatedAt: row['song_form_updated_at'] as int,
+            ),
+      ],
     );
   }
 
@@ -105,10 +114,13 @@ class SongSyncRepository {
     final translations = await _mergeTranslations(txn, remotes);
     // 곡 uid 합치기가 끝난 다음에 코드를 맞춘다. 코드만 바뀐 곡도 '바뀐 찬양' 한 곡으로 센다.
     final chords = await _mergeChords(txn, remotes);
+    final forms = await _mergeForms(txn, remotes);
     return SyncMergeResult(
       addedCount: songs.addedCount,
       updatedCount:
-          songs.updatedCount + translations + chords.difference(touched).length,
+          songs.updatedCount +
+          translations +
+          chords.union(forms).difference(touched).length,
       deletedCount: songs.deletedCount,
     );
   }
@@ -321,7 +333,12 @@ class SongSyncRepository {
     final result = <String, _LocalSong>{};
     // 곡 행 id → 코드 칸. 중복 행을 지울 때 코드를 살리려고.
     final chordOf = <int, ({Object? text, Object? key, int at})>{};
+    final formOf = <int, ({Object? text, int at})>{};
     for (final row in await txn.query('praise_songs')) {
+      formOf[row['id'] as int] = (
+        text: row['song_form'],
+        at: (row['song_form_updated_at'] as int?) ?? 0,
+      );
       chordOf[row['id'] as int] = (
         text: row['chord_lyrics'],
         key: row['chord_key'],
@@ -371,6 +388,16 @@ class SongSyncRepository {
             whereArgs: [winner.id],
           );
           chordOf[winner.id] = lost;
+        }
+        final lostForm = formOf[loser.id]!;
+        if (lostForm.at > formOf[winner.id]!.at) {
+          await txn.update(
+            'praise_songs',
+            {'song_form': lostForm.text, 'song_form_updated_at': lostForm.at},
+            where: 'id = ?',
+            whereArgs: [winner.id],
+          );
+          formOf[winner.id] = lostForm;
         }
         await txn.delete(
           'praise_songs',
@@ -473,6 +500,57 @@ class SongSyncRepository {
       if (c.chordLyrics != mine.chordLyrics || c.chordKey != mine.chordKey) {
         changed.add(c.uid);
       }
+    }
+    return changed;
+  }
+
+  // ── 송폼 ────────────────────────────────────────────────────────────
+
+  /// 다른 PC 의 송폼을 합친다. 곡마다 나중에 고친 쪽이 이긴다([_mergeChords] 와 같은 규칙).
+  /// 송폼 칸 두 개만 고치고 곡 `updated_at`·가사는 손대지 않는다. 글이 안 맞아 숨는 라벨도 그대로 옮긴다
+  /// (되돌리면 다시 보이게). 실제로 바뀐 곡의 uid 를 돌려준다.
+  Future<Set<String>> _mergeForms(
+    DatabaseExecutor txn,
+    List<SyncSnapshot> remotes,
+  ) async {
+    if (remotes.every((r) => r.forms.isEmpty)) return const {};
+    final aliases = {
+      for (final r in await txn.query('song_uid_aliases'))
+        r['alias'] as String: r['uid'] as String,
+    };
+    final newest = <String, SyncForm>{};
+    for (final remote in remotes) {
+      for (final raw in remote.forms) {
+        final f = raw.withUid(resolveSongUid(aliases, raw.uid));
+        final before = newest[f.uid];
+        if (before == null || f.winsOver(before)) newest[f.uid] = f;
+      }
+    }
+    final rows = {
+      for (final r in await txn.query(
+        'praise_songs',
+        columns: ['id', 'uid', 'song_form', 'song_form_updated_at'],
+        where: 'uid IS NOT NULL',
+      ))
+        r['uid'] as String: r,
+    };
+    final changed = <String>{};
+    for (final f in newest.values) {
+      final row = rows[f.uid];
+      if (row == null) continue; // 이 PC 에 없는 곡은 버린다.
+      final mine = SyncForm(
+        uid: f.uid,
+        form: row['song_form'] as String?,
+        updatedAt: (row['song_form_updated_at'] as int?) ?? 0,
+      );
+      if (!f.winsOver(mine)) continue;
+      await txn.update(
+        'praise_songs',
+        {'song_form': f.form, 'song_form_updated_at': f.updatedAt},
+        where: 'id = ?',
+        whereArgs: [row['id']],
+      );
+      if (f.form != mine.form) changed.add(f.uid);
     }
     return changed;
   }

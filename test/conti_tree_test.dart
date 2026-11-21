@@ -2,6 +2,7 @@ import 'dart:math';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:worship_slides/src/features/praise/domain/conti_tree.dart';
 import 'package:worship_slides/src/features/praise/presentation/conti_insert_target.dart';
@@ -14,6 +15,12 @@ ContiLayout layout(
 ]) => ContiLayout(uids, Map.of(groups), Set.of(noSpacer));
 
 /// 그룹마다 항목이 목록에서 이어져 있는지(불변식).
+ContiDropZone zoneOf(bool after) =>
+    after ? ContiDropZone.after : ContiDropZone.before;
+
+/// resolveGroupDrop 가 받아들인 자리(거절이면 null).
+ContiSpot? okSpot(ContiGroupDrop d) => d.spot;
+
 bool contiguous(ContiLayout l) {
   // 모든 앞부분 경로(상위·하위)가 이어져 있어야 한다.
   final seen = <String>{};
@@ -94,10 +101,15 @@ void main() {
       expect(resolveDrop(c, 0, true, 3), (index: 2, group: 'a'));
     });
 
-    test('빈 그룹 머리 아래 절반 = 목록 끝에서 그 그룹 시작', () {
+    test('빈 그룹 머리: 위/아래 구분 없이 안으로(자리 = anchorIndex)', () {
       final e = contiRows(uids, groups, emptyGroups: ['x']);
       expect(resolveDrop(e, 4, true, 3), (index: 3, group: 'x'));
-      expect(resolveDrop(e, 4, false, 3), (index: 3, group: null));
+      expect(resolveDrop(e, 4, false, 3), (index: 3, group: 'x'));
+      // 빈 하위: 부모 구간 끝, 부모는 쪼개지지 않는다
+      final h = contiRows(uids, groups, emptyGroups: ['a/c']);
+      final hi = h.indexWhere((r) => r is ContiHeaderRow && r.name == 'a/c');
+      expect(resolveDrop(h, hi, false, 3), (index: 2, group: 'a/c'));
+      expect(resolveDrop(h, hi, true, 3), (index: 2, group: 'a/c'));
     });
   });
 
@@ -167,24 +179,78 @@ void main() {
   });
 
   group('그룹째 옮기기', () {
-    test('순서를 유지한 채 항목 앞으로, 다른 그룹 안에는 못 들어간다', () {
+    test('그룹 밖 항목 행 아래에 놓으면 순서를 유지한 채 그 뒤로', () {
       final l = layout([1, 2, 3, 4, 5], {1: 'a', 2: 'a', 4: 'b', 5: 'b'});
       final rows = contiRows(l.uids, l.groups);
       final run = groupRuns(l.uids, l.groups).first;
-      // b 그룹의 항목 5 위 절반에 놓아도 b 블록 앞
-      final at = resolveGroupDrop(rows, 5, false, run, l.uids, l.groups)!;
-      expect(at.index, 3);
+      final at = okSpot(
+        resolveGroupDrop(rows, 3, ContiDropZone.after, run, l.uids, l.groups),
+      )!;
+      expect((at.index, at.group), (3, null));
       final r = moveGroupTo(l, run, at.index);
       expect(r.uids, [3, 1, 2, 4, 5]);
       expect(r.groups, l.groups);
       expect(contiguous(r), isTrue);
     });
 
-    test('자기 블록 위에 놓으면 제자리(null)', () {
+    test('다른 그룹 안 항목 행에 놓으면 그 그룹 안으로 들어간다(원래 단계 유지 규칙 폐지)', () {
+      final l = layout([1, 2, 3, 4, 5], {1: 'a', 2: 'a', 4: 'b', 5: 'b'});
+      final rows = contiRows(l.uids, l.groups);
+      final run = groupRuns(l.uids, l.groups).first;
+      final at = okSpot(
+        resolveGroupDrop(rows, 5, ContiDropZone.before, run, l.uids, l.groups),
+      )!;
+      expect((at.index, at.group), (3, 'b'));
+      final r = moveGroupTo(
+        l,
+        run,
+        at.index,
+        setParent: true,
+        parent: at.group,
+      );
+      expect(r.uids, [3, 1, 2, 4, 5]);
+      expect(r.groups, {1: 'b/a', 2: 'b/a', 4: 'b', 5: 'b'});
+      expect(contiguous(r), isTrue);
+    });
+
+    test('자기 블록 위에 놓으면 거절(자기 안), 제자리면 noChange', () {
       final l = layout([1, 2, 3], {1: 'a', 2: 'a'});
       final rows = contiRows(l.uids, l.groups);
       final run = groupRuns(l.uids, l.groups).first;
-      expect(resolveGroupDrop(rows, 1, true, run, l.uids, l.groups), isNull);
+      expect(
+        resolveGroupDrop(
+          rows,
+          1,
+          ContiDropZone.after,
+          run,
+          l.uids,
+          l.groups,
+        ).reject,
+        ContiDropReject.self,
+      );
+      expect(
+        resolveGroupDrop(
+          rows,
+          0,
+          ContiDropZone.into,
+          run,
+          l.uids,
+          l.groups,
+        ).reject,
+        ContiDropReject.self,
+      );
+      // 그룹 밖 앞 경계 = 제자리
+      expect(
+        resolveGroupDrop(
+          rows,
+          3,
+          ContiDropZone.before,
+          run,
+          l.uids,
+          l.groups,
+        ).reject,
+        ContiDropReject.noChange,
+      );
     });
 
     test('위·아래 한 칸: 이웃 그룹 블록 또는 항목 하나를 건너뛴다', () {
@@ -274,8 +340,17 @@ void main() {
         final runs = groupRuns(l.uids, l.groups);
         if (runs.isEmpty) continue;
         final run = runs[rnd.nextInt(runs.length)];
-        final at = resolveGroupDrop(rows, i, after, run, l.uids, l.groups);
-        if (at != null) l = moveGroupTo(l, run, at.index);
+        final at = resolveGroupDrop(
+          rows,
+          i,
+          zoneOf(after),
+          run,
+          l.uids,
+          l.groups,
+        ).spot;
+        if (at != null) {
+          l = moveGroupTo(l, run, at.index, setParent: true, parent: at.group);
+        }
       } else {
         final uid = l.uids[rnd.nextInt(l.uids.length)];
         l = moveItemTo(l, uid, resolveDrop(rows, i, after, l.uids.length));
@@ -304,29 +379,38 @@ void main() {
                 state.groups,
                 collapsed: collapsed,
               );
-              void drop(Object data, int rowIndex, bool after) {
+              void drop(Object data, int rowIndex, ContiDropZone zone) {
                 if (data is! ContiRowDrag) return;
                 if (data.isGroup) {
-                  final run = groupRuns(
-                    state.uids,
-                    state.groups,
-                  ).firstWhere((r) => r.startUid == data.uid);
+                  final run = allGroupRuns(state.uids, state.groups).firstWhere(
+                    (r) =>
+                        r.startUid == data.uid &&
+                        r.name == (data as ContiGroupDrag).path,
+                  );
                   final at = resolveGroupDrop(
                     rows,
                     rowIndex,
-                    after,
+                    zone,
                     run,
                     state.uids,
                     state.groups,
-                  );
+                  ).spot;
                   if (at != null) {
-                    set(() => state = moveGroupTo(state, run, at.index));
+                    set(
+                      () => state = moveGroupTo(
+                        state,
+                        run,
+                        at.index,
+                        setParent: true,
+                        parent: at.group,
+                      ),
+                    );
                   }
                 } else {
                   final spot = resolveDrop(
                     rows,
                     rowIndex,
-                    after,
+                    zone != ContiDropZone.before,
                     state.uids.length,
                   );
                   set(() => state = moveItemTo(state, data.uid, spot));
@@ -356,7 +440,22 @@ void main() {
                       canMoveUp: true,
                       canMoveDown: true,
                       dragging: dragging,
-                      onDrop: (d, a) => drop(d, i, a),
+                      onDrop: (d, z) => drop(d, i, z),
+                      rejectOf: (d, z) {
+                        if (d is! ContiGroupDrag) return null;
+                        final run = allGroupRuns(state.uids, state.groups)
+                            .firstWhere(
+                              (r) => r.startUid == d.uid && r.name == d.path,
+                            );
+                        return resolveGroupDrop(
+                          rows,
+                          i,
+                          z,
+                          run,
+                          state.uids,
+                          state.groups,
+                        ).reject;
+                      },
                       onToggle: () => set(() {
                         if (!collapsed.remove(row.key)) collapsed.add(row.key);
                       }),
@@ -370,7 +469,7 @@ void main() {
                   final item = row as ContiItemRow;
                   return ContiInsertTarget(
                     key: ValueKey(item.uid),
-                    onDrop: (d, a) => drop(d, i, a),
+                    onDrop: (d, z) => drop(d, i, z),
                     child: Container(
                       height: 48,
                       margin: EdgeInsets.only(
@@ -484,6 +583,215 @@ void main() {
       await drag(tester, find.byKey(const Key('h3')), upper(tester, header));
       expect(state.uids, [1, 3, 2]);
       expect(state.groups, {2: 'a'});
+    });
+
+    testWidgets('그룹을 머리줄 가운데에 놓으면 그 하위로, 위 1/3 이면 앞 형제로', (tester) async {
+      state = layout([1, 2, 3, 4], {1: 'a', 2: 'a', 3: 'b', 4: 'b'});
+      await tester.pumpWidget(app());
+      final a = find.byKey(const ValueKey('ga'));
+      final b = find.byKey(const ValueKey('gb'));
+      await drag(
+        tester,
+        find.descendant(of: a, matching: find.text('a')),
+        tester.getCenter(b),
+      );
+      expect(state.groups, {1: 'b/a', 2: 'b/a', 3: 'b', 4: 'b'});
+      expect(state.uids, [1, 2, 3, 4]);
+
+      // 하위 b/a 를 b 머리줄 위 1/3 에 놓으면 b 앞 형제(맨 위 단계)로 나온다.
+      state = layout([1, 2, 3], {1: 'b/a', 2: 'b', 3: 'b'});
+      await tester.pumpWidget(app());
+      await tester.pumpAndSettle();
+      await drag(
+        tester,
+        find.descendant(
+          of: find.byKey(const ValueKey('gb/a')),
+          matching: find.text('a'),
+        ),
+        upper(tester, find.byKey(const ValueKey('gb'))),
+      );
+      expect(state.groups, {1: 'a', 2: 'b', 3: 'b'});
+    });
+
+    testWidgets('접힌 그룹은 3구역: 가운데 = 안으로(맨 끝)', (tester) async {
+      state = layout([1, 2, 3], {1: 'a', 2: 'b', 3: 'b'});
+      collapsed.add(groupKey('b', 2));
+      await tester.pumpWidget(app());
+      final b = find.byKey(const ValueKey('gb'));
+      await drag(
+        tester,
+        find.descendant(
+          of: find.byKey(const ValueKey('ga')),
+          matching: find.text('a'),
+        ),
+        tester.getCenter(b),
+      );
+      expect(state.groups, {1: 'b/a', 2: 'b', 3: 'b'});
+      expect(state.uids, [2, 3, 1]);
+    });
+
+    testWidgets('자기 하위 위에 놓으면 빨간 거부 칩이 뜨고 데이터는 그대로', (tester) async {
+      state = layout([1, 2], {1: 'a', 2: 'a/c'});
+      await tester.pumpWidget(app());
+      final before = Map.of(state.groups);
+      final from = find.descendant(
+        of: find.byKey(const ValueKey('ga')),
+        matching: find.text('a'),
+      );
+      final g = await tester.startGesture(
+        tester.getCenter(from),
+        kind: PointerDeviceKind.mouse,
+      );
+      await g.moveTo(tester.getCenter(from) + const Offset(0, 6));
+      await g.moveTo(tester.getCenter(find.byKey(const ValueKey('ga/c'))));
+      await tester.pump();
+      expect(find.text('자기 안에는 못 넣어요'), findsWidgets);
+      await g.up();
+      await tester.pumpAndSettle();
+      expect(state.groups, before);
+    });
+  });
+
+  group('머리줄 + · 이름 입력칸', () {
+    ContiHeaderRow header(String name, {int count = 1, int startUid = 1}) =>
+        ContiHeaderRow(
+          name: name,
+          startUid: count == 0 ? -1 : startUid,
+          start: 0,
+          count: count,
+          collapsed: false,
+        );
+
+    Widget host(
+      ContiHeaderRow h, {
+      VoidCallback? onAddSub,
+      bool editing = false,
+      bool editIsNew = false,
+      ValueChanged<String>? onSubmit,
+      VoidCallback? onCancel,
+      void Function(Object, ContiDropZone)? onDrop,
+    }) => MaterialApp(
+      home: Scaffold(
+        body: SizedBox(
+          width: 400,
+          child: ContiGroupHeader(
+            header: h,
+            holdsSelected: false,
+            canMoveUp: false,
+            canMoveDown: false,
+            dragging: ValueNotifier(false),
+            onDrop: onDrop ?? (_, _) {},
+            onToggle: () {},
+            onRename: () {},
+            onCreateSub: () {},
+            onAddSub: onAddSub,
+            editing: editing,
+            editIsNew: editIsNew,
+            onSubmitName: onSubmit,
+            onCancelEdit: onCancel,
+            onMove: (_) {},
+            onUngroup: () {},
+            onDelete: () {},
+          ),
+        ),
+      ),
+    );
+
+    testWidgets('+ 누르면 onAddSub, 깊이 3 그룹은 + 가 없다', (tester) async {
+      var n = 0;
+      await tester.pumpWidget(host(header('a'), onAddSub: () => n++));
+      await tester.tap(find.byIcon(Icons.add_rounded));
+      expect(n, 1);
+      await tester.pumpWidget(host(header('a/b/c'), onAddSub: () => n++));
+      expect(find.byIcon(Icons.add_rounded), findsNothing);
+    });
+
+    testWidgets('빈 그룹: 힌트·아웃라인 폴더, 무엇을 놓아도 안으로', (tester) async {
+      final zones = <ContiDropZone>[];
+      final item = Draggable<ContiRowDrag>(
+        data: const ContiRowDrag(9),
+        feedback: const SizedBox(width: 10, height: 10),
+        child: const SizedBox(width: 40, height: 40, child: Text('x')),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Column(
+              children: [
+                item,
+                SizedBox(
+                  width: 400,
+                  child: ContiGroupHeader(
+                    header: header('a', count: 0),
+                    holdsSelected: false,
+                    canMoveUp: false,
+                    canMoveDown: false,
+                    dragging: ValueNotifier(false),
+                    onDrop: (_, z) => zones.add(z),
+                    onToggle: () {},
+                    onRename: () {},
+                    onCreateSub: () {},
+                    onMove: (_) {},
+                    onUngroup: () {},
+                    onDelete: () {},
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      expect(find.text('여기에 끌어 놓기'), findsOneWidget);
+      expect(find.byIcon(Icons.folder_outlined), findsOneWidget);
+      final h = tester.getRect(find.byType(ContiGroupHeader));
+      final g = await tester.startGesture(
+        tester.getCenter(find.text('x')),
+        kind: PointerDeviceKind.mouse,
+      );
+      await g.moveBy(const Offset(0, 6));
+      await g.moveTo(Offset(h.center.dx, h.top + 3)); // 위쪽이어도
+      await tester.pump();
+      await g.up();
+      await tester.pump();
+      expect(zones, [ContiDropZone.into]);
+    });
+
+    testWidgets('이름 편집: 전체 선택·Enter 확정·/ 막기', (tester) async {
+      String? got;
+      await tester.pumpWidget(
+        host(header('새 그룹'), editing: true, onSubmit: (t) => got = t),
+      );
+      await tester.pump();
+      await tester.pump();
+      final field = tester.widget<TextField>(find.byType(TextField));
+      expect(field.controller!.selection.extentOffset, 4);
+      await tester.enterText(find.byType(TextField), '특/송');
+      await tester.pump();
+      expect(find.text('이름에 / 는 쓸 수 없어요'), findsOneWidget);
+      expect(field.controller!.text, '특송');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pump();
+      expect(got, '특송');
+    });
+
+    testWidgets('방금 만든 그룹은 Esc 로 기본 이름 유지(취소 콜백)', (tester) async {
+      var cancelled = 0;
+      String? got;
+      await tester.pumpWidget(
+        host(
+          header('새 그룹'),
+          editing: true,
+          editIsNew: true,
+          onSubmit: (t) => got = t,
+          onCancel: () => cancelled++,
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      expect(cancelled, 1);
+      expect(got, isNull);
     });
   });
 
@@ -682,7 +990,9 @@ void main() {
       // b 머리 위 절반 = b 앞, 맨 위로 빠져나온다
       final rows = contiRows(b.uids, b.groups);
       final hb = rows.indexWhere((r) => r is ContiHeaderRow && r.name == 'b');
-      final spot = resolveGroupDrop(rows, hb, false, x, b.uids, b.groups)!;
+      final spot = okSpot(
+        resolveGroupDrop(rows, hb, ContiDropZone.before, x, b.uids, b.groups),
+      )!;
       expect(spot.group, isNull);
       final r = moveGroupTo(
         b,
@@ -743,7 +1053,14 @@ void main() {
           final runs = allGroupRuns(l.uids, l.groups);
           if (runs.isEmpty) continue;
           final run = runs[rnd.nextInt(runs.length)];
-          final spot = resolveGroupDrop(rows, i, after, run, l.uids, l.groups);
+          final spot = resolveGroupDrop(
+            rows,
+            i,
+            ContiDropZone.values[rnd.nextInt(3)],
+            run,
+            l.uids,
+            l.groups,
+          ).spot;
           if (spot != null) {
             l = moveGroupTo(
               l,
@@ -779,6 +1096,411 @@ void main() {
           l.groups.values.every((g) => groupDepth(g) <= maxGroupDepth),
           isTrue,
           reason: 'step $n ${l.groups}',
+        );
+      }
+    });
+  });
+
+  group('그룹 끌어 놓기: 구역·거절·빈 그룹', () {
+    ContiGroupRun runOf(ContiLayout l, String path) =>
+        allGroupRuns(l.uids, l.groups).firstWhere((r) => r.name == path);
+
+    int headerRow(List<ContiRow> rows, String name) =>
+        rows.indexWhere((r) => r is ContiHeaderRow && r.name == name);
+
+    /// 페이지가 하는 일을 순수 함수로: 그룹 [path] 를 [row] 행 [zone] 에 놓는다. 거절이면 null.
+    ({ContiLayout l, List<String> empties, String path, bool renamed})? apply(
+      ContiLayout l,
+      List<String> empties,
+      String path,
+      String targetName,
+      ContiDropZone zone, {
+      Set<String> collapsed = const {},
+    }) {
+      final rows = contiRows(
+        l.uids,
+        l.groups,
+        collapsed: collapsed,
+        emptyGroups: empties,
+      );
+      final isEmpty = empties.contains(path);
+      final run = isEmpty ? null : runOf(l, path);
+      final d = resolveGroupDrop(
+        rows,
+        headerRow(rows, targetName),
+        zone,
+        run,
+        l.uids,
+        l.groups,
+        emptyPath: isEmpty ? path : null,
+        emptyGroups: empties,
+      );
+      final spot = d.spot;
+      if (spot == null) return null;
+      if (isEmpty) {
+        final m = moveEmptyGroup(l.groups, empties, path, spot.group);
+        return (
+          l: l,
+          empties: normalizeEmptyGroups(l.groups, m.empties),
+          path: m.path,
+          renamed: groupLeaf(m.path) != groupLeaf(path),
+        );
+      }
+      final m = moveGroupToNamed(
+        l,
+        run!,
+        spot.index,
+        setParent: true,
+        parent: spot.group,
+        emptyGroups: empties,
+      );
+      return (
+        l: m.layout,
+        empties: normalizeEmptyGroups(
+          m.layout.groups,
+          moveEmpties(empties, path, m.path),
+        ),
+        path: m.path,
+        renamed: m.renamed,
+      );
+    }
+
+    ContiLayout two() =>
+        layout([1, 2, 3, 4, 5], {1: 'a', 2: 'a', 4: 'b', 5: 'b'});
+
+    test('구역 판정: 펼침 위 1/3 앞·나머지 안, 접힘 3등분, 빈 그룹 전부 안', () {
+      ContiDropZone z(double dy, {bool c = false, bool e = false}) =>
+          groupDropZone(dy, 30, collapsed: c, empty: e);
+      expect(z(5), ContiDropZone.before);
+      expect(z(12), ContiDropZone.into);
+      expect(z(29), ContiDropZone.into);
+      expect(z(5, c: true), ContiDropZone.before);
+      expect(z(15, c: true), ContiDropZone.into);
+      expect(z(25, c: true), ContiDropZone.after);
+      expect(z(1, e: true), ContiDropZone.into);
+    });
+
+    test('펼친 머리줄 안으로 = 대상 구간 맨 앞, 위 1/3 = 앞 형제', () {
+      final l = two();
+      final r = apply(l, [], 'a', 'b', ContiDropZone.into)!;
+      expect(r.l.groups, {1: 'b/a', 2: 'b/a', 4: 'b', 5: 'b'});
+      expect(r.l.uids, [3, 1, 2, 4, 5]);
+      expect(contiguous(r.l), isTrue);
+      // 맨 앞 하위 = b 구간 맨 앞(= a 의 항목이 b 항목 4 앞)
+      final rows = contiRows(l.uids, l.groups);
+      final d = resolveGroupDrop(
+        rows,
+        headerRow(rows, 'b'),
+        ContiDropZone.before,
+        runOf(l, 'a'),
+        l.uids,
+        l.groups,
+      );
+      expect((d.spot!.index, d.spot!.group), (3, null)); // b 앞 형제
+    });
+
+    test('접힌 그룹 안으로 = 맨 끝 하위', () {
+      final l = two();
+      final r = apply(
+        l,
+        [],
+        'a',
+        'b',
+        ContiDropZone.into,
+        collapsed: {groupKey('b', 4)},
+      )!;
+      expect(r.l.uids, [3, 4, 5, 1, 2]);
+      expect(r.l.groups, {1: 'b/a', 2: 'b/a', 4: 'b', 5: 'b'});
+      expect(contiguous(r.l), isTrue);
+    });
+
+    test('접힌 그룹 앞/뒤 형제', () {
+      final l = layout([1, 2, 3], {1: 'a', 3: 'b'});
+      final c = {groupKey('b', 3)};
+      final after = apply(l, [], 'a', 'b', ContiDropZone.after, collapsed: c)!;
+      expect(after.l.uids, [2, 3, 1]);
+      expect(after.l.groups, {1: 'a', 3: 'b'});
+    });
+
+    test('자기 자신·자기 하위 안에는 못 넣는다', () {
+      final l = layout([1, 2, 3], {1: 'a', 2: 'a/x', 3: 'a/x'});
+      for (final target in ['a', 'a/x']) {
+        final rows = contiRows(l.uids, l.groups);
+        final d = resolveGroupDrop(
+          rows,
+          headerRow(rows, target),
+          ContiDropZone.into,
+          runOf(l, 'a'),
+          l.uids,
+          l.groups,
+        );
+        expect(d.reject, ContiDropReject.self, reason: target);
+      }
+    });
+
+    test('깊이 초과 거절: 높이 3 그룹은 1단 안에도 못 들어간다', () {
+      final l = layout([1, 2, 3], {1: 'a/x/p', 2: 'b', 3: 'c/y'});
+      final rows = contiRows(l.uids, l.groups);
+      ContiGroupDrop go(String from, String to) => resolveGroupDrop(
+        rows,
+        headerRow(rows, to),
+        ContiDropZone.into,
+        runOf(l, from),
+        l.uids,
+        l.groups,
+      );
+      expect(go('a', 'b').reject, ContiDropReject.tooDeep);
+      expect(go('a/x', 'b').spot, isNotNull); // 높이 2 + 깊이 1 = 3
+      expect(go('a/x', 'c/y').reject, ContiDropReject.tooDeep);
+      expect(go('b', 'c/y').spot, isNotNull); // 1 + 2
+      // moveGroupTo 방어: 직접 불러도 4단이 안 생긴다
+      final r = moveGroupTo(l, runOf(l, 'a'), 1, setParent: true, parent: 'b');
+      expect(r.groups, l.groups);
+      // createSubGroupWithItems 방어
+      final deep = layout([1, 2], {1: 'a/x/p'});
+      final same = createSubGroupWithItems(deep, runOf(deep, 'a/x/p'), [
+        2,
+      ], 'n');
+      expect(same.groups, deep.groups);
+    });
+
+    test('제자리 = noChange (같은 부모·같은 자리)', () {
+      final l = layout([1, 2, 3], {2: 'a/x', 3: 'a/x'});
+      final rows = contiRows(l.uids, l.groups);
+      final d = resolveGroupDrop(
+        rows,
+        headerRow(rows, 'a'),
+        ContiDropZone.into,
+        runOf(l, 'a/x'),
+        l.uids,
+        l.groups,
+      );
+      expect(d.reject, ContiDropReject.noChange);
+    });
+
+    test('같은 이름 충돌은 이름 (2) 로 바뀌고 알린다', () {
+      final l = layout([1, 2, 3], {1: 'b', 2: 'b/a', 3: 'a'});
+      final r = apply(l, [], 'a', 'b', ContiDropZone.into)!;
+      expect(r.path, 'b/a (2)');
+      expect(r.renamed, isTrue);
+      expect(r.l.groups[3], 'b/a (2)');
+      expect(contiguous(r.l), isTrue);
+    });
+
+    test('빈 하위 그룹은 부모 구간 끝, 부모가 접히면 같이 가려지고 최상위 빈 그룹은 맨 끝', () {
+      final l = layout([1, 2, 3], {1: 'a', 2: 'a/x'});
+      final rows = contiRows(l.uids, l.groups, emptyGroups: ['a/c', 'e']);
+      expect(
+        [
+          for (final r in rows)
+            r is ContiHeaderRow ? 'H${r.name}' : 'I${(r as ContiItemRow).uid}',
+        ],
+        ['Ha', 'I1', 'Ha/x', 'I2', 'Ha/c', 'I3', 'He'],
+      );
+      final c = rows.whereType<ContiHeaderRow>().firstWhere(
+        (h) => h.name == 'a/c',
+      );
+      expect(c.anchorIndex, 2);
+      expect(c.depth, 2);
+      final folded = contiRows(
+        l.uids,
+        l.groups,
+        collapsed: {groupKey('a', 1)},
+        emptyGroups: ['a/c'],
+      );
+      expect(folded.whereType<ContiHeaderRow>().map((h) => h.name), ['a']);
+      // 빈 하위의 빈 하위: 둘 다 부모 구간 끝, 자리는 같다
+      final deep = contiRows(l.uids, l.groups, emptyGroups: ['a/c', 'a/c/d']);
+      final d = deep.whereType<ContiHeaderRow>().firstWhere(
+        (h) => h.name == 'a/c/d',
+      );
+      expect(d.anchorIndex, 2);
+      expect(d.depth, 3);
+    });
+
+    test('빈 하위에 항목을 놓으면 부모가 쪼개지지 않고 빈 그룹이 정리된다', () {
+      final l = layout([1, 2, 3], {1: 'a', 2: 'a/x'});
+      final rows = contiRows(l.uids, l.groups, emptyGroups: ['a/c']);
+      final spot = resolveDrop(rows, headerRow(rows, 'a/c'), true, 3);
+      expect(spot, (index: 2, group: 'a/c'));
+      final r = moveItemTo(l, 3, spot);
+      expect(r.groups, {1: 'a', 2: 'a/x', 3: 'a/c'});
+      expect(contiguous(r), isTrue);
+      expect(normalizeEmptyGroups(r.groups, ['a/c', 'a']), isEmpty);
+    });
+
+    test('normalizeEmptyGroups: 항목이 생긴 것은 빼고 조상 없는 것은 채운다', () {
+      expect(normalizeEmptyGroups({1: 'a/c'}, ['a', 'a/c', 'b/d', 'x/y/z/w']), [
+        'b',
+        'b/d',
+      ]);
+    });
+
+    test('빈 그룹 이름 바꾸기·옮기기·풀기·삭제는 하위 경로를 같이 고친다', () {
+      expect(renameEmpties(['a/c', 'a/c/d', 'q'], 'a', 'z'), [
+        'z/c',
+        'z/c/d',
+        'q',
+      ]);
+      expect(renameEmpties(['a/c', 'a/c/d'], 'a/c', 'k'), ['a/k', 'a/k/d']);
+      expect(moveEmpties(['a', 'a/c'], 'a', 'b/a'), ['b/a', 'b/a/c']);
+      expect(ungroupEmpties(['a', 'a/c'], 'a'), ['c']);
+      expect(ungroupEmpties(['a/c', 'a/c/d'], 'a/c'), ['a/d']);
+      expect(removeEmpties(['a', 'a/c', 'b'], 'a'), ['b']);
+    });
+
+    test('빈 그룹을 끌어 다른 그룹 하위로, 이름이 겹치면 (2)', () {
+      final l = layout([1, 2], {1: 'a'});
+      final r = apply(l, ['e'], 'e', 'a', ContiDropZone.into)!;
+      expect(r.empties, ['a/e']);
+      expect(r.l.uids, l.uids);
+      final rows = contiRows(l.uids, l.groups, emptyGroups: r.empties);
+      expect(headerRow(rows, 'a/e'), greaterThan(headerRow(rows, 'a')));
+      // 겹침
+      final l2 = layout([1, 2], {1: 'a', 2: 'a/e'});
+      final r2 = apply(l2, ['e'], 'e', 'a', ContiDropZone.into)!;
+      expect(r2.empties, ['a/e (2)']);
+      expect(r2.renamed, isTrue);
+      // 자기 안으로는 안 된다
+      final r3 = apply(l, ['e', 'e/f'], 'e', 'e/f', ContiDropZone.into);
+      expect(r3, isNull);
+    });
+
+    test('실제 그룹을 빈 그룹 위에 놓으면 B/A 가 되고 B 는 빈 그룹이 아니다', () {
+      final l = layout([1, 2, 3, 4], {1: 'a', 2: 'a', 4: 'z'});
+      // 최상위 빈 그룹 B: 목록 끝으로
+      final r = apply(l, ['B'], 'z', 'B', ContiDropZone.into)!;
+      expect(r.l.groups, {1: 'a', 2: 'a', 4: 'B/z'});
+      expect(r.empties, isEmpty);
+      expect(contiguous(r.l), isTrue);
+      // 빈 하위 a/B: a 구간 끝으로, a 는 쪼개지지 않는다
+      final r2 = apply(l, ['a/B'], 'z', 'a/B', ContiDropZone.into)!;
+      expect(r2.l.uids, [1, 2, 4, 3]);
+      expect(r2.l.groups, {1: 'a', 2: 'a', 4: 'a/B/z'});
+      expect(r2.empties, isEmpty);
+      expect(contiguous(r2.l), isTrue);
+    });
+
+    test('빈 그룹 아래 빈 하위가 있으면 높이에 센다(깊이 거절)', () {
+      final l = layout([1, 2], {1: 'a/x'});
+      final r = apply(l, ['e', 'e/f', 'e/f/g'], 'e', 'a/x', ContiDropZone.into);
+      expect(r, isNull); // e 높이 3 + a/x 깊이 2
+    });
+
+    test('validGroupAt: 빈 하위는 부모에 닿아 있을 때만', () {
+      expect(validGroupAt([1, 2], {1: 'a'}, 1, 'a/c', ['a/c']), 'a/c');
+      expect(validGroupAt([1, 2], {1: 'a'}, 2, 'a/c', ['a/c']), isNull);
+      expect(validGroupAt([1, 2], {1: 'a'}, 2, 'e', ['e']), 'e');
+      expect(validGroupAt([1, 2], {1: 'a'}, 1, 'e', ['e']), isNull);
+    });
+
+    test('무작위: 그룹·빈 그룹을 아무렇게나 끌어도 이어짐·깊이≤3·항목 보존·빈 그룹 정리', () {
+      final rnd = Random(5);
+      var l = layout(List.generate(10, (i) => i + 1), {
+        2: 'a',
+        3: 'a/x',
+        4: 'a/x',
+        6: 'b',
+        7: 'b/y',
+        8: 'b/y/p',
+      });
+      var empties = <String>['e', 'a/c'];
+      final collapsed = <String>{};
+      for (var n = 0; n < 800; n++) {
+        if (rnd.nextInt(6) == 0) {
+          final runs = allGroupRuns(l.uids, l.groups);
+          if (runs.isNotEmpty) {
+            final r = runs[rnd.nextInt(runs.length)];
+            final k = groupKey(r.name, r.startUid);
+            if (!collapsed.remove(k)) collapsed.add(k);
+          }
+        }
+        if (rnd.nextInt(5) == 0) {
+          final parents = [
+            null,
+            ...{
+              for (final g in [...l.groups.values, ...empties])
+                for (var d = 1; d <= groupDepth(g); d++) pathPrefix(g, d)!,
+            },
+          ];
+          final par = parents[rnd.nextInt(parents.length)];
+          if ((par == null ? 0 : groupDepth(par)) < maxGroupDepth) {
+            final name = uniqueGroupName(
+              'n',
+              siblingGroupNames(l.groups, empties, par),
+            );
+            empties = [...empties, par == null ? name : '$par/$name'];
+          }
+        }
+        final rows = contiRows(
+          l.uids,
+          l.groups,
+          collapsed: collapsed,
+          emptyGroups: empties,
+        );
+        final headers = [
+          for (var i = 0; i < rows.length; i++)
+            if (rows[i] is ContiHeaderRow) i,
+        ];
+        if (headers.isEmpty) continue;
+        final target = headers[rnd.nextInt(headers.length)];
+        final from = [
+          ...allGroupRuns(l.uids, l.groups).map((r) => r.name).toSet(),
+          ...empties,
+        ];
+        if (from.isEmpty) continue;
+        final path = from[rnd.nextInt(from.length)];
+        final isEmpty =
+            empties.contains(path) &&
+            !l.groups.values.any((g) => isUnder(g, path));
+        final run = isEmpty ? null : runOf(l, path);
+        final d = resolveGroupDrop(
+          rows,
+          target,
+          ContiDropZone.values[rnd.nextInt(3)],
+          run,
+          l.uids,
+          l.groups,
+          emptyPath: isEmpty ? path : null,
+          emptyGroups: empties,
+        );
+        final spot = d.spot;
+        if (spot != null) {
+          if (isEmpty) {
+            final m = moveEmptyGroup(l.groups, empties, path, spot.group);
+            empties = normalizeEmptyGroups(l.groups, m.empties);
+          } else {
+            final m = moveGroupToNamed(
+              l,
+              run!,
+              spot.index,
+              setParent: true,
+              parent: spot.group,
+              emptyGroups: empties,
+            );
+            l = m.layout;
+            empties = normalizeEmptyGroups(
+              l.groups,
+              moveEmpties(empties, path, m.path),
+            );
+          }
+        }
+        empties = normalizeEmptyGroups(l.groups, empties);
+        final why = 'step $n ${l.uids} ${l.groups} $empties';
+        expect(contiguous(l), isTrue, reason: why);
+        expect(l.uids.toSet().length, 10, reason: why);
+        expect(
+          [
+            ...l.groups.values,
+            ...empties,
+          ].every((g) => groupDepth(g) <= maxGroupDepth),
+          isTrue,
+          reason: why,
+        );
+        expect(
+          empties.every((e) => !l.groups.values.any((g) => isUnder(g, e))),
+          isTrue,
+          reason: why,
         );
       }
     });

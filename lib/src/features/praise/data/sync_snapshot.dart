@@ -211,6 +211,47 @@ class SyncChord {
   }
 }
 
+/// 곡 하나의 송폼(페이지별 구성 라벨 JSON). 코드([SyncChord])와 같은 규칙으로 곡과 따로 자기 시각으로 맞춘다.
+/// [form] null + [updatedAt] > 0 = 송폼을 지움.
+class SyncForm {
+  const SyncForm({
+    required this.uid,
+    required this.form,
+    required this.updatedAt,
+  });
+
+  final String uid;
+  final String? form;
+  final int updatedAt;
+
+  bool winsOver(SyncForm other) => updatedAt != other.updatedAt
+      ? updatedAt > other.updatedAt
+      : (form ?? '').compareTo(other.form ?? '') > 0;
+
+  SyncForm withUid(String newUid) =>
+      SyncForm(uid: newUid, form: form, updatedAt: updatedAt);
+
+  Map<String, Object?> toJson() => {
+    'uid': uid,
+    'song_form': form,
+    'updated_at': updatedAt,
+  };
+
+  static SyncForm? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final uid = _str(raw['uid']);
+    final at = _int(raw['updated_at']);
+    if (uid == null || uid.isEmpty || at == null || at <= 0) return null;
+    final text = raw['song_form'];
+    if (text != null && text is! String) return null;
+    return SyncForm(
+      uid: uid,
+      form: text is String && text.isNotEmpty ? text : null,
+      updatedAt: at,
+    );
+  }
+}
+
 /// PC 한 대가 공유 폴더에 쓰는 내용 전부. PC 마다 자기 파일 하나만 쓰므로
 /// 두 PC 가 같은 파일을 동시에 고쳐 생기는 충돌(드라이브의 "사본" 파일)이 없다.
 class SyncSnapshot {
@@ -226,6 +267,7 @@ class SyncSnapshot {
     this.translations = const [],
     this.translationDeleted = const {},
     this.chords = const [],
+    this.forms = const [],
   });
 
   static const format = 'worship_slides_song_sync';
@@ -259,6 +301,9 @@ class SyncSnapshot {
   /// 곡 코드(§3-8). `chord_updated_at > 0` 인 곡만. 옛 앱은 이 키를 모르고 버린다.
   final List<SyncChord> chords;
 
+  /// 곡 송폼. `song_form_updated_at > 0` 인 곡만. 옛 앱은 이 키를 모르고 버린다.
+  final List<SyncForm> forms;
+
   Map<String, Object?> toJson() => {
     'format': format,
     'version': 1,
@@ -281,6 +326,7 @@ class SyncSnapshot {
         },
     ],
     'chords': [for (final c in chords) c.toJson()],
+    'forms': [for (final f in forms) f.toJson()],
   };
 
   static SyncSnapshot? fromJson(Object? raw) {
@@ -291,6 +337,7 @@ class SyncSnapshot {
     final translations = raw['translations'];
     final translationDeleted = raw['translation_deleted'];
     final chords = raw['chords'];
+    final forms = raw['forms'];
     return SyncSnapshot(
       deviceId: _str(raw['device_id']) ?? '',
       deviceName: _str(raw['device_name']) ?? '',
@@ -323,6 +370,9 @@ class SyncSnapshot {
       },
       chords: chords is List
           ? chords.map(SyncChord.fromJson).whereType<SyncChord>().toList()
+          : const [],
+      forms: forms is List
+          ? forms.map(SyncForm.fromJson).whereType<SyncForm>().toList()
           : const [],
     );
   }

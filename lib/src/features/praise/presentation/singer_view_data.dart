@@ -12,6 +12,7 @@ class SingerPage {
     this.imagePath,
     this.chordLines,
     this.keyLabel = '',
+    this.formLabels = const [],
   });
 
   final String mainText;
@@ -30,6 +31,10 @@ class SingerPage {
   /// 조를 바꿨을 때 머리줄 배지(`A (원래 G, +2)`). 그대로면 ''.
   final String keyLabel;
 
+  /// 송폼 라벨 약어(`['V2', 'PC']`, `SectionLabel.abbr`). 없으면 빈 목록이고 JSON 키 `form` 을 뺀다.
+  /// 싱어 화면 전용 — 관객 화면·통역(B)·PPTX 로는 가지 않는다. 스위치 없이 늘 싣는다.
+  final List<String> formLabels;
+
   bool get isBlank =>
       (imagePath == null || imagePath!.isEmpty) &&
       mainText.trim().isEmpty &&
@@ -44,6 +49,7 @@ class SingerPage {
     if (chordLines != null && chordLines!.isNotEmpty)
       'chord_lines': [for (final l in chordLines!) l.toJson()],
     if (keyLabel.isNotEmpty) 'key_label': keyLabel,
+    if (formLabels.isNotEmpty) 'form': formLabels,
   };
 }
 

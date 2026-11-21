@@ -650,7 +650,7 @@ void main() {
       expect(chordLyricsForPages([pages[0], pages[2]]), '[G]주 은[D]혜\n\n[C]끝');
       expect(chordLyricsForPages([pages[1]]), isNull);
       final withBracket = [
-        (korean: '[A] 글자', english: '', extra: '', chord: ''),
+        (korean: '[A] 글자', english: '', extra: '', chord: '', form: ''),
         pages[2],
       ];
       final text = chordLyricsForPages(withBracket)!;

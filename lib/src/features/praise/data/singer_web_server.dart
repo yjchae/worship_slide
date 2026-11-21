@@ -615,6 +615,13 @@ const singerPageHtml =
     font:inherit;font-size:2vh;font-weight:700;padding:.3em .7em;}
   #chords.on{color:#FFA94D;border-color:#FFA94D;}
   #chords.dim{opacity:.45;}
+  /* 송폼 칩: 칸 좌상단, 글자 맞춤·확대·눌림에 안 끼어든다. 다음 칸은 0.75배·테두리만. */
+  .form{position:absolute;left:1vh;top:1vh;z-index:2;display:flex;gap:4px;pointer-events:none;
+    transform-origin:0 0;}
+  .form span{font-size:clamp(14px,3.2vw,22px);font-weight:700;line-height:1;padding:.15em .5em;border-radius:6px;
+    color:#EDEDF0;background:rgba(147,165,204,.2);border:1px solid #4A5268;white-space:nowrap;}
+  #next .form{transform:scale(.75);}
+  #next .form span{background:transparent;color:#9A9AA6;}
   .fit{width:100%;max-height:100%;text-align:center;line-height:1.3;font-weight:700;}
   .main,.sub{white-space:pre;}
   .wrap .main,.wrap .sub{white-space:pre-wrap;word-break:keep-all;}
@@ -710,6 +717,10 @@ function fill(box, page, empty){
   box.textContent='';
   var st=el('div','stage'); box.appendChild(st);
   if(!page){ st.appendChild(el('div','placeholder',empty)); return; }
+  if(page.form && page.form.length){
+    var fm=el('div','form'); page.form.forEach(function(t){ fm.appendChild(el('span',null,t)); });
+    box.appendChild(fm);
+  }
   if(page.image_path){ var img=el('img'); img.src=page.image_path; st.appendChild(img); return; }
   // 코드만 있는 페이지는 관객 화면엔 빈 페이지지만 여기선 코드가 보인다.
   if(CHORDS && hasChords(page)){

@@ -210,6 +210,80 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     await settle(tester);
   });
+
+  testWidgets('항목을 안 골라도 + 로 빈 하위 그룹 → 이름 입력 → 항목을 끌어 넣기', (tester) async {
+    tester.view.physicalSize = const Size(1920, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final onError = FlutterError.onError;
+    FlutterError.onError = (d) {
+      if (!d.exceptionAsString().contains('overflowed')) onError?.call(d);
+    };
+    addTearDown(() => FlutterError.onError = onError);
+    await tester.pumpWidget(const MaterialApp(home: PraiseHomePage()));
+    await settle(tester);
+    for (final t in ['첫째 곡', '둘째 곡']) {
+      await tester.tap(find.text(t));
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.tap(find.text(t));
+      await settle(tester);
+    }
+    final list = find.byType(ContiTreeList);
+    await tester.tap(find.descendant(of: list, matching: find.text('둘째 곡')));
+    await settle(tester);
+    await tester.tap(find.byIcon(Icons.create_new_folder_outlined));
+    await settle(tester);
+    await tester.enterText(find.byType(TextField).last, '특송');
+    await tester.pump();
+    await tester.tap(find.text('만들기'));
+    await settle(tester);
+
+    // 고른 항목이 있어도 + 는 대화창 없이 빈 하위를 만들고 이름 칸을 연다.
+    await tester.tap(
+      find.descendant(
+        of: find.byType(ContiGroupHeader),
+        matching: find.byIcon(Icons.add_rounded),
+      ),
+    );
+    await settle(tester);
+    final field = find.descendant(
+      of: find.byType(ContiGroupHeader),
+      matching: find.byType(TextField),
+    );
+    expect(field, findsOneWidget);
+    expect(find.text('여기에 끌어 놓기'), findsOneWidget);
+    await tester.enterText(field, '솔로');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await settle(tester);
+    expect(field, findsNothing);
+    expect(find.text('솔로'), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.text('솔로')).dx,
+      greaterThan(tester.getTopLeft(find.text('특송')).dx),
+    );
+
+    // 첫째 곡을 빈 하위에 끌어 놓으면 특송 안 솔로로 들어가고 힌트가 사라진다.
+    final handle = find
+        .descendant(of: list, matching: find.byIcon(Icons.drag_handle_rounded))
+        .first;
+    final target = tester.getCenter(
+      find.ancestor(of: find.text('솔로'), matching: find.byType(InkWell)).first,
+    );
+    final g = await tester.startGesture(
+      tester.getCenter(handle),
+      kind: PointerDeviceKind.mouse,
+    );
+    await g.moveTo(tester.getCenter(handle) + const Offset(0, 8));
+    await g.moveTo(target);
+    await tester.pump();
+    await g.up();
+    await settle(tester);
+    expect(find.text('여기에 끌어 놓기'), findsNothing);
+    expect(find.byType(ContiGroupHeader), findsNWidgets(2));
+
+    await tester.pumpWidget(const SizedBox());
+    await settle(tester);
+  });
 }
 
 class _MemoryDatabaseFactory implements SqfliteDatabaseFactoryLogger {

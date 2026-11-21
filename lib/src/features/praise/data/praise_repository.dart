@@ -1,6 +1,7 @@
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../domain/chord_lyrics.dart';
+import '../domain/song_form.dart';
 import '../domain/praise_song.dart';
 import 'praise_database.dart';
 import 'sync_snapshot.dart';
@@ -100,6 +101,8 @@ class PraiseRepository {
           'chord_lyrics',
           'chord_key',
           'chord_updated_at',
+          'song_form',
+          'song_form_updated_at',
         ],
       );
       String keyOf(Object? title, Object? lyrics, Object? english) =>
@@ -131,6 +134,8 @@ class PraiseRepository {
             'chord_lyrics',
             'chord_key',
             'chord_updated_at',
+            'song_form',
+            'song_form_updated_at',
           ]) {
             if (kept[c] != null) row[c] = kept[c];
           }
@@ -332,7 +337,7 @@ class PraiseRepository {
     return result;
   }
 
-  /// 새 곡을 넣고 그 id 를 돌려준다(코드는 이어서 [saveChords] 로).
+  /// 새 곡을 넣고 그 id 를 돌려준다(코드는 이어서 [saveChords], 송폼은 [saveSongForm] 으로).
   Future<int> insertSong(PraiseSong song) async {
     final db = await _databaseProvider.database;
     final id = await db.insert('praise_songs', _newSongRow(song, _now()));
@@ -370,6 +375,37 @@ class PraiseRepository {
           'chord_lyrics': text,
           'chord_key': key,
           'chord_updated_at': _after(row['chord_updated_at'], _now()),
+        },
+        where: 'id = ?',
+        whereArgs: [songId],
+      );
+      return true;
+    });
+    if (changed) onSongsChanged?.call();
+  }
+
+  /// 곡의 송폼(페이지별 구성 라벨)을 저장한다. **송폼을 DB 에 쓰는 길은 이것 하나다** —
+  /// [updateSong]·[insertSong] 은 송폼 칸을 모른다([saveChords] 와 같다). 라벨이 없으면 null 로 비운다.
+  /// 바뀐 게 없으면 아무것도 안 한다. 송폼 시각만 올리고 곡 `updated_at` 은 그대로다.
+  Future<void> saveSongForm(int songId, SongForm? form) async {
+    final db = await _databaseProvider.database;
+    final text = SongForm.encode(form);
+    final changed = await db.transaction((txn) async {
+      final current = await txn.query(
+        'praise_songs',
+        columns: ['song_form', 'song_form_updated_at'],
+        where: 'id = ?',
+        whereArgs: [songId],
+        limit: 1,
+      );
+      if (current.isEmpty) return false;
+      final row = current.first;
+      if (row['song_form'] == text) return false;
+      await txn.update(
+        'praise_songs',
+        {
+          'song_form': text,
+          'song_form_updated_at': _after(row['song_form_updated_at'], _now()),
         },
         where: 'id = ?',
         whereArgs: [songId],

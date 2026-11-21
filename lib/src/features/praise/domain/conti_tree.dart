@@ -110,7 +110,8 @@ class ContiHeaderRow extends ContiRow {
     required this.start,
     required this.count,
     required this.collapsed,
-  });
+    int? anchorIndex,
+  }) : anchorIndex = anchorIndex ?? start + count;
 
   /// 그룹 경로(맨 위 단계면 이름).
   final String name;
@@ -122,6 +123,10 @@ class ContiHeaderRow extends ContiRow {
   final int start;
   final int count;
   final bool collapsed;
+
+  /// 이 그룹 안으로 넣을 때의 목록 번호. 항목이 있는 그룹은 구간 끝, 빈 그룹은 부모 구간 끝
+  /// (부모도 빈 그룹이면 그 부모의 값, 빈 최상위 그룹은 목록 길이).
+  final int anchorIndex;
   bool get empty => count == 0;
   String get key => groupKey(name, startUid);
   int get depth => groupDepth(name);
@@ -138,7 +143,8 @@ class ContiItemRow extends ContiRow {
   int get depth => group == null ? 0 : groupDepth(group!);
 }
 
-/// 화면 행 목록: 그룹마다 머리 행 + (접히지 않았으면) 소속 항목 행. 빈 그룹은 맨 끝에 머리 행만.
+/// 화면 행 목록: 그룹마다 머리 행 + (접히지 않았으면) 소속 항목 행. 빈 그룹은 부모 그룹 구간 끝(들여쓰기 안)에
+/// 머리 행만 — 빈 최상위 그룹은 맨 끝. 같은 이름 구간이 여럿이면 첫 구간에 붙고, 부모가 접히면 같이 가려진다.
 List<ContiRow> contiRows(
   List<int> uids,
   Map<int, String> groups, {
@@ -146,6 +152,39 @@ List<ContiRow> contiRows(
   List<String> emptyGroups = const [],
 }) {
   final rows = <ContiRow>[];
+  final real = <String>{
+    for (final u in uids)
+      if (groups[u] != null)
+        for (var n = 1; n <= groupDepth(groups[u]!); n++)
+          pathPrefix(groups[u], n)!,
+  };
+  final pending = [...emptyGroups];
+  late void Function(String? parent, int anchor) emitEmpties;
+
+  void addEmpty(String e, int anchor, {required bool children}) {
+    pending.remove(e);
+    final isCollapsed = collapsed.contains(groupKey(e, -1));
+    rows.add(
+      ContiHeaderRow(
+        name: e,
+        startUid: -1,
+        start: uids.length,
+        count: 0,
+        collapsed: isCollapsed,
+        anchorIndex: anchor,
+      ),
+    );
+    if (children && !isCollapsed) emitEmpties(e, anchor);
+  }
+
+  emitEmpties = (String? parent, int anchor) {
+    for (final e in emptyGroups) {
+      if (groupParent(e) == parent && pending.contains(e)) {
+        addEmpty(e, anchor, children: true);
+      }
+    }
+  };
+
   void emit(int from, int to, int depth) {
     var i = from;
     while (i < to) {
@@ -176,22 +215,24 @@ List<ContiRow> contiRows(
           collapsed: isCollapsed,
         ),
       );
-      if (!isCollapsed) emit(i, j, depth + 1);
+      if (!isCollapsed) {
+        emit(i, j, depth + 1);
+        emitEmpties(prefix, j);
+      }
       i = j;
     }
   }
 
   emit(0, uids.length, 1);
-  for (final name in emptyGroups) {
-    rows.add(
-      ContiHeaderRow(
-        name: name,
-        startUid: -1,
-        start: uids.length,
-        count: 0,
-        collapsed: collapsed.contains(groupKey(name, -1)),
-      ),
-    );
+  emitEmpties(null, uids.length);
+  // 부모가 없는 빈 그룹(정리 전)은 잃지 않게 맨 끝에 낸다.
+  for (final e in emptyGroups) {
+    final par = groupParent(e);
+    if (pending.contains(e) &&
+        !real.contains(par) &&
+        !emptyGroups.contains(par)) {
+      addEmpty(e, uids.length, children: true);
+    }
   }
   return rows;
 }
@@ -202,7 +243,7 @@ typedef ContiSpot = ({int index, String? group});
 /// 항목·찬양·성경 절을 [rows] 의 [rowIndex] 행 위/아래 절반([after])에 놓았을 때의 자리.
 /// - 항목 행: 그 항목 앞/뒤, 그 항목의 그룹(그룹 마지막 항목 아래 절반 = 그룹 끝).
 /// - 머리 행 위 절반: 머리 앞, 그 그룹의 상위(맨 위 단계면 그룹 밖 — 빠져나오는 길). 아래 절반: 그룹 맨 앞(접힌 그룹은 맨 끝).
-/// - 빈 그룹 머리 아래 절반: 목록 끝에서 그 그룹을 시작한다.
+/// - 빈 그룹 머리: 위/아래 구분 없이 안으로 — 자리는 [ContiHeaderRow.anchorIndex](빈 하위 그룹이면 부모 구간 끝).
 ContiSpot resolveDrop(
   List<ContiRow> rows,
   int rowIndex,
@@ -214,9 +255,7 @@ ContiSpot resolveDrop(
     case ContiItemRow():
       return (index: after ? row.index + 1 : row.index, group: row.group);
     case ContiHeaderRow():
-      if (row.empty) {
-        return (index: length, group: after ? row.name : null);
-      }
+      if (row.empty) return (index: row.anchorIndex, group: row.name);
       if (!after) return (index: row.start, group: groupParent(row.name));
       return (
         index: row.collapsed ? row.start + row.count : row.start,
@@ -225,56 +264,132 @@ ContiSpot resolveDrop(
   }
 }
 
-/// 그룹 블록 [run] 을 [rows] 의 [rowIndex] 행 위/아래에 놓을 때의 자리: index = 목록 번호, group = 옮긴 뒤
-/// 그 그룹의 상위 경로(null = 맨 위 단계). 그룹은 원래 단계(상위 깊이)를 지켜 그 행의 같은 단계 블록 앞/뒤에 놓인다 —
-/// 맨 위 그룹은 늘 맨 위 블록 앞/뒤(예전과 같다), 하위 그룹은 놓은 행이 든 그룹의 같은 단계 형제 앞/뒤.
-/// 자기 안이거나 제자리(같은 상위, 자기 블록 경계)면 null.
-ContiSpot? resolveGroupDrop(
+/// 그룹 머리줄 안의 놓는 구역: 앞 형제 / 안으로 / 뒤 형제.
+enum ContiDropZone { before, into, after }
+
+/// 그룹 끌기를 거절하는 이유. self = 자기 자신·자기 하위, tooDeep = 3단 초과, noChange = 제자리(알리지 않는다).
+enum ContiDropReject { self, tooDeep, noChange }
+
+/// [resolveGroupDrop] 의 답. [reject] 가 null 이면 [spot] 이 있다.
+class ContiGroupDrop {
+  const ContiGroupDrop.ok(ContiSpot this.spot) : reject = null;
+  const ContiGroupDrop.no(ContiDropReject this.reject) : spot = null;
+  final ContiSpot? spot;
+  final ContiDropReject? reject;
+}
+
+/// 그룹 머리줄 안에서 포인터가 [dy]/[height] 에 있을 때의 구역(그룹 끌기용). 빈 그룹은 늘 안으로,
+/// 펼친 그룹은 위 1/3 = 앞·나머지 = 안으로, 접힌 그룹은 위/가운데/아래 1/3 = 앞/안/뒤.
+ContiDropZone groupDropZone(
+  double dy,
+  double height, {
+  required bool collapsed,
+  bool empty = false,
+}) {
+  if (empty || height <= 0) return ContiDropZone.into;
+  final r = dy / height;
+  if (r < 1 / 3) return ContiDropZone.before;
+  if (collapsed && r >= 2 / 3) return ContiDropZone.after;
+  return ContiDropZone.into;
+}
+
+int _heightOf(String path, Iterable<String> paths) {
+  var h = 1;
+  for (final g in paths) {
+    if (isUnder(g, path)) {
+      final d = groupDepth(g) - groupDepth(path) + 1;
+      if (d > h) h = d;
+    }
+  }
+  return h;
+}
+
+/// 그룹 [run] 의 높이: 자기 1 + 가장 깊은 하위 단계 수(하위가 없으면 1). [uids] 를 주면 그 구간 항목만 센다.
+/// [emptyGroups] 의 빈 하위도 센다.
+int groupHeight(
+  ContiGroupRun run,
+  Map<int, String> groups, {
+  List<int>? uids,
+  Iterable<String> emptyGroups = const [],
+}) => _heightOf(run.name, [
+  for (final u in uids == null ? groups.keys : uids.sublist(run.start, run.end))
+    if (groups[u] != null) groups[u]!,
+  ...emptyGroups,
+]);
+
+/// 빈 그룹 [path] 의 높이(그 아래 빈 하위 포함).
+int emptyGroupHeight(String path, Iterable<String> emptyGroups) =>
+    _heightOf(path, emptyGroups);
+
+/// 그룹을 [rows] 의 [rowIndex] 행 [zone] 에 놓을 때의 자리(트리 표준: 놓은 행 기준). 끄는 그룹은 항목이 있으면
+/// [run], 빈 그룹이면 [run] = null + [emptyPath]. 답의 spot.index = 목록 번호, spot.group = 옮긴 뒤 그 그룹의
+/// 상위 경로(null = 맨 위 단계).
+/// - 펼친 머리줄: 위 1/3 앞 형제 · 나머지 안으로(대상 구간 맨 앞). 접힌 머리줄: 앞 형제 / 안으로(맨 끝) / 뒤 형제.
+/// - 빈 그룹 머리줄: 늘 안으로(자리 = anchorIndex).
+/// - 그룹 안 항목 행: 그 그룹 안으로(행 앞/뒤). 그룹 밖 항목 행: 그룹 밖 앞/뒤 ([zone] 이 into 면 뒤).
+/// 거절: 자기 자신·자기 하위(self), 제자리(noChange), 3단 초과(tooDeep, 형제로 몰래 바꾸지 않는다).
+ContiGroupDrop resolveGroupDrop(
   List<ContiRow> rows,
   int rowIndex,
-  bool after,
-  ContiGroupRun run,
+  ContiDropZone zone,
+  ContiGroupRun? run,
   List<int> uids,
-  Map<int, String> groups,
-) {
+  Map<int, String> groups, {
+  String? emptyPath,
+  List<String> emptyGroups = const [],
+}) {
+  final path = run?.name ?? emptyPath!;
+  final parent = groupParent(path);
   final row = rows[rowIndex];
-  final level = run.depth - 1; // 옮길 그룹의 상위 깊이
-  final all = allGroupRuns(uids, groups);
-  int? blockAt(String path, int index) {
-    final b = all
-        .where((r) => r.name == path && index >= r.start && index < r.end)
-        .firstOrNull;
-    return b == null ? null : (after ? b.end : b.start);
-  }
-
-  String? dest;
-  int? at;
+  final String? dest;
+  final int at;
+  bool self;
   switch (row) {
     case ContiItemRow():
-      final g = row.group;
-      final len = g == null ? 0 : groupDepth(g);
-      if (len <= level) {
-        dest = g;
-        at = after ? row.index + 1 : row.index;
-      } else {
-        dest = pathPrefix(g, level);
-        at = blockAt(pathPrefix(g, level + 1)!, row.index);
-      }
+      dest = row.group;
+      at = zone == ContiDropZone.before ? row.index : row.index + 1;
+      self = run != null && row.index >= run.start && row.index < run.end;
     case ContiHeaderRow():
       if (row.empty) {
-        dest = null;
-        at = uids.length;
+        dest = row.name;
+        at = row.anchorIndex;
+        self =
+            isUnder(row.name, path) &&
+            (run == null ||
+                (row.anchorIndex > run.start && row.anchorIndex <= run.end));
       } else {
-        final n = (row.depth - 1).clamp(0, level);
-        dest = pathPrefix(row.name, n);
-        at = blockAt(pathPrefix(row.name, n + 1)!, row.start);
+        final end = row.start + row.count;
+        switch (zone) {
+          case ContiDropZone.before:
+            dest = groupParent(row.name);
+            at = row.start;
+          case ContiDropZone.after:
+            dest = groupParent(row.name);
+            at = end;
+          case ContiDropZone.into:
+            dest = row.name;
+            at = row.collapsed ? end : row.start;
+        }
+        self =
+            run != null &&
+            row.start >= run.start &&
+            row.start < run.end &&
+            row.depth >= run.depth;
       }
   }
-  if (at == null) return null;
-  if (dest != null && isUnder(dest, run.name)) return null;
-  if (at > run.start && at < run.end) return null;
-  if ((at == run.start || at == run.end) && dest == run.parent) return null;
-  return (index: at, group: dest);
+  if (run == null && dest != null && isUnder(dest, path)) self = true;
+  if (run != null && at > run.start && at < run.end) self = true;
+  if (self) return const ContiGroupDrop.no(ContiDropReject.self);
+  if (dest == parent && (run == null || at == run.start || at == run.end)) {
+    return const ContiGroupDrop.no(ContiDropReject.noChange);
+  }
+  final height = run == null
+      ? emptyGroupHeight(path, emptyGroups)
+      : groupHeight(run, groups, uids: uids, emptyGroups: emptyGroups);
+  if ((dest == null ? 0 : groupDepth(dest)) + height > maxGroupDepth) {
+    return const ContiGroupDrop.no(ContiDropReject.tooDeep);
+  }
+  return ContiGroupDrop.ok((index: at, group: dest));
 }
 
 /// 콘티 배치 한 벌(목록·그룹·'여백 없음' 표시). 이동 함수가 새 것을 돌려준다.
@@ -368,30 +483,72 @@ ContiLayout moveItemsTo(
 
 /// 그룹 블록 [run](하위 그룹까지 통째로)을 [insertIndex] 앞으로 옮긴다(순서 유지, 다른 그룹과 안 섞임).
 /// [setParent] 면 옮긴 뒤 상위를 [parent] 로 바꾼다(하위 구조는 그대로 따라간다). 새 상위 아래에 같은 이름이
-/// 있으면 이름 뒤에 (2) 를 단다.
-ContiLayout moveGroupTo(
+/// 있으면(빈 그룹 [emptyGroups] 포함) 이름 뒤에 (2) 를 단다. 3단을 넘으면 아무것도 안 바꾼다.
+/// 답의 path = 옮긴 뒤 그 그룹의 경로, renamed = 이름이 겹쳐 바뀌었는지.
+({ContiLayout layout, String path, bool renamed}) moveGroupToNamed(
   ContiLayout layout,
   ContiGroupRun run,
   int insertIndex, {
   bool setParent = false,
   String? parent,
+  List<String> emptyGroups = const [],
 }) {
+  final reparent = setParent && parent != run.parent;
+  final height = groupHeight(
+    run,
+    layout.groups,
+    uids: layout.uids,
+    emptyGroups: emptyGroups,
+  );
+  if (reparent &&
+      (parent == null ? 0 : groupDepth(parent)) + height > maxGroupDepth) {
+    return (layout: layout.copy(), path: run.name, renamed: false);
+  }
   final moved = layout.uids.sublist(run.start, run.end);
   final out = moveBlock(layout, moved, insertIndex);
-  if (!setParent || parent == run.parent) return out;
+  if (!reparent) return (layout: out, path: run.name, renamed: false);
   final rest = {
     for (final u in moved) u: out.groups[u]!.substring(run.name.length),
   };
   final others = Map.of(out.groups)..removeWhere((u, _) => rest.containsKey(u));
   final leaf = uniqueGroupName(
     run.label,
-    siblingGroupNames(others, const [], parent),
+    siblingGroupNames(others, [
+      for (final e in emptyGroups)
+        if (!isUnder(e, run.name)) e,
+    ], parent),
   );
   final prefix = parent == null ? leaf : '$parent/$leaf';
   for (final e in rest.entries) {
     out.groups[e.key] = '$prefix${e.value}';
   }
-  return out;
+  return (layout: out, path: prefix, renamed: leaf != run.label);
+}
+
+ContiLayout moveGroupTo(
+  ContiLayout layout,
+  ContiGroupRun run,
+  int insertIndex, {
+  bool setParent = false,
+  String? parent,
+  List<String> emptyGroups = const [],
+}) => moveGroupToNamed(
+  layout,
+  run,
+  insertIndex,
+  setParent: setParent,
+  parent: parent,
+  emptyGroups: emptyGroups,
+).layout;
+
+/// 옮긴 뒤 [path] 그룹 구간 중 항목 [uid] 가 든 것(접힘 키·펼치기·강조에 쓴다). 없으면 null.
+ContiGroupRun? runAtItem(ContiLayout layout, String path, int uid) {
+  final i = layout.uids.indexOf(uid);
+  return groupRuns(
+    layout.uids,
+    layout.groups,
+    depth: groupDepth(path),
+  ).where((r) => r.name == path && i >= r.start && i < r.end).firstOrNull;
 }
 
 /// 위([delta] < 0)·아래로 한 칸: 같은 상위 안에서 앞·뒤의 같은 단계 그룹 블록 또는 상위 직속 항목 하나를 건너뛴다.
@@ -443,6 +600,7 @@ ContiLayout createSubGroupWithItems(
   Iterable<int> uids,
   String leaf,
 ) {
+  if (parent.depth >= maxGroupDepth) return layout.copy();
   var at = parent.end;
   for (var k = parent.start; k < parent.end; k++) {
     if (uids.contains(layout.uids[k])) {
@@ -504,7 +662,8 @@ String uniqueGroupName(String name, Iterable<String> used, {int max = 12}) {
 
 /// 비동기(읽는 사이 콘티가 바뀔 수 있음) 뒤에 놓을 자리가 아직 [group] 에 닿아 있는지.
 /// 닿아 있지 않으면 그룹 밖으로 둔다(이어진 구간이 갈라지지 않게). 하위 그룹이면 닿는 데까지만 쓴다
-/// (모든 앞부분 경로가 이어져야 하므로). [emptyGroups] 의 이름은 끝에서 시작할 수 있다.
+/// (모든 앞부분 경로가 이어져야 하므로). [emptyGroups] 의 빈 그룹은 자리가 그 부모에 닿아 있을 때
+/// (빈 최상위 그룹은 목록 끝일 때) 그대로 쓴다.
 String? validGroupAt(
   List<int> uids,
   Map<int, String> groups,
@@ -517,15 +676,87 @@ String? validGroupAt(
       ? groups[uids[index - 1]]
       : null;
   final next = index < uids.length ? groups[uids[index]] : null;
+  bool touched(String p) =>
+      (prev != null && isUnder(prev, p)) || (next != null && isUnder(next, p));
+  bool emptyOk(String p) {
+    final par = groupParent(p);
+    if (par == null) return index == uids.length;
+    return touched(par) || (emptyGroups.contains(par) && emptyOk(par));
+  }
+
   for (var n = groupDepth(group); n >= 1; n--) {
     final p = pathPrefix(group, n)!;
-    if ((prev != null && isUnder(prev, p)) ||
-        (next != null && isUnder(next, p))) {
-      return p;
+    if (touched(p) || (emptyGroups.contains(p) && emptyOk(p))) return p;
+  }
+  return null;
+}
+
+/// 빈 그룹 정리: 항목이 아래에 생긴 빈 그룹은 빼고, 부모가 (항목 그룹으로도 빈 그룹으로도) 없으면 부모를 채운다.
+/// 순서는 [empties] 를 따르고 부모가 자식 앞에 온다. 4단 이상은 버린다.
+List<String> normalizeEmptyGroups(
+  Map<int, String> groups,
+  Iterable<String> empties,
+) {
+  final real = {
+    for (final g in groups.values)
+      for (var n = 1; n <= groupDepth(g); n++) pathPrefix(g, n)!,
+  };
+  final out = <String>[];
+  for (final e in empties) {
+    if (real.contains(e) || groupDepth(e) > maxGroupDepth) continue;
+    for (var n = 1; n <= groupDepth(e); n++) {
+      final p = pathPrefix(e, n)!;
+      if (!real.contains(p) && !out.contains(p)) out.add(p);
     }
   }
-  if (index == uids.length && emptyGroups.contains(group)) return group;
-  return null;
+  return out;
+}
+
+/// 빈 그룹 경로의 앞부분 [from] 을 [to] 로 바꾼다(이름 바꾸기·옮기기 공용, 겹친 경로는 하나로).
+List<String> moveEmpties(Iterable<String> empties, String from, String to) => {
+  for (final e in empties)
+    isUnder(e, from) ? '$to${e.substring(from.length)}' : e,
+}.toList();
+
+List<String> renameEmpties(Iterable<String> empties, String path, String leaf) {
+  final parent = groupParent(path);
+  return moveEmpties(empties, path, parent == null ? leaf : '$parent/$leaf');
+}
+
+/// 그룹 [path] 를 풀 때: 그 아래 빈 하위는 한 단계 올라오고 [path] 자신(빈 그룹이면)은 사라진다.
+List<String> ungroupEmpties(Iterable<String> empties, String path) {
+  final parent = groupParent(path);
+  return {
+    for (final e in empties)
+      if (e != path)
+        if (isUnder(e, path))
+          parent == null
+              ? e.substring(path.length + 1)
+              : '$parent${e.substring(path.length)}'
+        else
+          e,
+  }.toList();
+}
+
+/// 그룹 [path] 와 그 아래 빈 하위를 없앤다(그룹과 항목 삭제).
+List<String> removeEmpties(Iterable<String> empties, String path) => [
+  for (final e in empties)
+    if (!isUnder(e, path)) e,
+];
+
+/// 빈 그룹 [path] 를 상위 [parent] (null = 맨 위) 아래로 옮긴다. 이름이 겹치면 (2). 답의 path = 새 경로.
+({List<String> empties, String path}) moveEmptyGroup(
+  Map<int, String> groups,
+  List<String> empties,
+  String path,
+  String? parent,
+) {
+  final leaf = uniqueGroupName(
+    groupLeaf(path),
+    siblingGroupNames(groups, removeEmpties(empties, path), parent),
+  );
+  final np = parent == null ? leaf : '$parent/$leaf';
+  return (empties: moveEmpties(empties, path, np), path: np);
 }
 
 /// 콘티 목록 항목 클릭의 고르기 규칙(순수 함수). [visible] = 지금 보이는 항목 uid(트리 표시 순서, 접힌 그룹 안 항목 제외).

@@ -32,9 +32,9 @@ void main() {
   group('페이지', () {
     test('세 언어를 페이지별로 짝짓고 모자란 칸은 빈 문자열', () {
       expect(song.pairedPages, [
-        (korean: '1절', english: 'verse 1', extra: 'verso 1', chord: ''),
-        (korean: '2절', english: 'verse 2', extra: 'verso 2', chord: ''),
-        (korean: '3절', english: 'verse 3', extra: '', chord: ''),
+        (korean: '1절', english: 'verse 1', extra: 'verso 1', chord: '', form: ''),
+        (korean: '2절', english: 'verse 2', extra: 'verso 2', chord: '', form: ''),
+        (korean: '3절', english: 'verse 3', extra: '', chord: '', form: ''),
       ]);
       expect(song.extraPages, ['verso 1', 'verso 2', '']);
     });
@@ -54,6 +54,7 @@ void main() {
         english: '',
         extra: 'y',
         chord: '',
+        form: '',
       ));
     });
 

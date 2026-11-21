@@ -1,6 +1,7 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:worship_slides/src/features/praise/domain/conti_tree.dart';
 import 'package:worship_slides/src/features/praise/domain/praise_song.dart';
 import 'package:worship_slides/src/features/praise/domain/staging_item.dart';
 import 'package:worship_slides/src/features/praise/presentation/conti_insert_target.dart';
@@ -93,8 +94,8 @@ void main() {
                           final uid = order[i];
                           return ContiInsertTarget(
                             key: ValueKey(uid),
-                            onDrop: (data, after) => log.add(
-                              '${data.runtimeType} $uid ${after ? 'after' : 'before'}',
+                            onDrop: (data, zone) => log.add(
+                              '${data.runtimeType} $uid ${zone == ContiDropZone.after ? 'after' : 'before'}',
                             ),
                             child: SizedBox(
                               height: 60,

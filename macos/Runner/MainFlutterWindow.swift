@@ -999,6 +999,14 @@ class SingerWindowController: NSWindowController, NSWindowDelegate {
     return json.replacingOccurrences(of: "</", with: "<\\/")
   }
 
+  /// 송폼 칩(`form: ["V2","PC"]`). 현재 칸은 채움, 다음 칸은 테두리만(`.next`). 칸 좌상단에 얹고 클릭·글자 맞춤에 안 끼어든다.
+  private func formChipsHTML(_ page: [String: Any]?) -> String {
+    guard let labels = page?["form"] as? [Any] else { return "" }
+    let chips = labels.compactMap { $0 as? String }.filter { !$0.isEmpty }
+      .map { "<span>\(htmlEscape($0))</span>" }.joined()
+    return chips.isEmpty ? "" : "<div class=\"form\">\(chips)</div>"
+  }
+
   private func pageHTML(_ page: [String: Any]?, emptyLabel: String, chordSlot: String) -> String {
     guard let page = page else {
       return "<div class=\"placeholder\">\(emptyLabel)</div>"
@@ -1082,13 +1090,18 @@ class SingerWindowController: NSWindowController, NSWindowDelegate {
       .seg .ly{display:block;white-space:pre;}
       .cl.only{font-size:.55em;line-height:1.15;color:#FFA94D;}
       .next .seg .ch,.next .cl.only{color:#B07A40;}
+      .form{position:absolute;left:1.2vh;top:1.2vh;display:flex;gap:4px;pointer-events:none;}
+      .form span{font-size:max(1.8vh,12px);font-weight:700;line-height:1;padding:.35em .6em;border-radius:6px;
+        color:#EDEDF0;background:rgba(147,165,204,.2);border:1px solid #4A5268;white-space:nowrap;}
+      .next .form{transform-origin:left top;transform:scale(.75);}
+      .next .form span{background:transparent;color:#9A9AA6;}
       .placeholder{color:#59626e;font-size:3.4vh;font-weight:600;}
       img{max-width:100%;max-height:100%;object-fit:contain;display:block;}
     </style></head><body>
       <header><span class="title">\(title)</span>\(keyBadge)<span class="grow"></span>\(badge)<span class="clock" id="clock"></span><span class="page">\(pageNumber) / \(totalPages)</span></header>
-      <div class="box current">\(pageHTML(current, emptyLabel: "빈 화면", chordSlot: "current"))</div>
+      <div class="box current">\(formChipsHTML(current))\(pageHTML(current, emptyLabel: "빈 화면", chordSlot: "current"))</div>
       <div class="label">\(nextLabel)</div>
-      <div class="box next">\(pageHTML(next, emptyLabel: "마지막 페이지", chordSlot: "next"))</div>
+      <div class="box next">\(formChipsHTML(next))\(pageHTML(next, emptyLabel: "마지막 페이지", chordSlot: "next"))</div>
     <script>
     // 코드 줄 {t, c:[[오프셋, 이름]...]} — 휴대폰 싱어 화면(singer_web_server.dart chordLine)과 같은 규칙.
     // 오프셋은 t 안 UTF-16 위치라 JS 문자열 그대로 자른다. 낱말(.w)은 줄바꿈하지 않는다.

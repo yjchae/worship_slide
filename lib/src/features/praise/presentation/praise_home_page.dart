@@ -50,6 +50,7 @@ import '../domain/offering_design.dart';
 import '../domain/page_element.dart';
 import '../domain/page_format.dart';
 import '../domain/praise_song.dart';
+import '../domain/song_form.dart';
 import '../domain/slide_background.dart';
 import '../domain/slide_media.dart';
 import '../domain/staging_item.dart';
@@ -82,10 +83,20 @@ import 'thumb_select.dart';
 import 'slide_render_view.dart';
 import 'style_fields.dart';
 import 'slide_text_layout.dart';
+import 'song_form_widgets.dart';
 import 'cloud_conti_dialog.dart';
 import 'conti_text_import_dialog.dart';
 import 'sync_dialog.dart';
 import 'heard_bubble.dart';
+
+// 곡(불변)마다 한 번만 계산한다 — 콘티 목록이 다시 그려질 때마다 페이지를 짝짓지 않게.
+final _formSummaryCache = Expando<String>();
+
+String _formSummary(PraiseSong song) => song.songForm == null
+    ? ''
+    : _formSummaryCache[song] ??= formOrderText([
+        for (final p in song.pairedPages) p.labels,
+      ]);
 
 class PraiseHomePage extends StatefulWidget {
   const PraiseHomePage({super.key});
@@ -112,6 +123,7 @@ class _SlideInfo {
     this.chordText = '',
     this.chordSong,
     this.pageFormat,
+    this.formText = '',
   });
   final int stagingUid;
   final String mainText;
@@ -138,6 +150,9 @@ class _SlideInfo {
   final PraiseSong? chordSong;
   // 이 페이지 글자 서식(색·크기). 관객 화면·미리보기·썸네일만 쓴다 — 싱어·통역(B)·휴대폰은 무시.
   final PageEntry? pageFormat;
+  // 이 페이지 송폼 라벨 글(`V2,PC`). 발표 보기·싱어만 쓴다 — 관객 쪽 SlidePageData 로는 안 간다.
+  final String formText;
+  List<SectionLabel> get formLabels => labelsFromText(formText);
 
   /// 전역 [base] 위에 항목 배경과 이 페이지 서식을 입힌 스타일.
   ExportStyle styleOn(ExportStyle base, {bool formatted = true}) {
@@ -428,6 +443,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   // 콘티 폴더 트리: 아직 항목이 없는 그룹 이름(저장하면 사라진다)과 접힌 그룹 키(groupKey). 둘 다 이 실행 동안만.
   final List<String> _emptyGroups = [];
   final Set<String> _collapsedGroups = {};
+  // 이름을 그 자리에서 고치는 중인 그룹 키(없으면 null). _editingNew = 방금 만든 그룹.
+  String? _editingGroupKey;
+  bool _editingNew = false;
   // 헌금송 기본 디자인(배경·은행·계좌). 항목에 적용할 때 여기서 시작해 높낮이만 곡마다 맞춘다.
   OfferingDesign _offeringDesign = const OfferingDesign();
   // offering_design.json 이 있으면(한 번이라도 등록했으면) true. 배경·계좌 없이 등록해도 된다.
@@ -1221,6 +1239,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                       originalKey: chordKey,
                     ),
               chordSong: chordSong,
+              formText: pairs[j].form,
             ),
           );
         }
@@ -1592,6 +1611,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
             ? parseChordPage(slide.chordText)
             : null,
         keyLabel: withChords ? chordKeyLabelOf(slide.chordSong) : '',
+        // 송폼은 스위치 없이 늘 싣는다(관객 화면용 JSON 에는 칸이 없다).
+        formLabels: [for (final l in slide.formLabels) l.abbr],
       );
     }
 
@@ -2699,6 +2720,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
           extra: newExtra,
           // 원본 가사를 고쳤으면 그 페이지 코드는 짝이 안 맞으니 뺀다(다시 맞추지 않는다, §3-7).
           chord: newMain == old.korean ? old.chord : '',
+          form: old.form,
         );
       }
 
@@ -3343,7 +3365,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         if (group != null) _itemGroups[uid] = group;
         _stagingItems.insert(i++, (uid: uid, item: item));
       }
-      if (group != null) _emptyGroups.remove(group);
+      if (group != null) _setEmptyGroups(_emptyGroups);
       if (current != null) {
         final key = _slideInfoKey(current);
         final found = _allSlides.indexWhere((s) => _slideInfoKey(s) == key);
@@ -4728,6 +4750,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         englishLyrics: encodePages(pages.map((p) => p.english)),
         extraLyrics: encodePages(pages.map((p) => p.extra)),
         chordLyrics: chordLyricsForPages(pages),
+        // 송폼은 페이지를 따라간다(나누기·일부 담기). 글이 바뀌어 숨은 항목은 이어 둔다.
+        songForm: songFormForPages(pages, previous: song.songForm),
       );
 
   /// 콘티 항목 하나의 배경만 따로 지정한다(헌금송만 다른 배경 등).
@@ -5892,7 +5916,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
           : '"${choice.name}" 콘티를 저장했습니다.';
       final emptyNote = _emptyGroups.isEmpty
           ? ''
-          : ' 항목이 없는 빈 그룹(${_emptyGroups.length}개)은 저장되지 않습니다.';
+          : ' 빈 그룹·빈 하위 그룹(${_emptyGroups.length}개)은 저장되지 않아요. 항목을 넣으면 저장돼요.';
       final messenger = ScaffoldMessenger.of(context);
       // 연달아 저장해도 10초짜리 스낵바가 줄 서지 않게. 올리는 중 표시는 그대로 둔다.
       if (!_isUploadingSaved) messenger.hideCurrentSnackBar();
@@ -6015,6 +6039,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         ..addAll(itemGroups);
       _emptyGroups.clear();
       _collapsedGroups.clear();
+      _editingGroupKey = null;
       _mediaGroups.clear();
       _slideNotes
         ..clear()
@@ -6167,6 +6192,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         : _slideInfoKey(slides[_currentSlideIndex.clamp(0, slides.length - 1)]);
     final undo = _VoiceUndo.capture(this);
     setState(() {
+      _editingGroupKey = null;
       edit();
       if (nowKey != null) {
         final found = _allSlides.indexWhere((s) => _slideInfoKey(s) == nowKey);
@@ -6198,11 +6224,14 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   }
 
   /// 새 배치 [l] 을 적용한다(목록 순서·그룹·여백 표시). 달라진 게 없으면 false.
+  /// [empties] 가 있으면 빈 그룹을 그 목록으로 바꾼다(그룹째 옮길 때 빈 하위가 따라가게). [also] 는 같은 편집 안에서 더 할 일.
   bool _applyLayout(
     ContiLayout l,
     String message,
     String undoText, {
     Set<int> flash = const {},
+    List<String>? empties,
+    void Function()? also,
   }) {
     final before = _contiLayout();
     if (listEquals(before.uids, l.uids) && mapEquals(before.groups, l.groups)) {
@@ -6219,7 +6248,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       _noSpacerUids
         ..clear()
         ..addAll(l.noSpacer);
-      _emptyGroups.removeWhere(l.groups.containsValue);
+      _setEmptyGroups(empties ?? _emptyGroups);
+      also?.call();
     }, flash: flash);
     return true;
   }
@@ -6233,39 +6263,85 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     ).where((r) => r.name == path && r.startUid == startUid).firstOrNull;
   }
 
-  /// 목록 행 [rowIndex] 의 위/아래 절반([after])에 [data] 를 놓았다.
-  void _dropOnRow(Object data, int rowIndex, bool after) {
+  /// 빈 그룹 목록을 [empties] 로 바꾼다(항목이 아래에 생긴 것은 빠지고 없는 부모는 채워진다).
+  void _setEmptyGroups(Iterable<String> empties) {
+    final n = normalizeEmptyGroups(_itemGroups, empties);
+    _emptyGroups
+      ..clear()
+      ..addAll(n);
+  }
+
+  static ({int uid, String name}) _splitKey(String key) {
+    final i = key.indexOf('\u0000');
+    return (uid: int.parse(key.substring(0, i)), name: key.substring(i + 1));
+  }
+
+  /// 그룹 경로 [from] 이 [to] 로 바뀔 때 접힘 키를 따라 바꾼다([uids] = 옮긴 구간 항목, 빈 그룹 키는 늘 따라간다).
+  void _remapCollapsed(String from, String to, Set<int> uids) {
+    if (from == to) return;
+    final moved = <String>[];
+    for (final k in _collapsedGroups.toList()) {
+      final (:uid, :name) = _splitKey(k);
+      if (isUnder(name, from) && (uid == -1 || uids.contains(uid))) {
+        _collapsedGroups.remove(k);
+        moved.add(groupKey('$to${name.substring(from.length)}', uid));
+      }
+    }
+    _collapsedGroups.addAll(moved);
+  }
+
+  /// [dest] 그룹이 접혀 있으면 펼친다. 맨 앞에 넣으면 시작 uid 가 바뀌어 키가 어긋나므로 이름으로 모두 지운다.
+  void _expandGroup(String? dest) {
+    if (dest != null) {
+      _collapsedGroups.removeWhere((k) => _splitKey(k).name == dest);
+    }
+  }
+
+  /// 그룹 [data] 를 [rowIndex] 행 [zone] 에 놓을 때의 판정. 행이 사라졌거나 끌던 그룹을 못 찾으면 null.
+  ({ContiGroupRun? run, ContiGroupDrop drop, ContiLayout layout})?
+  _resolveGroupDrop(ContiGroupDrag data, int rowIndex, ContiDropZone zone) {
+    final rows = _contiRows();
+    if (rowIndex >= rows.length) return null;
+    final empty = data.uid < 0;
+    final run = empty ? null : _runAt(data.path, data.uid);
+    if (!empty && run == null) return null;
+    final layout = _contiLayout();
+    final drop = resolveGroupDrop(
+      rows,
+      rowIndex,
+      zone,
+      run,
+      layout.uids,
+      layout.groups,
+      emptyPath: empty ? data.path : null,
+      emptyGroups: _emptyGroups,
+    );
+    return (run: run, drop: drop, layout: layout);
+  }
+
+  /// 놓기 전에 표시할 거절 이유(그룹 끌기만).
+  ContiDropReject? _groupRejectOf(
+    Object data,
+    int rowIndex,
+    ContiDropZone zone,
+  ) => data is ContiGroupDrag
+      ? _resolveGroupDrop(data, rowIndex, zone)?.drop.reject
+      : null;
+
+  /// 목록 행 [rowIndex] 의 [zone] 에 [data] 를 놓았다(항목·곡·성경은 앞/뒤, 그룹은 앞/안으로/뒤).
+  void _dropOnRow(Object data, int rowIndex, ContiDropZone zone) {
     final rows = _contiRows();
     if (rowIndex >= rows.length) return;
-    final length = _stagingItems.length;
     if (data is ContiGroupDrag) {
-      final run = _runAt(data.path, data.uid);
-      if (run == null) return;
-      final layout = _contiLayout();
-      final spot = resolveGroupDrop(
-        rows,
-        rowIndex,
-        after,
-        run,
-        layout.uids,
-        layout.groups,
-      );
-      if (spot == null) return;
-      _applyLayout(
-        moveGroupTo(
-          layout,
-          run,
-          spot.index,
-          setParent: true,
-          parent: spot.group,
-        ),
-        '"${run.label}" 그룹을 옮겼습니다.',
-        '그룹 옮기기를 되돌렸습니다.',
-        flash: {for (var k = run.start; k < run.end; k++) layout.uids[k]},
-      );
+      _dropGroupOnRow(data, rowIndex, zone);
       return;
     }
-    final spot = resolveDrop(rows, rowIndex, after, length);
+    final spot = resolveDrop(
+      rows,
+      rowIndex,
+      zone != ContiDropZone.before,
+      _stagingItems.length,
+    );
     if (data is ContiRowDrag) {
       _moveItemToSpot(data, spot);
     } else {
@@ -6273,19 +6349,145 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     }
   }
 
+  void _dropGroupOnRow(ContiGroupDrag data, int rowIndex, ContiDropZone zone) {
+    final r = _resolveGroupDrop(data, rowIndex, zone);
+    if (r == null) return;
+    final spot = r.drop.spot;
+    if (spot != null) {
+      _moveGroupToSpot(data, r.run, r.layout, spot);
+      return;
+    }
+    // 제자리(noChange)는 조용히, 거절은 이유를 알린다.
+    final row = _contiRows()[rowIndex];
+    final dest = row is ContiHeaderRow
+        ? (row.empty || zone == ContiDropZone.into
+              ? row.name
+              : groupParent(row.name))
+        : (row as ContiItemRow).group;
+    final height = r.run == null
+        ? emptyGroupHeight(data.path, _emptyGroups)
+        : groupHeight(
+            r.run!,
+            r.layout.groups,
+            uids: r.layout.uids,
+            emptyGroups: _emptyGroups,
+          );
+    switch (r.drop.reject) {
+      case ContiDropReject.self:
+        _showSnack('그룹을 자기 안에는 넣을 수 없어요');
+      case ContiDropReject.tooDeep:
+        _showSnack(
+          height > 1
+              ? "3단까지만 만들 수 있어요. '${groupLeaf(data.path)}' 안에 하위 그룹이 있어 "
+                    "'${groupLeaf(dest!)}' 안에는 넣을 수 없어요"
+              : "3단까지만 만들 수 있어요. '${groupLeaf(dest!)}' 안에는 더 넣을 수 없어요",
+        );
+      default:
+        break;
+    }
+  }
+
+  /// 그룹(항목이 있으면 [run], 빈 그룹이면 null)을 [spot] 으로 옮긴다. 상위가 바뀌면 같은 이름은 (2) 로 비키고,
+  /// 빈 하위·접힘 키가 따라가며 대상 그룹은 펼친다.
+  void _moveGroupToSpot(
+    ContiGroupDrag data,
+    ContiGroupRun? run,
+    ContiLayout layout,
+    ContiSpot spot,
+  ) {
+    final leaf = groupLeaf(data.path);
+    final reparent = spot.group != groupParent(data.path);
+    final String newPath;
+    final bool renamed;
+    final List<String> empties;
+    ContiLayout? moved;
+    if (run == null) {
+      final m = moveEmptyGroup(
+        layout.groups,
+        _emptyGroups,
+        data.path,
+        spot.group,
+      );
+      newPath = m.path;
+      empties = m.empties;
+      renamed = groupLeaf(m.path) != leaf;
+    } else {
+      final m = moveGroupToNamed(
+        layout,
+        run,
+        spot.index,
+        setParent: true,
+        parent: spot.group,
+        emptyGroups: _emptyGroups,
+      );
+      moved = m.layout;
+      newPath = m.path;
+      renamed = m.renamed;
+      empties = moveEmpties(_emptyGroups, run.name, m.path);
+    }
+    final dest = spot.group == null ? null : groupLeaf(spot.group!);
+    final message = !reparent
+        ? "'$leaf' 그룹을 옮겼어요"
+        : dest == null
+        ? "'$leaf' 그룹을 맨 바깥으로 옮겼어요"
+        : renamed
+        ? "'$dest' 안에 같은 이름이 있어 '${groupLeaf(newPath)}'로 옮겼어요"
+        : "'$leaf' 그룹을 '$dest' 안으로 옮겼어요";
+    const undoText = '그룹 옮기기를 되돌렸습니다.';
+    final uids = run == null
+        ? <int>{}
+        : {for (var k = run.start; k < run.end; k++) layout.uids[k]};
+    void after() {
+      _remapCollapsed(data.path, newPath, uids);
+      _expandGroup(spot.group);
+    }
+
+    if (moved != null) {
+      _applyLayout(
+        moved,
+        message,
+        undoText,
+        flash: uids,
+        empties: empties,
+        also: after,
+      );
+    } else if (newPath != data.path) {
+      _trackedEdit(message, undoText, () {
+        _setEmptyGroups(empties);
+        after();
+      });
+    }
+  }
+
+  /// ⋯ 메뉴 '다른 그룹 안으로 이동' 목적지: 안으로 놓을 수 있는 보이는 그룹 + 맨 바깥.
+  List<ContiMoveTarget> _moveTargetsFor(ContiHeaderRow h) {
+    final rows = _contiRows();
+    final drag = ContiGroupDrag(h.name, h.startUid);
+    return [
+      if (groupParent(h.name) != null)
+        (label: '맨 바깥으로', pick: () => _dropOnListEnd(drag)),
+      for (var i = 0; i < rows.length; i++)
+        if (rows[i] case final ContiHeaderRow r)
+          if (_resolveGroupDrop(drag, i, ContiDropZone.into)?.drop.spot != null)
+            (
+              label: groupLabel(r.name),
+              pick: () => _dropOnRow(drag, i, ContiDropZone.into),
+            ),
+    ];
+  }
+
   /// 목록 아래 빈 자리에 놓았다 = 맨 끝, 그룹 밖.
   void _dropOnListEnd(Object data) {
     final spot = (index: _stagingItems.length, group: null as String?);
     if (data is ContiGroupDrag) {
-      final run = _runAt(data.path, data.uid);
-      if (run == null) return;
+      final run = data.uid < 0 ? null : _runAt(data.path, data.uid);
+      if (data.uid >= 0 && run == null) return;
       final layout = _contiLayout();
-      if (run.end == layout.uids.length && run.parent == null) return;
-      _applyLayout(
-        moveGroupTo(layout, run, layout.uids.length, setParent: true),
-        '"${run.label}" 그룹을 맨 끝으로 옮겼습니다.',
-        '그룹 옮기기를 되돌렸습니다.',
-      );
+      final atEnd = run == null
+          ? groupParent(data.path) == null
+          : run.end == layout.uids.length && run.parent == null;
+      if (atEnd) return;
+      _moveGroupToSpot(data, run, layout, spot);
     } else if (data is ContiRowDrag) {
       _moveItemToSpot(data, spot);
     } else if (data is PraiseSong) {
@@ -6319,14 +6521,14 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       siblingGroupNames(_itemGroups, _emptyGroups, parent)..remove(except);
 
   /// '그룹 만들기': 이름을 묻고, 고른 항목이 있으면 그 항목을 넣는다(체크 해제하면 빈 그룹).
-  /// [parent] 가 있으면 그 그룹 아래 하위 그룹(빈 그룹은 못 만든다 — 항목을 골라야 한다).
+  /// [parent] 가 있으면 그 그룹 아래 하위 그룹(고른 항목이 없으면 대화 없이 빈 하위 그룹을 바로 만든다).
   Future<void> _createGroup([ContiGroupRun? parent]) async {
     final picked = _selectedUids;
     final selected = _stagingItems
         .where((e) => picked.contains(e.uid))
         .toList();
     if (parent != null && selected.isEmpty) {
-      _showSnack('하위 그룹에 넣을 항목을 먼저 골라 주세요.');
+      _createEmptySub(parent.name, parent.startUid);
       return;
     }
     final r = await showGroupNameDialog(
@@ -6371,37 +6573,68 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     if (!_collapsedGroups.remove(key)) _collapsedGroups.add(key);
   });
 
-  /// 그룹 머리 ⋯ 메뉴: 이름 바꾸기. [path] 는 그룹 경로, [startUid] -1 = 빈 그룹.
-  Future<void> _renameGroup(String path, int startUid) async {
-    final leaf = groupLeaf(path);
-    final parent = groupParent(path);
-    final r = await showGroupNameDialog(
-      context,
-      title: '그룹 이름 바꾸기',
-      confirmLabel: '바꾸기',
-      initial: leaf,
-      takenNames: _groupNames(parent: parent, except: leaf),
+  /// 머리줄 `+`: [path] 그룹 안에 빈 하위 그룹을 바로 만들고(접혀 있으면 펼침) 이름 입력칸을 연다.
+  void _createEmptySub(String path, int startUid) {
+    if (groupDepth(path) >= maxGroupDepth) {
+      _showSnack('3단까지만 만들 수 있어요');
+      return;
+    }
+    final full = '$path/${uniqueGroupName('새 그룹', _groupNames(parent: path))}';
+    _trackedEdit(
+      "'${groupLeaf(path)}' 안에 하위 그룹을 만들었어요",
+      '하위 그룹 만들기를 되돌렸습니다.',
+      () {
+        _setEmptyGroups([..._emptyGroups, full]);
+        _expandGroup(path);
+        _editingGroupKey = groupKey(full, -1);
+        _editingNew = true;
+      },
     );
-    if (r == null || r.name == leaf || !mounted) return;
-    final oldKey = groupKey(path, startUid);
+  }
+
+  /// ⋯ 메뉴 '이름 바꾸기': 머리줄이 그 자리에서 입력칸이 된다. [startUid] -1 = 빈 그룹.
+  void _beginRename(String path, int startUid) => setState(() {
+    _editingGroupKey = groupKey(path, startUid);
+    _editingNew = false;
+  });
+
+  void _endGroupEdit() {
+    if (_editingGroupKey != null) setState(() => _editingGroupKey = null);
+  }
+
+  /// 인라인 입력 확정. 같은 상위 아래 같은 이름이 있으면 '이름 (2)'.
+  void _commitGroupName(String path, int startUid, String text) {
+    _endGroupEdit();
+    final typed = normalizeItemGroup(text.replaceAll('/', '／'));
+    final oldLeaf = groupLeaf(path);
+    if (typed == null || typed == oldLeaf) return;
+    final parent = groupParent(path);
+    final leaf = uniqueGroupName(
+      typed,
+      _groupNames(parent: parent, except: oldLeaf),
+    );
     final run = startUid < 0 ? null : _runAt(path, startUid);
     if (startUid >= 0 && run == null) return;
-    _trackedEdit('그룹 이름을 "${r.name}"(으)로 바꿨습니다.', '그룹 이름 바꾸기를 되돌렸습니다.', () {
-      if (run == null) {
-        final i = _emptyGroups.indexOf(path);
-        if (i >= 0) _emptyGroups[i] = r.name;
-      } else {
-        final l = renameGroup(_contiLayout(), run, r.name);
-        _itemGroups
-          ..clear()
-          ..addAll(l.groups);
-      }
-      if (_collapsedGroups.remove(oldKey)) {
-        _collapsedGroups.add(
-          groupKey(parent == null ? r.name : '$parent/${r.name}', startUid),
-        );
-      }
-    });
+    final newPath = parent == null ? leaf : '$parent/$leaf';
+    final uids = run == null
+        ? <int>{}
+        : {for (var k = run.start; k < run.end; k++) _stagingItems[k].uid};
+    _trackedEdit(
+      leaf != typed
+          ? "'$typed' 이름이 이미 있어 '$leaf'(으)로 만들었어요"
+          : "그룹 이름을 '$leaf'(으)로 바꿨어요",
+      '그룹 이름 바꾸기를 되돌렸습니다.',
+      () {
+        if (run != null) {
+          final l = renameGroup(_contiLayout(), run, leaf);
+          _itemGroups
+            ..clear()
+            ..addAll(l.groups);
+        }
+        _remapCollapsed(path, newPath, uids);
+        _setEmptyGroups(renameEmpties(_emptyGroups, path, leaf));
+      },
+    );
   }
 
   /// 그룹 풀기: 항목은 그대로(상위에) 두고 그룹만 없앤다. 빈 그룹이면 그냥 지운다.
@@ -6412,14 +6645,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       '"${groupLabel(path)}" 그룹을 풀었습니다. 항목은 그대로 있습니다.',
       '그룹 풀기를 되돌렸습니다.',
       () {
-        if (run == null) {
-          _emptyGroups.remove(path);
-        } else {
+        if (run != null) {
           final l = ungroup(_contiLayout(), run);
           _itemGroups
             ..clear()
             ..addAll(l.groups);
         }
+        _setEmptyGroups(ungroupEmpties(_emptyGroups, path));
         _collapsedGroups.remove(groupKey(path, startUid));
       },
     );
@@ -6465,6 +6697,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
           _deletedSlideKeys.removeWhere((k) => k.startsWith('$uid:'));
           _itemBackgrounds.remove(uid);
         }
+        _setEmptyGroups(removeEmpties(_emptyGroups, name));
         _collapsedGroups.remove(groupKey(name, startUid));
         if (uids.contains(_previewStagingUid)) {
           _previewStagingUid = _stagingItems.isEmpty
@@ -7022,6 +7255,19 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         chordKey: edited.chordKey,
       );
     }
+    // 송폼도 길이 따로다(saveSongForm). 실패해도 가사는 이미 저장됐으니 알리기만 한다.
+    if (edited.songForm != song?.songForm) {
+      try {
+        await _repository.saveSongForm(id, edited.songForm);
+      } catch (e, st) {
+        await AppLogger.instance.error('[song-form] 저장 실패', e, st);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('송폼을 저장하지 못했습니다. 다시 시도해 주세요.')),
+          );
+        }
+      }
+    }
     for (final entry in subLyrics.entries) {
       if (entry.key == PraiseRepository.defaultSubLanguage) continue;
       await _repository.saveTranslations(entry.key, {
@@ -7295,10 +7541,17 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               onDropSong: _addSongToStaging,
                               rows: _contiRows(),
                               onRowDrop: _dropOnRow,
+                              rejectOf: _groupRejectOf,
                               onEndDrop: _dropOnListEnd,
                               onCreateGroup: _createGroup,
                               onToggleGroup: _toggleGroup,
-                              onRenameGroup: _renameGroup,
+                              onRenameGroup: _beginRename,
+                              onAddSubGroup: _createEmptySub,
+                              moveTargetsFor: _moveTargetsFor,
+                              editingGroupKey: _editingGroupKey,
+                              editingNew: _editingNew,
+                              onCommitName: _commitGroupName,
+                              onCancelEdit: _endGroupEdit,
                               onCreateSubGroup: (path, startUid) {
                                 final run = _runAt(path, startUid);
                                 if (run != null) _createGroup(run);
@@ -8375,10 +8628,17 @@ class _StagingPanel extends StatelessWidget {
     required this.onDropSong,
     required this.rows,
     required this.onRowDrop,
+    required this.rejectOf,
     required this.onEndDrop,
     required this.onCreateGroup,
     required this.onToggleGroup,
     required this.onRenameGroup,
+    required this.onAddSubGroup,
+    required this.moveTargetsFor,
+    required this.editingGroupKey,
+    required this.editingNew,
+    required this.onCommitName,
+    required this.onCancelEdit,
     required this.onCreateSubGroup,
     required this.onUngroup,
     required this.onDeleteGroup,
@@ -8433,7 +8693,9 @@ class _StagingPanel extends StatelessWidget {
   // 폴더 트리 행(그룹 머리 + 항목). 행마다 끌어 놓을 수 있다.
   final List<ContiRow> rows;
   // 행 [rowIndex] 의 위/아래 절반에 끌어 놓은 것(찬양·성경 절·콘티 항목·그룹째)
-  final void Function(Object data, int rowIndex, bool after) onRowDrop;
+  final void Function(Object data, int rowIndex, ContiDropZone zone) onRowDrop;
+  final ContiDropReject? Function(Object data, int rowIndex, ContiDropZone zone)
+  rejectOf;
   // 목록 아래 빈 자리에 놓은 것 = 맨 끝
   final void Function(Object data) onEndDrop;
   final VoidCallback onCreateGroup;
@@ -8441,6 +8703,13 @@ class _StagingPanel extends StatelessWidget {
   // 그룹 머리 ⋯ 메뉴. startUid = 그 그룹 첫 항목 uid(빈 그룹은 -1).
   final void Function(String name, int startUid) onRenameGroup;
   final void Function(String name, int startUid) onCreateSubGroup;
+  // 머리줄 `+`: 빈 하위 그룹을 바로 만든다. 이름 인라인 편집 상태는 페이지가 들고 있다.
+  final void Function(String name, int startUid) onAddSubGroup;
+  final List<ContiMoveTarget> Function(ContiHeaderRow header) moveTargetsFor;
+  final String? editingGroupKey;
+  final bool editingNew;
+  final void Function(String name, int startUid, String text) onCommitName;
+  final VoidCallback onCancelEdit;
   final void Function(String name, int startUid) onUngroup;
   final void Function(String name, int startUid) onDeleteGroup;
   final void Function(String name, int startUid, int delta) onMoveGroup;
@@ -8712,6 +8981,10 @@ class _StagingPanel extends StatelessWidget {
                   : ContiTreeList(
                       itemCount: rows.length,
                       onEndDrop: onEndDrop,
+                      rowPath: (i) => switch (rows[i]) {
+                        ContiHeaderRow(:final name) => name,
+                        ContiItemRow(:final group) => group,
+                      },
                       itemBuilder: (context, rowIndex, dragging) {
                         final row = rows[rowIndex];
                         if (row is ContiHeaderRow) {
@@ -8729,9 +9002,19 @@ class _StagingPanel extends StatelessWidget {
                             canMoveDown:
                                 row.start + row.count < stagingItems.length,
                             dragging: dragging,
-                            onDrop: (data, after) =>
-                                onRowDrop(data, rowIndex, after),
+                            onDrop: (data, zone) =>
+                                onRowDrop(data, rowIndex, zone),
+                            rejectOf: (data, zone) =>
+                                rejectOf(data, rowIndex, zone),
                             onToggle: () => onToggleGroup(row.key),
+                            onAddSub: () =>
+                                onAddSubGroup(row.name, row.startUid),
+                            moveTargets: () => moveTargetsFor(row),
+                            editing: editingGroupKey == row.key,
+                            editIsNew: editingNew,
+                            onSubmitName: (t) =>
+                                onCommitName(row.name, row.startUid, t),
+                            onCancelEdit: onCancelEdit,
                             onRename: () =>
                                 onRenameGroup(row.name, row.startUid),
                             onCreateSub: () =>
@@ -8771,8 +9054,11 @@ class _StagingPanel extends StatelessWidget {
                             : '그림 ${elements.whereType<PageImageElement>().length}장';
                         final target = ContiInsertTarget(
                           key: ValueKey(entry.uid),
-                          onDrop: (data, after) =>
-                              onRowDrop(data, rowIndex, after),
+                          groupPath: row.group,
+                          rejectOf: (data, zone) =>
+                              rejectOf(data, rowIndex, zone),
+                          onDrop: (data, zone) =>
+                              onRowDrop(data, rowIndex, zone),
                           child: Material(
                             color: isSelected
                                 ? cs.secondaryContainer
@@ -8956,6 +9242,20 @@ class _StagingPanel extends StatelessWidget {
                                               overflow: TextOverflow.ellipsis,
                                               style: TextStyle(
                                                 fontSize: 11,
+                                                color: cs.onSurfaceVariant,
+                                              ),
+                                            ),
+                                          // 송폼 요약 `Intro·V1·C ×2` — 보일 라벨이 없으면 줄도 없다.
+                                          if (item is SongStagingItem &&
+                                              _formSummary(
+                                                item.song,
+                                              ).isNotEmpty)
+                                            Text(
+                                              _formSummary(item.song),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: TextStyle(
+                                                fontSize: 12,
                                                 color: cs.onSurfaceVariant,
                                               ),
                                             ),
@@ -12302,7 +12602,8 @@ class _SheetLyricsDialogState extends State<_SheetLyricsDialog> {
     // 콘티 쪽에서 따로 고친 코드·원래 조도 덮지 않는다(§3-9).
     if (item.song.lyrics == before.lyrics &&
         item.song.chordLyrics == before.chordLyrics &&
-        item.song.chordKey == before.chordKey) {
+        item.song.chordKey == before.chordKey &&
+        item.song.songForm == before.songForm) {
       targets.add(entry.uid);
     } else {
       skipped++;
@@ -12333,7 +12634,8 @@ bool songEditChanged({
       before.lyrics != edited.lyrics ||
       before.englishLyrics != edited.englishLyrics ||
       before.chordLyrics != edited.chordLyrics ||
-      before.chordKey != edited.chordKey) {
+      before.chordKey != edited.chordKey ||
+      before.songForm != edited.songForm) {
     return true;
   }
   for (final entry in newSubLyrics.entries) {
@@ -12577,6 +12879,7 @@ class _SlideThumbnail extends StatefulWidget {
     required this.index,
     this.isEditable = true,
     this.chordBadge = false,
+    this.formLabels = const [],
     required this.onTap,
     this.onDoubleTap,
     required this.onEdit,
@@ -12587,6 +12890,9 @@ class _SlideThumbnail extends StatefulWidget {
 
   /// 코드 있는 곡 항목의 첫 페이지 — 작은 ♪ 배지. 코드 자체는 썸네일에 안 그린다.
   final bool chordBadge;
+
+  /// 송폼 라벨 — 좌하단 작은 배지(코드 ♪ 배지가 있으면 그 오른쪽). 관객 화면엔 안 나간다.
+  final List<SectionLabel> formLabels;
 
   /// 통역 화면 판. 있으면 그 기준 넘침도 표시한다.
   final SlidePageData? bData;
@@ -12694,6 +13000,14 @@ class _SlideThumbnailState extends State<_SlideThumbnail> {
                               ),
                             ),
                           ),
+                        ),
+                      ),
+                    if (widget.formLabels.isNotEmpty)
+                      Positioned(
+                        bottom: 4,
+                        left: widget.chordBadge ? 26 : 4,
+                        child: IgnorePointer(
+                          child: FormThumbBadge(labels: widget.formLabels),
                         ),
                       ),
                     if (overflow != null) ...[
@@ -15656,13 +15970,34 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
       children: [
         Row(
           children: [
-            _sectionLabel(cs, '현재 슬라이드'),
-            if (widget.bPageMissing)
-              const _OverflowChip(
-                '외국어 쪽 없음',
-                tooltip: '통역 화면에 원본 쪽이 나가고 있습니다.',
+            // 좁으면 왼쪽 묶음이 줄을 바꾼다(오른쪽 코드 버튼은 그대로).
+            Expanded(
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  _sectionLabel(cs, '현재 슬라이드'),
+                  // 송폼: 현재 라벨(채움 배지)과 다음 라벨. 라벨이 없으면 자리도 안 차지한다.
+                  if (current != null && current.formLabels.isNotEmpty)
+                    FormBadge(labels: current.formLabels),
+                  if (_slideAt(widget.currentIndex + 1)?.formLabels
+                      case final next? when next.isNotEmpty)
+                    Text(
+                      '다음 ${next.map((l) => l.abbr).join(' · ')}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: cs.onSurfaceVariant,
+                      ),
+                    ),
+                  if (widget.bPageMissing)
+                    const _OverflowChip(
+                      '외국어 쪽 없음',
+                      tooltip: '통역 화면에 원본 쪽이 나가고 있습니다.',
+                    ),
+                ],
               ),
-            const Spacer(),
+            ),
             if (_showingChordSheet && keyText.isNotEmpty) ...[
               ChordKeyBadge(keyText),
               const SizedBox(width: 8),
@@ -16130,6 +16465,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
             index: i,
             isEditable: !widget.slides[i].isAutoSpacer,
             chordBadge: _isFirstChordPage(i),
+            formLabels: widget.slides[i].formLabels,
             // 한 번 = 고르기, 두 번 = 그 페이지로 이동. 보기 전환은 버튼으로만.
             onTap: () => _onThumbTap(i),
             onDoubleTap: () => _onThumbDoubleTap(i),
@@ -16421,6 +16757,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
                           index: i,
                           isEditable: !widget.slides[i].isAutoSpacer,
                           chordBadge: _isFirstChordPage(i),
+                          formLabels: widget.slides[i].formLabels,
                           onTap: () => _onThumbTap(i),
                           onDoubleTap: () => _onThumbDoubleTap(i),
                           onEdit: () => widget.onSlideEdit(i),

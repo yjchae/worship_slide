@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -7,12 +9,14 @@ import '../data/praise_repository.dart';
 import '../domain/chord_lyrics.dart';
 import '../domain/export_style.dart';
 import '../domain/praise_song.dart';
+import '../domain/song_form.dart';
 import 'chord_edit_widgets.dart';
 import 'chord_sheet_view.dart';
 import 'lyrics_page_grid.dart';
 import 'slide_page_data.dart';
 import 'slide_render_view.dart';
 import 'slide_text_layout.dart';
+import 'song_form_widgets.dart';
 
 /// 곡 편집 결과: 곡 본체 + 언어별 보조 가사 ('영어' 는 song.englishLyrics).
 typedef SongEditResult = (PraiseSong song, Map<String, String> subLyrics);
@@ -100,6 +104,21 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
     (_) => ChordTextController()..highlight = false,
   );
 
+  // ── 송폼 ──
+  /// 행마다 송폼 라벨 글(표를 다시 만들 때 [LyricsPageGrid.fromTexts] 로 되살린다).
+  /// ponytail: '통째로' 보기에서 페이지 수를 바꾸면 라벨이 번호대로만 남는다(표로 돌아오면 확인).
+  late List<String> _forms;
+
+  /// 열 때 저장돼 있던 송폼 — 글이 바뀌어 숨은 라벨 확인용.
+  SongForm? _previousForm;
+  int? _lastRow;
+  final List<List<String>> _formUndo = [];
+  ({SectionLabel label, List<int> rows})? _formSuggest;
+  Timer? _suggestTimer;
+  String? _formHint;
+  Timer? _hintTimer;
+  final ScrollController _scroll = ScrollController();
+
   /// 붙여 넣기로 나눈 직후 되돌리기용.
   ({LyricsPageGrid before, String message})? _undo;
 
@@ -133,6 +152,10 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
     _original = song?.lyrics ?? '';
     _chordText = song?.chordLyrics;
     _chordKey = song?.chordKey;
+    _previousForm = song?.songForm;
+    _forms = [
+      for (final p in song?.pairedPages ?? const <LyricsPage>[]) p.form,
+    ];
     if (widget.contiOnly) {
       _texts = {
         widget.subLanguage: song?.englishLyrics ?? '',
@@ -168,6 +191,9 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
   void dispose() {
     _titleController.dispose();
     _tableFocus.dispose();
+    _suggestTimer?.cancel();
+    _hintTimer?.cancel();
+    _scroll.dispose();
     _disposeCells();
     for (final c in _whole) {
       c.dispose();
@@ -200,13 +226,14 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
   void _commit() {
     if (_view == _EditorView.table) {
       _storeColumnTexts(_grid.toTexts());
+      _forms = _grid.toForms();
     } else {
       _storeColumnTexts([for (final c in _whole) c.text]);
     }
   }
 
   void _loadGrid() {
-    _grid = LyricsPageGrid.fromTexts(_columnTexts);
+    _grid = LyricsPageGrid.fromTexts(_columnTexts, forms: _forms);
     _rebuildCells();
   }
 
@@ -267,6 +294,9 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
     _selectedRow = _selectedRow.clamp(0, _grid.length - 1);
     _pickedRows.clear(); // 행 번호가 바뀌었으니 고른 것도 푼다
     _pickAnchor = null;
+    _formUndo.clear();
+    _formSuggest = null;
+    _lastRow = null;
     if (focus == null) return;
     final row = focus.row.clamp(0, _grid.length - 1);
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -286,6 +316,7 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
       if (hasFocus) {
         _focused = (row: row, column: column);
         _selectedRow = row;
+        _lastRow = row;
       } else if (_focused == (row: row, column: column)) {
         _focused = null;
       }
@@ -409,7 +440,7 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
     final rows = _pickedRows.contains(row)
         ? (_pickedRows.toList()..sort())
         : [row];
-    _pageClipboard = [for (final r in rows) _grid.row(r)];
+    _pageClipboard = [for (final r in rows) _grid.rowWithForm(r)];
     setState(() {});
   }
 
@@ -739,16 +770,364 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
     });
   }
 
+  // ── 송폼 ───────────────────────────────────────────────────────────────
+
+  String _originalOf(int row) {
+    final t = _grid.cell(row, 0);
+    return _chordMode ? stripChords(t) : t;
+  }
+
+  List<String> get _originals => [
+    for (var r = 0; r < _grid.length; r++) _originalOf(r),
+  ];
+
+  List<List<SectionLabel>> get _allLabels => [
+    for (var r = 0; r < _grid.length; r++) _grid.labels(r),
+  ];
+
+  /// 칩이 일할 행: 고른 행들, 없으면 마지막으로 커서가 있던 행.
+  List<int> get _formTargets {
+    if (_pickedRows.isNotEmpty) return _pickedRows.toList()..sort();
+    final r = _lastRow;
+    return r != null && r < _grid.length ? [r] : const [];
+  }
+
+  /// 아래 칩 바의 직접 입력 칩 — 이 곡에서 쓴 직접 입력 라벨(최대 4개).
+  List<SectionLabel> get _customLabels {
+    final seen = <SectionLabel>{};
+    for (final labels in _allLabels) {
+      for (final l in labels) {
+        if (l.isCustom) seen.add(l);
+      }
+    }
+    return seen.take(SongFormBar.maxCustomChips).toList();
+  }
+
+  /// 글이 바뀌어 숨은 라벨(행 번호 → 라벨). 그 행에 지금 붙은 라벨이 없을 때만.
+  Map<int, List<SectionLabel>> get _hiddenForms {
+    if (_previousForm == null) return const {};
+    final hidden = matchedForm(_previousForm, _originals).hidden;
+    return {
+      for (final e in hidden.entries)
+        if (e.key < _grid.length && _grid.labels(e.key).isEmpty) e.key: e.value,
+    };
+  }
+
+  void _pushFormUndo() {
+    _formUndo.add(_grid.toForms());
+    if (_formUndo.length > 50) _formUndo.removeAt(0);
+  }
+
+  void _undoForm() {
+    if (_formUndo.isEmpty) return;
+    setState(() {
+      _grid.restoreForms(_formUndo.removeLast());
+      _forms = _grid.toForms();
+      _formSuggest = null;
+    });
+  }
+
+  KeyEventResult _handleFormUndoKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent ||
+        event.logicalKey != LogicalKeyboardKey.keyZ ||
+        _formUndo.isEmpty) {
+      return KeyEventResult.ignored;
+    }
+    final k = HardwareKeyboard.instance;
+    if (k.isShiftPressed || !(k.isMetaPressed || k.isControlPressed)) {
+      return KeyEventResult.ignored;
+    }
+    // 글 입력칸 안의 ⌘Z 는 글자 되돌리기다.
+    final inText =
+        FocusManager.instance.primaryFocus?.context
+            ?.findAncestorWidgetOfExactType<EditableText>() !=
+        null;
+    if (inText) return KeyEventResult.ignored;
+    _undoForm();
+    return KeyEventResult.handled;
+  }
+
+  void _showFormHint(String text) {
+    _hintTimer?.cancel();
+    setState(() => _formHint = text);
+    _hintTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _formHint = null);
+    });
+  }
+
+  /// [rows] 의 라벨을 [next] 로 바꾼다. [added] 가 있으면 같은 가사 다른 행에 넣자고 제안한다.
+  void _applyLabels(
+    List<int> rows,
+    List<List<SectionLabel>> next, {
+    SectionLabel? added,
+  }) {
+    _pushFormUndo();
+    setState(() {
+      for (var i = 0; i < rows.length; i++) {
+        _grid.setLabels(rows[i], next[i]);
+      }
+      _forms = _grid.toForms();
+      _formSuggest = null;
+      _suggestTimer?.cancel();
+      if (added != null) {
+        final same = sameTextRowsWithout(_originals, _allLabels, rows, added);
+        if (same.isNotEmpty) {
+          _formSuggest = (label: added, rows: same);
+          _suggestTimer = Timer(const Duration(seconds: 5), () {
+            if (mounted) setState(() => _formSuggest = null);
+          });
+        }
+      }
+    });
+  }
+
+  void _onFormKind(SectionKind kind) {
+    final rows = _formTargets;
+    if (rows.isEmpty) return _showFormHint('먼저 행을 골라 주세요');
+    final r = toggleKind(
+      [for (final i in rows) _grid.labels(i)],
+      kind,
+      _allLabels,
+    );
+    _applyLabels(rows, r.rows, added: r.added);
+  }
+
+  void _onFormCustom(SectionLabel label) {
+    final rows = _formTargets;
+    if (rows.isEmpty) return _showFormHint('먼저 행을 골라 주세요');
+    final r = toggleLabel([for (final i in rows) _grid.labels(i)], label);
+    _applyLabels(rows, r.rows, added: r.added);
+  }
+
+  void _clearFormLabels() {
+    final rows = _formTargets;
+    if (rows.isEmpty) return;
+    _applyLabels(rows, [for (final _ in rows) const <SectionLabel>[]]);
+  }
+
+  void _acceptFormSuggest() {
+    final s = _formSuggest;
+    if (s == null) return;
+    _applyLabels(s.rows, [
+      for (final r in s.rows) mergeLabels(_grid.labels(r), [s.label]),
+    ]);
+  }
+
+  Future<void> _openLabelMenu(int row, int index) {
+    final labels = _grid.labels(row);
+    if (labels.isEmpty) return Future.value();
+    final at = index.clamp(0, labels.length - 1);
+    return showFormLabelMenu(
+      context,
+      label: labels[at],
+      index: at,
+      count: labels.length,
+      actions: FormLabelMenuActions(
+        setNumber: (current, number) {
+          final now = _grid.labels(row);
+          final i = now.indexOf(current);
+          final changed = current.withNum(number);
+          if (i < 0 || changed == current || now.contains(changed)) {
+            return current;
+          }
+          _pushFormUndo();
+          setState(() {
+            _grid.setLabels(row, [...now]..[i] = changed);
+            _forms = _grid.toForms();
+          });
+          return changed;
+        },
+        move: (current, delta) {
+          final now = _grid.labels(row);
+          final i = now.indexOf(current);
+          final j = i + delta;
+          if (i < 0 || j < 0 || j >= now.length) return i;
+          _pushFormUndo();
+          setState(() {
+            _grid.setLabels(
+              row,
+              [...now]
+                ..[i] = now[j]
+                ..[j] = now[i],
+            );
+            _forms = _grid.toForms();
+          });
+          return j;
+        },
+        remove: (current) {
+          final now = _grid.labels(row);
+          _pushFormUndo();
+          setState(() {
+            _grid.setLabels(row, [
+              for (final l in now)
+                if (l != current) l,
+            ]);
+            _forms = _grid.toForms();
+          });
+        },
+      ),
+    );
+  }
+
+  Future<void> _openHidden(int row) async {
+    final hidden = _hiddenForms[row];
+    if (hidden == null) return;
+    final choice = await showHiddenFormDialog(context, hidden);
+    if (choice == null || !mounted) return;
+    if (choice == HiddenFormChoice.apply) {
+      _applyLabels([row], [hidden]);
+    } else {
+      setState(() => _previousForm = _previousForm?.clearedAt(row));
+    }
+  }
+
+  void _goToRow(int row) {
+    final r = row.clamp(0, _grid.length - 1);
+    setState(() {
+      _pickedRows
+        ..clear()
+        ..add(r);
+      _pickAnchor = r;
+      _selectedRow = r;
+      _lastRow = r;
+    });
+    // ponytail: 행 높이가 제각각이라 위치는 어림이다(한 행 약 110px).
+    if (_scroll.hasClients) {
+      _scroll.animateTo(
+        (r * 110.0).clamp(0.0, _scroll.position.maxScrollExtent),
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOut,
+      );
+    }
+  }
+
+  /// 통째로 보기의 원본 페이지들에 라벨을 글 키로 다시 짝짓는다(행 번호가 아니라).
+  /// 짝 없는 라벨은 [_previousForm] 에 숨은 채 남는다.
+  List<String> _wholeForms(List<String> originals) => [
+    for (final l in matchedForm(_previousForm, originals).labels)
+      labelsToText(l),
+  ];
+
+  /// 저장할 송폼: 지금 행들의 라벨 + 글이 바뀌어 숨은 옛 항목(되돌리면 다시 보이게 이어 둔다).
+  SongForm? _formToSave() {
+    final table = _view == _EditorView.table;
+    final originals = table
+        ? _originals
+        : splitEditablePages(_chordMode ? stripChords(_original) : _original);
+    final forms = table ? _grid.toForms() : _wholeForms(originals);
+    return songFormForPages([
+      for (var i = 0; i < originals.length; i++)
+        (
+          korean: originals[i],
+          english: '',
+          extra: '',
+          chord: '',
+          form: i < forms.length ? forms[i] : '',
+        ),
+    ], previous: _previousForm);
+  }
+
+  Widget _formRowLine(int row) {
+    final hidden = _hiddenForms[row];
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: FormRowLine(
+        labels: _grid.labels(row),
+        emphasized: _pickedRows.contains(row) || row == _selectedRow,
+        onLabelTap: (i) => _openLabelMenu(row, i),
+        onAdd: () {
+          // 한 번 누르면 이 행을 대상으로 잡고 아래 칩 바로 안내한다.
+          setState(() {
+            _lastRow = row;
+            if (_pickedRows.isEmpty) _selectedRow = row;
+          });
+          _showFormHint('아래 송폼 칩을 누르면 ${row + 1}페이지에 붙습니다');
+        },
+        hiddenLabels: hidden,
+        onHiddenTap: hidden == null ? null : () => _openHidden(row),
+      ),
+    );
+  }
+
+  Widget _formOrderLine() {
+    final hidden = _hiddenForms;
+    return SongFormOrderLine(
+      steps: formOrder(_allLabels),
+      onStep: (step) => _goToRow(step.firstPage),
+      checkCount: hidden.length,
+      onCheck: hidden.isEmpty
+          ? null
+          : () => _goToRow(hidden.keys.reduce((a, b) => a < b ? a : b)),
+    );
+  }
+
+  Widget _formBottom(ColorScheme cs) {
+    final rows = _formTargets;
+    final labels = [for (final r in rows) _grid.labels(r)];
+    final suggest = _formSuggest;
+    final note = suggest != null
+        ? '같은 가사 ${suggest.rows.length}페이지'
+              '(${suggest.rows.map((r) => r + 1).join(', ')})에도 ${suggest.label.abbr} 넣기'
+        : _formHint;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (note != null)
+          Container(
+            height: 36,
+            margin: const EdgeInsets.only(bottom: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: cs.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(AppRadius.control),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(note, style: const TextStyle(fontSize: 13)),
+                ),
+                if (suggest != null) ...[
+                  TextButton(
+                    onPressed: _acceptFormSuggest,
+                    child: const Text('넣기'),
+                  ),
+                  TextButton(
+                    onPressed: () => setState(() => _formSuggest = null),
+                    child: const Text('괜찮아요'),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        SongFormBar(
+          kindState: (k) => selectionState(labels, (l) => l.kind == k),
+          customLabels: _customLabels,
+          labelState: (c) => selectionState(labels, (l) => l == c),
+          selectedCount: _pickedRows.length,
+          clearEnabled: labels.any((l) => l.isNotEmpty),
+          onKind: _onFormKind,
+          onCustom: _onFormCustom,
+          onClear: _clearFormLabels,
+        ),
+      ],
+    );
+  }
+
   // ── 보기 · 저장 ────────────────────────────────────────────────────────
 
   void _setView(_EditorView view) {
     if (view == _view) return;
     setState(() {
       _commit();
+      // 통째로에서는 페이지를 끼우고 옮기므로, 들어가기 전 (글 키 → 라벨)을 기준으로 잡아 둔다.
+      if (view == _EditorView.whole) _previousForm = _formToSave();
       _view = view;
       _lastView = view;
       _undo = null;
       if (view == _EditorView.table) {
+        _forms = _wholeForms(
+          splitEditablePages(_chordMode ? stripChords(_original) : _original),
+        );
         _loadGrid();
       } else {
         _loadWhole();
@@ -789,6 +1168,7 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
         context,
       )?.showSnackBar(SnackBar(content: Text(notice)));
     }
+    final songForm = _formToSave();
     if (widget.contiOnly && song != null) {
       Navigator.of(context).pop((
         song.copyWith(
@@ -799,6 +1179,7 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
               : song.extraLyrics,
           chordLyrics: chord,
           chordKey: _chordKey,
+          songForm: songForm,
         ),
         const <String, String>{},
       ));
@@ -813,6 +1194,7 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
         englishLyrics: _texts[PraiseRepository.defaultSubLanguage] ?? '',
         chordLyrics: chord,
         chordKey: _chordKey,
+        songForm: songForm,
       ),
       Map<String, String>.from(_texts),
     ));
@@ -899,90 +1281,103 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
     final cs = Theme.of(context).colorScheme;
     final isNew = widget.song?.id == null;
     final size = MediaQuery.sizeOf(context);
-    return Dialog(
-      insetPadding: const EdgeInsets.all(24),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: 1240,
-          maxHeight: size.height * 0.9,
-        ),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final showPreview =
-                  _view == _EditorView.table && constraints.maxWidth >= 1000;
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _buildHeader(isNew),
-                  const SizedBox(height: 12),
-                  if (_undo != null) _buildUndoBanner(cs),
-                  if (_pasteOffer != null)
-                    _banner(
-                      cs,
-                      icon: Icons.music_note_rounded,
-                      message: '코드 위 가사 형식 같습니다.',
-                      actions: [
-                        TextButton(
-                          onPressed: _applyPasteOffer,
-                          child: const Text('코드 표기로 바꾸기'),
-                        ),
-                        TextButton(
-                          onPressed: () => setState(() => _pasteOffer = null),
-                          child: const Text('그대로 두기'),
-                        ),
-                      ],
-                    ),
-                  if (_realignOffer case final r?)
-                    _banner(
-                      cs,
-                      icon: Icons.warning_amber_rounded,
-                      warn: true,
-                      message:
-                          '코드 확인 필요 — 가사가 바뀐 페이지 '
-                          '${hiddenChordPageCount(_chordText, _original)}곳은 코드가 숨겨집니다 '
-                          '(다시 맞추면 옮김 ${r.moved}개 · 버림 ${r.dropped}개).',
-                      actions: [
-                        TextButton(
-                          onPressed: _takeRealign,
-                          child: const Text('다시 맞춘 결과로 바꾸기'),
-                        ),
-                        TextButton(
-                          onPressed: () => _save(keepChords: true),
-                          child: const Text('코드는 그대로 두고 저장'),
-                        ),
-                      ],
-                      onClose: () => setState(() => _realignOffer = null),
-                    ),
-                  if (_chordMode && _chordNotice != null)
-                    _banner(
-                      cs,
-                      icon: Icons.info_outline_rounded,
-                      message: _chordNotice!,
-                      onClose: () => setState(() => _chordNotice = null),
-                    ),
-                  Expanded(
-                    child: _view == _EditorView.whole
-                        ? _buildWhole(cs)
-                        : Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Expanded(child: _buildTable(cs)),
-                              if (showPreview) ...[
-                                const SizedBox(width: 18),
-                                SizedBox(width: 300, child: _buildPreview(cs)),
-                              ],
-                            ],
+    return Focus(
+      canRequestFocus: false,
+      skipTraversal: true,
+      onKeyEvent: _handleFormUndoKey,
+      child: Dialog(
+        insetPadding: const EdgeInsets.all(24),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: 1240,
+            maxHeight: size.height * 0.9,
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final showPreview =
+                    _view == _EditorView.table && constraints.maxWidth >= 1000;
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _buildHeader(isNew),
+                    const SizedBox(height: 12),
+                    if (_undo != null) _buildUndoBanner(cs),
+                    if (_pasteOffer != null)
+                      _banner(
+                        cs,
+                        icon: Icons.music_note_rounded,
+                        message: '코드 위 가사 형식 같습니다.',
+                        actions: [
+                          TextButton(
+                            onPressed: _applyPasteOffer,
+                            child: const Text('코드 표기로 바꾸기'),
                           ),
-                  ),
-                  const SizedBox(height: 12),
-                  Divider(height: 1, color: cs.outlineVariant),
-                  const SizedBox(height: 12),
-                  _buildFooter(cs, isNew),
-                ],
-              );
-            },
+                          TextButton(
+                            onPressed: () => setState(() => _pasteOffer = null),
+                            child: const Text('그대로 두기'),
+                          ),
+                        ],
+                      ),
+                    if (_realignOffer case final r?)
+                      _banner(
+                        cs,
+                        icon: Icons.warning_amber_rounded,
+                        warn: true,
+                        message:
+                            '코드 확인 필요 — 가사가 바뀐 페이지 '
+                            '${hiddenChordPageCount(_chordText, _original)}곳은 코드가 숨겨집니다 '
+                            '(다시 맞추면 옮김 ${r.moved}개 · 버림 ${r.dropped}개).',
+                        actions: [
+                          TextButton(
+                            onPressed: _takeRealign,
+                            child: const Text('다시 맞춘 결과로 바꾸기'),
+                          ),
+                          TextButton(
+                            onPressed: () => _save(keepChords: true),
+                            child: const Text('코드는 그대로 두고 저장'),
+                          ),
+                        ],
+                        onClose: () => setState(() => _realignOffer = null),
+                      ),
+                    if (_chordMode && _chordNotice != null)
+                      _banner(
+                        cs,
+                        icon: Icons.info_outline_rounded,
+                        message: _chordNotice!,
+                        onClose: () => setState(() => _chordNotice = null),
+                      ),
+                    if (_view == _EditorView.table) _formOrderLine(),
+                    Expanded(
+                      child: _view == _EditorView.whole
+                          ? _buildWhole(cs)
+                          : Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(child: _buildTable(cs)),
+                                if (showPreview) ...[
+                                  const SizedBox(width: 18),
+                                  SizedBox(
+                                    width: 300,
+                                    child: _buildPreview(cs),
+                                  ),
+                                ],
+                              ],
+                            ),
+                    ),
+                    if (_view == _EditorView.table) ...[
+                      const SizedBox(height: 8),
+                      _formBottom(cs),
+                    ],
+                    const SizedBox(height: 8),
+                    Divider(height: 1, color: cs.outlineVariant),
+                    const SizedBox(height: 12),
+                    _buildFooter(cs, isNew),
+                  ],
+                );
+              },
+            ),
           ),
         ),
       ),
@@ -1208,6 +1603,7 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
           Divider(height: 1, color: cs.outlineVariant),
           Expanded(
             child: ListView.builder(
+              controller: _scroll,
               padding: const EdgeInsets.only(top: 4, bottom: 8),
               itemCount: _grid.length + 1,
               itemBuilder: (context, row) => row == _grid.length
@@ -1494,6 +1890,7 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
         field,
+        if (column == 0) _formRowLine(row),
         if (_chordMode && column == 0) ..._chordCellExtras(cs, row, text),
         if (focused && column != 0) ...[
           const SizedBox(height: 4),

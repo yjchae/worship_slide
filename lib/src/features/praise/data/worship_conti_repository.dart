@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../domain/chord_lyrics.dart';
+import '../domain/song_form.dart';
 import '../domain/conti_tree.dart' show maxGroupDepth;
 import '../domain/page_format.dart';
 import '../domain/praise_song.dart';
@@ -193,6 +194,8 @@ class WorshipContiRepository {
             'song_chord_key': item.song.chordKey,
             'song_transpose': readTranspose(item.song.chordTranspose),
             'song_chord_accidental': item.song.chordAccidental.dbValue,
+            // 송폼 스냅샷(싱어·발표자 화면 전용). 라이브러리 곡을 따라가지 않는다.
+            'song_form': SongForm.encode(item.song.songForm),
           };
         } else if (item is BibleStagingItem) {
           row = {
@@ -324,6 +327,7 @@ class WorshipContiRepository {
         final storedKey = _nonEmpty(row['song_chord_key']);
         final transpose = readTranspose(row['song_transpose']);
         final accidental = ChordAccidental.fromDb(row['song_chord_accidental']);
+        final storedForm = SongForm.parse(row['song_form']);
         final song = baseSong == null
             ? PraiseSong(
                 id: songId,
@@ -336,6 +340,7 @@ class WorshipContiRepository {
                 chordKey: storedKey,
                 chordTranspose: transpose,
                 chordAccidental: accidental,
+                songForm: storedForm,
               )
             : (storedLyrics != null
                   ? PraiseSong(
@@ -351,6 +356,7 @@ class WorshipContiRepository {
                       chordKey: storedKey,
                       chordTranspose: transpose,
                       chordAccidental: accidental,
+                      songForm: storedForm,
                     )
                   : baseSong.copyWith(
                       chordTranspose: transpose,
@@ -446,7 +452,8 @@ class WorshipContiRepository {
       """
       SELECT wci.*, ps.title AS cur_title, ps.lyrics AS cur_lyrics,
              ps.english_lyrics AS cur_english_lyrics, ps.uid AS cur_song_uid,
-             ps.chord_lyrics AS cur_chord_lyrics, ps.chord_key AS cur_chord_key
+             ps.chord_lyrics AS cur_chord_lyrics, ps.chord_key AS cur_chord_key,
+             ps.song_form AS cur_song_form
       FROM worship_conti_items wci
       LEFT JOIN praise_songs ps ON ps.id = wci.song_id
       WHERE wci.conti_id = ?
@@ -648,6 +655,10 @@ class WorshipContiRepository {
           final g = row['item_group'];
           row['item_group'] = normalizeItemGroup(g is String ? g : null);
         }
+        if (row.containsKey('song_form')) {
+          // 남이 만든 파일 — 모양이 틀린 라벨은 버리고 아는 라벨만 다시 쓴다.
+          row['song_form'] = SongForm.encode(SongForm.parse(row['song_form']));
+        }
         if (row.containsKey('page_format')) {
           row['page_format'] = PageFormat.encode(
             PageFormat.parse(row['page_format']),
@@ -803,6 +814,7 @@ class WorshipContiRepository {
       if (row['song_lyrics'] == null) {
         item['song_chord_lyrics'] ??= row['cur_chord_lyrics'];
         item['song_chord_key'] ??= row['cur_chord_key'];
+        item['song_form'] ??= row['cur_song_form'];
       }
       item['song_lyrics'] ??= row['cur_lyrics'];
       item['song_english_lyrics'] ??= row['cur_english_lyrics'];

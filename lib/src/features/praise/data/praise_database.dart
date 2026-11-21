@@ -44,6 +44,7 @@ class PraiseDatabase {
       onOpen: (db) async {
         await ensureItemGroupColumn(db);
         await ensurePageFormatColumn(db);
+        await ensureSongFormColumns(db);
       },
     );
     return _database!;
@@ -130,7 +131,9 @@ Future<void> createPraiseSchema(DatabaseExecutor db) async {
     updated_at INTEGER NOT NULL DEFAULT 0,
     chord_lyrics TEXT,
     chord_key TEXT,
-    chord_updated_at INTEGER NOT NULL DEFAULT 0
+    chord_updated_at INTEGER NOT NULL DEFAULT 0,
+    song_form TEXT,
+    song_form_updated_at INTEGER NOT NULL DEFAULT 0
   )
 ''');
   await db.execute(_createSongUidIndex);
@@ -194,7 +197,8 @@ Future<void> createPraiseSchema(DatabaseExecutor db) async {
     song_transpose INTEGER,
     song_chord_accidental TEXT,
     item_group TEXT,
-    page_format TEXT
+    page_format TEXT,
+    song_form TEXT
   )
 ''');
   await db.execute(_createSongTranslations);
@@ -608,6 +612,29 @@ Future<void> ensurePageFormatColumn(DatabaseExecutor db) => _addColumnIfMissing(
   'page_format',
   'ALTER TABLE worship_conti_items ADD COLUMN page_format TEXT',
 );
+
+/// 송폼(페이지별 구성 라벨) 칸: 곡 `song_form`(JSON)·`song_form_updated_at`, 콘티 항목 `song_form` 스냅샷.
+/// 스키마 버전은 20 그대로 — [ensureItemGroupColumn] 과 같이 열 때마다 없으면 더한다.
+Future<void> ensureSongFormColumns(DatabaseExecutor db) async {
+  await _addColumnIfMissing(
+    db,
+    'praise_songs',
+    'song_form',
+    'ALTER TABLE praise_songs ADD COLUMN song_form TEXT',
+  );
+  await _addColumnIfMissing(
+    db,
+    'praise_songs',
+    'song_form_updated_at',
+    'ALTER TABLE praise_songs ADD COLUMN song_form_updated_at INTEGER NOT NULL DEFAULT 0',
+  );
+  await _addColumnIfMissing(
+    db,
+    'worship_conti_items',
+    'song_form',
+    'ALTER TABLE worship_conti_items ADD COLUMN song_form TEXT',
+  );
+}
 
 /// 곡 항목 중 스냅샷 칸(제목·가사·영어 가사·uid)이 빈 행을 그 곡의 지금 값으로 채운다.
 Future<void> freezeContiSongSnapshots(DatabaseExecutor db) async {
