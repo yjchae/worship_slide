@@ -182,6 +182,11 @@ class PraiseSong {
 
   static String cleanDisplayTitle(String title) {
     var t = title.replaceFirst(RegExp(r'\.pptx?$', caseSensitive: false), '');
+    // '(영어가사포함)'·'(영어 포함)'·'영어 가사 포함' 표시
+    final english = RegExp(r'\(?\s*영어\s*(?:가사\s*)?포함\s*\)?');
+    if (english.hasMatch(t)) {
+      t = t.replaceAll(english, ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+    }
     if (_wideMark.hasMatch(t)) {
       t = t
           .replaceAll(_wideMark, '')
