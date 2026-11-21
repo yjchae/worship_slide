@@ -109,4 +109,37 @@ void main() {
     final loaded = await repoOn(db).loadConti(cid, 10);
     expect(loaded.itemGroups, isEmpty);
   });
+
+  test('하위 그룹 경로: 정리 규칙과 저장·.wsconti 왕복', () async {
+    expect(normalizeItemGroup('상위 / 하위'), '상위/하위');
+    expect(normalizeItemGroup('가나다라마바사아자차카타파/b'), '가나다라마바사아자차카타/b');
+    expect(normalizeItemGroup('a/b/c/d'), 'a／b／c／d'); // 4단은 평면 이름
+    expect(normalizeItemGroup('a//b'), 'a／／b');
+    expect(normalizeItemGroup('/a'), '／a');
+    expect(normalizeItemGroup('a/'), 'a／');
+    expect(normalizeItemGroup(normalizeItemGroup('a/b/c/d')), 'a／b／c／d');
+
+    final tmp = await Directory.systemTemp.createTemp('conti_group_path');
+    addTearDown(() => tmp.delete(recursive: true));
+    final src = repoOn(await freshDb());
+    final id = await src.saveConti(
+      'c',
+      items(),
+      itemGroups: {1: '찬양', 2: '찬양/특송', 3: '찬양/특송/솔로'},
+    );
+    var loaded = await src.loadConti(id, 10);
+    expect(
+      {for (final u in loaded.items) u.uid: loaded.itemGroups[u.uid]},
+      {10: '찬양', 11: '찬양/특송', 12: '찬양/특송/솔로'},
+    );
+    final file = p.join(tmp.path, 'o.wsconti');
+    await src.exportContiFile(id, file);
+    final dst = repoOn(await freshDb());
+    final newId = await dst.importContiFile(
+      file,
+      filesDir: Directory(p.join(tmp.path, 'imp')),
+    );
+    loaded = await dst.loadConti(newId, 10);
+    expect(loaded.itemGroups.values.toList(), ['찬양', '찬양/특송', '찬양/특송/솔로']);
+  });
 }

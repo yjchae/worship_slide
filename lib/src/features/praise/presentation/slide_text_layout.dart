@@ -98,12 +98,14 @@ class SlideTextLayout {
 
   static (String, String) _splitNum(String line) {
     final i = line.indexOf(' ');
-    return i < 0 ? ('', _keepWords(line)) : (line.substring(0, i), _keepWords(line.substring(i + 1)));
+    return i < 0
+        ? ('', _keepWords(line))
+        : (line.substring(0, i), _keepWords(line.substring(i + 1)));
   }
 
   /// 한글은 글자마다 줄이 나뉠 수 있어, 공백이 아닌 글자 사이에 word joiner 를 넣어 낱말째 다음 줄로 보낸다.
-  static String _keepWords(String s) => s.replaceAllMapped(
-      RegExp(r'(?<=\S)(?=\S)'), (_) => '\u2060');
+  static String _keepWords(String s) =>
+      s.replaceAllMapped(RegExp(r'(?<=\S)(?=\S)'), (_) => '\u2060');
 
   static Widget bibleBody(
     SlidePageData data, {

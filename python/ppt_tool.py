@@ -1858,24 +1858,33 @@ def _sub_font_sizes(style, is_bible):
     return english, extra
 
 
-def add_song_slides(prs, song, style, background=None):
-    is_bible = song.get("type") == "bible"
-    font_name = style.get("font_family", "Pretendard")
-    text_color_key = "bible_text_color" if is_bible else "text_color"
-    text_color = parse_hex_color(style.get(text_color_key, style["text_color"]))
+def _page_text_style(style, is_bible):
+    """한 페이지에 쓰는 본문·보조·추가 보조 색과 글자 크기(pt)를 style 에서 읽는다."""
+    text_color = parse_hex_color(
+        style.get("bible_text_color" if is_bible else "text_color", style["text_color"])
+    )
     font_size = Pt(style.get(
         "bible_font_size" if is_bible else "font_size",
         style["font_size"],
     ))
+    english_color = parse_hex_color(style["english_text_color"])
+    extra_color = parse_hex_color(style.get("extra_text_color") or "#80DEEA")
+    english_size, extra_size = _sub_font_sizes(style, is_bible)
+    return text_color, font_size, english_color, extra_color, english_size, extra_size
+
+
+def add_song_slides(prs, song, style, background=None):
+    is_bible = song.get("type") == "bible"
+    font_name = style.get("font_family", "Pretendard")
     position = style.get(
         "bible_text_position" if is_bible else "text_position",
         style["text_position"],
     )
     include_english_lyrics = style.get("include_english_lyrics", False)
-    english_color = parse_hex_color(style["english_text_color"])
     include_extra_lyrics = style.get("include_extra_lyrics", True)
-    extra_color = parse_hex_color(style.get("extra_text_color") or "#80DEEA")
-    english_size, extra_size = _sub_font_sizes(style, is_bible)
+    base_text_style = _page_text_style(style, is_bible)
+    # 페이지별 서식(Dart pageStylesFor): 페이지 순서, 없는 페이지는 None.
+    page_styles = song.get("page_styles") or []
     show_song_title = style.get(
         "show_bible_title" if is_bible else "show_song_title",
         style.get("show_song_title", False),
@@ -1906,6 +1915,13 @@ def add_song_slides(prs, song, style, background=None):
         extra_page = page_at(extra_pages, index)
         if not page and not english_page and not extra_page:
             continue
+
+        override = page_styles[index] if index < len(page_styles) else None
+        (text_color, font_size, english_color, extra_color,
+         english_size, extra_size) = (
+            _page_text_style({**style, **override}, is_bible)
+            if override else base_text_style
+        )
 
         slide = prs.slides.add_slide(prs.slide_layouts[6])
         _apply_slide_background(slide, style, background)

@@ -48,6 +48,7 @@ import '../domain/worship_conti.dart';
 import '../domain/export_style.dart';
 import '../domain/offering_design.dart';
 import '../domain/page_element.dart';
+import '../domain/page_format.dart';
 import '../domain/praise_song.dart';
 import '../domain/slide_background.dart';
 import '../domain/slide_media.dart';
@@ -63,7 +64,9 @@ import 'lyrics_page_grid.dart';
 import 'offering_dialog.dart';
 import 'offering_overlay_painter.dart';
 import 'page_canvas.dart';
+import 'page_to_free.dart';
 import 'page_editor_dialog.dart';
+import 'page_format_editor.dart';
 import 'page_template_dialog.dart';
 import 'auto_advance_box.dart';
 import 'auto_advance_timer.dart';
@@ -108,6 +111,7 @@ class _SlideInfo {
     this.media,
     this.chordText = '',
     this.chordSong,
+    this.pageFormat,
   });
   final int stagingUid;
   final String mainText;
@@ -132,12 +136,21 @@ class _SlideInfo {
   final String chordText;
   // 코드 있는 곡 항목의 곡(조 묶음·조 배지용). 코드가 없으면 null.
   final PraiseSong? chordSong;
+  // 이 페이지 글자 서식(색·크기). 관객 화면·미리보기·썸네일만 쓴다 — 싱어·통역(B)·휴대폰은 무시.
+  final PageEntry? pageFormat;
+
+  /// 전역 [base] 위에 항목 배경과 이 페이지 서식을 입힌 스타일.
+  ExportStyle styleOn(ExportStyle base, {bool formatted = true}) {
+    final s = base.withBackground(background);
+    return formatted ? s.withPageFormat(pageFormat, isBible: isBible) : s;
+  }
 }
 
 /// 발표 보기에서 복사·옮기는 콘티 항목 하나: 새 항목 + 배경 + 이 항목에 담긴 원래 페이지들.
 typedef _SlidePiece = ({
   StagingItem item,
   SlideBackground? background,
+  PageFormat? format,
   List<_SlideInfo> pages,
 });
 
@@ -204,6 +217,7 @@ class _VoiceUndo {
       itemGroups = Map.of(s._itemGroups),
       emptyGroups = List.of(s._emptyGroups),
       backgrounds = Map.of(s._itemBackgrounds),
+      formats = Map.of(s._itemFormats),
       notes = Map.of(s._slideNotes),
       deleted = Set.of(s._deletedSlideKeys),
       mediaGroups = Map.of(s._mediaGroups);
@@ -213,6 +227,7 @@ class _VoiceUndo {
   final Map<int, String> itemGroups;
   final List<String> emptyGroups;
   final Map<int, SlideBackground> backgrounds;
+  final Map<int, PageFormat> formats;
   final Map<String, String> notes;
   final Set<String> deleted;
   final Map<int, int> mediaGroups;
@@ -235,6 +250,7 @@ class _VoiceUndo {
         mapEquals(itemGroups, o.itemGroups) &&
         listEquals(emptyGroups, o.emptyGroups) &&
         mapEquals(backgrounds, o.backgrounds) &&
+        mapEquals(formats, o.formats) &&
         mapEquals(notes, o.notes) &&
         setEquals(deleted, o.deleted) &&
         mapEquals(mediaGroups, o.mediaGroups);
@@ -261,6 +277,9 @@ class _VoiceUndo {
     s._itemBackgrounds
       ..clear()
       ..addAll(backgrounds);
+    s._itemFormats
+      ..clear()
+      ..addAll(formats);
     s._slideNotes
       ..clear()
       ..addAll(notes);
@@ -400,6 +419,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   // 콘티 항목별 배경 오버라이드. 키는 항목 uid. 없는 항목은 전역 배경을 쓴다.
   // (헌금송만 다른 배경으로 띄우는 등 "일부만 다르게" 하기 위한 것)
   final Map<int, SlideBackground> _itemBackgrounds = {};
+  // 콘티 항목별 페이지 글자 서식(색·크기, 키 = 페이지 글 해시). 저장·불러오기·PPTX 대상.
+  final Map<int, PageFormat> _itemFormats = {};
   // 뒤 자동 여백을 뺀 항목 uid(곡 중간 붙여 넣기, 여백 페이지 삭제). 저장·PPTX 에도 실린다.
   final Set<int> _noSpacerUids = {};
   // 항목 uid → 그룹 이름(시작곡·말씀 …). 같은 이름이 이어진 항목이 한 그룹이다. 저장·불러오기 대상.
@@ -584,6 +605,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     HardwareKeyboard.instance.addHandler(_handleStartKey);
     HardwareKeyboard.instance.addHandler(_pullFocusToPresenter);
     HardwareKeyboard.instance.addHandler(_handleContiDeleteKey);
+    HardwareKeyboard.instance.addHandler(_handleUndoKey);
     _mainPresentationChannel.setMethodCallHandler((call) async {
       if (!mounted) return null;
       switch (call.method) {
@@ -642,6 +664,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     HardwareKeyboard.instance.removeHandler(_handleStartKey);
     HardwareKeyboard.instance.removeHandler(_pullFocusToPresenter);
     HardwareKeyboard.instance.removeHandler(_handleContiDeleteKey);
+    HardwareKeyboard.instance.removeHandler(_handleUndoKey);
     _mainTabController
       ..removeListener(_onMainTabChanged)
       ..dispose();
@@ -1004,14 +1027,20 @@ class _PraiseHomePageState extends State<PraiseHomePage>
             );
       final undo = _VoiceUndo.capture(this);
       setState(() {
-        _stagingItems[i] = (
-          uid: uid,
-          item: BibleStagingItem(
-            reference: switched.reference,
-            text: switched.text,
-            subText: sub,
-            extraText: extra,
-          ),
+        final newItem = BibleStagingItem(
+          reference: switched.reference,
+          text: switched.text,
+          subText: sub,
+          extraText: extra,
+        );
+        _stagingItems[i] = (uid: uid, item: newItem);
+        // 본문이 새 역본 글로 바뀌어 키가 달라지므로 페이지 색·크기(보조·추가 줄 포함)를 새 키로 옮긴다.
+        _carryPageFormat(
+          uid,
+          item.text,
+          switched.text,
+          newItem,
+          _itemFormats[uid]?.forText(item.text),
         );
         final result = _allSlides;
         final found = result.indexWhere((s) => _slideInfoKey(s) == nowKey);
@@ -1148,6 +1177,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       // 항목에 배경 오버라이드가 걸려 있으면 그 항목이 만드는 모든 페이지가
       // (뒤에 자동으로 붙는 여백까지) 같은 배경을 쓴다.
       final background = _itemBackgrounds[entry.uid];
+      final format = _itemFormats[entry.uid];
 
       if (item is BlankStagingItem) {
         tryAdd(
@@ -1181,6 +1211,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
               isBible: false,
               pageIndexInItem: j,
               background: background,
+              pageFormat: format?.forText(pairs[j].korean),
               chordText: chord.isEmpty
                   ? ''
                   : transposeChordText(
@@ -1250,6 +1281,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
             isBible: true,
             pageIndexInItem: 0,
             background: background,
+            pageFormat: format?.forText(item.text),
           ),
         );
         // 말씀 다음이 말씀이면 빈 페이지 삽입 안 함
@@ -1289,6 +1321,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         for (final e in _itemBackgrounds.entries)
           Object.hash(e.key, identityHashCode(e.value)),
       ]),
+      Object.hashAllUnordered([
+        for (final e in _itemFormats.entries)
+          Object.hash(e.key, identityHashCode(e.value)),
+      ]),
       Object.hashAllUnordered(_deletedSlideKeys),
       Object.hashAllUnordered(_noSpacerUids),
       _bConfig.screen != null,
@@ -1314,14 +1350,14 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         isBible: slide.isBible,
         pageIndex: i,
         totalPages: slides.length,
-        style: _style.withBackground(slide.background),
+        style: slide.styleOn(_style),
         imagePath: slide.imagePath,
       );
       final overflows =
           SlideTextLayout.overflows(page) ||
           (usesB &&
               SlideTextLayout.overflows(
-                page.forB(
+                _buildSlidePageData(i, slides, false).forB(
                   page.imagePath,
                   sermon: slide.background?.isSermon ?? false,
                 ),
@@ -1352,7 +1388,11 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   int _mediaGroupOf(int stagingUid) => _mediaGroups[stagingUid] ?? stagingUid;
 
-  SlidePageData _buildSlidePageData(int index, [List<_SlideInfo>? allSlides]) {
+  SlidePageData _buildSlidePageData(
+    int index, [
+    List<_SlideInfo>? allSlides,
+    bool formatted = true,
+  ]) {
     final slides = allSlides ?? _allSlides;
     final slide = index < slides.length ? slides[index] : null;
     return SlidePageData(
@@ -1363,7 +1403,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       isBible: slide?.isBible ?? false,
       pageIndex: index,
       totalPages: slides.length,
-      style: _style.withBackground(slide?.background),
+      style: slide == null
+          ? _style
+          : slide.styleOn(_style, formatted: formatted),
       imagePath: slide?.imagePath,
       media: slide?.media,
       mediaGroup: slide == null ? null : _mediaGroupOf(slide.stagingUid),
@@ -1624,7 +1666,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         ? 0
         : _currentSlideIndex.clamp(0, slides.length - 1);
     final slide = slides.isEmpty ? null : slides[index];
-    return _buildSlidePageData(index, slides).forB(
+    return _buildSlidePageData(index, slides, false).forB(
       bImagePath(slide?.imagePath, _bConfig.pairs),
       sermon: slide?.background?.isSermon ?? false,
     );
@@ -2447,7 +2489,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       timer.stop();
       return;
     }
+    // 횟수가 찬 마지막 넘김이면 타이머는 이미 멈춰 있다(`_fire` 가 먼저 멈춘다).
+    final countDone =
+        !timer.isRunning && timer.maxCount != null && timer.repeat;
     await _nextSlide();
+    if (mounted && countDone) {
+      _showSnack('정한 ${timer.maxCount}회를 넘겨 자동 넘기기를 멈췄습니다.');
+    }
     // 마지막 페이지에 닿았으면(이미 끝이었어도) 더 넘길 곳이 없으니 여기서 멈춘다.
     if (mounted &&
         _currentSlideIndex >= _allSlides.length - 1 &&
@@ -2481,9 +2529,14 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       return;
     }
 
-    final result = await showDialog<(String, String, String)?>(
+    // 글자 모양은 찬양·성경 글 페이지만(빈 페이지는 서식을 안 둔다).
+    final canFormat = !info.isBlank && info.mainText.trim().isNotEmpty;
+    final result = await showDialog<(String, String, String, PageEntry?)?>(
       context: context,
       builder: (_) => _SlideQuickEditDialog(
+        formatStyle: canFormat ? info.styleOn(_style, formatted: false) : null,
+        format: info.pageFormat,
+        swatches: _textSwatches,
         mainText: info.mainText,
         englishText: info.englishText,
         extraText: info.extraText,
@@ -2491,11 +2544,117 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         title: info.title,
         subLabel: _subFieldLabel(info.isBible),
         extraLabel: _extraFieldLabel(info.isBible),
+        onConvert: canFormat ? () => _convertPageToFreePage(info) : null,
       ),
     );
     if (result == null || !mounted) return;
-    final (newMain, newEnglish, newExtra) = result;
-    await _applySlideEdit(info, newMain, newEnglish, newExtra, slideIndex);
+    final (newMain, newEnglish, newExtra, newFormat) = result;
+    await _applySlideEdit(
+      info,
+      newMain,
+      newEnglish,
+      newExtra,
+      slideIndex,
+      newFormat: canFormat ? newFormat : info.pageFormat,
+    );
+  }
+
+  /// 찬양·성경 글 페이지 한 장을 슬라이드 편집 페이지(그림)로 바꿔 일부 글자만 서식을 줄 수 있게 한다.
+  /// 대가: 그 페이지는 역본 바꾸기·보조 언어 다시 입히기·가사 검색·코드에서 빠진다.
+  /// 곡이면 앞/편집/뒤로 나뉜다. 편집 창을 취소하면 아무것도 안 바뀐다.
+  Future<void> _convertPageToFreePage(_SlideInfo info) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('자유 편집 페이지로 바꾸기'),
+        content: const Text(
+          '이 페이지는 그림 페이지가 되어 역본 바꾸기·보조 언어 다시 입히기·가사 검색·코드 기능이 '
+          '이 페이지에서는 사라지고, 헌금송 띠·배경 영상도 이 페이지에서는 빠집니다. '
+          '수정 창에 입력 중이던 글·글자 모양은 반영되지 않고 저장된 원래 글로 바뀝니다. '
+          '다른 편집을 하기 전까지 ⌘/Ctrl+Z 로 되돌릴 수 있습니다.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('바꾸기'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final style = info.styleOn(_style);
+    final result = await _showPageEditor(
+      name: info.title ?? '',
+      background: SlideBackground(
+        color: style.backgroundColor,
+        imagePath: style.backgroundImagePath,
+        pageElements: freePageElements(
+          style,
+          main: info.mainText,
+          sub: info.englishText,
+          extra: info.extraText,
+          isBible: info.isBible,
+          title: info.title,
+        ),
+      ),
+    );
+    if (result == null || !mounted) return;
+    _trackedEdit('페이지를 자유 편집 페이지로 바꿨습니다.', '자유 편집 페이지 변환을 되돌렸습니다.', () {
+      _replacePageWithFree(
+        info.stagingUid,
+        info.pageIndexInItem,
+        ImageStagingItem(
+          sourceName: result.name,
+          imagePaths: [result.imagePath],
+        ),
+        result.background.copyWith(pageElements: result.elements),
+      );
+    });
+  }
+
+  /// 곡·성경 항목 [uid] 의 [page] 장만 [item](편집 페이지 그림)으로 바꾼다. 곡이면 앞/편집/뒤로 나누고
+  /// 사이에 자동 여백이 끼지 않게 잇는다. 글자 서식은 그림이 되었으므로 새 항목에 옮기지 않는다.
+  /// setState 안에서 부른다.
+  void _replacePageWithFree(
+    int uid,
+    int page,
+    ImageStagingItem item,
+    SlideBackground background,
+  ) {
+    var index = _stagingItems.indexWhere((e) => e.uid == uid);
+    if (index < 0) return;
+    final old = _stagingItems[index].item;
+    final total = _pageCount(old);
+    var pageUid = uid;
+    if (total > 1) {
+      final parts = [
+        [for (var j = 0; j < page; j++) j],
+        [page],
+        [for (var j = page + 1; j < total; j++) j],
+      ].where((p) => p.isNotEmpty).toList();
+      final uids = _rebuildItem(index, parts, {});
+      pageUid = uids[page == 0 ? 0 : 1].first;
+      // 마지막 조각 말고는 뒤와 여백 없이 잇는다(원래 한 곡이었다).
+      _noSpacerUids.addAll(uids.expand((u) => u).toList()..removeLast());
+      index = _stagingItems.indexWhere((e) => e.uid == pageUid);
+    } else if (old is BibleStagingItem) {
+      // 말씀 → 말씀은 여백이 없었다. 그림이 되어도 장 수가 늘지 않게 이어 둔다.
+      if (index + 1 < _stagingItems.length &&
+          _stagingItems[index + 1].item is BibleStagingItem) {
+        _noSpacerUids.add(uid);
+      }
+      if (index > 0 && _stagingItems[index - 1].item is BibleStagingItem) {
+        _noSpacerUids.add(_stagingItems[index - 1].uid);
+      }
+    }
+    _stagingItems[index] = (uid: pageUid, item: item);
+    _itemFormats.remove(pageUid);
+    _itemBackgrounds[pageUid] = background;
+    _previewStagingUid = pageUid;
   }
 
   /// 한 장 고치기의 보조·추가 보조 칸 이름. 지금 고른 언어·역본 이름을 붙인다.
@@ -2514,8 +2673,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     String newMain,
     String newEnglish,
     String newExtra,
-    int slideIndex,
-  ) async {
+    int slideIndex, {
+    PageEntry? newFormat,
+  }) async {
     if (info.isAutoSpacer) return;
 
     final stagingIndex = _stagingItems.indexWhere(
@@ -2561,12 +2721,37 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       return;
     }
 
-    setState(() {
+    _trackedEdit('페이지를 수정했습니다.', '페이지 수정을 되돌렸습니다.', () {
       _stagingItems[stagingIndex] = (uid: entry.uid, item: newItem);
+      _carryPageFormat(entry.uid, info.mainText, newMain, newItem, newFormat);
     });
+  }
 
-    if (_currentSlideIndex == slideIndex) {
-      _sendCurrentSlide();
+  /// 페이지 글을 [oldMain] → [newMain] 으로 고친 항목 [uid] 의 서식을 새 글 키로 옮긴다.
+  /// 옛 키는 같은 글이 다른 페이지에 남아 있지 않을 때만 지운다. setState 안에서 부른다.
+  void _carryPageFormat(
+    int uid,
+    String oldMain,
+    String newMain,
+    StagingItem newItem,
+    PageEntry? entry,
+  ) {
+    final newKey = pageKey(newMain);
+    final oldKey = pageKey(oldMain);
+    var f = _itemFormats[uid] ?? const PageFormat({});
+    // 글을 고쳤는데 서식이 없으면 이미 그 글에 걸린 서식(다른 페이지의 같은 글)을 지우지 않는다.
+    if (newKey != null && (entry != null || newKey == oldKey)) {
+      f = f.withEntry(newKey, entry);
+    }
+    if (oldKey != null &&
+        oldKey != newKey &&
+        !livePageKeys(newItem).contains(oldKey)) {
+      f = f.withEntry(oldKey, null);
+    }
+    if (f.isEmpty) {
+      _itemFormats.remove(uid);
+    } else {
+      _itemFormats[uid] = f;
     }
   }
 
@@ -2603,7 +2788,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       _ => ('', '', '', false),
     };
 
-    final result = await showDialog<(String, String, String)?>(
+    final result = await showDialog<(String, String, String, PageEntry?)?>(
       context: context,
       builder: (_) => _SlideQuickEditDialog(
         mainText: mainText,
@@ -2623,7 +2808,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       ),
     );
     if (result == null || !mounted) return;
-    final (newMain, newSub, newExtra) = result;
+    final (newMain, newSub, newExtra, _) = result;
 
     final StagingItem newItem = switch (item) {
       SongStagingItem(:final song) => SongStagingItem(
@@ -2677,12 +2862,24 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     if (result == null || !mounted) return;
     final index = _stagingItems.indexWhere((e) => e.uid == uid);
     if (index == -1) return;
+    final newItem = SongStagingItem(result.$1);
+    // 글이 바뀐 페이지의 글자 모양은 버린다(키가 글이라 어차피 안 맞는다).
+    final oldFormat = _itemFormats[uid];
+    final keptFormat = oldFormat?.pruneTo(livePageKeys(newItem));
+    final lost =
+        (oldFormat?.pages.length ?? 0) - (keptFormat?.pages.length ?? 0);
     setState(() {
-      _stagingItems[index] = (uid: uid, item: SongStagingItem(result.$1));
+      _stagingItems[index] = (uid: uid, item: newItem);
+      if (keptFormat != null) {
+        keptFormat.isEmpty
+            ? _itemFormats.remove(uid)
+            : _itemFormats[uid] = keptFormat;
+      }
       // 페이지 수가 달라지면 "발표 중 삭제" 표시가 엉뚱한 페이지를 가리킨다.
       _deletedSlideKeys.removeWhere((k) => k.startsWith('$uid:'));
       _clampCurrentSlideIndex();
     });
+    if (lost > 0) _showSnack('글이 바뀐 $lost페이지의 글자 모양(색·크기)은 지워졌습니다.');
     if (_isPresentationOpen) await _sendCurrentSlide();
   }
 
@@ -2793,6 +2990,23 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   }
 
   /// ⌘/Ctrl+Z: 끌어 옮기기·페이지 삭제 중 더 나중에 한 것을 되돌린다. 되돌릴 게 없으면 false.
+  bool get _canUndo => _moveUndo != null || _deleteUndo.isNotEmpty;
+
+  /// ⌘/Ctrl+Z (Shift 없이): 편집·발표 보기 어느 탭에서든 마지막 편집 한 단계를 되돌린다.
+  /// 다이얼로그가 떠 있거나 글 입력칸에 커서가 있으면 그 칸 글자 되돌리기로 둔다.
+  bool _handleUndoKey(KeyEvent event) {
+    final keyboard = HardwareKeyboard.instance;
+    if (event is! KeyDownEvent ||
+        event.logicalKey != LogicalKeyboardKey.keyZ ||
+        !(keyboard.isControlPressed || keyboard.isMetaPressed) ||
+        keyboard.isShiftPressed ||
+        ModalRoute.of(context)?.isCurrent == false ||
+        _isTextFieldFocused) {
+      return false;
+    }
+    return _undoLastSlideEdit();
+  }
+
   bool _undoLastSlideEdit() {
     final deleteSeq = _deleteUndo.isEmpty ? -1 : _deleteUndo.last.seq;
     if (_moveUndo != null && _moveUndoSeq > deleteSeq) return _undoMoveSlides();
@@ -3172,8 +3386,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   /// (그렇지 않으면 그룹 구간이 갈라진다). 끝이나 그룹 경계에서는 그룹 밖.
   String? _groupInside(int at) {
     if (at <= 0 || at >= _stagingItems.length) return null;
-    final g = _itemGroups[_stagingItems[at - 1].uid];
-    return g != null && g == _itemGroups[_stagingItems[at].uid] ? g : null;
+    return commonGroupPath(
+      _itemGroups[_stagingItems[at - 1].uid],
+      _itemGroups[_stagingItems[at].uid],
+    );
   }
 
   void _addBlankItem() {
@@ -3697,6 +3913,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         result.add((
           item: pieces[k].item,
           background: _itemBackgrounds[uid],
+          format: _itemFormats[uid],
           pages: [for (final j in pieces[k].from) byPage[j]!],
         ));
       }
@@ -3718,6 +3935,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     final (:uid, :item) = _stagingItems[index];
     final total = _pageCount(item);
     final background = _itemBackgrounds[uid];
+    final format = _itemFormats[uid];
     final group = _mediaGroupOf(uid);
     final wasJoined = _noSpacerUids.remove(uid);
     final itemGroup = _itemGroups[uid];
@@ -3743,6 +3961,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         if (k < pieces.length - 1) _noSpacerUids.add(pieceUid);
         if (pieceUid != uid) {
           if (background != null) _itemBackgrounds[pieceUid] = background;
+          if (format != null) _itemFormats[pieceUid] = format;
           if (itemGroup != null) _itemGroups[pieceUid] = itemGroup;
           _mediaGroups[pieceUid] = group;
         }
@@ -4092,7 +4311,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     setState(() {
       uids = _insertItemsAfterSlide(slides, at, [
         for (final item in items)
-          (item: item, background: null, pages: const []),
+          (item: item, background: null, format: null, pages: const []),
       ], {});
     });
     _voiceChain = (currentKey: currentKey, lastUid: uids.last);
@@ -4195,6 +4414,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       if (insertGroup != null) _itemGroups[uid] = insertGroup;
       _stagingItems.insert(insertAt++, (uid: uid, item: c.item));
       if (c.background != null) _itemBackgrounds[uid] = c.background!;
+      if (c.format != null) _itemFormats[uid] = c.format!;
       _noSpacerUids.add(uid);
     }
     // 콘티 끝에 넣었으면 마지막 항목은 표시를 푼다 — 끝 항목엔 원래 여백이 없고(화면은 그대로),
@@ -4474,6 +4694,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       if (!joined && i > 0) _noSpacerUids.remove(_stagingItems[i - 1].uid);
       _mediaGroups.remove(e.uid);
       _itemGroups.remove(e.uid);
+      _itemFormats.remove(e.uid);
       _stagingItems.removeAt(i);
     }
     if (prune) _pruneSourceWatches();
@@ -5545,9 +5766,11 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     setState(() => _isExporting = true);
 
     try {
+      final effective = _effectiveStagingItems;
+      final live = _liveFormats(effective);
       final savedPath = await _pythonBridge.exportPresentation(
         outputPath: normalizedOutputPath,
-        stagingItems: _effectiveStagingItems
+        stagingItems: effective
             .map(
               (e) => (
                 item: e.item,
@@ -5556,6 +5779,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
               ),
             )
             .toList(),
+        pageFormats: [for (final e in effective) live[e.uid]],
         style: _style,
       );
       if (!mounted) return;
@@ -5571,6 +5795,16 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     } finally {
       if (mounted) setState(() => _isExporting = false);
     }
+  }
+
+  /// 저장·내보내기용 페이지 서식: 지금 있는 페이지 글에 걸린 것만 남긴다(글이 바뀌어 안 쓰는 키는 버린다).
+  Map<int, PageFormat> _liveFormats(List<({int uid, StagingItem item})> items) {
+    final result = <int, PageFormat>{};
+    for (final e in items) {
+      final f = _itemFormats[e.uid]?.pruneTo(livePageKeys(e.item));
+      if (f != null && !f.isEmpty) result[e.uid] = f;
+    }
+    return result;
   }
 
   String _withPptxExtension(String outputPath) {
@@ -5640,6 +5874,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         backgrounds: _itemBackgrounds,
         noSpacerUids: _noSpacerUids,
         itemGroups: _itemGroups,
+        pageFormats: _liveFormats(_effectiveStagingItems),
         overwriteUid: choice.overwrite ? linked!.uid : null,
       );
       final uid = await _contiRepository.contiUid(id);
@@ -5757,6 +5992,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     Map<int, String> itemGroups = const {},
     Map<String, String> notes = const {},
     Map<int, SlideBackground> backgrounds = const {},
+    Map<int, PageFormat> formats = const {},
     WorshipConti? linked,
     int missing = 0,
   }) {
@@ -5786,6 +6022,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       _itemBackgrounds
         ..clear()
         ..addAll(backgrounds);
+      _itemFormats
+        ..clear()
+        ..addAll(formats);
       _nextUid += items.length;
       _previewStagingUid = items.isEmpty ? null : items.first.uid;
       _currentSlideIndex = 0;
@@ -5985,12 +6224,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     return true;
   }
 
-  ContiGroupRun? _runAt(int startUid) {
+  /// 경로 [path] 로 [startUid] 항목에서 시작하는 그룹 구간.
+  ContiGroupRun? _runAt(String path, int startUid) {
     final layout = _contiLayout();
-    return groupRuns(
+    return allGroupRuns(
       layout.uids,
       layout.groups,
-    ).where((r) => r.startUid == startUid).firstOrNull;
+    ).where((r) => r.name == path && r.startUid == startUid).firstOrNull;
   }
 
   /// 목록 행 [rowIndex] 의 위/아래 절반([after])에 [data] 를 놓았다.
@@ -5998,11 +6238,11 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     final rows = _contiRows();
     if (rowIndex >= rows.length) return;
     final length = _stagingItems.length;
-    if (data is ContiRowDrag && data.isGroup) {
-      final run = _runAt(data.uid);
+    if (data is ContiGroupDrag) {
+      final run = _runAt(data.path, data.uid);
       if (run == null) return;
       final layout = _contiLayout();
-      final at = resolveGroupDrop(
+      final spot = resolveGroupDrop(
         rows,
         rowIndex,
         after,
@@ -6010,10 +6250,16 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         layout.uids,
         layout.groups,
       );
-      if (at == null) return;
+      if (spot == null) return;
       _applyLayout(
-        moveGroupTo(layout, run, at),
-        '"${run.name}" 그룹을 옮겼습니다.',
+        moveGroupTo(
+          layout,
+          run,
+          spot.index,
+          setParent: true,
+          parent: spot.group,
+        ),
+        '"${run.label}" 그룹을 옮겼습니다.',
         '그룹 옮기기를 되돌렸습니다.',
         flash: {for (var k = run.start; k < run.end; k++) layout.uids[k]},
       );
@@ -6030,14 +6276,14 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   /// 목록 아래 빈 자리에 놓았다 = 맨 끝, 그룹 밖.
   void _dropOnListEnd(Object data) {
     final spot = (index: _stagingItems.length, group: null as String?);
-    if (data is ContiRowDrag && data.isGroup) {
-      final run = _runAt(data.uid);
+    if (data is ContiGroupDrag) {
+      final run = _runAt(data.path, data.uid);
       if (run == null) return;
       final layout = _contiLayout();
-      if (run.end == layout.uids.length) return;
+      if (run.end == layout.uids.length && run.parent == null) return;
       _applyLayout(
-        moveGroupTo(layout, run, layout.uids.length),
-        '"${run.name}" 그룹을 맨 끝으로 옮겼습니다.',
+        moveGroupTo(layout, run, layout.uids.length, setParent: true),
+        '"${run.label}" 그룹을 맨 끝으로 옮겼습니다.',
         '그룹 옮기기를 되돌렸습니다.',
       );
     } else if (data is ContiRowDrag) {
@@ -6058,7 +6304,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         spot.group == old && uids.every((u) => _itemGroups[u] == old)
         ? '$noun 옮겼습니다.'
         : spot.group != null
-        ? '$noun "${spot.group}" 그룹에 넣었습니다.'
+        ? '$noun "${groupLabel(spot.group!)}" 그룹에 넣었습니다.'
         : '$noun 그룹에서 뺐습니다.';
     _applyLayout(
       moveItemsTo(_contiLayout(), uids, spot),
@@ -6068,24 +6314,26 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     );
   }
 
-  /// 모든 그룹 이름(빈 그룹 포함). [except] 한 개는 뺀다(이름 바꿀 때 자기 이름).
-  List<String> _groupNames({String? except}) {
-    final names = [..._itemGroups.values.toSet(), ..._emptyGroups];
-    if (except != null) names.remove(except);
-    return names;
-  }
+  /// [parent] 바로 아래 그룹 이름(빈 그룹 포함). [except] 한 개는 뺀다(이름 바꿀 때 자기 이름).
+  Set<String> _groupNames({String? parent, String? except}) =>
+      siblingGroupNames(_itemGroups, _emptyGroups, parent)..remove(except);
 
   /// '그룹 만들기': 이름을 묻고, 고른 항목이 있으면 그 항목을 넣는다(체크 해제하면 빈 그룹).
-  Future<void> _createGroup() async {
+  /// [parent] 가 있으면 그 그룹 아래 하위 그룹(빈 그룹은 못 만든다 — 항목을 골라야 한다).
+  Future<void> _createGroup([ContiGroupRun? parent]) async {
     final picked = _selectedUids;
     final selected = _stagingItems
         .where((e) => picked.contains(e.uid))
         .toList();
+    if (parent != null && selected.isEmpty) {
+      _showSnack('하위 그룹에 넣을 항목을 먼저 골라 주세요.');
+      return;
+    }
     final r = await showGroupNameDialog(
       context,
-      title: '그룹 만들기',
+      title: parent == null ? '그룹 만들기' : '"${parent.label}" 아래 하위 그룹 만들기',
       confirmLabel: '만들기',
-      takenNames: _groupNames(),
+      takenNames: _groupNames(parent: parent?.name),
       selectedTitle: selected.isEmpty
           ? null
           : selected.length > 1
@@ -6095,10 +6343,16 @@ class _PraiseHomePageState extends State<PraiseHomePage>
           : selected.first.item.displayTitle,
     );
     if (r == null || !mounted) return;
-    if (r.withSelected && selected.isNotEmpty) {
+    if (parent != null || (r.withSelected && selected.isNotEmpty)) {
       final uids = {for (final e in selected) e.uid};
+      final layout = _contiLayout();
+      // 묻는 사이 콘티가 바뀌었으면 상위를 다시 찾는다.
+      final p = parent == null ? null : _runAt(parent.name, parent.startUid);
+      if (parent != null && p == null) return;
       _applyLayout(
-        createGroupWithItems(_contiLayout(), uids, r.name),
+        p == null
+            ? createGroupWithItems(layout, uids, r.name)
+            : createSubGroupWithItems(layout, p, uids, r.name),
         '"${r.name}" 그룹을 만들었습니다.',
         '그룹 만들기를 되돌렸습니다.',
         flash: uids,
@@ -6117,22 +6371,24 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     if (!_collapsedGroups.remove(key)) _collapsedGroups.add(key);
   });
 
-  /// 그룹 머리 ⋯ 메뉴: 이름 바꾸기. [startUid] -1 = 빈 그룹.
-  Future<void> _renameGroup(String name, int startUid) async {
+  /// 그룹 머리 ⋯ 메뉴: 이름 바꾸기. [path] 는 그룹 경로, [startUid] -1 = 빈 그룹.
+  Future<void> _renameGroup(String path, int startUid) async {
+    final leaf = groupLeaf(path);
+    final parent = groupParent(path);
     final r = await showGroupNameDialog(
       context,
       title: '그룹 이름 바꾸기',
       confirmLabel: '바꾸기',
-      initial: name,
-      takenNames: _groupNames(except: name),
+      initial: leaf,
+      takenNames: _groupNames(parent: parent, except: leaf),
     );
-    if (r == null || r.name == name || !mounted) return;
-    final oldKey = groupKey(name, startUid);
-    final run = startUid < 0 ? null : _runAt(startUid);
+    if (r == null || r.name == leaf || !mounted) return;
+    final oldKey = groupKey(path, startUid);
+    final run = startUid < 0 ? null : _runAt(path, startUid);
     if (startUid >= 0 && run == null) return;
     _trackedEdit('그룹 이름을 "${r.name}"(으)로 바꿨습니다.', '그룹 이름 바꾸기를 되돌렸습니다.', () {
       if (run == null) {
-        final i = _emptyGroups.indexOf(name);
+        final i = _emptyGroups.indexOf(path);
         if (i >= 0) _emptyGroups[i] = r.name;
       } else {
         final l = renameGroup(_contiLayout(), run, r.name);
@@ -6141,37 +6397,44 @@ class _PraiseHomePageState extends State<PraiseHomePage>
           ..addAll(l.groups);
       }
       if (_collapsedGroups.remove(oldKey)) {
-        _collapsedGroups.add(groupKey(r.name, startUid));
+        _collapsedGroups.add(
+          groupKey(parent == null ? r.name : '$parent/${r.name}', startUid),
+        );
       }
     });
   }
 
-  /// 그룹 풀기: 항목은 그대로 두고 그룹만 없앤다. 빈 그룹이면 그냥 지운다.
-  void _ungroup(String name, int startUid) {
-    final run = startUid < 0 ? null : _runAt(startUid);
+  /// 그룹 풀기: 항목은 그대로(상위에) 두고 그룹만 없앤다. 빈 그룹이면 그냥 지운다.
+  void _ungroup(String path, int startUid) {
+    final run = startUid < 0 ? null : _runAt(path, startUid);
     if (startUid >= 0 && run == null) return;
-    _trackedEdit('"$name" 그룹을 풀었습니다. 항목은 그대로 있습니다.', '그룹 풀기를 되돌렸습니다.', () {
-      if (run == null) {
-        _emptyGroups.remove(name);
-      } else {
-        _itemGroups
-          ..clear()
-          ..addAll(ungroup(_contiLayout(), run).groups);
-      }
-      _collapsedGroups.remove(groupKey(name, startUid));
-    });
+    _trackedEdit(
+      '"${groupLabel(path)}" 그룹을 풀었습니다. 항목은 그대로 있습니다.',
+      '그룹 풀기를 되돌렸습니다.',
+      () {
+        if (run == null) {
+          _emptyGroups.remove(path);
+        } else {
+          final l = ungroup(_contiLayout(), run);
+          _itemGroups
+            ..clear()
+            ..addAll(l.groups);
+        }
+        _collapsedGroups.remove(groupKey(path, startUid));
+      },
+    );
   }
 
   /// 그룹과 안의 항목을 모두 삭제(확인). 저장한 콘티는 그대로다.
   Future<void> _deleteGroupWithItems(String name, int startUid) async {
-    final run = _runAt(startUid);
+    final run = _runAt(name, startUid);
     if (run == null) return;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('그룹과 항목 삭제'),
         content: Text(
-          '"$name" 그룹과 안의 항목 ${run.count}개를 콘티에서 삭제할까요?\n'
+          '"${groupLabel(name)}" 그룹과 안의 항목 ${run.count}개를 콘티에서 삭제할까요?\n'
           '저장한 콘티는 그대로 남습니다.',
         ),
         actions: [
@@ -6188,13 +6451,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     );
     if (ok != true || !mounted) return;
     // 묻는 사이 콘티가 바뀌었을 수 있어 다시 찾는다.
-    final again = _runAt(startUid);
+    final again = _runAt(name, startUid);
     if (again == null) return;
     final uids = {
       for (var k = again.start; k < again.end; k++) _stagingItems[k].uid,
     };
     _trackedEdit(
-      '"$name" 그룹과 항목 ${uids.length}개를 삭제했습니다.',
+      '"${groupLabel(name)}" 그룹과 항목 ${uids.length}개를 삭제했습니다.',
       '그룹 삭제를 되돌렸습니다.',
       () {
         _removeStagingWhere((e) => uids.contains(e.uid));
@@ -6216,15 +6479,15 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   void _deleteEmptyGroup(String name) => _ungroup(name, -1);
 
   /// 그룹을 위([delta] < 0)·아래로 한 칸.
-  void _moveGroupStep(int startUid, int delta) {
-    final run = _runAt(startUid);
+  void _moveGroupStep(String path, int startUid, int delta) {
+    final run = _runAt(path, startUid);
     if (run == null) return;
     final layout = _contiLayout();
     final at = groupStepIndex(layout, run, delta);
     if (at == null) return;
     _applyLayout(
       moveGroupTo(layout, run, at),
-      '"${run.name}" 그룹을 ${delta < 0 ? '위' : '아래'}로 옮겼습니다.',
+      '"${run.label}" 그룹을 ${delta < 0 ? '위' : '아래'}로 옮겼습니다.',
       '그룹 옮기기를 되돌렸습니다.',
       flash: {for (var k = run.start; k < run.end; k++) layout.uids[k]},
     );
@@ -6276,25 +6539,29 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     } while (startUid != _nextUid);
     if (!mounted) return;
 
-    // 이미 있는 그룹과 이름이 같으면 이어 붙어 한 그룹이 되므로 붙은 쪽에 '(2)' 를 단다.
-    final taken = {..._groupNames(), ...result.itemGroups.values};
-    final used = _groupNames().toSet();
+    // 이미 있는 맨 위 그룹과 이름이 같으면 이어 붙어 한 그룹이 되므로 붙은 쪽에 '(2)' 를 단다.
+    String top(String g) => pathPrefix(g, 1)!;
+    final used = _groupNames();
+    final taken = {...used, for (final g in result.itemGroups.values) top(g)};
     final renamed = <String, String>{};
-    for (final n in result.itemGroups.values.toSet()) {
+    for (final n in {for (final g in result.itemGroups.values) top(g)}) {
       if (used.contains(n)) {
         renamed[n] = uniqueGroupName(n, taken);
         taken.add(renamed[n]!);
       }
     }
+    String renameTop(String g) => renamed[top(g)] == null
+        ? g
+        : renamed[top(g)]! + g.substring(top(g).length);
     setState(() {
       _stagingItems.addAll(result.items);
       _noSpacerUids.addAll(result.noSpacerUids);
       _itemGroups.addAll({
-        for (final e in result.itemGroups.entries)
-          e.key: renamed[e.value] ?? e.value,
+        for (final e in result.itemGroups.entries) e.key: renameTop(e.value),
       });
       _slideNotes.addAll(result.notes);
       _itemBackgrounds.addAll(result.backgrounds);
+      _itemFormats.addAll(result.pageFormats);
       // loadConti 는 실제로 담은 항목에만 uid 를 쓴다.
       _nextUid += result.items.length;
       _linkedMissing += result.missingCount;
@@ -6385,6 +6652,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       itemGroups: result.itemGroups,
       notes: result.notes,
       backgrounds: result.backgrounds,
+      formats: result.pageFormats,
       linked: linked,
       missing: result.missingCount,
     );
@@ -6994,6 +7262,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                           isCheckingUpdate: _isCheckingUpdate,
                           hasUpdate: _pendingUpdate != null,
                           onCheckUpdate: _checkForUpdates,
+                          onUndo: _canUndo ? _undoLastSlideEdit : null,
                         ),
                         const SizedBox(height: 10),
                         Builder(
@@ -7030,6 +7299,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               onCreateGroup: _createGroup,
                               onToggleGroup: _toggleGroup,
                               onRenameGroup: _renameGroup,
+                              onCreateSubGroup: (path, startUid) {
+                                final run = _runAt(path, startUid);
+                                if (run != null) _createGroup(run);
+                              },
                               onUngroup: _ungroup,
                               onDeleteGroup: (name, startUid) => startUid < 0
                                   ? _deleteEmptyGroup(name)
@@ -7099,7 +7372,6 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               onSlideEdit: _editSlide,
                               onSlideDelete: _deleteSlide,
                               onSlidesDelete: _deleteSlides,
-                              onUndoDelete: _undoLastSlideEdit,
                               onSlidesCopy: _copySlides,
                               onPaste: _pasteSlides,
                               onSlidesMove: _moveSlides,
@@ -7108,9 +7380,6 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               bibleVersionOf: _bibleVersionOfItem,
                               switchingBible: _switchingBible,
                               onChangeBibleVersion: _changeBibleVersion,
-                              onUndoMove: _moveUndo == null
-                                  ? null
-                                  : _undoMoveSlides,
                               pageTemplates: _pageTemplates,
                               onAddPage: (choice) => _addPage(
                                 choice,
@@ -7671,6 +7940,7 @@ class _TopBar extends StatelessWidget {
     required this.isCheckingUpdate,
     required this.hasUpdate,
     required this.onCheckUpdate,
+    required this.onUndo,
   });
 
   final Widget tabs;
@@ -7689,6 +7959,9 @@ class _TopBar extends StatelessWidget {
   final bool isCheckingUpdate;
   final bool hasUpdate;
   final VoidCallback onCheckUpdate;
+
+  /// 마지막 편집 되돌리기(⌘/Ctrl+Z). null = 되돌릴 것 없음.
+  final bool Function()? onUndo;
 
   PopupMenuItem<VoidCallback> _item(
     VoidCallback action,
@@ -7815,6 +8088,11 @@ class _TopBar extends StatelessWidget {
                 ],
               ),
             ),
+          ),
+          IconButton(
+            tooltip: Platform.isMacOS ? '되돌리기 (⌘Z)' : '되돌리기 (Ctrl+Z)',
+            onPressed: onUndo == null ? null : () => onUndo!(),
+            icon: const Icon(Icons.undo_rounded, size: 18),
           ),
           PopupMenuButton<AppThemeKind>(
             tooltip: '테마',
@@ -8101,6 +8379,7 @@ class _StagingPanel extends StatelessWidget {
     required this.onCreateGroup,
     required this.onToggleGroup,
     required this.onRenameGroup,
+    required this.onCreateSubGroup,
     required this.onUngroup,
     required this.onDeleteGroup,
     required this.onMoveGroup,
@@ -8161,9 +8440,10 @@ class _StagingPanel extends StatelessWidget {
   final ValueChanged<String> onToggleGroup;
   // 그룹 머리 ⋯ 메뉴. startUid = 그 그룹 첫 항목 uid(빈 그룹은 -1).
   final void Function(String name, int startUid) onRenameGroup;
+  final void Function(String name, int startUid) onCreateSubGroup;
   final void Function(String name, int startUid) onUngroup;
   final void Function(String name, int startUid) onDeleteGroup;
-  final void Function(int startUid, int delta) onMoveGroup;
+  final void Function(String name, int startUid, int delta) onMoveGroup;
   // 방금 끌어 담은 항목(잠깐 강조)
   final Set<int> flashUids;
   // 콘티 글을 붙여 넣어 곡을 한꺼번에 담기
@@ -8454,7 +8734,10 @@ class _StagingPanel extends StatelessWidget {
                             onToggle: () => onToggleGroup(row.key),
                             onRename: () =>
                                 onRenameGroup(row.name, row.startUid),
-                            onMove: (d) => onMoveGroup(row.startUid, d),
+                            onCreateSub: () =>
+                                onCreateSubGroup(row.name, row.startUid),
+                            onMove: (d) =>
+                                onMoveGroup(row.name, row.startUid, d),
                             onUngroup: () => onUngroup(row.name, row.startUid),
                             onDelete: () =>
                                 onDeleteGroup(row.name, row.startUid),
@@ -8785,21 +9068,8 @@ class _StagingPanel extends StatelessWidget {
                             ),
                           ),
                         );
-                        // 그룹 안 항목은 들여쓰고 왼쪽에 세로 가이드선을 긋는다. 놓을 자리 선도 들여쓴 자리에서 시작한다.
-                        if (row.group == null) return target;
-                        return Container(
-                          margin: const EdgeInsets.only(left: 14),
-                          padding: const EdgeInsets.only(left: 6),
-                          decoration: BoxDecoration(
-                            border: Border(
-                              left: BorderSide(
-                                color: cs.outlineVariant,
-                                width: 2,
-                              ),
-                            ),
-                          ),
-                          child: target,
-                        );
+                        // 그룹 안 항목은 단계만큼 들여쓰고 왼쪽에 세로 가이드선을 긋는다. 놓을 자리 선도 들여쓴 자리에서 시작한다.
+                        return contiIndent(cs, row.depth, target);
                       },
                     ),
             ),
@@ -12578,7 +12848,19 @@ class _SlideQuickEditDialog extends StatefulWidget {
     this.subLabel,
     this.extraLabel,
     this.mainMaxLines = 7,
+    this.formatStyle,
+    this.format,
+    this.swatches = const [],
+    this.onConvert,
   });
+
+  /// 있으면 '자유 편집 페이지로 바꾸기' 버튼을 보인다(찬양·성경 글 페이지만).
+  final VoidCallback? onConvert;
+
+  /// 이 페이지 글자 모양(색·크기) 줄을 보일 때만 — 줄이 쓸 전역 스타일·현재 서식·색 견본.
+  final ExportStyle? formatStyle;
+  final PageEntry? format;
+  final List<Color> swatches;
 
   final String mainText;
   final String englishText;
@@ -12602,6 +12884,7 @@ class _SlideQuickEditDialogState extends State<_SlideQuickEditDialog> {
   late final TextEditingController _mainCtrl;
   late final TextEditingController _englishCtrl;
   late final TextEditingController _extraCtrl;
+  late PageEntry? _format = widget.format;
 
   @override
   void initState() {
@@ -12683,6 +12966,30 @@ class _SlideQuickEditDialogState extends State<_SlideQuickEditDialog> {
                   border: const OutlineInputBorder(),
                 ),
               ),
+              if (widget.formatStyle != null) ...[
+                const SizedBox(height: 12),
+                PageFormatEditor(
+                  entry: _format,
+                  style: widget.formatStyle!,
+                  isBible: widget.isBible,
+                  swatches: widget.swatches,
+                  onChanged: (f) => setState(() => _format = f),
+                ),
+              ],
+              if (widget.onConvert != null) ...[
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      widget.onConvert!();
+                    },
+                    icon: const Icon(Icons.brush_outlined, size: 18),
+                    label: const Text('이 페이지를 자유 편집 페이지로 바꾸기… (일부 글자만 서식)'),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -12697,6 +13004,7 @@ class _SlideQuickEditDialogState extends State<_SlideQuickEditDialog> {
             _mainCtrl.text,
             _englishCtrl.text,
             _extraCtrl.text,
+            _format,
           )),
           child: const Text('적용'),
         ),
@@ -13975,11 +14283,9 @@ class _PresenterConsole extends StatefulWidget {
     required this.onSlideEdit,
     required this.onSlideDelete,
     required this.onSlidesDelete,
-    required this.onUndoDelete,
     required this.onSlidesCopy,
     required this.onPaste,
     required this.onSlidesMove,
-    this.onUndoMove,
     this.bibleVersions = const [],
     this.bibleBookCounts = const {},
     this.bibleVersionOf,
@@ -14043,16 +14349,12 @@ class _PresenterConsole extends StatefulWidget {
   final ValueChanged<int> onSlideEdit;
   final ValueChanged<int> onSlideDelete;
   final ValueChanged<List<int>> onSlidesDelete;
-  // ⌘/Ctrl+Z: 끌어 옮기기·삭제 중 마지막 것 되돌리기. 되돌릴 게 없으면 false.
-  final bool Function() onUndoDelete;
   final ValueChanged<List<int>> onSlidesCopy;
   // 이 페이지(null = 현재 페이지) 바로 뒤에 붙여 넣기
   // 붙여 넣을 게 없으면 false
   final bool Function(int? afterIndex) onPaste;
   // 썸네일 끌어 놓기: (옮길 페이지들, 이 페이지 바로 뒤로)
   final void Function(List<int> slideIndexes, int afterIndex) onSlidesMove;
-  // 방금 끌어 옮긴 페이지 되돌리기(⌘/Ctrl+Z·머리줄 버튼). null = 되돌릴 것 없음. 되돌렸으면 true.
-  final bool Function()? onUndoMove;
   // 현재 슬라이드가 성경일 때만 보이는 본문 역본 칩. bibleVersionOf = 성경 항목 uid → 지금 본문 역본(못 풀면 null).
   final List<String> bibleVersions;
   final Map<String, int> bibleBookCounts;
@@ -14343,10 +14645,6 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
         _markAnchor = null;
       });
       return true;
-    }
-    if (withCmd && key == LogicalKeyboardKey.keyZ) {
-      // 옮기기·삭제 중 더 나중에 한 것을 되돌린다.
-      return widget.onUndoDelete();
     }
     if (withCmd && key == LogicalKeyboardKey.keyV) {
       // 고른 페이지가 있으면 그중 가장 뒤 페이지 뒤에, 없으면 현재 페이지 뒤에 넣는다.
@@ -14796,7 +15094,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
     }
   }
 
-  SlidePageData _pageDataFor(int i) {
+  SlidePageData _pageDataFor(int i, {bool formatted = true}) {
     final info = widget.slides[i];
     return SlidePageData(
       mainText: info.mainText,
@@ -14806,7 +15104,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
       isBible: info.isBible,
       pageIndex: i,
       totalPages: widget.slides.length,
-      style: widget.style.withBackground(info.background),
+      style: info.styleOn(widget.style, formatted: formatted),
       imagePath: info.imagePath,
       media: info.media,
       backdrop: _backdropFor(info),
@@ -14816,7 +15114,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
   /// 넘침을 잴 통역 화면 판. 모니터를 안 골랐으면 null.
   SlidePageData? _bOverflowDataFor(int i) => widget.bScreen == null
       ? null
-      : _pageDataFor(i).forB(
+      : _pageDataFor(i, formatted: false).forB(
           widget.slides[i].imagePath,
           sermon: widget.slides[i].background?.isSermon ?? false,
         );
@@ -15131,24 +15429,6 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
               ),
             ),
           ),
-          if (flash.badge == '옮김' && widget.onUndoMove != null) ...[
-            const SizedBox(width: 4),
-            Tooltip(
-              message: Platform.isMacOS ? '되돌리기 (⌘Z)' : '되돌리기 (Ctrl+Z)',
-              child: TextButton.icon(
-                onPressed: () => widget.onUndoMove?.call(),
-                icon: const Icon(Icons.undo_rounded, size: 16),
-                label: const Text('되돌리기'),
-                style: TextButton.styleFrom(
-                  visualDensity: VisualDensity.compact,
-                  textStyle: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-            ),
-          ],
         ],
         if (_view.showAllPages) ...[
           const SizedBox(width: 16),
@@ -15867,7 +16147,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
     SlideGroupSection s, {
     required bool first,
   }) {
-    final name = s.name ?? noGroupLabel;
+    final name = s.label ?? noGroupLabel;
     final muted = s.name == null; // 그룹 없는 구간은 흐린 라벨로 경계만 알린다.
     return SliverToBoxAdapter(
       child: SizedBox(

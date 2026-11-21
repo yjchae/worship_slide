@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 
 import '../domain/export_style.dart';
+import '../domain/page_format.dart';
 import '../domain/praise_song.dart';
 import '../domain/slide_background.dart';
 import '../domain/staging_item.dart';
@@ -313,11 +314,14 @@ class PythonBridge {
       ({StagingItem item, SlideBackground? background, bool noSpacer})
     >
     stagingItems,
+    // stagingItems 와 같은 순서의 페이지 서식(없으면 null). 생략하면 서식 없음.
+    List<PageFormat?>? pageFormats,
     required ExportStyle style,
   }) async {
     final payload = exportPayload(
       outputPath: outputPath,
       stagingItems: stagingItems,
+      pageFormats: pageFormats,
       style: style,
     );
 
@@ -335,11 +339,13 @@ class PythonBridge {
       ({StagingItem item, SlideBackground? background, bool noSpacer})
     >
     stagingItems,
+    List<PageFormat?>? pageFormats,
     required ExportStyle style,
   }) {
     return jsonEncode({
       'output_path': outputPath,
-      'songs': stagingItems.map((entry) {
+      'songs': stagingItems.indexed.map((indexed) {
+        final (itemIndex, entry) = indexed;
         final Map<String, dynamic> json = switch (entry.item) {
           SongStagingItem(:final song) => {
             'type': 'song',
@@ -390,6 +396,14 @@ class PythonBridge {
                   'font_files': FontLibrary.filesFor(background.fontFamily!),
               };
         if (entry.noSpacer) json['no_spacer'] = true;
+        final pageStyles = pageStylesFor(
+          entry.item,
+          pageFormats != null && itemIndex < pageFormats.length
+              ? pageFormats[itemIndex]
+              : null,
+          style.withBackground(background),
+        );
+        if (pageStyles != null) json['page_styles'] = pageStyles;
         return json;
       }).toList(),
       'style': {

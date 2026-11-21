@@ -8,6 +8,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../domain/chord_lyrics.dart';
+import '../domain/conti_tree.dart' show maxGroupDepth;
+import '../domain/page_format.dart';
 import '../domain/praise_song.dart';
 import '../domain/slide_background.dart';
 import '../domain/slide_media.dart';
@@ -24,6 +26,7 @@ class LoadContiResult {
     this.backgrounds = const {},
     this.noSpacerUids = const {},
     this.itemGroups = const {},
+    this.pageFormats = const {},
   });
   final List<({int uid, StagingItem item})> items;
   final int missingCount;
@@ -35,14 +38,28 @@ class LoadContiResult {
   final Set<int> noSpacerUids;
   // 항목 uid → 그룹 이름(정리된 값). 없는 항목은 그룹 없음.
   final Map<int, String> itemGroups;
+  // 항목 uid → 페이지별 글자 서식. 서식 없는 항목은 없다.
+  final Map<int, PageFormat> pageFormats;
 }
 
-/// 그룹 이름 정리: 앞뒤 공백 제거, 12자(글자 기준) 초과는 자름, 빈 값 = null(그룹 없음).
+/// 그룹 이름 정리: 앞뒤 공백 제거, 마디(글자 기준)마다 12자 초과는 자름, 빈 값 = null(그룹 없음).
+/// `상위/하위` 경로(최대 [maxGroupDepth] 단, 빈 마디 없음)는 그대로 두고, 그 밖에 `/` 가 든 이름은
+/// 평면 이름으로 보아 `/` 를 `／` 로 바꾼다.
 String? normalizeItemGroup(String? name) {
   final t = name?.trim() ?? '';
   if (t.isEmpty) return null;
-  final r = t.runes.toList();
-  return r.length <= 12 ? t : String.fromCharCodes(r.take(12)).trim();
+  String clip(String s) {
+    final r = s.runes.toList();
+    return r.length <= 12 ? s : String.fromCharCodes(r.take(12)).trim();
+  }
+
+  final segs = [for (final s in t.split('/')) s.trim()];
+  if (segs.length > 1 &&
+      segs.length <= maxGroupDepth &&
+      segs.every((s) => s.isNotEmpty)) {
+    return segs.map(clip).join('/');
+  }
+  return clip(t.replaceAll('/', '／'));
 }
 
 // 메모는 항목별로 {"페이지": "메모"} JSON 한 칸에 담는다.
@@ -92,6 +109,7 @@ class WorshipContiRepository {
     Map<int, SlideBackground> backgrounds = const {},
     Set<int> noSpacerUids = const {},
     Map<int, String> itemGroups = const {},
+    Map<int, PageFormat> pageFormats = const {},
     String? overwriteUid,
   }) async {
     final db = await _db.database;
@@ -221,6 +239,9 @@ class WorshipContiRepository {
         );
         if (noSpacerUids.contains(stagingItems[i].uid)) row['no_spacer'] = 1;
         row['item_group'] = normalizeItemGroup(itemGroups[stagingItems[i].uid]);
+        row['page_format'] = PageFormat.encode(
+          pageFormats[stagingItems[i].uid],
+        );
         await txn.insert('worship_conti_items', row);
       }
       return contiId;
@@ -282,6 +303,7 @@ class WorshipContiRepository {
     final backgrounds = <int, SlideBackground>{};
     final noSpacerUids = <int>{};
     final itemGroups = <int, String>{};
+    final pageFormats = <int, PageFormat>{};
 
     for (final row in itemRows) {
       final addedBefore = result.length;
@@ -388,6 +410,8 @@ class WorshipContiRepository {
         if (row['no_spacer'] == 1) noSpacerUids.add(result.last.uid);
         final group = normalizeItemGroup(row['item_group'] as String?);
         if (group != null) itemGroups[result.last.uid] = group;
+        final format = PageFormat.parse(row['page_format']);
+        if (format != null) pageFormats[result.last.uid] = format;
       }
     }
 
@@ -398,6 +422,7 @@ class WorshipContiRepository {
       backgrounds: backgrounds,
       noSpacerUids: noSpacerUids,
       itemGroups: itemGroups,
+      pageFormats: pageFormats,
     );
   }
 
@@ -622,6 +647,11 @@ class WorshipContiRepository {
         if (row.containsKey('item_group')) {
           final g = row['item_group'];
           row['item_group'] = normalizeItemGroup(g is String ? g : null);
+        }
+        if (row.containsKey('page_format')) {
+          row['page_format'] = PageFormat.encode(
+            PageFormat.parse(row['page_format']),
+          );
         }
         final songUid = row['song_uid'];
         if (songUid is String) row['song_id'] = songIdByUid(songUid);

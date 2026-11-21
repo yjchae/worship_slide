@@ -64,12 +64,16 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate, WKNavi
       : NSWindow(contentRect: rect, styleMask: [.titled, .resizable], backing: .buffered, defer: false)
     window.isReleasedWhenClosed = false
     window.backgroundColor = .black
-    window.collectionBehavior = [.fullScreenAuxiliary]
+    // .stationary: 보조 모니터 Spaces 전환 때 창이 다시 합성되며 번쩍이는 것을 줄이는 시험(실기 미확인).
+    window.collectionBehavior = [.fullScreenAuxiliary, .stationary]
     self.init(window: window)
 
     let config = WKWebViewConfiguration()
     config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
     webView = WKWebView(frame: window.contentView!.bounds, configuration: config)
+    // 다시 그려지는 순간 흰 바탕이 비치지 않게 검정으로.
+    webView.setValue(false, forKey: "drawsBackground")
+    if #available(macOS 12.0, *) { webView.underPageBackgroundColor = .black }
     webView.autoresizingMask = [.width, .height]
     window.contentView!.addSubview(webView)
     window.delegate = self
@@ -80,6 +84,9 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate, WKNavi
   private var fullScreenDisplay: CGDirectDisplayID?
 
   @objc private func screensChanged() {
+    #if DEBUG
+    NSLog("[audience] screensChanged frame=\(String(describing: window?.frame)) display=\(String(describing: fullScreenDisplay))")
+    #endif
     NSScreen.refit(window, toDisplay: fullScreenDisplay)
   }
 
@@ -190,12 +197,26 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate, WKNavi
     mediaView?.evaluateJavaScript(js, completionHandler: nil)
   }
 
+  /// 슬라이드 웹뷰에 마지막으로 올린 HTML(같으면 다시 안 읽는다).
+  private var _loadedHTML: String?
+
+  private func load(_ html: String) {
+    _loadedHTML = html
+    webView.loadHTMLString(html, baseURL: nil)
+  }
+
   // data: Dart의 SlidePageData.toJson() 결과 ([String:Any])
   func updatePage(data: [String: Any]) {
     _lastData = data
     if _isBlackout { return }
     let html = buildHTML(data: data)
-    webView.loadHTMLString(html, baseURL: nil)
+    // 같은 HTML 이면 다시 읽지 않는다(다시 읽으면 번쩍인다). 확대·포인터는 HTML 이 아니라 JS 로 따로 오므로 영향 없고,
+    // 블랙아웃 토글은 아래 _loadedHTML 을 직접 갱신한다. 미디어는 HTML 과 무관하게 늘 맞춘다.
+    let skip = html == _loadedHTML
+    #if DEBUG
+    NSLog("[audience] updatePage skip=\(skip) len=\(html.count)")
+    #endif
+    if !skip { load(html) }
     updateMedia(data["media"] as? [String: Any])
   }
 
@@ -353,11 +374,11 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate, WKNavi
       <style>*{margin:0;padding:0;}body{width:100vw;height:100vh;background:\(bgColor);}</style>
       </head><body></body></html>
       """
-      webView.loadHTMLString(html, baseURL: nil)
+      load(html)
       mediaView?.evaluateJavaScript("window.setBlack&&setBlack(true)", completionHandler: nil)
     } else {
       if let d = _lastData {
-        webView.loadHTMLString(buildHTML(data: d), baseURL: nil)
+        load(buildHTML(data: d))
         // 꺼진 사이 페이지를 넘겼으면 새 미디어로 바뀐다. 같은 미디어면 멈춘 자리에서 다시.
         let media = d["media"] as? [String: Any]
         let same = (media?["key"] as? String) == mediaKey

@@ -54,6 +54,68 @@ void main() {
 
   tearDownAll(() => temp.delete(recursive: true));
 
+  testWidgets('하위 그룹 만들기 → 들여쓰기·접기(상위가 하위도 가림) → 되돌리기', (tester) async {
+    tester.view.physicalSize = const Size(1920, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final onError = FlutterError.onError;
+    FlutterError.onError = (d) {
+      if (!d.exceptionAsString().contains('overflowed')) onError?.call(d);
+    };
+    addTearDown(() => FlutterError.onError = onError);
+    await tester.pumpWidget(const MaterialApp(home: PraiseHomePage()));
+    await settle(tester);
+    for (final t in ['첫째 곡', '둘째 곡']) {
+      await tester.tap(find.text(t));
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.tap(find.text(t));
+      await settle(tester);
+    }
+    final list = find.byType(ContiTreeList);
+    Finder inList(String t) =>
+        find.descendant(of: list, matching: find.text(t));
+
+    // 둘째 곡을 고르고 그룹 '특송'을 만든다.
+    await tester.tap(inList('둘째 곡'));
+    await settle(tester);
+    await tester.tap(find.byIcon(Icons.create_new_folder_outlined));
+    await settle(tester);
+    await tester.enterText(find.byType(TextField).last, '특송');
+    await tester.pump();
+    await tester.tap(find.text('만들기'));
+    await settle(tester);
+
+    // 첫째 곡을 골라 특송 ⋯ → 하위 그룹 만들기. 이름의 '/' 는 전각으로 바뀐다.
+    await tester.tap(inList('첫째 곡'));
+    await settle(tester);
+    await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+    await settle(tester);
+    await tester.tap(find.text('하위 그룹 만들기'));
+    await settle(tester);
+    await tester.enterText(find.byType(TextField).last, '솔/로');
+    await tester.pump();
+    await tester.tap(find.text('만들기'));
+    await settle(tester);
+    final headers = find.byType(ContiGroupHeader);
+    expect(headers, findsNWidgets(2));
+    expect(find.text('솔／로'), findsOneWidget);
+    // 하위 머리줄은 상위보다 오른쪽으로 들여쓴다.
+    expect(
+      tester.getTopLeft(find.text('솔／로')).dx,
+      greaterThan(tester.getTopLeft(find.text('특송')).dx),
+    );
+
+    // 상위를 접으면 하위 머리줄·항목이 모두 가려진다.
+    await tester.tap(find.text('특송'));
+    await settle(tester);
+    expect(headers, findsOneWidget);
+    expect(inList('첫째 곡'), findsNothing);
+    expect(inList('둘째 곡'), findsNothing);
+
+    await tester.pumpWidget(const SizedBox());
+    await settle(tester);
+  });
+
   testWidgets('그룹 만들기 → 끌어 넣기 → 접기 → 풀기', (tester) async {
     tester.view.physicalSize = const Size(1920, 1400);
     tester.view.devicePixelRatio = 1;

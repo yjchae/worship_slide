@@ -8,10 +8,15 @@ const double slideGroupGap = 12;
 /// 같은 그룹 이름이 이어진 슬라이드 구간. [name] 이 null 이면 그룹 없는 구간.
 class SlideGroupSection {
   const SlideGroupSection(this.name, this.start, this.count);
+
+  /// 그룹 경로(`상위/하위`). 없으면 null.
   final String? name;
   final int start;
   final int count;
   int get end => start + count; // 끝 번호(포함 안 함)
+
+  /// 머리줄에 쓸 이름: `상위 › 하위`.
+  String? get label => name?.replaceAll('/', ' › ');
 
   @override
   bool operator ==(Object other) =>

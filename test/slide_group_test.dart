@@ -50,4 +50,10 @@ void main() {
     expect(s.length, 1);
     expect(sectionHasHeader(s[0], first: true), isFalse);
   });
+
+  test('하위 그룹 경로는 구간이 갈리고 머리줄은 상위 › 하위', () {
+    final s = slideGroupSections(['a', 'a/x', 'a/x', 'a/y']);
+    expect(s.map((e) => e.label), ['a', 'a › x', 'a › y']);
+    expect(const SlideGroupSection(null, 0, 1).label, isNull);
+  });
 }

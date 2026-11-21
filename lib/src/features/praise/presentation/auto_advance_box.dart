@@ -34,6 +34,10 @@ class _AutoAdvanceBoxState extends State<AutoAdvanceBox> {
     text: (widget.timer.interval.inSeconds % 60).toString().padLeft(2, '0'),
   );
 
+  late final _count = TextEditingController(
+    text: widget.timer.maxCount?.toString() ?? '',
+  );
+
   AutoAdvanceTimer get _timer => widget.timer;
 
   @override
@@ -49,6 +53,7 @@ class _AutoAdvanceBoxState extends State<AutoAdvanceBox> {
     _ticker?.cancel();
     _minutes.dispose();
     _seconds.dispose();
+    _count.dispose();
     super.dispose();
   }
 
@@ -148,6 +153,38 @@ class _AutoAdvanceBoxState extends State<AutoAdvanceBox> {
             ),
           ],
         ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Text(
+              '횟수',
+              style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+            ),
+            const SizedBox(width: 6),
+            Tooltip(
+              message: '비우면 계속 넘깁니다. 0이나 숫자가 아니면 무제한입니다. 반복일 때만 쓸 수 있습니다.',
+              child: _numberField(
+                _count,
+                key: const ValueKey('auto-advance-count'),
+                enabled: _timer.repeat && !running,
+                hint: '무제한',
+                onChanged: () => _timer.setMaxCount(int.tryParse(_count.text)),
+              ),
+            ),
+            unit('회'),
+            const Spacer(),
+            if (_timer.remainingCount case final left?)
+              Text(
+                '남은 $left회',
+                key: const ValueKey('auto-advance-left'),
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: cs.primary,
+                ),
+              ),
+          ],
+        ),
         const SizedBox(height: 8),
         SizedBox(
           width: double.infinity,
@@ -174,12 +211,19 @@ class _AutoAdvanceBoxState extends State<AutoAdvanceBox> {
     );
   }
 
-  Widget _numberField(TextEditingController controller, {Key? key}) {
+  Widget _numberField(
+    TextEditingController controller, {
+    Key? key,
+    bool enabled = true,
+    String? hint,
+    VoidCallback? onChanged,
+  }) {
     return SizedBox(
-      width: 44,
+      width: hint == null ? 44 : 64,
       height: 32,
       child: TextField(
         key: key,
+        enabled: enabled,
         controller: controller,
         keyboardType: TextInputType.number,
         textAlign: TextAlign.center,
@@ -188,12 +232,16 @@ class _AutoAdvanceBoxState extends State<AutoAdvanceBox> {
           FilteringTextInputFormatter.digitsOnly,
           LengthLimitingTextInputFormatter(3),
         ],
-        decoration: const InputDecoration(
+        decoration: InputDecoration(
           isDense: true,
-          contentPadding: EdgeInsets.symmetric(vertical: 6),
-          border: OutlineInputBorder(),
+          hintText: hint,
+          hintStyle: const TextStyle(fontSize: 11),
+          contentPadding: const EdgeInsets.symmetric(vertical: 6),
+          border: const OutlineInputBorder(),
         ),
-        onChanged: (_) => setState(() => _timer.setInterval(_typed)),
+        onChanged: (_) => setState(
+          () => onChanged != null ? onChanged() : _timer.setInterval(_typed),
+        ),
       ),
     );
   }

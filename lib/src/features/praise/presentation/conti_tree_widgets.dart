@@ -250,7 +250,29 @@ class ContiDragHandle extends StatelessWidget {
   }
 }
 
-enum _GroupMenu { rename, up, down, ungroup, delete }
+/// 그룹째 끄는 데이터. 하위 그룹은 상위와 첫 항목 uid 가 같을 수 있어 경로로 가른다.
+class ContiGroupDrag extends ContiRowDrag {
+  const ContiGroupDrag(this.path, int startUid)
+    : super(startUid, isGroup: true);
+  final String path;
+}
+
+/// 그룹 안 행을 [depth] 단계만큼 들여쓰고 단계마다 왼쪽에 세로 가이드선을 긋는다. 0 이면 그대로.
+Widget contiIndent(ColorScheme cs, int depth, Widget child) {
+  for (var i = 0; i < depth; i++) {
+    child = Container(
+      margin: const EdgeInsets.only(left: 14),
+      padding: const EdgeInsets.only(left: 6),
+      decoration: BoxDecoration(
+        border: Border(left: BorderSide(color: cs.outlineVariant, width: 2)),
+      ),
+      child: child,
+    );
+  }
+  return child;
+}
+
+enum _GroupMenu { rename, sub, up, down, ungroup, delete }
 
 /// 그룹 머리줄(폴더). 누르면 접기·펼치기, 끌면 그룹째 이동, 항목을 놓으면 그 그룹에 든다.
 /// 빈 그룹([ContiHeaderRow.empty])은 접거나 끌 수 없다.
@@ -265,6 +287,7 @@ class ContiGroupHeader extends StatelessWidget {
     required this.onDrop,
     required this.onToggle,
     required this.onRename,
+    required this.onCreateSub,
     required this.onMove,
     required this.onUngroup,
     required this.onDelete,
@@ -280,6 +303,7 @@ class ContiGroupHeader extends StatelessWidget {
   final void Function(Object data, bool after) onDrop;
   final VoidCallback onToggle;
   final VoidCallback onRename;
+  final VoidCallback onCreateSub;
   final ValueChanged<int> onMove; // -1 위, 1 아래
   final VoidCallback onUngroup;
   final VoidCallback onDelete;
@@ -296,7 +320,8 @@ class ContiGroupHeader extends StatelessWidget {
         borderRadius: BorderRadius.circular(AppRadius.control),
         onTap: h.empty ? null : onToggle,
         child: Semantics(
-          label: '${h.name} 그룹, ${h.count}개, ${h.collapsed ? '접힘' : '펼침'}',
+          label:
+              '${groupLabel(h.name)} 그룹, ${h.count}개, ${h.collapsed ? '접힘' : '펼침'}',
           child: Padding(
             padding: const EdgeInsets.fromLTRB(2, 4, 0, 4),
             child: Row(
@@ -323,7 +348,7 @@ class ContiGroupHeader extends StatelessWidget {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    h.name,
+                    h.label,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
@@ -365,6 +390,7 @@ class ContiGroupHeader extends StatelessWidget {
                   ),
                   onSelected: (m) => switch (m) {
                     _GroupMenu.rename => onRename(),
+                    _GroupMenu.sub => onCreateSub(),
                     _GroupMenu.up => onMove(-1),
                     _GroupMenu.down => onMove(1),
                     _GroupMenu.ungroup => onUngroup(),
@@ -376,6 +402,11 @@ class ContiGroupHeader extends StatelessWidget {
                       child: Text('이름 바꾸기'),
                     ),
                     if (!h.empty) ...[
+                      PopupMenuItem(
+                        value: _GroupMenu.sub,
+                        enabled: h.depth < maxGroupDepth,
+                        child: const Text('하위 그룹 만들기'),
+                      ),
                       PopupMenuItem(
                         value: _GroupMenu.up,
                         enabled: canMoveUp,
@@ -412,36 +443,40 @@ class ContiGroupHeader extends StatelessWidget {
         ),
       ),
     );
-    return ContiInsertTarget(
-      intoOnAfter: true,
-      onDrop: onDrop,
-      child: h.empty
-          ? body
-          : Draggable<ContiRowDrag>(
-              data: ContiRowDrag(h.startUid, isGroup: true),
-              dragAnchorStrategy: pointerDragAnchorStrategy,
-              feedback: _dragFeedback(
-                cs,
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.folder_rounded, size: 18),
-                    const SizedBox(width: 6),
-                    Flexible(
-                      child: Text(
-                        '${h.name} · ${h.count}개',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 13),
+    return contiIndent(
+      cs,
+      h.depth - 1,
+      ContiInsertTarget(
+        intoOnAfter: true,
+        onDrop: onDrop,
+        child: h.empty
+            ? body
+            : Draggable<ContiRowDrag>(
+                data: ContiGroupDrag(h.name, h.startUid),
+                dragAnchorStrategy: pointerDragAnchorStrategy,
+                feedback: _dragFeedback(
+                  cs,
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.folder_rounded, size: 18),
+                      const SizedBox(width: 6),
+                      Flexible(
+                        child: Text(
+                          '${h.label} · ${h.count}개',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 13),
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
+                onDragStarted: () => dragging.value = true,
+                onDragEnd: (_) => dragging.value = false,
+                child: body,
               ),
-              onDragStarted: () => dragging.value = true,
-              onDragEnd: (_) => dragging.value = false,
-              child: body,
-            ),
+      ),
     );
   }
 }

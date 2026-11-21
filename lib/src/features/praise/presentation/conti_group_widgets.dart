@@ -63,7 +63,9 @@ class _GroupNameDialogState extends State<_GroupNameDialog> {
     super.dispose();
   }
 
-  String? get _name => normalizeItemGroup(_controller.text);
+  // 이름 안 `/` 는 하위 그룹 경로와 헷갈리므로 전각 `／` 로 바꾼다.
+  String? get _name =>
+      normalizeItemGroup(_controller.text.replaceAll('/', '／'));
   String? get _error => groupNameError(_name, widget.takenNames);
   bool get _canSubmit => _name != null && _error == null;
 

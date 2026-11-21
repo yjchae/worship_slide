@@ -41,7 +41,10 @@ class PraiseDatabase {
       onCreate: (db, version) => createPraiseSchema(db),
       onUpgrade: (db, oldVersion, newVersion) =>
           upgradePraiseSchema(db, oldVersion),
-      onOpen: ensureItemGroupColumn,
+      onOpen: (db) async {
+        await ensureItemGroupColumn(db);
+        await ensurePageFormatColumn(db);
+      },
     );
     return _database!;
   }
@@ -190,7 +193,8 @@ Future<void> createPraiseSchema(DatabaseExecutor db) async {
     song_chord_key TEXT,
     song_transpose INTEGER,
     song_chord_accidental TEXT,
-    item_group TEXT
+    item_group TEXT,
+    page_format TEXT
   )
 ''');
   await db.execute(_createSongTranslations);
@@ -595,6 +599,14 @@ Future<void> ensureItemGroupColumn(DatabaseExecutor db) => _addColumnIfMissing(
   'worship_conti_items',
   'item_group',
   'ALTER TABLE worship_conti_items ADD COLUMN item_group TEXT',
+);
+
+/// 콘티 항목 페이지별 글자 서식 칸(`page_format`, JSON, NULL = 서식 없음). [ensureItemGroupColumn] 과 같은 방식.
+Future<void> ensurePageFormatColumn(DatabaseExecutor db) => _addColumnIfMissing(
+  db,
+  'worship_conti_items',
+  'page_format',
+  'ALTER TABLE worship_conti_items ADD COLUMN page_format TEXT',
 );
 
 /// 곡 항목 중 스냅샷 칸(제목·가사·영어 가사·uid)이 빈 행을 그 곡의 지금 값으로 채운다.

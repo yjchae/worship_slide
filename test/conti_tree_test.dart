@@ -15,12 +15,19 @@ ContiLayout layout(
 
 /// 그룹마다 항목이 목록에서 이어져 있는지(불변식).
 bool contiguous(ContiLayout l) {
+  // 모든 앞부분 경로(상위·하위)가 이어져 있어야 한다.
   final seen = <String>{};
-  String? prev;
+  Set<String> prev = {};
   for (final u in l.uids) {
     final g = l.groups[u];
-    if (g != prev && g != null && !seen.add(g)) return false;
-    prev = g;
+    final now = {
+      if (g != null)
+        for (var n = 1; n <= groupDepth(g); n++) pathPrefix(g, n)!,
+    };
+    for (final p in now) {
+      if (!prev.contains(p) && !seen.add(p)) return false;
+    }
+    prev = now;
   }
   return true;
 }
@@ -166,8 +173,8 @@ void main() {
       final run = groupRuns(l.uids, l.groups).first;
       // b 그룹의 항목 5 위 절반에 놓아도 b 블록 앞
       final at = resolveGroupDrop(rows, 5, false, run, l.uids, l.groups)!;
-      expect(at, 3);
-      final r = moveGroupTo(l, run, at);
+      expect(at.index, 3);
+      final r = moveGroupTo(l, run, at.index);
       expect(r.uids, [3, 1, 2, 4, 5]);
       expect(r.groups, l.groups);
       expect(contiguous(r), isTrue);
@@ -268,7 +275,7 @@ void main() {
         if (runs.isEmpty) continue;
         final run = runs[rnd.nextInt(runs.length)];
         final at = resolveGroupDrop(rows, i, after, run, l.uids, l.groups);
-        if (at != null) l = moveGroupTo(l, run, at);
+        if (at != null) l = moveGroupTo(l, run, at.index);
       } else {
         final uid = l.uids[rnd.nextInt(l.uids.length)];
         l = moveItemTo(l, uid, resolveDrop(rows, i, after, l.uids.length));
@@ -313,7 +320,7 @@ void main() {
                     state.groups,
                   );
                   if (at != null) {
-                    set(() => state = moveGroupTo(state, run, at));
+                    set(() => state = moveGroupTo(state, run, at.index));
                   }
                 } else {
                   final spot = resolveDrop(
@@ -354,6 +361,7 @@ void main() {
                         if (!collapsed.remove(row.key)) collapsed.add(row.key);
                       }),
                       onRename: () {},
+                      onCreateSub: () {},
                       onMove: (_) {},
                       onUngroup: () {},
                       onDelete: () {},
@@ -595,16 +603,184 @@ void main() {
     });
 
     test('다른 그룹 안 항목이 앞이면 그 그룹 뒤에서 만든다', () {
-      final l = createGroupWithItems(
-        layout([1, 2, 3, 4], {1: 'a', 2: 'a'}),
-        [1, 4],
-        'x',
-      );
+      final l = createGroupWithItems(layout([1, 2, 3, 4], {1: 'a', 2: 'a'}), [
+        1,
+        4,
+      ], 'x');
       expect(l.uids, [2, 1, 4, 3]);
       expect(contiguous(l), isTrue);
       expect(l.groups[1], 'x');
       expect(l.groups[4], 'x');
       expect(l.groups[2], 'a');
+    });
+  });
+
+  group('하위 그룹', () {
+    ContiLayout base() => layout(
+      [1, 2, 3, 4, 5, 6],
+      {2: 'a', 3: 'a/x', 4: 'a/x', 5: 'a/y', 6: 'b'},
+    );
+
+    test('행: 상위 머리 → 직속 항목·하위 머리 → 하위 항목, 접으면 하위도 가려진다', () {
+      final rows = contiRows(base().uids, base().groups);
+      expect(
+        [
+          for (final r in rows)
+            r is ContiHeaderRow ? 'H${r.name}' : 'I${(r as ContiItemRow).uid}',
+        ],
+        ['I1', 'Ha', 'I2', 'Ha/x', 'I3', 'I4', 'Ha/y', 'I5', 'Hb', 'I6'],
+      );
+      expect((rows[3] as ContiHeaderRow).depth, 2);
+      expect((rows[3] as ContiHeaderRow).label, 'x');
+      expect((rows[4] as ContiItemRow).depth, 2);
+      final folded = contiRows(
+        base().uids,
+        base().groups,
+        collapsed: {groupKey('a', 2)},
+      );
+      expect(folded.whereType<ContiItemRow>().map((r) => r.uid), [1, 6]);
+      expect(folded.whereType<ContiHeaderRow>().map((r) => r.name), ['a', 'b']);
+    });
+
+    test('하위 그룹 만들기: 고른 항목이 그 상위 아래 하위 그룹이 된다', () {
+      final l = layout([1, 2, 3, 4], {2: 'a', 3: 'a', 4: 'a'});
+      final a = groupRuns(l.uids, l.groups).single;
+      final r = createSubGroupWithItems(l, a, [3, 4], 'x');
+      expect(r.groups, {2: 'a', 3: 'a/x', 4: 'a/x'});
+      expect(contiguous(r), isTrue);
+      // 상위 밖 항목을 골라도 상위 끝에 들어온다
+      final out = createSubGroupWithItems(l, a, [1], 'y');
+      expect(out.uids, [2, 3, 4, 1]);
+      expect(out.groups[1], 'a/y');
+      expect(contiguous(out), isTrue);
+    });
+
+    test('같은 상위 아래 이름 목록', () {
+      final b = base();
+      expect(siblingGroupNames(b.groups, [], null), {'a', 'b'});
+      expect(siblingGroupNames(b.groups, [], 'a'), {'x', 'y'});
+      expect(siblingGroupNames(b.groups, [], 'a/x'), isEmpty);
+    });
+
+    test('상위째 이동하면 하위 구조가 그대로 따라간다', () {
+      final b = base();
+      final a = groupRuns(b.uids, b.groups).first;
+      final r = moveGroupTo(b, a, b.uids.length);
+      expect(r.uids, [1, 6, 2, 3, 4, 5]);
+      expect(r.groups, b.groups);
+      expect(contiguous(r), isTrue);
+    });
+
+    test('하위 그룹은 상위 안에서만 한 칸씩, 상위 밖으로는 끌어서 옮기며 상위가 바뀐다', () {
+      final b = base();
+      final x = groupRuns(b.uids, b.groups, depth: 2).first; // a/x
+      expect(groupStepIndex(b, x, -1), 1); // 상위 직속 항목 2 를 건너뛴다
+      final y = groupRuns(b.uids, b.groups, depth: 2).last; // a/y
+      expect(groupStepIndex(b, y, 1), isNull); // 뒤는 상위 밖(b)
+      expect(groupStepIndex(b, x, 1), 5); // a/y 블록 뒤
+      expect(moveGroupTo(b, x, 5).uids, [1, 2, 5, 3, 4, 6]);
+      // b 머리 위 절반 = b 앞, 맨 위로 빠져나온다
+      final rows = contiRows(b.uids, b.groups);
+      final hb = rows.indexWhere((r) => r is ContiHeaderRow && r.name == 'b');
+      final spot = resolveGroupDrop(rows, hb, false, x, b.uids, b.groups)!;
+      expect(spot.group, isNull);
+      final r = moveGroupTo(
+        b,
+        x,
+        spot.index,
+        setParent: true,
+        parent: spot.group,
+      );
+      expect(r.groups[3], 'x');
+      expect(r.groups[4], 'x');
+      expect(r.groups[5], 'a/y');
+      expect(contiguous(r), isTrue);
+    });
+
+    test('이름 바꾸기·풀기: 하위는 따라오거나 한 단계 올라온다', () {
+      final b = base();
+      final a = groupRuns(b.uids, b.groups).first;
+      final renamed = renameGroup(b, a, 'z');
+      expect(renamed.groups, {2: 'z', 3: 'z/x', 4: 'z/x', 5: 'z/y', 6: 'b'});
+      final x = groupRuns(b.uids, b.groups, depth: 2).first;
+      expect(renameGroup(b, x, 'q').groups[3], 'a/q');
+      // 하위 풀기: 항목은 상위에 남는다
+      expect(ungroup(b, x).groups, {2: 'a', 3: 'a', 4: 'a', 5: 'a/y', 6: 'b'});
+      // 상위 풀기: 직속 항목은 그룹 밖, 하위는 맨 위로
+      expect(ungroup(b, a).groups, {3: 'x', 4: 'x', 5: 'y', 6: 'b'});
+    });
+
+    test('validGroupAt: 닿는 데까지의 경로만', () {
+      final groups = {1: 'a', 2: 'a/x'};
+      expect(validGroupAt([1, 2, 3], groups, 2, 'a/x', []), 'a/x');
+      expect(validGroupAt([1, 2, 3], groups, 1, 'a/x', []), 'a/x'); // 다음이 a/x
+      expect(validGroupAt([1, 2, 3], groups, 3, 'a/x', []), isNull); // 3 은 그룹 밖
+      expect(validGroupAt([1, 3, 2], {1: 'a'}, 1, 'a/x', []), 'a'); // 하위는 안 닿는다
+      expect(validGroupAt([3, 4], {}, 1, 'a/x', []), isNull);
+      expect(commonGroupPath('a/x', 'a/y'), 'a');
+      expect(commonGroupPath('a/x', 'a/x'), 'a/x');
+      expect(commonGroupPath('a', 'b'), isNull);
+    });
+
+    test('아무렇게나 끌어 놓아도 모든 앞부분 경로가 이어진다(불변식)', () {
+      final rnd = Random(11);
+      var l = layout(List.generate(12, (i) => i + 1), {
+        2: 'a',
+        3: 'a/x',
+        4: 'a/x',
+        5: 'a/x/p',
+        6: 'a/y',
+        8: 'b',
+        9: 'b/z',
+        10: 'b/z',
+      });
+      for (var n = 0; n < 600; n++) {
+        final rows = contiRows(l.uids, l.groups);
+        final i = rnd.nextInt(rows.length);
+        final after = rnd.nextBool();
+        final mode = rnd.nextInt(4);
+        if (mode == 0) {
+          final runs = allGroupRuns(l.uids, l.groups);
+          if (runs.isEmpty) continue;
+          final run = runs[rnd.nextInt(runs.length)];
+          final spot = resolveGroupDrop(rows, i, after, run, l.uids, l.groups);
+          if (spot != null) {
+            l = moveGroupTo(
+              l,
+              run,
+              spot.index,
+              setParent: true,
+              parent: spot.group,
+            );
+          }
+        } else if (mode == 1) {
+          final runs = allGroupRuns(l.uids, l.groups);
+          if (runs.isEmpty) continue;
+          final run = runs[rnd.nextInt(runs.length)];
+          final at = groupStepIndex(l, run, rnd.nextBool() ? -1 : 1);
+          if (at != null) l = moveGroupTo(l, run, at);
+        } else if (mode == 2) {
+          final uid = l.uids[rnd.nextInt(l.uids.length)];
+          l = moveItemTo(l, uid, resolveDrop(rows, i, after, l.uids.length));
+        } else {
+          final runs = groupRuns(l.uids, l.groups);
+          if (runs.isEmpty) continue;
+          final run = runs[rnd.nextInt(runs.length)];
+          if (run.depth < maxGroupDepth) {
+            final pick = [
+              for (var k = 0; k < 2; k++) l.uids[rnd.nextInt(l.uids.length)],
+            ];
+            l = createSubGroupWithItems(l, run, pick, 'n$n');
+          }
+        }
+        expect(contiguous(l), isTrue, reason: 'step $n ${l.uids} ${l.groups}');
+        expect(l.uids.toSet().length, 12);
+        expect(
+          l.groups.values.every((g) => groupDepth(g) <= maxGroupDepth),
+          isTrue,
+          reason: 'step $n ${l.groups}',
+        );
+      }
     });
   });
 }

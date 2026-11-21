@@ -25,6 +25,7 @@ flutter test test/bible_voice_parse_test.dart # 성경 음성 검색: 말 → �
 flutter test test/move_pages_test.dart # 발표 보기 페이지 옮기기·나누기
 flutter test test/conti_text_parse_test.dart # 콘티 한번에 넣기: 콘티 글 → 번호·제목·조·(or 곡) + 곡 찾기
 flutter test test/extra_language_test.dart # 추가 보조 언어(세 번째 줄) 페이지·콘티 저장·스타일·설교자 화면
+flutter test test/page_format_test.dart # 페이지별 글자 서식(page_format): JSON·clamp·withPageFormat 키·저장·.wsconti 왕복·PPTX page_styles
 flutter test test/conti_group_test.dart # 콘티 항목 그룹: item_group 칸 추가(옛 DB)·저장·불러오기·이름 정규화
 flutter test test/slide_group_test.dart # 발표 보기 격자 그룹 구간·머리줄 높이 계산(그룹 끝 '그룹 없음' 머리줄)
 flutter test test/conti_tree_test.dart test/conti_tree_page_test.dart # 콘티 폴더 트리: 순수 함수·불변식·끌어 넣기/빼기/그룹째/접기 위젯·실제 페이지
@@ -44,6 +45,7 @@ python3 python/test_animation.py # 애니메이션 단계 펼치기 self-check (
 python3 python/test_export_background.py # 항목별 배경 오버라이드 self-check (LibreOffice 불필요)
 python3 python/test_export_text.py       # 가사 줄바꿈 self-check (LibreOffice 불필요)
 python3 python/test_export_position.py   # 본문·제목 세로 미세 조정 self-check (LibreOffice 불필요)
+python3 python/test_export_page_format.py # 페이지별 글자 서식(page_styles) self-check (LibreOffice 불필요)
 python3 python/test_export_extra.py      # 추가 보조 언어(셋째 줄) 문단·색·크기 self-check (LibreOffice 불필요)
 python3 python/test_split_language.py    # 한/보조 언어 줄 나누기 self-check (LibreOffice 불필요)
 python3 python/test_sheet_lyrics.py      # 악보 가사 추출 self-check (Tesseract 없으면 OCR 부분만 skip)
@@ -109,6 +111,7 @@ lib/
       staging_item.dart              -- sealed StagingItem: Song / Bible / Image / Blank
       worship_conti.dart             -- 콘티 모델
       conti_text_parse.dart          -- 콘티 글 파싱(parseContiText) + 제목으로 곡 찾기(ContiSongMatcher, 띄어쓰기·문장부호 무시)
+      page_format.dart               -- 페이지별 글자 서식(1단계 색·크기 비율): PageFormat·PageEntry·pageKey(본문 FNV)·ExportStyle.withPageFormat·pageStylesFor(PPTX). DB `worship_conti_items.page_format`(JSON, onOpen 멱등 추가, 스키마 20 유지), LoadContiResult.pageFormats(uid→PageFormat). 기획 `.claude-office/work/20261120-2336-five-fixes/`
       conti_tree.dart                -- 콘티 폴더 트리 순수 함수: 행 계산·놓을 자리·항목/그룹 이동·만들기·풀기·이름·여백 없음 규칙
     presentation/
       praise_home_page.dart          -- 단일 화면(약 12,400줄). 검색·성경·디자인·콘티·발표 제어 전부 여기

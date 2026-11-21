@@ -123,4 +123,63 @@ void main() {
     expect(start, findsOneWidget);
     timer.dispose();
   });
+
+  testWidgets('횟수 3·간격 5초: 5·10·15초에 넘기고 멈추며, 다시 시작하면 처음부터', (tester) async {
+    final clock = _Clock();
+    final timer = AutoAdvanceTimer(now: clock.now)
+      ..setInterval(const Duration(seconds: 5))
+      ..setMaxCount(3);
+    var fired = 0;
+    timer.onElapsed = () => fired++;
+    timer.start();
+    expect(timer.remainingCount, 3);
+    await _advance(tester, clock, const Duration(seconds: 5));
+    expect(fired, 1);
+    expect(timer.remainingCount, 2);
+    await _advance(tester, clock, const Duration(seconds: 10));
+    expect(fired, 3);
+    expect(timer.isRunning, isFalse);
+    await _advance(tester, clock, const Duration(seconds: 20));
+    expect(fired, 3);
+
+    timer.start();
+    await _advance(tester, clock, const Duration(seconds: 15));
+    expect(fired, 6);
+    timer.dispose();
+  });
+
+  test('횟수 0·비우기는 무제한', () {
+    final timer = AutoAdvanceTimer()..setMaxCount(2);
+    expect(timer.maxCount, 2);
+    timer.setMaxCount(0);
+    expect(timer.maxCount, isNull);
+    timer.dispose();
+  });
+
+  testWidgets('횟수 칸: 반복일 때만 쓰고, 남은 횟수가 보인다', (tester) async {
+    final clock = _Clock();
+    final timer = AutoAdvanceTimer(now: clock.now);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 300,
+            child: AutoAdvanceBox(timer: timer, presenting: true),
+          ),
+        ),
+      ),
+    );
+    final count = find.byKey(const ValueKey('auto-advance-count'));
+    await tester.enterText(count, '3');
+    expect(timer.maxCount, 3);
+    await tester.tap(find.byKey(const ValueKey('auto-advance-start')));
+    await tester.pump();
+    expect(find.textContaining('남은 3회'), findsOneWidget);
+    expect(tester.widget<TextField>(count).enabled, isFalse);
+    await tester.tap(find.byKey(const ValueKey('auto-advance-stop')));
+    await tester.tap(find.byKey(const ValueKey('auto-advance-repeat')));
+    await tester.pump();
+    expect(tester.widget<TextField>(count).enabled, isFalse);
+    timer.dispose();
+  });
 }
