@@ -16,12 +16,14 @@ import 'package:worship_slides/src/features/praise/presentation/praise_home_page
 
 // 편집 페이지 클릭 단계(appear): JSON 왕복·단계 나누기·다시 매기기·단계별 굽기·저장·나눈 조각.
 void main() {
-  PageTextElement box(String id, int appear) => PageTextElement(
-    id: id,
-    rect: const Rect.fromLTWH(0.1, 0.1, 0.3, 0.2),
-    text: id,
-    appear: appear,
-  );
+  PageTextElement box(String id, int appear, [int disappear = 0]) =>
+      PageTextElement(
+        id: id,
+        rect: const Rect.fromLTWH(0.1, 0.1, 0.3, 0.2),
+        text: id,
+        appear: appear,
+        disappear: disappear,
+      );
 
   test('appear 왕복: 0 이면 키 없음, 틀린 값은 0·상한 30, 그림·글 상자·도형 모두 보존', () {
     const image = PageImageElement(
@@ -54,6 +56,58 @@ void main() {
     expect(pageSteps([box('a', 0)]), [
       [box('a', 0)],
     ]);
+  });
+
+  test('disappear 왕복: 0 이면 키 없음, 틀린 값·appear 이하·상한, 그림·글 상자·도형 모두 보존', () {
+    const image = PageImageElement(
+      id: 'i',
+      rect: Rect.fromLTWH(0, 0, 0.5, 0.5),
+      path: '/p/a.png',
+      appear: 1,
+      disappear: 2,
+    );
+    final shape = PageShapeElement.withText(
+      box('s', 0, 3),
+      kind: PageShapeKind.ellipse,
+    );
+    final text = box('t', 1, 4);
+    expect(box('z', 1).toJson().containsKey('disappear'), isFalse);
+    expect(text.toJson()['disappear'], 4);
+    final json = jsonDecode(jsonEncode([image, text, shape]));
+    expect(PageElement.listFromJson(json), [image, text, shape]);
+    // 복제(copyWith id)도 이어받는다.
+    expect(text.copyWith(id: 'u').disappear, 4);
+
+    int parse(Object? appear, Object? v) => PageElement.fromJson({
+      ...box('x', 0).toJson(),
+      'appear': appear,
+      'disappear': v,
+    })!.disappear;
+    expect(
+      [parse(0, -1), parse(0, 'x'), parse(0, 31), parse(2, 2), parse(3, 1)],
+      [0, 0, 30, 0, 0],
+    );
+    expect(parse(30, 31), 0);
+  });
+
+  test('나타남·사라짐 단계: 클릭1 나타남 → 클릭2 사라짐 → 클릭3 다른 요소', () {
+    final els = [box('a', 1, 2), box('b', 3), box('c', 0, 2)];
+    expect(pageStepCount(els), 4);
+    expect(pageSteps(els).map((s) => s.map((e) => e.id).join()), [
+      'c',
+      'ac',
+      '',
+      'b',
+    ]);
+    // 다시 매기기는 appear·disappear 를 합쳐 연속으로, 없음(0)은 그대로.
+    expect(
+      normalizeAppear([
+        box('a', 2, 5),
+        box('b', 0, 7),
+        box('c', 0),
+      ]).map((e) => (e.appear, e.disappear)),
+      [(1, 2), (0, 3), (0, 0)],
+    );
   });
 
   test('나눈 조각: 여러 장 편집 페이지를 일부만 떼면 요소를 빼고, 통째면 그대로', () {
@@ -165,7 +219,9 @@ void main() {
     expect(loaded.notes['$uid:1'], '세 번째 장');
   });
 
-  testWidgets('단계마다 다른 PNG, 마지막 장은 단계 무시하고 구운 것과 같은 파일', (tester) async {
+  testWidgets('단계마다 다른 PNG, 사라짐이 없으면 마지막 장은 단계 무시하고 구운 것과 같은 파일', (
+    tester,
+  ) async {
     await tester.runAsync(() async {
       final temp = await Directory.systemTemp.createTemp('page_anim');
       addTearDown(() => temp.delete(recursive: true));
@@ -216,6 +272,28 @@ void main() {
       );
       expect(pngs.last, whole);
       expect(File(whole).existsSync(), isTrue);
+
+      // 사라짐: [없음, a, 빈 화면, b] — 빈 화면은 요소 없이 구운 것과 같은 파일, 마지막 장은 '전부'가 아니다.
+      final gone = [box('a', 1, 2), box('b', 3)];
+      final gonePngs = [
+        for (final step in pageSteps(gone))
+          await const PageComposer().compose(
+            elements: step,
+            background: bg,
+            style: style,
+          ),
+      ];
+      expect(gonePngs, hasLength(4));
+      expect(gonePngs[0], gonePngs[2]);
+      expect(gonePngs.toSet(), hasLength(3));
+      expect(
+        gonePngs.last,
+        await const PageComposer().compose(
+          elements: [gone[1]],
+          background: bg,
+          style: style,
+        ),
+      );
     });
   });
 }

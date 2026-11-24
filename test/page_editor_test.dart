@@ -588,7 +588,9 @@ void main() {
       text: '나중',
     );
     Future<void> pickAppear(String label) async {
-      await tester.tap(find.byType(DropdownButtonFormField<int>));
+      await tester.tap(
+        find.widgetWithText(DropdownButtonFormField<int>, '나타나는 순서'),
+      );
       await tester.pumpAndSettle();
       await tester.tap(find.text(label).last);
       await tester.pumpAndSettle();
@@ -627,6 +629,94 @@ void main() {
     expect(h.result!.imagePaths, hasLength(1));
     expect(h.result!.elements, [a, b]);
   });
+
+  testWidgets('사라지는 순서: 고르면 단계에 사라짐·배지 1→2, 나타남을 뒤로 밀면 사라짐도 밀림, 되돌리기 한 묶음', (
+    tester,
+  ) async {
+    const a = PageTextElement(
+      id: 'a',
+      rect: Rect.fromLTWH(0.1, 0.1, 0.4, 0.2),
+      text: '처음',
+    );
+    const b = PageTextElement(
+      id: 'b',
+      rect: Rect.fromLTWH(0.1, 0.6, 0.4, 0.2),
+      text: '나중',
+    );
+    Future<void> pick(String field, String label) async {
+      await tester.tap(
+        find.widgetWithText(DropdownButtonFormField<int>, field),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(label).last);
+      await tester.pumpAndSettle();
+    }
+
+    Finder badge(String label) => find.byWidgetPredicate(
+      (w) => w is Semantics && w.properties.label == label,
+    );
+
+    final h = await _open(tester, elements: [a, b]);
+    await tester.tapAt(_at(tester, b.rect));
+    await tester.pump(const Duration(milliseconds: 500));
+    await pick('나타나는 순서', '1번째 클릭');
+    await pick('사라지는 순서', '2번째 클릭');
+    expect(badge('1번째 클릭에 나타남, 2번째 클릭에 사라짐'), findsOneWidget);
+    expect(find.text('1→2'), findsOneWidget);
+    // 나타남을 사라짐 자리(2)로 옮기면 사라짐은 3으로 밀린다.
+    await pick('나타나는 순서', '2번째 클릭');
+    expect(find.text('2→3'), findsOneWidget);
+    // 되돌리기 한 번 = 바꾸기 한 번.
+    await tester.tap(find.byTooltip(RegExp('^되돌리기')));
+    await tester.pump();
+    expect(find.text('1→2'), findsOneWidget);
+    await tester.tap(find.text('확인'));
+    await tester.pumpAndSettle();
+    // 0: a / 1: a·b / 2: a
+    expect(h.result!.imagePaths, hasLength(3));
+    expect(h.result!.elements.map((e) => (e.appear, e.disappear)), [
+      (0, 0),
+      (1, 2),
+    ]);
+    expect(h.composed, [a]); // 마지막 장 = b 가 사라진 뒤
+  });
+
+  testWidgets(
+    'disappear 만 있는 요소(가져온 PPT): 배지 →N, 사라지는 순서 칸에 값, 완료하면 다시 매겨 2장',
+    (tester) async {
+      const a = PageTextElement(
+        id: 'a',
+        rect: Rect.fromLTWH(0.1, 0.1, 0.4, 0.2),
+        text: '처음',
+      );
+      const b = PageTextElement(
+        id: 'b',
+        rect: Rect.fromLTWH(0.1, 0.6, 0.4, 0.2),
+        text: '사라짐',
+        disappear: 3,
+      );
+      final h = await _open(tester, elements: [a, b]);
+      expect(find.text('→3'), findsOneWidget);
+      await tester.tapAt(_at(tester, b.rect));
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(
+        find.descendant(
+          of: find.widgetWithText(DropdownButtonFormField<int>, '사라지는 순서'),
+          matching: find.text('3번째 클릭'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('확인'));
+      await tester.pumpAndSettle();
+      // 쓰인 단계 {0, 3} → {0, 1}: 0: a·b / 1: a
+      expect(h.result!.imagePaths, hasLength(2));
+      expect(h.result!.elements.map((e) => (e.appear, e.disappear)), [
+        (0, 0),
+        (0, 1),
+      ]);
+      expect(h.composed, [a]);
+    },
+  );
 
   testWidgets('클립보드 그림 읽기가 실패해도 글자가 있으면 글 상자로 넣는다', (tester) async {
     tester.view.physicalSize = const Size(1600, 1000);

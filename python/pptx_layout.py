@@ -807,10 +807,12 @@ def _slide_title(slide):
 
 
 def _appear_steps(root, items):
-    """메인 시퀀스 → ({맨 위 도형 번호: 나타나는 클릭 단계 ≥ 1}, anim_lost 셈).
+    """메인 시퀀스 → ({맨 위 도형 번호: (나타나는 단계, 사라지는 단계 | None)}, anim_lost 셈).
 
-    클릭 순서만 살린다(효과 종류·속도는 버림). 첫 묶음이 클릭 없이 시작(withEffect·afterEffect)하면 그 묶음은
-    처음부터 보인다. 문단 단위는 상자째 첫 문단 단계, 사라짐·그룹 안 도형만 노린 것은 무시하고 센다.
+    클릭 순서만 살린다(효과 종류·속도는 버림). 첫 묶음이 클릭 없이 시작(withEffect·afterEffect)하면 그 묶음은 단계 0
+    (처음부터). 나타남이 먼저면 그 단계에 나타나고(아니면 처음부터 보임), 그 뒤 첫 사라짐에 사라진다. 사라지는 단계 0 =
+    쉬는 장에선 한 번도 안 보임(자동 시작 묶음에서 사라짐·같은 클릭에 나타났다 사라짐) — 요소를 뺀다.
+    사라진 뒤 다시 나타남(끝까지 사라진 채)·문단 단위(상자째 첫 문단 단계, 문단 사라짐은 무시)·그룹 안 도형만 노린 것은 센다.
     """
     import ppt_tool  # 늦은 import — ppt_tool 이 이 모듈을 부른다
 
@@ -818,37 +820,54 @@ def _appear_steps(root, items):
     top = {ppt_tool._shape_id(el): n for n, el in enumerate(items)}
     nested = {ppt_tool._shape_id(c) for el in items if _local(el.tag) == "grpSp" for c in ppt_tool._iter_shapes(el)}
     auto = 1 if groups and groups[0][0] != "clickEffect" else 0
-    appear, lost = {}, {}
+    events, lost = {}, {}
     for g, (_, effects) in enumerate(groups):
         step = g + 1 - auto
         for preset, spid, paragraphs in effects:
-            if preset == "exit":
-                lost.setdefault("exit", set()).add(spid)
-            elif spid in top:
+            if spid in top:
                 if paragraphs is not None:
                     lost.setdefault("paragraph", set()).add(spid)
-                n = top[spid]
-                appear[n] = min(appear.get(n, step), step)
+                    if preset == "exit":
+                        continue
+                events.setdefault(top[spid], []).append((step, preset))
             elif spid in nested:
                 lost.setdefault("group_child", set()).add(spid)
-    appear = {n: k for n, k in appear.items() if k > 0}
-    if len(set(appear.values())) > ppt_tool.ANIM_MAX_STEPS_PER_SLIDE:
-        lost["too_many"] = set(appear)
-        appear = {}
-    return appear, {kind: len(v) for kind, v in lost.items()}
+    steps = {}
+    for n, evs in events.items():
+        appear = evs[0][0] if evs[0][1] == "entr" else 0
+        disappear = None
+        for step, preset in evs:
+            if disappear is None and preset == "exit":
+                disappear = step if step > appear else 0
+            elif disappear is not None and preset == "entr":
+                lost.setdefault("exit", set()).add(n)  # 다시 나타남 — 사라진 채로 둔다
+                break
+        if appear or disappear is not None:
+            steps[n] = (appear, disappear)
+    if len({k for a, d in steps.values() for k in (a, d) if k}) > ppt_tool.ANIM_MAX_STEPS_PER_SLIDE:
+        lost["too_many"] = set(steps)
+        steps = {}
+    return steps, {kind: len(v) for kind, v in lost.items()}
+
+
+def _step_keys(appear, disappear):
+    """요소 JSON 에 얹을 키 — 0·None 은 안 쓴다(옛 JSON 과 같게)."""
+    return {**({"appear": appear} if appear else {}), **({"disappear": disappear} if disappear else {})}
 
 
 def _number_steps(info):
-    """쓰인 단계만 1..n 으로 다시 매기고 info['steps'] = n + 1(1 = 애니메이션 없음)."""
-    rank = {k: i + 1 for i, k in enumerate(sorted({e["appear"] for e in info["elements"] if "appear" in e}))}
+    """쓰인 단계(나타남·사라짐 합쳐)만 1..n 으로 다시 매기고 info['steps'] = n + 1(1 = 애니메이션 없음)."""
+    keys = ("appear", "disappear")
+    rank = {k: i + 1 for i, k in enumerate(sorted({e[key] for e in info["elements"] for key in keys if key in e}))}
     for e in info["elements"]:
-        if "appear" in e:
-            e["appear"] = rank[e["appear"]]
+        for key in keys:
+            if key in e:
+                e[key] = rank[e[key]]
     info["steps"] = len(rank) + 1
 
 
 def convert_slide(prs, slide, index, frame, out_dir, theme_cache):
-    """슬라이드 하나 → (결과 dict, 사본에서 지울 도형 목록, 애니메이션 걸린 배경 도형 [(도형, 바깥 상자, 단계, 번호)])."""
+    """슬라이드 하나 → (결과 dict, 사본에서 지울 도형 목록, 애니메이션 걸린 배경 도형 [(도형, 바깥 상자, (나타남, 사라짐), 번호)])."""
     ctx = _Slide(prs, slide, theme_cache)
     tree = slide._element.find(f"{_P}cSld/{_P}spTree")
     items = [c for c in tree if _local(c.tag) not in ("nvGrpSpPr", "grpSpPr", "extLst")]
@@ -879,21 +898,24 @@ def convert_slide(prs, slide, index, frame, out_dir, theme_cache):
                     Path(e["path"]).unlink(missing_ok=True)
             r[1], r[2] = None, "covered"
             covers.append(_item_bbox(ctx, el))
-    dropped = {}
-    for _, _, reason, _ in results:
-        if reason:
-            dropped[reason] = dropped.get(reason, 0) + 1
-    appear, lost = _appear_steps(slide._element, items)
+    steps, lost = _appear_steps(slide._element, items)
     anim_bg = []
-    for n, (el, elements, reason, _) in enumerate(results):
-        if n not in appear:
+    for n, r in enumerate(results):
+        if n not in steps:
             continue
-        if reason is None:
+        el, elements, reason, _ = r
+        appear, disappear = steps[n]
+        if disappear == 0:  # 쉬는 장에선 안 보인다 — 요소도 배경도 없이
+            for e in elements or ():
+                if e["type"] == "image":
+                    Path(e["path"]).unlink(missing_ok=True)
+            r[1], r[2], r[3] = [], None, 0
+        elif reason is None:
             for e in elements:
-                e["appear"] = appear[n]
+                e.update(_step_keys(appear, disappear))
         else:
-            anim_bg.append((el, _item_bbox(ctx, el), appear[n], n))
-    # 배경 도형은 A 판(다 있음)에서 잘라 내므로, 단계가 다른 것끼리 겹치면 늦은 것이 일찍 보인다 → 처음부터 보이게 둔다.
+            anim_bg.append((el, _item_bbox(ctx, el), (appear, disappear), n))
+    # 배경 도형은 A 판(다 있음)에서 잘라 내므로, 단계가 다른 것끼리 겹치면 서로 비친다 → 처음부터 끝까지 보이게 둔다.
     overlap = {
         i for i, a in enumerate(anim_bg) for j, b in enumerate(anim_bg)
         if i != j and a[2] != b[2] and _overlaps(a[1], b[1])
@@ -901,6 +923,10 @@ def convert_slide(prs, slide, index, frame, out_dir, theme_cache):
     if overlap:
         lost["overlap"] = len(overlap)
         anim_bg = [a for i, a in enumerate(anim_bg) if i not in overlap]
+    dropped = {}
+    for _, _, reason, _ in results:
+        if reason:
+            dropped[reason] = dropped.get(reason, 0) + 1
     info = {
         "index": index,
         "hidden": False,
@@ -1048,7 +1074,7 @@ def _bake_backgrounds(prs, slides, removals, anim_bg, frame, out_dir, to_pdf):
     """요소로 바꾼 도형을 지운 사본을 구워 slides[i]['background_png'] 를 채운다.
 
     애니메이션 걸린 배경 도형(anim_bg: 장 번호 → convert_slide 의 목록)이 있으면 두 번 굽는다 — A 판(그 도형 있음)에서
-    그 자리를 잘라 그림 요소(+ appear)로 요소 목록 맨 앞에 넣고, 배경은 그 도형까지 지운 B 판.
+    그 자리를 잘라 그림 요소(+ appear·disappear)로 요소 목록 맨 앞에 넣고, 배경은 그 도형까지 지운 B 판.
     ponytail: 회전 도형은 바깥 상자째, PDF 해상도 그대로 잘린다.
     """
     for slide in prs.slides:
@@ -1063,7 +1089,7 @@ def _bake_backgrounds(prs, slides, removals, anim_bg, frame, out_dir, to_pdf):
             cut = []
             for image, info in _baked_pages(prs, Path(temp) / "a", to_pdf, slides):
                 crops = []
-                for el, bbox, step, n in anim_bg.get(info["index"], ()):
+                for el, bbox, (appear, disappear), n in anim_bg.get(info["index"], ()):
                     box = _crop_box(frame, bbox)
                     if box[2] <= box[0] or box[3] <= box[1]:
                         continue  # 캔버스 밖 — 배경에 그대로(어차피 안 보인다)
@@ -1073,7 +1099,7 @@ def _bake_backgrounds(prs, slides, removals, anim_bg, frame, out_dir, to_pdf):
                         "type": "image", "id": _new_id(),
                         "rect": [round(box[0] / CANVAS_W, 5), round(box[1] / CANVAS_H, 5),
                                  round((box[2] - box[0]) / CANVAS_W, 5), round((box[3] - box[1]) / CANVAS_H, 5)],
-                        "path": str(path), "appear": step,
+                        "path": str(path), **_step_keys(appear, disappear),
                     })
                     cut.append(el)
                 info["elements"][:0] = crops

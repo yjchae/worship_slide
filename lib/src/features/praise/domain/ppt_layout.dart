@@ -114,11 +114,13 @@ class PptLayoutSlide {
   final int droppedCount;
   final int effectsLost;
 
-  /// 클릭 단계 장 수(1 = 애니메이션 없음). 요소마다 `appear` 가 단계를 정한다.
+  /// 클릭 단계 장 수(1 = 애니메이션 없음). 요소마다 `appear`(나타남)·`disappear`(사라짐)가 단계를 정한다
+  /// — 요소 JSON 은 [pptLayoutPages] 가 `PageElement.fromJson` 으로 그대로 읽어 둘 다 남는다.
   final int steps;
 
   /// 단계로 옮기지 못해 처음부터 보이게 둔 애니메이션 수(까닭 → 수, 0 인 까닭은 없다):
-  /// paragraph(문단 단위)·exit(사라짐)·group_child(그룹 안 도형)·overlap(겹침)·too_many(30단계 넘음).
+  /// paragraph(문단 단위)·exit(사라진 뒤 다시 나타남 — 이건 사라진 채로 둔다)·group_child(그룹 안 도형)·
+  /// overlap(겹침)·too_many(30단계 넘음).
   final Map<String, int> animLost;
 }
 

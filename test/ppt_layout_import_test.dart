@@ -147,6 +147,27 @@ void main() {
     expect(pageStepCount(elements), layout.slides[0].steps);
   });
 
+  test('요소 disappear 도 페이지까지 간다: 클릭1 나타남 → 클릭2 사라짐 → 클릭3 다른 요소', () {
+    final json = contract();
+    final slides = json['slides'] as List;
+    slides[0]['steps'] = 4;
+    final elements0 = slides[0]['elements'] as List;
+    elements0[0]['appear'] = 1;
+    elements0[0]['disappear'] = 2;
+    elements0[1]['appear'] = 3;
+    elements0[2]['disappear'] = 2; // 처음부터 보이다가 사라짐
+    final layout = PptLayout.fromJson(json);
+    final all = {for (final f in pptLayoutFiles(layout)) f: '/copy$f'};
+    final elements = pptLayoutPages(layout, all).first.background.pageElements!;
+    expect(elements.map((e) => (e.appear, e.disappear)), [
+      (1, 2),
+      (3, 0),
+      (0, 2),
+      (0, 0),
+    ]);
+    expect(pageStepCount(elements), layout.slides[0].steps);
+  });
+
   test('그룹 이름 = 파일 이름(12자), 겹치면 (2)', () {
     final layout = PptLayout.fromJson(contract());
     expect(pptImportGroupName(layout, const []), '2026 성탄 예배');
@@ -285,7 +306,7 @@ void main() {
       expect(find.text('5장'), findsOneWidget);
       expect(find.text('처음부터 보이게 둔 애니메이션'), findsOneWidget);
       expect(find.text('4곳'), findsOneWidget);
-      expect(find.textContaining('사라짐·문단 단위·겹침'), findsOneWidget);
+      expect(find.textContaining('다시 나타남·문단 단위·겹침'), findsOneWidget);
     });
 
     testWidgets('편집 가능 0장이면 닫기만', (tester) async {

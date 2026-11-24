@@ -31,7 +31,12 @@ enum PageShapeKind {
 /// 저장은 `SlideBackground.pageElements` → 배경 JSON `page_elements`.
 @immutable
 sealed class PageElement {
-  const PageElement({required this.id, required this.rect, this.appear = 0});
+  const PageElement({
+    required this.id,
+    required this.rect,
+    this.appear = 0,
+    this.disappear = 0,
+  }) : assert(disappear == 0 || disappear > appear);
 
   final String id;
   final Rect rect;
@@ -40,7 +45,14 @@ sealed class PageElement {
   /// ([pageSteps]). JSON `appear`, 0 이면 키를 안 쓴다(옛 페이지 JSON·굽기 캐시 키 그대로).
   final int appear;
 
+  /// 몇 번째 클릭에 사라지는지(0 = 끝까지 보임, 아니면 [appear] 보다 크다, 상한 [maxAppear]).
+  /// 단계 s 에서 보임 = `appear ≤ s` 이고 (`disappear` 가 0 이거나 `s < disappear`). JSON `disappear`, 0 이면 키 없음.
+  final int disappear;
+
   static const int maxAppear = 30;
+
+  /// 단계 [s] 에서 보이는지.
+  bool visibleAt(int s) => appear <= s && (disappear == 0 || s < disappear);
 
   /// 가장 작은 너비·높이(슬라이드 비율).
   static const double minSize = 0.02;
@@ -96,13 +108,16 @@ sealed class PageElement {
     ).join();
   }
 
-  PageElement copyWith({String? id, Rect? rect, int? appear});
+  PageElement copyWith({String? id, Rect? rect, int? appear, int? disappear});
 
   Map<String, dynamic> toJson();
 
   List<double> get _rectJson => [rect.left, rect.top, rect.width, rect.height];
 
-  Map<String, dynamic> get _appearJson => {if (appear > 0) 'appear': appear};
+  Map<String, dynamic> get _appearJson => {
+    if (appear > 0) 'appear': appear,
+    if (disappear > 0) 'disappear': disappear,
+  };
 
   /// 모양이 틀린 요소(종류·자리·경로가 없거나 숫자가 아님)는 null. 틀린 숫자는 범위 안으로, 모르는 `shape` 는 사각형.
   /// 이 판이 모르는 종류(`type` 이 글자)는 [PageUnknownElement] 로 그대로 보존한다.
@@ -132,13 +147,21 @@ sealed class PageElement {
         : null;
     final rect = _parseRect(raw['rect'], flat: kind?.isLine ?? false);
     if (rect == null) return null;
-    final appear = raw['appear'] is num && (raw['appear'] as num).isFinite
-        ? (raw['appear'] as num).toInt().clamp(0, maxAppear)
-        : 0;
+    int step(Object? v) =>
+        v is num && v.isFinite ? v.toInt().clamp(0, maxAppear) : 0;
+    final appear = step(raw['appear']);
+    final gone = step(raw['disappear']);
+    final disappear = gone > appear ? gone : 0;
     if (type == 'image') {
       final path = raw['path'];
       if (path is! String || path.isEmpty) return null;
-      return PageImageElement(id: id, rect: rect, path: path, appear: appear);
+      return PageImageElement(
+        id: id,
+        rect: rect,
+        path: path,
+        appear: appear,
+        disappear: disappear,
+      );
     }
     if (type != 'text' && kind == null) return null;
     double num01(Object? v, double fallback, double max) =>
@@ -149,6 +172,7 @@ sealed class PageElement {
       id: id,
       rect: rect,
       appear: appear,
+      disappear: disappear,
       text: raw['text'] is String ? raw['text'] as String : '',
       fontSize: size is num && size.isFinite && size > 0
           ? size.toDouble().clamp(
@@ -233,6 +257,7 @@ final class PageImageElement extends PageElement {
     required super.rect,
     required this.path,
     super.appear,
+    super.disappear,
   });
 
   final String path;
@@ -243,11 +268,13 @@ final class PageImageElement extends PageElement {
     Rect? rect,
     String? path,
     int? appear,
+    int? disappear,
   }) => PageImageElement(
     id: id ?? this.id,
     rect: rect ?? this.rect,
     path: path ?? this.path,
     appear: appear ?? this.appear,
+    disappear: disappear ?? this.disappear,
   );
 
   @override
@@ -265,10 +292,11 @@ final class PageImageElement extends PageElement {
       other.id == id &&
       other.rect == rect &&
       other.path == path &&
-      other.appear == appear;
+      other.appear == appear &&
+      other.disappear == disappear;
 
   @override
-  int get hashCode => Object.hash(id, rect, path, appear);
+  int get hashCode => Object.hash(id, rect, path, appear, disappear);
 }
 
 /// 글 상자. 글은 상자 너비에서 줄을 바꾸고 [valign] 대로 놓인다(넘치면 위아래로 삐져나온다).
@@ -286,6 +314,7 @@ base class PageTextElement extends PageElement {
     this.rich,
     this.valign = PageVAlign.top,
     super.appear,
+    super.disappear,
   });
 
   /// 글 전체(서식 뺀 평문). 비었는지·넘침·페이지 이름은 이걸로 본다.
@@ -328,10 +357,12 @@ base class PageTextElement extends PageElement {
     Object? rich = _keep,
     PageVAlign? valign,
     int? appear,
+    int? disappear,
   }) => PageTextElement(
     id: id ?? this.id,
     rect: rect ?? this.rect,
     appear: appear ?? this.appear,
+    disappear: disappear ?? this.disappear,
     text: text ?? this.text,
     fontSize: fontSize ?? this.fontSize,
     color: color ?? this.color,
@@ -383,7 +414,8 @@ base class PageTextElement extends PageElement {
       other.fontFamily == fontFamily &&
       other.rich == rich &&
       other.valign == valign &&
-      other.appear == appear;
+      other.appear == appear &&
+      other.disappear == disappear;
 
   @override
   int get hashCode => Object.hash(
@@ -398,6 +430,7 @@ base class PageTextElement extends PageElement {
     rich,
     valign,
     appear,
+    disappear,
   );
 }
 
@@ -425,6 +458,7 @@ final class PageShapeElement extends PageTextElement {
     super.rich,
     super.valign = PageVAlign.middle,
     super.appear,
+    super.disappear,
   });
 
   /// [t] 의 id·자리·글 칸 그대로.
@@ -450,6 +484,7 @@ final class PageShapeElement extends PageTextElement {
          rich: t.rich,
          valign: t.valign,
          appear: t.appear,
+         disappear: t.disappear,
        );
 
   final PageShapeKind kind;
@@ -517,6 +552,7 @@ final class PageShapeElement extends PageTextElement {
     Object? rich = PageTextElement._keep,
     PageVAlign? valign,
     int? appear,
+    int? disappear,
     PageShapeKind? kind,
     Object? fill = PageTextElement._keep,
     double? fillAlpha,
@@ -538,6 +574,7 @@ final class PageShapeElement extends PageTextElement {
       rich: rich,
       valign: valign,
       appear: appear,
+      disappear: disappear,
     ),
     kind: kind ?? this.kind,
     fill: identical(fill, PageTextElement._keep) ? this.fill : fill as Color?,
@@ -612,12 +649,16 @@ final class PageUnknownElement extends PageElement {
 
   /// 고를 수 없으니 자리·id 를 바꿀 일이 없다 — 복제 같은 경로가 불러도 날 JSON 은 그대로 둔다.
   @override
-  PageUnknownElement copyWith({String? id, Rect? rect, int? appear}) =>
-      PageUnknownElement(
-        id: id ?? this.id,
-        rect: rect ?? this.rect,
-        raw: {...raw, 'id': id ?? this.id},
-      );
+  PageUnknownElement copyWith({
+    String? id,
+    Rect? rect,
+    int? appear,
+    int? disappear,
+  }) => PageUnknownElement(
+    id: id ?? this.id,
+    rect: rect ?? this.rect,
+    raw: {...raw, 'id': id ?? this.id},
+  );
 
   @override
   Map<String, dynamic> toJson() => raw;
@@ -632,9 +673,9 @@ final class PageUnknownElement extends PageElement {
   int get hashCode => Object.hash(id, jsonEncode(raw));
 }
 
-/// 편집 페이지의 클릭 단계마다 보이는 요소 목록(앞 = 처음 화면, 마지막 = 전부).
-/// 쓰인 `appear` 값마다 한 장이고 0단계는 늘 있다 — {0,1,1,3} 이면 3장(0 / 0·1·1 / 전부).
-/// 애니메이션이 없으면 [elements] 그대로 한 장.
+/// 편집 페이지의 클릭 단계마다 보이는 요소 목록(앞 = 처음 화면).
+/// 쓰인 `appear`·`disappear` 값마다 한 장이고 0단계는 늘 있다 — appear {0,1,1,3} 이면 3장(0 / 0·1·1 / 전부).
+/// 사라지는 요소가 있으면 마지막 장이 '전부'가 아니다. 애니메이션이 없으면 [elements] 그대로 한 장.
 List<List<PageElement>> pageSteps(List<PageElement> elements) => [
   for (final k in _stepLevels(elements)) elementsAtStep(elements, k),
 ];
@@ -642,21 +683,26 @@ List<List<PageElement>> pageSteps(List<PageElement> elements) => [
 /// 구울 PNG 장 수([pageSteps] 길이).
 int pageStepCount(List<PageElement> elements) => _stepLevels(elements).length;
 
-/// [k] 번째 클릭까지 나타난 요소(appear ≤ k). 순서는 그대로.
+/// [k] 번째 클릭 뒤 보이는 요소([PageElement.visibleAt]). 순서는 그대로.
 List<PageElement> elementsAtStep(List<PageElement> elements, int k) => [
   for (final e in elements)
-    if (e.appear <= k) e,
+    if (e.visibleAt(k)) e,
 ];
 
-List<int> _stepLevels(List<PageElement> elements) =>
-    {0, for (final e in elements) e.appear}.toList()..sort();
+List<int> _stepLevels(List<PageElement> elements) => {
+  0,
+  for (final e in elements) ...[e.appear, e.disappear],
+}.toList()..sort();
 
-/// 쓰인 단계만 1..n 으로 다시 매긴다(빈 단계 = 같은 그림 두 장이 생기지 않게). {0,1,1,3} → {0,1,1,2}.
+/// 쓰인 단계(appear·disappear 합쳐)만 1..n 으로 다시 매긴다(빈 단계 = 같은 그림 두 장이 생기지 않게).
+/// appear {0,1,1,3} → {0,1,1,2}. disappear 0(없음)은 0 그대로.
 List<PageElement> normalizeAppear(List<PageElement> elements) {
   final levels = _stepLevels(elements);
   final rank = {for (var i = 0; i < levels.length; i++) levels[i]: i};
   return [
     for (final e in elements)
-      rank[e.appear] == e.appear ? e : e.copyWith(appear: rank[e.appear]),
+      rank[e.appear] == e.appear && rank[e.disappear] == e.disappear
+          ? e
+          : e.copyWith(appear: rank[e.appear], disappear: rank[e.disappear]),
   ];
 }

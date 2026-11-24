@@ -27,7 +27,7 @@ class PptLayoutResultDialog extends StatelessWidget {
 
   /// 처음부터 보이게 둔 애니메이션의 까닭 이름(`anim_lost` 키).
   static const _animLostLabels = {
-    'exit': '사라짐',
+    'exit': '다시 나타남',
     'paragraph': '문단 단위',
     'group_child': '그룹 안 도형',
     'overlap': '겹침',
@@ -131,7 +131,7 @@ class PptLayoutResultDialog extends StatelessWidget {
                   Icons.animation_rounded,
                   '애니메이션',
                   '${animated.length}장 → 클릭 단계 $animSteps장으로 나눔. '
-                      '발표에서 넘길 때마다 원본 순서대로 하나씩 나타납니다(움직이는 효과는 빠집니다).\n'
+                      '발표에서 넘길 때마다 원본 순서대로 나타나고 사라집니다(움직이는 효과는 빠집니다).\n'
                       '${_numbers(animated)}번째 장',
                   '$animSteps장',
                 ),
@@ -140,7 +140,7 @@ class PptLayoutResultDialog extends StatelessWidget {
                   context,
                   Icons.info_outline_rounded,
                   '처음부터 보이게 둔 애니메이션',
-                  '${[for (final MapEntry(:key) in animLost.entries) _animLostLabels[key] ?? key].join('·')} — 클릭 단계로 옮기지 못해 처음부터 보입니다.',
+                  '${[for (final MapEntry(:key) in animLost.entries) _animLostLabels[key] ?? key].join('·')} — 클릭 단계로 옮기지 못해 처음부터 보입니다(사라진 뒤 다시 나타나는 것은 사라진 채로 둡니다).',
                   '$animLostCount곳',
                 ),
               if (layout.fontsMissing.isNotEmpty)

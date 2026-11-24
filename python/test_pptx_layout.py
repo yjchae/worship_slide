@@ -1,7 +1,7 @@
 """layout 명령(PPTX → 편집 페이지 요소) self-check: python3 python/test_pptx_layout.py
 
 python-pptx 로 견본을 만들어 받음·떨어뜨림 분류, 좌표·글자 크기 환산, 상속(마스터 제목 크기·테마 색),
-Delta 서식, 그룹 풀기, 그림 자르기, 4:3 여백, 숨긴 슬라이드, 애니메이션 클릭 단계(appear·steps·anim_lost)를 확인한다.
+Delta 서식, 그룹 풀기, 그림 자르기, 4:3 여백, 숨긴 슬라이드, 애니메이션 클릭 단계(appear·disappear·steps·anim_lost)를 확인한다.
 두 번 굽기(배경 PNG, 애니메이션 배경 도형 잘라 내기)는 LibreOffice·PowerPoint 가 없으면 skip.
 """
 import io
@@ -177,7 +177,9 @@ def animate(slide, clicks):
 
 def make_anim(path):
     """애니메이션 견본. 1: 클릭·이전과 함께·클릭 2: 첫 묶음 이전과 함께 3: 첫 묶음 이전 다음 뿐
-    4: 문단·사라짐·그룹 자식·그룹째 5: 31단계 6: 회전(배경) 도형 둘 — 하나 겹침 없음, 둘은 서로 겹치고 단계가 다름."""
+    4: 문단·사라짐·그룹 자식·그룹째 5: 31단계 6: 회전(배경) 도형 둘 — 하나 겹침 없음, 둘은 서로 겹치고 단계가 다름
+    7: 나타남 → 사라짐 → 다른 것 나타남, 사라졌다 다시 나타남, 같은 클릭에 나타났다 사라짐, 문단 사라짐, 그룹째 사라짐
+    8: 첫 묶음(자동)에 사라짐, 처음부터 보이던 회전(배경) 도형이 클릭에 사라짐."""
     prs = Presentation()
     prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
     blank = prs.slide_layouts[6]
@@ -221,20 +223,69 @@ def make_anim(path):
     right = solid_shape(s6, MSO_SHAPE.RECTANGLE, 9, 2, 2, 2, "0000FF")
     left.rotation = right.rotation = 10
     animate(s6, [effect(text), effect(lone.shape_id), effect(left.shape_id), effect(right.shape_id)])
+
+    s7 = new("101010")
+    first, other, back, blink = (textbox(s7, 1, y, 4, 1, t).shape_id for y, t in ((1, "가"), (2, "나"), (3, "다"), (4, "라")))
+    para = textbox(s7, 6, 1, 4, 2, "첫 줄")
+    para.text_frame.add_paragraph().text = "둘째 줄"
+    whole = s7.shapes.add_group_shape()
+    solid_shape(whole.shapes, MSO_SHAPE.RECTANGLE, 6, 4, 1, 1, "00FF00")
+    solid_shape(whole.shapes, MSO_SHAPE.RECTANGLE, 8, 4, 1, 1, "0000FF")
+    animate(s7, [
+        effect(first) + effect(back, preset="exit") + effect(blink) + effect(blink, "afterEffect", "exit"),
+        effect(first, preset="exit") + effect(para.shape_id, preset="exit", paragraph=1),
+        effect(other) + effect(back) + effect(whole.shape_id, preset="exit"),
+    ])
+
+    s8 = new("202020")
+    auto_gone = textbox(s8, 1, 6, 4, 1, "자동").shape_id
+    text = textbox(s8, 6, 6, 4, 1, "글").shape_id
+    shape = solid_shape(s8, MSO_SHAPE.RECTANGLE, 2, 2, 2, 2, "FF0000")
+    shape.rotation = 45
+    animate(s8, [effect(auto_gone, "withEffect", "exit"), effect(shape.shape_id, preset="exit"), effect(text)])
     prs.save(str(path))
 
 
+def visible(e, step):
+    """계약: 단계 s 에서 보임 = appear ≤ s 이고 (disappear 없음 또는 s < disappear)."""
+    return e.get("appear", 0) <= step and step < e.get("disappear", step + 1)
+
+
+def check_exit(s7, s8):
+    """사라짐: 처음 나타남 뒤 첫 사라짐만. 단계는 appear·disappear 합쳐 1..n."""
+    first, other, back, para, g1, g2 = s7["elements"]  # 같은 클릭에 나타났다 사라진 '라' 는 빠진다
+    assert (first.get("appear"), first.get("disappear")) == (1, 2) and other["appear"] == 3, s7["elements"]
+    assert "appear" not in back and back["disappear"] == 1, back  # 처음부터 보이다 사라짐, 다시 나타남은 셈
+    assert "disappear" not in para and g1["disappear"] == g2["disappear"] == 3 and s7["steps"] == 4, s7["elements"]
+    assert s7["anim_lost"] == {"exit": 1, "paragraph": 1}, s7["anim_lost"]
+    assert [[visible(e, s) for s in range(4)] for e in (first, other)] == [
+        [False, True, False, False], [False, False, False, True]]
+    assert [e["text"] for e in s8["elements"] if e["type"] == "text"] == ["글"], s8["elements"]  # 자동 시작 사라짐 = 뺌
+    assert "anim_lost" not in s8, s8
+
+
+def check_exit_baked(s8):
+    """처음부터 보이던 배경 도형의 사라짐: 잘라 낸 그림 요소가 disappear 만, 배경(B 판)엔 없다."""
+    first = s8["elements"][0]
+    assert first["type"] == "image" and "appear" not in first and first["disappear"] == 1, s8["elements"]
+    assert s8["elements"][1]["appear"] == 2 and s8["steps"] == 3, s8["elements"]
+    with Image.open(s8["background_png"]) as bg:
+        assert all(abs(v - 0x20) <= 6 for v in bg.getpixel((round(3 / 13.333 * 1920), round(3 / 7.5 * 1080)))[:3])
+
+
 def check_anim(result):
-    s1, s2, s3, s4, s5, s6 = result["slides"]
+    s1, s2, s3, s4, s5, s6, s7, s8 = result["slides"]
     assert [e.get("appear") for e in s1["elements"]] == [1, 1, 2] and s1["steps"] == 3, s1
     assert [e.get("appear") for e in s2["elements"]] == [None, 1] and s2["steps"] == 2, s2
     assert [e.get("appear") for e in s3["elements"]] == [None] and s3["steps"] == 1 and "anim_lost" not in s3, s3
-    # 문단 단위 = 상자째 그 단계, 사라짐·그룹 자식은 처음부터, 그룹째는 자식 모두 같은 단계. 빈 단계(사라짐)는 다시 매김.
-    assert [e.get("appear") for e in s4["elements"]] == [1, None, None, 2, 2] and s4["steps"] == 3, s4["elements"]
-    assert s4["anim_lost"] == {"paragraph": 1, "exit": 1, "group_child": 1}, s4["anim_lost"]
+    # 문단 단위 = 상자째 그 단계, 그룹 자식은 처음부터, 그룹째는 자식 모두 같은 단계. 빈 단계(그룹 자식)는 다시 매김.
+    assert [e.get("appear") for e in s4["elements"]] == [1, None, None, 3, 3] and s4["steps"] == 4, s4["elements"]
+    assert [e.get("disappear") for e in s4["elements"]] == [None, 2, None, None, None], s4["elements"]
+    assert s4["anim_lost"] == {"paragraph": 1, "group_child": 1}, s4["anim_lost"]
     assert all("appear" not in e for e in s5["elements"]) and s5["steps"] == 1 and s5["anim_lost"] == {"too_many": 31}, s5
     assert s6["anim_lost"] == {"overlap": 2}, s6
-    return s6
+    check_exit(s7, s8)
+    return s6, s8
 
 
 def check_anim_baked(s6):
@@ -445,11 +496,14 @@ def main():
         check_sigterm_kills_tree(tmp)
         anim = tmp / "anim.pptx"
         make_anim(anim)
-        s6 = check_anim(pptx_layout.layout_presentation(anim, tmp / "out_anim_plain"))
+        s6, s8 = check_anim(pptx_layout.layout_presentation(anim, tmp / "out_anim_plain"))
         # 굽지 않으면 배경 도형 애니메이션은 잘라 낼 수 없다 — 글 상자(1번째 클릭)만 남는다
         assert [e.get("appear") for e in s6["elements"]] == [1] and s6["steps"] == 2, s6["elements"]
+        assert [e.get("appear") for e in s8["elements"]] == [1] and s8["steps"] == 2, s8["elements"]
         if bake:
-            check_anim_baked(check_anim(pptx_layout.layout_presentation(anim, tmp / "out_anim", bake)))
+            s6, s8 = check_anim(pptx_layout.layout_presentation(anim, tmp / "out_anim", bake))
+            check_anim_baked(s6)
+            check_exit_baked(s8)
             check_baked(result)
             via_command = ppt_tool.layout_presentation(sample, tmp / "out_cmd")
             assert "error" not in via_command and len(via_command["slides"]) == 5

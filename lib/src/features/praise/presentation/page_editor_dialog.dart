@@ -1372,7 +1372,7 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
     });
     try {
       final paths = <String>[];
-      // 틀은 썸네일 한 장(마지막 단계 = 전부)만. 요소의 appear 는 남는다.
+      // 틀은 썸네일 한 장(단계 무시 = 전부)만. 요소의 appear·disappear 는 남는다.
       for (final step
           in widget.templateMode ? [elements] : pageSteps(elements)) {
         paths.add(await widget.compose(step, _background));
@@ -1919,11 +1919,13 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
                     ),
                   ),
                 ),
-              if (e.appear > 0)
+              if (e.appear > 0 || e.disappear > 0)
                 Positioned(
                   left: 2,
                   top: 2,
-                  child: IgnorePointer(child: _AppearBadge(e.appear)),
+                  child: IgnorePointer(
+                    child: _AppearBadge(e.appear, e.disappear),
+                  ),
                 ),
               if (line)
                 const SizedBox.shrink()
@@ -2138,7 +2140,10 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
                   Text('요소를 누르면 위 리본에서 고칩니다.', style: hint),
                   if (pageStepCount(_elements) case final n when n > 1) ...[
                     const SizedBox(height: 8),
-                    Text('클릭 단계 $n장 — 발표에서 넘길 때마다 번호 순서대로 나타납니다.', style: hint),
+                    Text(
+                      '클릭 단계 $n장 — 발표에서 넘길 때마다 번호 순서대로 나타나고 사라집니다.',
+                      style: hint,
+                    ),
                   ],
                   ..._backgroundProperties(cs, label),
                 ],
@@ -2201,37 +2206,68 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
     _appearField([e]),
   ];
 
-  /// '나타나는 순서': 처음부터 / k번째 클릭(지금 가장 큰 번호 + 1 까지). 여럿이면 한꺼번에, 값이 섞이면 빈칸.
+  /// '나타나는 순서'(처음부터 / k번째 클릭) + '사라지는 순서'(없음 / k번째 클릭). 번호는 지금 가장 큰 번호 + 1 까지,
+  /// 사라짐은 고른 요소의 나타남보다 뒤만 고를 수 있다. 여럿이면 한꺼번에, 값이 섞이면 빈칸.
   /// 바꾸기 한 번 = 되돌리기 한 묶음.
-  Widget _appearField(List<PageElement> picked) {
-    final values = picked.map((e) => e.appear).toSet();
+  Widget _appearField(List<PageElement> picked) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      _stepField(picked, gone: false),
+      const SizedBox(height: 12),
+      _stepField(picked, gone: true),
+    ],
+  );
+
+  Widget _stepField(List<PageElement> picked, {required bool gone}) {
+    int of(PageElement e) => gone ? e.disappear : e.appear;
+    final values = picked.map(of).toSet();
     final value = values.length == 1 ? values.single : null;
     final last = math.min(
-      _elements.fold(0, (a, e) => math.max(a, e.appear)) + 1,
+      _elements.fold(
+            0,
+            (a, e) => math.max(a, math.max(e.appear, e.disappear)),
+          ) +
+          1,
       PageElement.maxAppear,
     );
+    // 사라짐은 고른 것 중 가장 늦은 나타남 뒤부터.
+    final first = gone
+        ? picked.fold(0, (a, e) => math.max(a, e.appear)) + 1
+        : 1;
     return DropdownButtonFormField<int>(
       // 되돌리기·다른 요소 고르기로 값이 밖에서 바뀌면 다시 그리게.
-      key: ValueKey(('appear', picked.map((e) => e.id).join(','), value)),
+      key: ValueKey((gone, picked.map((e) => e.id).join(','), value)),
       initialValue: value,
       isDense: true,
-      decoration: const InputDecoration(
-        labelText: '나타나는 순서',
-        helperText: '발표에서 클릭(넘기기)할 때마다 번호 순서대로 나타납니다.',
+      decoration: InputDecoration(
+        labelText: gone ? '사라지는 순서' : '나타나는 순서',
+        helperText: gone ? null : '발표에서 클릭(넘기기)할 때마다 번호 순서대로 나타납니다.',
         helperMaxLines: 2,
-        border: OutlineInputBorder(),
+        border: const OutlineInputBorder(),
         isDense: true,
       ),
       items: [
-        for (var k = 0; k <= last; k++)
-          DropdownMenuItem(value: k, child: Text(k == 0 ? '처음부터' : '$k번째 클릭')),
+        DropdownMenuItem(value: 0, child: Text(gone ? '없음' : '처음부터')),
+        for (var k = first; k <= last; k++)
+          DropdownMenuItem(value: k, child: Text('$k번째 클릭')),
       ],
       onChanged: (k) {
         if (k == null) return;
         final ids = {for (final e in picked) e.id};
         final next = [
           for (final e in _elements)
-            ids.contains(e.id) && e.appear != k ? e.copyWith(appear: k) : e,
+            if (!ids.contains(e.id))
+              e
+            else if (gone)
+              e.copyWith(disappear: k)
+            else
+              // 나타남을 사라짐과 같거나 뒤로 옮기면 사라짐을 바로 다음 클릭으로 민다(상한이면 없앤다).
+              e.copyWith(
+                appear: k,
+                disappear: e.disappear == 0 || e.disappear > k
+                    ? e.disappear
+                    : (k < PageElement.maxAppear ? k + 1 : 0),
+              ),
         ];
         if (!listEquals(next, _elements)) _commit(next);
       },
@@ -2382,18 +2418,24 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
   }
 }
 
-/// 요소 왼쪽 위 클릭 단계 번호(편집 창에서만 — 굽기엔 없다).
+/// 요소 왼쪽 위 클릭 단계 번호(편집 창에서만 — 굽기엔 없다). 나타남 '1', 사라짐까지 '1→3', 사라짐만 '→3'.
 class _AppearBadge extends StatelessWidget {
-  const _AppearBadge(this.step);
+  const _AppearBadge(this.appear, this.disappear);
 
-  final int step;
+  final int appear;
+  final int disappear;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final label = [
+      if (appear > 0) '$appear번째 클릭에 나타남',
+      if (disappear > 0) '$disappear번째 클릭에 사라짐',
+    ].join(', ');
     // 말풍선은 안 단다 — 배지는 IgnorePointer 안이라 요소 고르기·끌기를 막지 않아야 한다.
     return Semantics(
-      label: '$step번째 클릭에 나타남',
+      label: label,
+      excludeSemantics: true,
       child: Container(
         constraints: const BoxConstraints(minWidth: 20),
         padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
@@ -2402,7 +2444,7 @@ class _AppearBadge extends StatelessWidget {
           borderRadius: BorderRadius.circular(4),
         ),
         child: Text(
-          '$step',
+          [if (appear > 0) '$appear', if (disappear > 0) '→$disappear'].join(),
           textAlign: TextAlign.center,
           style: TextStyle(
             fontSize: 12,

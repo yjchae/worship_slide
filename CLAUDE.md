@@ -38,7 +38,7 @@ flutter test test/page_shape_test.dart # 편집 페이지 도형: shape JSON 왕
 flutter test test/page_text_layout_test.dart # 캔버스 안 편집기(Quill)와 굽기(PageTextBlock) 줄 배치 일치: 24·40·96pt × Pretendard·나눔명조 × 정렬 × 목록
 flutter test test/page_template_test.dart # 페이지 틀: JSON 왕복·깨진 항목·기본 3개·그림 없으면 색만·틀 배경 입히기
 flutter test test/ppt_layout_import_test.dart # PPT 를 편집 페이지로: 계약 JSON → 페이지·배경·요소·그룹 이름, 결과 창(0 인 줄 숨김·담지 않기·애니메이션 줄)·진행 줄 문구·빠진 것 알림·steps/anim_lost
-flutter test test/page_anim_test.dart  # 편집 페이지 클릭 단계(appear): JSON 왕복·단계 나누기·다시 매기기·단계별 PNG·저장·나눈 조각은 일반 그림
+flutter test test/page_anim_test.dart  # 편집 페이지 클릭 단계(appear·disappear): JSON 왕복·단계 나누기·다시 매기기·단계별 PNG·저장·나눈 조각은 일반 그림
 flutter test test/system_font_test.dart # 이 PC 글꼴: name 테이블(모든 언어·TTC)·TTC 한 글꼴 떼기·시스템 폴더에서 이름으로 올려 그리기(글꼴 없으면 skip)
 flutter test test/chord_lyrics_test.dart # 코드 가사 순수 함수: 문법·strip·이스케이프·페이지 짝·조 바꾸기·다시 맞추기·코드 위 가사 변환
 flutter test test/chord_repository_test.dart test/chord_conti_test.dart test/chord_leak_test.dart # 코드 저장 길(saveChords)·콘티 스냅샷·관객/PPTX 누출 없음
@@ -279,8 +279,11 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
 - `layout <pptx|ppt> <작업 폴더>` — 슬라이드마다 편집 페이지 요소(`page_elements` 형식) + 요소를 지우고 구운 배경 PNG(`python/pptx_layout.py`).
   계약은 `planning/ppt-style-editor/shapes-contract.md`. 그림·배경은 작업 폴더에 생기고 앱이 `page_images/` 로 복사한 뒤 지운다. `{"error": "libreoffice_missing"}`.
   stderr 에 진행 줄 `{"progress": "read", "n", "total"}`·`render`·`fonts`·`convert`. SIGTERM 을 받으면(`Cancelled`) 자식 프로세스 그룹(`_run_child`)을 죽이고 임시 폴더를 지운 뒤 130 으로 나간다
-  애니메이션은 클릭 순서만 살린다: 요소 `appear`(k번째 클릭, 0 이면 키 없음, 슬라이드 안 1..n 연속)·슬라이드 `steps`(1 = 없음)·`anim_lost`(paragraph·exit·group_child·overlap·too_many, 0 아닌 것만).
-  첫 묶음이 `withEffect`·`afterEffect` 면 처음부터 보임. 배경에 남는 도형의 애니메이션은 A판(그 도형 있음)·B판(지움) 두 번 구워 A판에서 바깥 상자를 잘라
+  애니메이션은 클릭 순서만 살린다: 요소에 클릭 단계 `appear`(나타남)·`disappear`(사라짐, > appear)를 싣는다(0 이면 키 없음). 단계 s 에서 보임 = appear ≤ s < disappear.
+  두 값을 합쳐 슬라이드 안 1..n 으로 다시 매기고 슬라이드 `steps` = n + 1(1 = 없음). `anim_lost`(paragraph·exit·group_child·overlap·too_many, 0 아닌 것만) —
+  사라졌다 다시 나타나는 것은 `exit`, 문단 단위 사라짐은 `paragraph` 로 센다. 첫 묶음이 `withEffect`·`afterEffect` 면 처음부터 보임.
+  쉬는 장에서 한 번도 안 보이는 도형(자동 시작 첫 묶음에서 사라짐, 같은 클릭에 나타났다 사라짐)은 요소에서 빼고 배경에서도 지운다.
+  배경에 남는 도형의 애니메이션(나타남·사라짐)은 A판(그 도형 있음)·B판(지움) 두 번 구워 A판에서 바깥 상자를 잘라
   그림 요소로 맨 앞에 넣는다(진행 줄 `render n=2`). 단계가 다른 배경 도형끼리 겹치면 처음부터 보임. `_click_steps(with_kind=True)` 는 이 경로만 쓰고 render 경로는 그대로
 - `sheet-finish <job.json> <ocr.json>` — 2단계: 앱이 읽은 결과(`{경로: [{text, confidence, x, y, w, h}]}`)로 마무리
 
@@ -662,13 +665,17 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
     빈 곳 끌기 = 범위로 고르기(`PageCanvas` 를 감싼 GestureDetector, `DragStartBehavior.down`, 걸친 요소 `pageElementsInRange`, Shift/⌘·Ctrl = 더하기, 편집 중엔 꺼서 글자 고르기와 안 겹침). 콘티 목록 둘째 줄·틀 목록은 도형 수를 따로 센다.
     옛 앱(1단계 이전)은 도형을 버리고 1단계 앱은 `PageUnknownElement` 로 보존한다(편집 창엔 안 보임). 회전·반지름 손잡이·끌어서 그리기·45° 붙이기는 없다
   - 항목은 `ImageStagingItem(imagePaths: [구운 PNG…], sourceName: 페이지 이름, sourcePath: null)` — 복사·옮기기·저장·PPTX(그림 한 장씩)는 손댈 게 없고 옛 앱에서도 보인다
-  - **클릭 단계(애니메이션, 기획 `.claude-office/work/20261125-0002-ppt-anim-import/`)**: 요소마다 `appear`(0 = 처음부터, 1..30 = 몇 번째 클릭, JSON 0 이면 키 없음 — 옛 JSON·굽기 캐시 키 그대로).
-    쓰인 단계마다 PNG 한 장(`pageSteps`·`elementsAtStep`, {0,1,1,3} → 3장, 마지막 장 = 전부)이라 한 항목이 여러 장이 되고 발표에서 넘길 때마다 다음 요소가 나타난다(움직이는 효과 없음, 렌더러 그대로).
-    편집 창 '완료'는 빈 단계를 당겨(`normalizeAppear`) 단계마다 `compose` 를 부르고 `PageEditorResult.imagePaths` 로 돌려준다(틀 모드는 마지막 단계 한 장 = 썸네일, appear 는 남김).
-    오른쪽 패널 '나타나는 순서'(처음부터 / k번째 클릭, 여럿이면 한꺼번에·섞이면 빈칸, 창 되돌리기 한 묶음), 캔버스 왼쪽 위 단계 배지(편집 창만), 안 골랐을 때 '클릭 단계 N장'.
+  - **클릭 단계(애니메이션, 기획 `.claude-office/work/20261125-0002-ppt-anim-import/`, 사라짐 `…/20261125-0059-ppt-anim-exit/`)**: 요소마다 `appear`(0 = 처음부터, 1..30 = 몇 번째 클릭)와
+    `disappear`(0 = 끝까지 보임, 아니면 appear 보다 큰 클릭 번호, 상한 30 — 틀린 값·appear 이하는 읽을 때 0). 둘 다 JSON 0 이면 키 없음 — 옛 JSON·굽기 캐시 키 그대로, 옛 앱은 disappear 를 모르고 끝까지 보인다.
+    단계 s 에서 보임 = `appear ≤ s` 이고 (`disappear` 0 이거나 `s < disappear`)(`PageElement.visibleAt`).
+    appear·disappear 에 쓰인 단계마다 PNG 한 장(`pageSteps`·`elementsAtStep`, appear {0,1,1,3} → 3장)이라 한 항목이 여러 장이 되고 발표에서 넘길 때마다 다음 요소가 나타나거나 사라진다(움직이는 효과 없음, 렌더러 그대로).
+    사라지는 요소가 있으면 마지막 장은 '전부'가 아니다(캔버스·틀 썸네일은 늘 모든 요소).
+    편집 창 '완료'는 빈 단계를 당겨(`normalizeAppear`, appear·disappear 를 합쳐 1..n 연속) 단계마다 `compose` 를 부르고 `PageEditorResult.imagePaths` 로 돌려준다(틀 모드는 단계 무시 한 장 = 썸네일, appear·disappear 는 남김).
+    오른쪽 패널 '나타나는 순서'(처음부터 / k번째 클릭)·'사라지는 순서'(없음 / 나타남 뒤 k번째 클릭 — 더 이르게는 못 고르고, 나타남을 사라짐 이후로 옮기면 사라짐은 바로 다음 클릭으로 밀린다),
+    여럿이면 한꺼번에·섞이면 빈칸, 창 되돌리기 한 묶음. 캔버스 왼쪽 위 단계 배지(편집 창만, '1'·'1→3'·'→3'), 안 골랐을 때 '클릭 단계 N장'.
     앱 쪽 `_composeFreePage` 가 모든 단계를 굽고 `_setFreePageImages` 가 장 수가 바뀌면 `remapReloadedPages`(범위 밖 메모만 버림)·`_findSlideAfterReload` 로 맞춘다. `_restoreFreePages` 는 PNG 하나라도 없거나 장 수 ≠ 단계 수면 다시 굽는다.
     **여러 장 편집 페이지를 일부만 떼면**(옮기기·나누기·붙여 넣기 복사·음성 넣기 — `_rebuildItem`·`_slidesToPieces` 의 `pieceBackground`) 요소 목록이 그 장들과 안 맞으므로 조각은 요소를 뺀 일반 그림 페이지가 되고 안내가 뜬다(통째면 그대로).
-    옛 앱에서 다시 편집하면 appear 가 사라져 마지막 상태 한 장이 된다
+    옛 앱에서 다시 편집하면 appear·disappear 가 사라져 모든 요소가 보이는 한 장이 된다
   - 굽기 `PageComposer.compose`(`presentation/page_canvas.dart`): 편집 창과 같은 `PageCanvas`(1920x1080 논리 크기 + FittedBox, 배경 색 → 배경 그림 cover → 요소,
     주변 테마·글자 배율 안 탐)를 `renderWidgetToImage` 로. **그림은 미리 디코딩한 `ui.Image`(`PageComposer.loadImages`, 긴 변 2560)** — `Image.file` 은 화면 밖에서 빈칸으로 찍힌다.
     파일 `page_images/render_<FNV>.png`(키 = 요소 JSON + 배경 색·그림 + 쓰인 파일 수정 시각·크기 + `_renderVersion`), 같으면 다시 안 굽고 옛 파일은 안 지운다. 글꼴(FontLibrary)을 올린 뒤에 굽는다
@@ -683,7 +690,7 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
     결과 창 `PptLayoutResultDialog`(s6: 슬라이드 N장 중 M장·그림으로 둔 요소·빠진 꾸밈·없는 글꼴·16:9 아님·숨긴 슬라이드·'애니메이션 N장 → 클릭 단계 M장'·'처음부터 보이게 둔 애니메이션'(`anim_lost` 까닭), 0 인 줄 숨김) → '콘티에 담기'면
     배경 PNG·그림을 `page_images/` 로 복사(`register`)하고 작업 폴더를 지운 뒤 슬라이드마다 편집 페이지(검정 + 배경 PNG + 요소, 이름 = 슬라이드 제목 또는 '파일 이름 N')를 구워
     콘티 끝에 파일 이름 그룹(`pptImportGroupName`)으로 넣는다(`_importPptAsPages`, `_trackedEdit` 라 되돌리기 됨). 숨긴 슬라이드는 건너뛰고, 4:3 은 여백을 둔 16:9 로 만든다.
-    애니메이션: 요소의 `appear`·슬라이드 `steps`(없으면 1)·`anim_lost`(`PptLayoutSlide.steps`·`animLost`)를 읽어 위 클릭 단계 편집 페이지로 넣는다(장 수 = steps). 배경에 굽히는 도형의 애니메이션은 그 영역을 잘라 낸 그림 요소 + appear 로 온다(진행 줄 `render` n=2 = '애니메이션 배경 굽는 중…').
+    애니메이션: 요소의 `appear`·`disappear`·슬라이드 `steps`(없으면 1)·`anim_lost`(`PptLayoutSlide.steps`·`animLost`)를 읽어 위 클릭 단계 편집 페이지로 넣는다(장 수 = steps). 배경에 굽히는 도형의 애니메이션은 그 영역을 잘라 낸 그림 요소 + appear 로 온다(진행 줄 `render` n=2 = '애니메이션 배경 굽는 중…').
     순수 함수는 `domain/ppt_layout.dart`(`PptLayout`·`pptLayoutFiles`·`pptLayoutPages` — 못 옮긴 그림 요소는 뺀다). 편집 창 배경 격자는 모음 밖 `page_images/` 배경을 '가져온 배경' 칸으로 보이고 다른 칸을 골라도 남긴다.
     그림 복사·페이지 굽기 실패·배경 PNG 누락은 세어(`pptLayoutLost`·`pptImportProblems`) 담은 뒤 따로 스낵바 + `app.log` `[page]`. 하나도 못 만들면 옮긴 사본도 지운다.
     **이 PC 글꼴**: 앱 목록 밖인데 이 PC 에 깔린 PPT 글꼴은 결과 `fonts_installed`(파일 경로·TTC 번호)를 `FontLibrary.loadSystemFont` 가 **읽기만 해서** 그 이름으로 `loadFontFromList`
