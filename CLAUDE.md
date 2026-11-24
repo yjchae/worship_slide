@@ -32,8 +32,10 @@ flutter test test/conti_tree_test.dart test/conti_tree_page_test.dart # 콘티 �
 flutter test test/thumb_click_test.dart # 썸네일 원클릭=고르기·더블클릭=이동·끌기·빈 곳 클릭 제스처가 서로 안 막는지
 flutter test test/b_screen_test.dart # 통역 화면(B): 칸 계산·폴더 대응표·보조 칸 올리기
 flutter test test/page_image_test.dart # 슬라이드 편집 페이지: 요소 JSON·clamp·배경 page_elements·.wsconti 경로·화면 밖 PNG 굽기
-flutter test test/page_rich_text_test.dart # 글 상자 부분 서식(Quill Delta → TextSpan): 색 8자리·bold·글머리·번호·깨진 rich
-flutter test test/page_editor_test.dart # 슬라이드 편집 창: 손잡이 크기 계산·되돌리기·자동 이름·틀 배경 칩·틀 편집 모드
+flutter test test/page_rich_text_test.dart # 글 상자 글 줄 모델(Delta → 줄): 색 8자리·bold·글머리·번호·깨진 rich·저장 정규화·상자째 서식·모르는 요소 왕복
+flutter test test/page_editor_test.dart # 슬라이드 편집 창: 손잡이·되돌리기·자동 이름·틀·캔버스 안 편집(더블클릭·Enter/F2·글자 키·Esc)·리본 서식·여러 개 고르기·순서
+flutter test test/page_shape_test.dart # 편집 페이지 도형: shape JSON 왕복·틀린 값·선 높이 0·끝점 flip·valign 없는 옛 JSON·굽기 픽셀·도형 넣기/서식/안 글·선 끝점 손잡이·범위 고르기·맞춤
+flutter test test/page_text_layout_test.dart # 캔버스 안 편집기(Quill)와 굽기(PageTextBlock) 줄 배치 일치: 24·40·96pt × Pretendard·나눔명조 × 정렬 × 목록
 flutter test test/page_template_test.dart # 페이지 틀: JSON 왕복·깨진 항목·기본 3개·그림 없으면 색만·틀 배경 입히기
 flutter test test/chord_lyrics_test.dart # 코드 가사 순수 함수: 문법·strip·이스케이프·페이지 짝·조 바꾸기·다시 맞추기·코드 위 가사 변환
 flutter test test/chord_repository_test.dart test/chord_conti_test.dart test/chord_leak_test.dart # 코드 저장 길(saveChords)·콘티 스냅샷·관객/PPTX 누출 없음
@@ -106,7 +108,7 @@ lib/
       lyrics_text.dart               -- normalizeEditableLyrics(가사 편집 글 정규화, lyrics_page_grid 가 다시 내보냄)
       export_style.dart              -- ExportStyle (가사/성경 각각의 색·크기·정렬·제목 표시 등)
       slide_background.dart          -- SlideBackground (콘티 항목 하나만 배경을 다르게, 편집 페이지 요소 page_elements)
-      page_element.dart              -- 슬라이드 편집 페이지 요소 PageElement(그림·글 상자)
+      page_element.dart              -- 슬라이드 편집 페이지 요소 PageElement(그림·글 상자·도형 PageShapeElement·모르는 종류 보존 PageUnknownElement)
       offering_design.dart           -- OfferingDesign (헌금송 배경·계좌·색·크기·띠 높낮이)
       staging_item.dart              -- sealed StagingItem: Song / Bible / Image / Blank
       worship_conti.dart             -- 콘티 모델
@@ -118,7 +120,10 @@ lib/
       slide_page_data.dart           -- 발표 창에 보낼 한 페이지의 JSON 표현
       singer_view_data.dart          -- 싱어 화면에 보낼 현재+다음 페이지 JSON 표현
       page_canvas.dart               -- 슬라이드 편집 페이지 PageCanvas(편집 창·굽기 공용) + PageComposer(1920x1080 PNG 굽기·캐시)
-      page_editor_dialog.dart        -- 슬라이드 편집 창 PageEditorDialog: 요소 놓기·손잡이·되돌리기, 창 안에서 compose 콜백으로 굽는다
+      page_editor_dialog.dart        -- 슬라이드 편집 창 PageEditorDialog: 요소 놓기·손잡이·되돌리기·여러 개 고르기·캔버스 안 글 편집, 창 안에서 compose 콜백으로 굽는다
+      page_editor_ribbon.dart        -- 편집 창 위 리본 두 줄(PageInsertRow 삽입·순서·되돌리기 / PageFormatRow 글자 서식) + 위치·크기 칸 PageRectFields
+      page_text_editor.dart          -- 캔버스 안 글 편집기 PageTextEditor(flutter_quill, 굽기와 같은 줄 규칙) + pageEditorDocument·pageRichOf
+      page_rich_text.dart            -- 글 상자 글 줄 모델·굽기 렌더 PageTextBlock·넘침 측정 measurePageText·상자째 서식 applyBoxFormat
       page_template_dialog.dart      -- 페이지 틀 관리 창(목록·새 틀·편집·삭제) + '틀 배경' 칩 줄 PageTemplateChips + 리본 칸
       style_fields.dart              -- 공용 입력 부품 FieldBox·ColorField·HexColorDialog·FontFamilyPicker
       slide_render_view.dart         -- 미리보기/썸네일용 Flutter 슬라이드 렌더러 (textOnly = 가사 PNG 굽기용)
@@ -619,8 +624,31 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   **요소 목록을 저장하고 화면에는 1920x1080 PNG 한 장으로 구워** 기존 PPT 이미지 길로 보낸다 — 렌더러 네 곳(미리보기·macOS·Windows·PPTX)·싱어·통역·확대·포인터는 이 페이지를 모른다.
   - 요소 `PageElement`(`domain/page_element.dart`, sealed: `PageImageElement(path)` / `PageTextElement(text, fontSize(540pt 기준), color, bold, align, fontFamily)`),
     `rect` 0~1(`clampRect` = w·h 0.02~2, 슬라이드 안 5% 이상), 뒤 요소가 위. 저장은 항목 배경 JSON `page_elements`(`SlideBackground.pageElements`, 마이그레이션 없음),
-    판별 `isFreePage`. '배경' 버튼으로 색을 바꿔도 `withPageElementsOf` 로 요소를 옮겨 붙이고 다시 굽는다. 틀린 요소는 읽을 때 버린다
-  - **글 상자 부분 서식**: 편집 창 글 칸은 `flutter_quill`(툴바 + `QuillEditor`, `Localizations.override` 로 Quill 번역만 창 안에 끼움). `PageTextElement.rich`(Delta ops JSON 문자열, 서식이 하나도 없으면 null)에 서식 글을, `text` 에 평문을 같이 둔다(비었는지·넘침·이름은 `text`). 렌더는 `pageTextSpan`(`page_rich_text.dart`) 하나 — 편집 창 미리보기·굽기·넘침 측정이 같이 쓴다. 지원: 굵게·기울임·밑줄·취소선·색·크기(pt)·글머리·번호. 정렬·글꼴은 상자 단위 그대로. 패널은 '고른 글자'(Quill 도구줄, 한국어 툴팁, 되돌리기 버튼 뺌 — 창 되돌리기 하나)와 '상자 전체 기본값'으로 나뉜다. 입력칸은 슬라이드 글꼴·기본 색·페이지 배경 색으로 그리고 글자 크기만 `_previewScale` 로 줄여 보인다. 크기·색·굵기를 직접 지정한 글자가 있으면 안내 줄과 '모두 기본값으로'(`_clearDirectFormats`)가 뜬다. 렌더러 네 곳·PPTX 는 여전히 구운 PNG 만 본다. `test/page_rich_text_test.dart`
+    판별 `isFreePage`. '배경' 버튼으로 색을 바꿔도 `withPageElementsOf` 로 요소를 옮겨 붙이고 다시 굽는다. 틀린 요소는 읽을 때 버린다.
+    글 상자는 `valign`(top|middle|bottom, 기본 top 이면 JSON 에 안 쓴다 — 옛 페이지 JSON·굽기 캐시 키 그대로).
+    **이 판이 모르는 `type`(글자)은 `PageUnknownElement` 로 JSON 그대로 보존**한다 — 캔버스·굽기에 안 그리고 고를 수 없지만 저장·`.wsconti`·틀에 그대로 돌아간다(새 판이 만든 도형이 이 판에서 고쳐도 사라지지 않게. 이 판 이전 앱은 여전히 버린다)
+  - **캔버스 안 글 편집 + 리본** (기획 `planning/ppt-style-editor/`, 1단계): 글은 오른쪽 패널이 아니라 **캔버스 위 그 상자 자리**에서 고친다. `PageCanvas(editingId:, editor:)` 가 그 요소의 글 대신 `PageTextEditor`(flutter_quill)를 같은 `Positioned`/`OverflowBox` 자리에 끼운다(굽기는 둘 다 null).
+    들어가기 = 더블클릭(누른 자리 커서) · 고른 상태 Enter/F2(글 끝) · '글 상자' 추가 직후 · 고른 채 글자 키(편집 시작만, 커서 글 끝 — 그 글자는 안 넣는다: 입력기에 안 붙은 캔버스가 받는 글자는 한글 입력기에서 라틴 자판이라 '한'이 갈라진다) · 새 페이지 첫 상자(통째 선택). 나가기 = Esc(상자는 고른 채, 한 번 더 = 해제) · 빈 곳·다른 요소 누르기.
+    편집 중 Delete·Backspace·방향키·⌘A·⌘V 는 글자만, ⌘D·⌘[ ] 는 무시. 편집 중인 상자는 안쪽이 편집기(끌기 = 글자 고르기)이고 바깥 6px 띠를 끌면 옮긴다(`_editingFrame`). Quill 의 `onTapOutsideEnabled` 는 끄고 리본은 `TextFieldTapRegion` 이라 리본을 눌러도 편집이 이어진다.
+    **되돌리기**: 편집 중 ⌘/Ctrl+Z·리본 되돌리기 = Quill 글자 단위(⌘⇧Z 는 `PageTextEditor` 가 Quill redo 로), 편집 밖 = 창 되돌리기(`PageEditHistory`). 편집 하나(시작~끝)가 창 기록 한 묶음(`_editSession`, 띠로 옮기면 끊긴다).
+    Quill 단축키 덮기는 `customShortcuts` — **Quill 기본과 같은 `const SingleActivator` 면 같은 객체라 맵에서 Quill 것에 덮인다**(Esc 는 `includeRepeats: false` 로 달리 둔다).
+    **편집 화면 = 굽기**: 굽기 렌더를 줄 단위 `PageTextBlock`(`page_rich_text.dart`)으로 바꿨다 — 줄마다 RichText, strut = 상자 기본 서식, 줄 간격 0, 목록은 왼쪽 기호 칸(폭 = flutter_quill `TextBlockUtils` 공식) + 내어쓰기, 기호 크기·색은 줄 첫 글자. 편집기는 같은 값(`DefaultStyles` paragraph·lists·align 간격 0, `indentWidthBuilder`, `customLeadingBlockBuilder` = 같은 `pageListMarker`)에 글자는 pt 그대로 + `textScaler`.
+    정렬은 상자 하나 — 편집기에 넣을 때 줄마다 `align` 을 넣고(`pageEditorDocument`) 돌려받을 때 뺀다(`pageRichOf`). 받는 서식은 `pageInlineKeys`(굵게·기울임·밑줄·취소선·색·크기·글꼴) + 목록(bullet·ordered)뿐이고 나머지(Quill 단축키의 제목·코드·들여쓰기, 붙여 넣은 서식)는 편집 중 바로 걷어 낸다(`_stripUnsupported`). `bold:false` = 굵은 상자 안 보통 글자(`customStyleBuilder`).
+    `_renderVersion` 2(다시 열어 확인하면 새 방식으로 구워져 옛 페이지의 글머리 감김·작은 글자 줄 높이가 조금 달라질 수 있다 — 감수). 일치는 `test/page_text_layout_test.dart` 가 1px 안으로 고정. `measurePageText` 가 넘침 경고·'편집 페이지로 바꾸기'(`page_to_free.dart`) 측정.
+    **리본**(`page_editor_ribbon.dart`, 두 줄 늘 자리 차지 — 고르기를 바꿔도 캔버스가 안 튄다): 줄 1 그림·붙여 넣기·글 상자 | 복제·삭제 | 순서 4개 | 되돌리기·다시 하기, 줄 2 '글자 서식' 글꼴(`FontFamilyPicker`, 목록에 없으면 '(없는 글꼴)')·크기(입력+목록+한 단계 크게/작게)·B I U S·색·정렬·글머리·번호·서식 지우기. 섞인 값은 빈칸, 글 상자를 안 고르면 모두 비활성 + 안내.
+    편집 중이면 고른 글자에(Quill `formatSelection`, 커서만이면 다음 글자), **상자만 골랐으면 글 전체**(`applyBoxFormat`: 글꼴·크기·색·굵게는 상자 기본값 + 같은 속성 직접 지정 지움, 기울임·밑줄·취소선·목록은 모든 글자/줄, 한 단계 크게는 크기 차이 유지). 정렬은 늘 상자 단위. 편집 밖 ⌘/Ctrl+B·I·U 도 같은 길.
+    **여러 개 고르기**: Shift/⌘·Ctrl+클릭으로 더하고 빼며(`_selection`), 함께 끌기·방향키·Delete·복제·순서(`reorderPageElements`, 고른 것끼리 순서 유지). 손잡이·위치 칸은 하나일 때만, 여럿이면 전체를 감싸는 점선. 오른쪽 패널(폭 280) = 안 고름: 페이지 이름·배경 / 글 상자: 위치·크기 숫자(`PageRectFields`, 1920×1080 기준)·넘침 경고 / 그림: 그림 설정 + 위치·크기 / 여러 개: 안내.
+    `PageTextElement.rich`(Delta ops JSON, 서식 없으면 null)·`text`(평문) 저장 형식은 그대로. 렌더러 네 곳·PPTX 는 여전히 구운 PNG 만 본다. PPTX 가져오기는 3단계
+  - **도형** (2단계): `PageShapeElement`(type `shape`)는 **`PageTextElement` 를 물려받는다** — 글 칸(text·rich·font_size·color·bold·align·font_family·valign)을 그대로 써서 캔버스 안 편집·리본 글자 서식·굽기 줄 배치·넘침·`pageAutoName` 이 도형 안 글에도 저절로 된다.
+    그래서 '글 상자만' 세는 곳은 `is PageTextElement && is! PageShapeElement`, 글을 담는지는 `holdsText`(선·화살표만 false)로 가린다. `switch` 에서는 `PageShapeElement()` 를 `PageTextElement()` 보다 앞에 둔다.
+    JSON 키(decisions.md 8): `shape`(rect|round_rect|ellipse|line|arrow, 모르면 rect)·`fill`(#RRGGBB, null = 없음, 키 없음 = 흰색)·`fill_alpha`(0~1)·`stroke`(null = 없음)·`stroke_width`(540pt 기준 0~40)·`radius`(짧은 변 대비 0~0.5, 기본 0.1667)·`flip_h`/`flip_v` + 글 칸·`valign`(도형 기본 middle, 늘 쓴다). 틀린 숫자는 범위 안으로, rect 가 틀리면 버린다.
+    **선·화살표** = rect 의 대각선(시작 모서리 = flip, 화살표 머리 = 끝점, 길이·폭 = 두께 × 4), 글 없음, 너비·높이 0 허용 — `clampFlatRect`. 요소 자리는 늘 `e.fitRect(r)`(선만 flat)로 맞춘다(끌기·방향키·복제·위치 칸·맞춤 — `clampRect` 를 직접 쓰면 가로선이 비스듬해진다). 끝점 `linePoints`/`withLinePoints`.
+    그리기 `PageShapePainter`(page_canvas.dart, 채우기 → 테두리, 사각형·타원 테두리는 상자 안쪽으로) 위에 안쪽 여백(좌우 7.2pt·상하 3.6pt = 0.1in·0.05in) 안 같은 `PageTextBlock`/편집기, valign = `OverflowBox` 정렬. 옛 요소 모양은 안 바뀌어 `_renderVersion` 은 2 그대로.
+    편집 창: 리본 줄 1 '도형 ▾'(`newShape` — 가운데 화면 정사각형, 선은 가로선, 고른/마지막 도형 서식 이어받기, 처음은 흰 채우기·테두리 없음·검정 40pt 가운데·세로 가운데, 선은 흰 선)·'맞춤 ▾'(`alignPageElements`, 하나 = 슬라이드 기준·여럿 = 고른 범위 기준).
+    도형(글 상자와 섞이지 않게)을 고르면 줄 2 '도형 서식' = 채우기(없음 메뉴)·투명도(끄는 동안 되돌리기 한 묶음)·테두리(없음)·두께(없음이면 비활성)·세로 맞춤 + 글자 묶음, 적용은 `applyShapeFormat`(선은 채우기·세로 맞춤·테두리 없음 무시). 글자 서식은 글을 담는 것에만.
+    사각형·둥근 사각형·타원은 더블클릭·Enter·F2 로 안에 글, 선·화살표는 두 번 누름 인식기를 안 단다(달면 빠른 두 번 누름이 고르기를 푼다) — 양 끝 손잡이 2개(`_lineHandles`), 덮개는 16px 로 넓히고 선에서 8px 안만 누름(`_LineHitPainter`). 크기 손잡이는 도형이면 Shift = 비율 고정(그림은 반대).
+    빈 곳 끌기 = 범위로 고르기(`PageCanvas` 를 감싼 GestureDetector, `DragStartBehavior.down`, 걸친 요소 `pageElementsInRange`, Shift/⌘·Ctrl = 더하기, 편집 중엔 꺼서 글자 고르기와 안 겹침). 콘티 목록 둘째 줄·틀 목록은 도형 수를 따로 센다.
+    옛 앱(1단계 이전)은 도형을 버리고 1단계 앱은 `PageUnknownElement` 로 보존한다(편집 창엔 안 보임). 회전·반지름 손잡이·끌어서 그리기·45° 붙이기는 없다
   - 항목은 `ImageStagingItem(imagePaths: [구운 PNG], sourceName: 페이지 이름, sourcePath: null)` — 복사·옮기기·저장·PPTX(그림 한 장)는 손댈 게 없고 옛 앱에서도 보인다
   - 굽기 `PageComposer.compose`(`presentation/page_canvas.dart`): 편집 창과 같은 `PageCanvas`(1920x1080 논리 크기 + FittedBox, 배경 색 → 배경 그림 cover → 요소,
     주변 테마·글자 배율 안 탐)를 `renderWidgetToImage` 로. **그림은 미리 디코딩한 `ui.Image`(`PageComposer.loadImages`, 긴 변 2560)** — `Image.file` 은 화면 밖에서 빈칸으로 찍힌다.

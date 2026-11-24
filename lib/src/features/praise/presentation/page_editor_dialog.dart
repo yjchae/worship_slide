@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
@@ -6,6 +5,7 @@ import 'dart:ui' as ui;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show listEquals, visibleForTesting;
+import 'package:flutter/gestures.dart' show DragStartBehavior;
 import 'package:flutter/material.dart';
 import 'package:flutter_quill/flutter_quill.dart';
 import 'package:flutter/services.dart';
@@ -19,8 +19,10 @@ import '../domain/page_element.dart';
 import '../domain/slide_background.dart';
 import 'background_image_gallery.dart';
 import 'page_canvas.dart';
+import 'page_editor_ribbon.dart';
 import 'page_rich_text.dart';
 import 'page_template_dialog.dart';
+import 'page_text_editor.dart';
 import 'style_fields.dart';
 
 /// 편집 창 결과: 페이지 이름(빈칸이면 자동 이름) + 요소 + 구운 PNG + 페이지 배경.
@@ -39,7 +41,9 @@ PageTextElement newTextBox(
   String? selectedId, {
   String text = '',
 }) {
-  final texts = elements.whereType<PageTextElement>();
+  final texts = elements.whereType<PageTextElement>().where(
+    (e) => e is! PageShapeElement,
+  );
   final from =
       texts.where((e) => e.id == selectedId).firstOrNull ?? texts.lastOrNull;
   final box = PageTextElement(
@@ -58,7 +62,123 @@ PageTextElement newTextBox(
         );
 }
 
-/// 이름 칸을 비웠을 때 쓰는 이름: 첫 글 상자 첫 줄 → '슬라이드 편집 페이지'.
+/// '도형 ▾' 로 넣을 새 도형: 가운데 기본 크기(선·화살표는 가로선). 고른(없으면 마지막) 도형의
+/// 채우기·테두리·글자 서식을 이어받고, 도형이 없으면 흰 채우기·테두리 없음·검정 40pt 가운데.
+/// 선·화살표는 테두리가 없으면 안 보이니 흰 선으로 둔다.
+@visibleForTesting
+PageShapeElement newShape(
+  List<PageElement> elements,
+  String? selectedId,
+  PageShapeKind kind,
+) {
+  // 선끼리·면 도형끼리만 이어받는다(선의 흰 테두리가 사각형으로 넘어가지 않게).
+  final shapes = elements.whereType<PageShapeElement>().where(
+    (e) => e.kind.isLine == kind.isLine,
+  );
+  final from =
+      shapes.where((e) => e.id == selectedId).firstOrNull ?? shapes.lastOrNull;
+  const w = 0.2, h = w * 16 / 9; // 화면에서 정사각형
+  var shape = PageShapeElement(
+    id: PageElement.newId(),
+    rect: kind.isLine
+        ? const Rect.fromLTWH(0.35, 0.5, 0.3, 0)
+        : const Rect.fromLTWH(0.5 - w / 2, 0.5 - h / 2, w, h),
+    kind: kind,
+  );
+  if (from != null) {
+    shape = shape.copyWith(
+      fill: from.fill,
+      fillAlpha: from.fillAlpha,
+      stroke: from.stroke,
+      strokeWidth: from.strokeWidth,
+      fontSize: from.fontSize,
+      color: from.color,
+      bold: from.bold,
+      align: from.align,
+      fontFamily: from.fontFamily,
+      valign: from.valign,
+    );
+  }
+  return kind.isLine && shape.stroke == null
+      ? shape.copyWith(stroke: Colors.white)
+      : shape;
+}
+
+/// 리본 도형 서식 하나를 도형에 적용한다. 선·화살표는 채우기·세로 맞춤이 없고 테두리를 '없음'으로 못 한다
+/// (안 보이게 되니까) — 그런 값은 그대로 둔다.
+@visibleForTesting
+PageShapeElement applyShapeFormat(
+  PageShapeElement e,
+  String key,
+  Object? value,
+) {
+  final line = e.kind.isLine;
+  return switch (key) {
+    'fill' when !line => e.copyWith(fill: value as Color?),
+    'fill_alpha' when !line => e.copyWith(
+      fillAlpha: (value as double).clamp(0.0, 1.0),
+    ),
+    'stroke' when value != null || !line => e.copyWith(stroke: value as Color?),
+    'stroke_width' => e.copyWith(
+      strokeWidth: (value as double).clamp(
+        0.0,
+        PageShapeElement.maxStrokeWidth,
+      ),
+    ),
+    'valign' when !line => e.copyWith(valign: value as PageVAlign),
+    _ => e,
+  };
+}
+
+/// 빈 곳 끌기 범위([range], 슬라이드 비율)에 걸친 요소 id(모르는 요소 빼고, 목록 순서).
+@visibleForTesting
+List<String> pageElementsInRange(List<PageElement> elements, Rect range) => [
+  for (final e in elements)
+    if (e is! PageUnknownElement && e.rect.overlaps(range)) e.id,
+];
+
+/// 고른 요소들([ids])을 맞춘 목록. 하나면 슬라이드(0~1) 기준, 여럿이면 고른 것을 모두 감싸는 범위 기준.
+@visibleForTesting
+List<PageElement> alignPageElements(
+  List<PageElement> elements,
+  Set<String> ids,
+  PageAlign align,
+) {
+  final picked = [
+    for (final e in elements)
+      if (ids.contains(e.id)) e,
+  ];
+  if (picked.isEmpty) return elements;
+  final ref = picked.length == 1
+      ? const Rect.fromLTWH(0, 0, 1, 1)
+      : picked.map((e) => e.rect).reduce((a, b) => a.expandToInclude(b));
+  return [
+    for (final e in elements)
+      if (!ids.contains(e.id))
+        e
+      else
+        e.copyWith(
+          rect: e.fitRect(
+            e.rect.translate(
+              switch (align) {
+                PageAlign.left => ref.left - e.rect.left,
+                PageAlign.center => ref.center.dx - e.rect.center.dx,
+                PageAlign.right => ref.right - e.rect.right,
+                _ => 0,
+              },
+              switch (align) {
+                PageAlign.top => ref.top - e.rect.top,
+                PageAlign.middle => ref.center.dy - e.rect.center.dy,
+                PageAlign.bottom => ref.bottom - e.rect.bottom,
+                _ => 0,
+              },
+            ),
+          ),
+        ),
+  ];
+}
+
+/// 이름 칸을 비웠을 때 쓰는 이름: 첫 글 상자(도형 안 글 포함) 첫 줄 → '슬라이드 편집 페이지'.
 String pageAutoName(List<PageElement> elements) {
   for (final e in elements) {
     if (e is PageTextElement) {
@@ -212,7 +332,47 @@ class PageEditHistory {
   }
 }
 
-/// 슬라이드 편집 페이지 편집 창. 그림·글 상자를 끌어 옮기고 손잡이로 크기를 바꾼다.
+/// 순서 바꾸기 종류(목록 뒤가 위).
+enum PageOrder { toFront, forward, backward, toBack }
+
+/// 고른 요소들([ids])의 순서를 바꾼 목록. 고른 것끼리의 순서는 지킨다.
+@visibleForTesting
+List<PageElement> reorderPageElements(
+  List<PageElement> elements,
+  Set<String> ids,
+  PageOrder order,
+) {
+  bool picked(PageElement e) => ids.contains(e.id);
+  switch (order) {
+    case PageOrder.toFront:
+      return [...elements.whereNot(picked), ...elements.where(picked)];
+    case PageOrder.toBack:
+      return [...elements.where(picked), ...elements.whereNot(picked)];
+    case PageOrder.forward:
+      final next = [...elements];
+      for (var i = next.length - 2; i >= 0; i--) {
+        if (picked(next[i]) && !picked(next[i + 1])) {
+          next.insert(i + 1, next.removeAt(i));
+        }
+      }
+      return next;
+    case PageOrder.backward:
+      final next = [...elements];
+      for (var i = 1; i < next.length; i++) {
+        if (picked(next[i]) && !picked(next[i - 1])) {
+          next.insert(i - 1, next.removeAt(i));
+        }
+      }
+      return next;
+  }
+}
+
+extension<T> on Iterable<T> {
+  Iterable<T> whereNot(bool Function(T) test) => where((e) => !test(e));
+}
+
+/// 슬라이드 편집 페이지 편집 창. 그림·글 상자를 끌어 옮기고 손잡이로 크기를 바꾸며,
+/// 글은 캔버스 위 그 자리에서 고친다(더블클릭·Enter·F2, 위 리본 = 글자 서식).
 /// [확인] 을 누르면 [compose] 로 PNG 를 굽고(실패하면 창이 남는다) 결과를 돌려준다.
 class PageEditorDialog extends StatefulWidget {
   const PageEditorDialog({
@@ -295,9 +455,12 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
       ? ''
       : widget.name;
   late final _nameController = TextEditingController(text: _initialName);
+
+  /// 캔버스 안 편집기 문서. 편집을 시작할 때 그 글 상자 글로 갈아 끼운다.
   final _quill = QuillController.basic();
+  final _quillScroll = ScrollController();
+  final _editorKey = GlobalKey<EditorState>();
   bool _syncingQuill = false;
-  final _sizeController = TextEditingController();
   final _history = PageEditHistory();
 
   final _rootFocus = FocusNode(debugLabel: 'page-editor');
@@ -309,15 +472,35 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
 
   /// 배경 그림을 다 읽었는지(읽는 중에는 '파일 없음' 안내를 띄우지 않는다).
   bool _backgroundLoaded = false;
-  String? _selectedId;
+
+  /// 고른 요소 id(고른 순서). 손잡이·위치 칸은 하나일 때만.
+  List<String> _selection = const [];
+
+  /// 캔버스 안에서 글을 고치는 글 상자(늘 [_selection] 의 하나뿐인 요소).
+  String? _editingId;
   String? _hoverId;
 
-  /// 지금 끄는 요소의 시작 자리와 누적 이동(px 이 아니라 비율).
-  Rect? _dragStart;
+  /// 끄는 요소들의 시작 자리와 누적 이동(px 이 아니라 비율).
+  Map<String, Rect>? _dragStarts;
+  Rect? _resizeStart;
   Offset _dragTotal = Offset.zero;
   bool _dragging = false;
 
-  /// 입력칸·슬라이더 편집 묶음: 포커스가 머무는 동안 되돌리기 기록은 한 번.
+  /// 선·화살표 끝점을 끌기 시작할 때의 두 점.
+  (Offset, Offset)? _lineStart;
+
+  /// 빈 곳 끌기 범위(슬라이드 비율)와 그 전에 골라 둔 것(Shift/⌘·Ctrl 이면 더한다).
+  Offset? _marqueeFrom;
+  Offset? _marqueeTo;
+  List<String> _marqueeBase = const [];
+
+  /// 누를 때 Shift/⌘·Ctrl 를 쥐고 있었는지(손을 뗄 때 여러 개 고르기를 하나로 줄이지 않게).
+  bool _tapAdditive = false;
+
+  /// 더블클릭한 자리 — 편집을 시작하면 그 자리에 커서를 놓는다.
+  Offset? _doubleTapAt;
+
+  /// 연달아 바뀌는 값(글 편집 하나, 위치 칸 등)의 되돌리기 묶음: 묶음 첫 변경에만 기록한다.
   bool _editSession = false;
 
   bool _pasting = false;
@@ -329,22 +512,23 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
   @override
   void initState() {
     super.initState();
-    _textFocus.addListener(() {
-      if (!_textFocus.hasFocus) _editSession = false;
-    });
     _quill.addListener(_onQuillChanged);
     _loadImages();
     _loadBackgroundImage();
     final first =
         _initialElements
             .whereType<PageTextElement>()
-            .where((e) => e.text.trim().isEmpty)
+            // 빈 도형(띠·자막 상자)은 '첫 빈 글 상자'가 아니다.
+            .where(
+              (e) =>
+                  e is! PageShapeElement && e.holdsText && e.text.trim().isEmpty,
+            )
             .firstOrNull ??
-        _initialElements.firstOrNull;
+        _initialElements.where(_selectable).firstOrNull;
     if (_isNew && first != null) {
-      _selectedId = first.id;
-      _syncFields();
-      WidgetsBinding.instance.addPostFrameCallback((_) => _focusText());
+      _selection = [first.id];
+      // 새 페이지 제목('제목')은 통째로 골라 두어 치면 바뀐다.
+      if (first is PageTextElement) _startEdit(selectAll: true, inInit: true);
     }
   }
 
@@ -407,7 +591,7 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
     _images.clear(); // 닫힌 뒤 끝나는 _addImageFiles 가 두 번 해제하지 않게
     _nameController.dispose();
     _quill.dispose();
-    _sizeController.dispose();
+    _quillScroll.dispose();
     _rootFocus.dispose();
     _canvasFocus.dispose();
     _textFocus.dispose();
@@ -416,10 +600,21 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
 
   // ── 상태 ────────────────────────────────────────────────────────────
 
-  PageElement? get _selected =>
-      _elements.where((e) => e.id == _selectedId).firstOrNull;
+  /// 이 판이 모르는 요소는 고를 수 없다(그리지도 않는다).
+  static bool _selectable(PageElement e) => e is! PageUnknownElement;
 
-  int get _selectedIndex => _elements.indexWhere((e) => e.id == _selectedId);
+  PageElement? _byId(String? id) =>
+      id == null ? null : _elements.where((e) => e.id == id).firstOrNull;
+
+  String? get _selectedId => _selection.length == 1 ? _selection.single : null;
+
+  /// 하나만 골랐을 때 그 요소.
+  PageElement? get _selected => _byId(_selectedId);
+
+  List<PageElement> get _selectedElements => [
+    for (final e in _elements)
+      if (_selection.contains(e.id)) e,
+  ];
 
   bool get _dirty =>
       !listEquals(_elements, _initialElements) ||
@@ -444,124 +639,283 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
     for (final e in _elements) e.id == element.id ? element : e,
   ], record: record);
 
-  /// 입력칸·슬라이더처럼 연달아 바뀌는 값: 묶음 첫 변경에만 기록한다.
+  /// 글 편집·위치 칸처럼 연달아 바뀌는 값: 묶음 첫 변경에만 기록한다.
   void _replaceInSession(PageElement element) {
     final record = !_editSession;
     _editSession = true;
     _replace(element, record: record);
   }
 
-  void _select(String? id) {
+  void _select(Iterable<String> ids) {
+    final next = ids.toList();
+    if (_editingId != null && !(next.length == 1 && next[0] == _editingId)) {
+      _exitEdit(focusCanvas: false);
+    }
     _editSession = false;
-    setState(() => _selectedId = id);
-    _syncFields();
+    setState(() => _selection = next);
   }
 
-  /// 고른 글 상자 값을 입력칸에 옮긴다(고르기·되돌리기 뒤).
-  void _syncFields() {
+  // ── 캔버스 안 글 편집 ───────────────────────────────────────────────
+
+  /// 고른 글 상자 하나를 그 자리에서 편집한다. 커서는 [at](화면 좌표)이 있으면 그 자리, 아니면 글 끝.
+  void _startEdit({Offset? at, bool selectAll = false, bool inInit = false}) {
     final e = _selected;
-    if (e is PageTextElement) {
-      _loadQuill(e);
-      _sizeController.text = e.fontSize.round().toString();
-    }
-  }
-
-  void _focusText() {
-    if (_selected is! PageTextElement) return;
-    _textFocus.requestFocus();
-    _quill.updateSelection(
-      TextSelection(baseOffset: 0, extentOffset: _quill.document.length - 1),
-      ChangeSource.local,
-    );
-  }
-
-  /// Quill 문서의 서식 글(Delta JSON). 서식이 하나도 없으면 null — 요소의 rich 와 같은 기준.
-  String? _quillRich() {
-    final delta = _quill.document.toDelta().toJson();
-    return delta.any((op) => op['attributes'] != null)
-        ? jsonEncode(delta)
-        : null;
-  }
-
-  /// 고른 글 상자의 글을 Quill 문서로 옮긴다(이미 같으면 그대로 — 커서 유지).
-  void _loadQuill(PageTextElement e) {
-    if (_quill.document.toPlainText().trimRightNewline() == e.text &&
-        _quillRich() == e.rich) {
-      return;
-    }
+    if (e is! PageTextElement || !e.holdsText) return;
+    // 편집 하나(시작~끝) = 창 되돌리기 한 묶음. 편집 중 ⌘Z 는 Quill 의 글자 단위 되돌리기다.
+    _editSession = false;
     _syncingQuill = true;
     try {
-      // fromJson: insert 로 만들면 그 삽입이 Quill undo 기록에 남아 Ctrl+Z 가 글을 지운다.
-      _quill.document = Document.fromJson(
-        e.rich == null
-            ? [
-                {'insert': '${e.text}\n'},
-              ]
-            : jsonDecode(e.rich!) as List,
-      );
-    } catch (_) {
-      _quill.document = Document.fromJson([
-        {'insert': '${e.text}\n'},
-      ]);
+      // fromJson: insert 로 만들면 그 삽입이 Quill undo 기록에 남아 ⌘Z 가 글을 지운다.
+      _quill.document = pageEditorDocument(e);
+    } finally {
+      _syncingQuill = false;
+    }
+    final end = _quill.document.length - 1;
+    _quill.updateSelection(
+      selectAll
+          ? TextSelection(baseOffset: 0, extentOffset: end)
+          : TextSelection.collapsed(offset: end),
+      ChangeSource.local,
+    );
+    if (inInit) {
+      _editingId = e.id;
+    } else {
+      setState(() => _editingId = e.id);
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _editingId != e.id) return;
+      _textFocus.requestFocus();
+      if (at != null) {
+        _editorKey.currentState?.renderEditor.selectPositionAt(
+          from: at,
+          cause: SelectionChangedCause.tap,
+        );
+      }
+    });
+  }
+
+  /// 편집을 끝낸다(상자는 고른 채).
+  void _exitEdit({bool focusCanvas = true}) {
+    if (_editingId == null) return;
+    _editSession = false;
+    setState(() => _editingId = null);
+    if (focusCanvas) _canvasFocus.requestFocus();
+  }
+
+  /// 편집기에서 바뀐 글을 그 글 상자에 담는다(평문 + 서식 글).
+  void _onQuillChanged() {
+    if (_syncingQuill) return;
+    final current = _byId(_editingId);
+    if (current is! PageTextElement) return;
+    _stripUnsupported();
+    final r = pageRichOf(_quill.document);
+    if (r.text == current.text &&
+        (r.rich == current.rich ||
+            r.rich == encodePageRich(pageRichLines(current)))) {
+      setState(() {}); // 커서만 움직임 — 리본 값만 다시 그린다.
+      return;
+    }
+    _replaceInSession(current.copyWith(text: r.text, rich: r.rich));
+  }
+
+  /// 굽기가 모르는 서식(Quill 단축키·붙여 넣기의 제목·코드·들여쓰기 등)을 편집기에서 바로 걷어 낸다
+  /// — 편집 중 보이는 것과 구운 그림이 달라지지 않게.
+  void _stripUnsupported() {
+    final fixes = <(int, int, Attribute)>[];
+    var offset = 0;
+    for (final op in _quill.document.toDelta().toJson()) {
+      final insert = op['insert'];
+      final len = insert is String ? insert.length : 1;
+      final a = op['attributes'];
+      if (a is Map) {
+        for (final MapEntry(:key, :value) in a.entries) {
+          final ok =
+              pageInlineKeys.contains(key) ||
+              key == 'align' ||
+              (key == 'list' && (value == 'bullet' || value == 'ordered'));
+          if (ok) continue;
+          final clear = Attribute.fromKeyValue(key as String, null);
+          if (clear != null) fixes.add((offset, len, clear));
+        }
+      }
+      offset += len;
+    }
+    if (fixes.isEmpty) return;
+    _syncingQuill = true;
+    try {
+      for (final (index, len, attr) in fixes) {
+        _quill.formatText(index, len, attr);
+      }
     } finally {
       _syncingQuill = false;
     }
   }
 
-  TextStyle _previewBase(PageTextElement e) => TextStyle(
-    fontFamily: e.fontFamily,
-    fontSize: e.fontSize,
-    color: e.color,
-    fontWeight: e.bold ? FontWeight.w700 : FontWeight.w400,
-    height: 1.2,
-  );
-
-  /// 미리보기 입력칸 글자 배율(슬라이드 pt → 패널 폭에 맞춘 비율).
-  static const _previewScale = 0.35;
-
-  static const _directKeys = ['size', 'color', 'bold'];
-
-  /// 크기·색·굵기를 직접 지정한 글 덩어리 수.
-  int _directFormatCount() => _quill.document.toDelta().toJson().where((op) {
-    final a = op['attributes'];
-    return a is Map && _directKeys.any(a.containsKey);
-  }).length;
-
-  /// 글 전체에서 크기·색·굵기 직접 지정만 지운다(기울임·밑줄·취소선·목록은 그대로).
-  /// 창 되돌리기로 한 번에 되돌아가게 묶음을 끊고 시작한다.
-  void _clearDirectFormats() {
-    _editSession = false;
-    var offset = 0;
-    for (final op in _quill.document.toDelta().toJson()) {
-      final len = (op['insert'] as String).length;
-      final a = op['attributes'];
-      if (a is Map) {
-        for (final key in _directKeys.where(a.containsKey)) {
-          _quill.formatText(
-            offset,
-            len,
-            Attribute.clone(switch (key) {
-              'size' => Attribute.size,
-              'color' => Attribute.color,
-              _ => Attribute.bold,
-            }, null),
-          );
+  /// 편집 중 고른 글자(없으면 커서 자리)의 서식 덩어리들.
+  List<Map<String, Object>> _editorRuns() {
+    Map<String, Object> styleOf(Style s) => pageInlineAttrs({
+      for (final MapEntry(:key, :value) in s.attributes.entries)
+        key: value.value,
+    });
+    final sel = _quill.selection;
+    final runs = <Map<String, Object>>[];
+    if (!sel.isCollapsed) {
+      var offset = 0;
+      for (final op in _quill.document.toDelta().toJson()) {
+        final insert = op['insert'];
+        final len = insert is String ? insert.length : 1;
+        final from = math.max(sel.start, offset);
+        final to = math.min(sel.end, offset + len);
+        if (insert is String &&
+            from < to &&
+            insert.substring(from - offset, to - offset).trim().isNotEmpty) {
+          final a = op['attributes'];
+          runs.add(a is Map ? pageInlineAttrs(a) : const {});
         }
+        offset += len;
       }
-      offset += len;
     }
-    _editSession = false;
+    return runs.isEmpty ? [styleOf(_quill.getSelectionStyle())] : runs;
   }
 
-  /// 입력·서식이 바뀌면 고른 글 상자에 평문(text)과 서식 글(rich)을 같이 담는다.
-  void _onQuillChanged() {
-    if (_syncingQuill) return;
-    final current = _selected;
-    if (current is! PageTextElement) return;
-    final plain = _quill.document.toPlainText().trimRightNewline();
-    final rich = _quillRich();
-    if (plain == current.text && rich == current.rich) return;
-    _replaceInSession(current.copyWith(text: plain, rich: rich));
+  /// 리본 줄 2 에 보일 서식. 글 상자를 안 골랐으면 null(비활성).
+  PageTextFormat? get _ribbonFormat {
+    final editing = _byId(_editingId);
+    if (editing is PageTextElement) {
+      final list = _quill.getSelectionStyle().attributes['list']?.value;
+      return pageTextFormatOf(
+        [for (final a in _editorRuns()) (editing, a)],
+        [list is String ? list : null],
+      );
+    }
+    final boxes = _selectedElements.whereType<PageTextElement>().where(
+      (e) => e.holdsText,
+    );
+    return boxes.isEmpty ? null : pageBoxFormat(boxes);
+  }
+
+  /// 리본 줄 2 앞의 도형 서식: 고른 것 중 도형이 있고 글 상자가 없을 때(둘 다면 글자 서식만).
+  PageShapeFormat? get _shapeFormat {
+    final picked = _selectedElements;
+    final shapes = picked.whereType<PageShapeElement>();
+    if (shapes.isEmpty ||
+        picked.any((e) => e is PageTextElement && e is! PageShapeElement)) {
+      return null;
+    }
+    final s = shapes.first;
+    return (
+      fill: s.fill,
+      fillAlpha: s.fillAlpha,
+      stroke: s.stroke,
+      strokeWidth: s.strokeWidth,
+      valign: s.valign,
+      holdsText: shapes.any((e) => e.holdsText),
+    );
+  }
+
+  /// 리본 도형 서식을 고른 도형들에 적용한다. 투명도는 끄는 동안 한 묶음('begin' 에서 새 묶음).
+  void _formatShape(String key, Object? value) {
+    if (key == 'begin') {
+      _editSession = false;
+      return;
+    }
+    final record = key != 'fill_alpha' || !_editSession;
+    _editSession = key == 'fill_alpha';
+    final next = [
+      for (final e in _elements)
+        e is PageShapeElement && _selection.contains(e.id)
+            ? applyShapeFormat(e, key, value)
+            : e,
+    ];
+    if (!listEquals(next, _elements)) _commit(next, record: record);
+  }
+
+  /// 리본·단축키 서식. 편집 중이면 고른 글자에(Quill), 아니면 고른 글 상자 전체에.
+  void _format(String key, Object? value) {
+    if (_editingId != null) {
+      _formatInEditor(key, value);
+      return;
+    }
+    if (!_selectedElements.any((e) => e is PageTextElement && e.holdsText)) {
+      return;
+    }
+    _editSession = false;
+    _commit([
+      for (final e in _elements)
+        e is PageTextElement && e.holdsText && _selection.contains(e.id)
+            ? applyBoxFormat(e, key, value)
+            : e,
+    ]);
+  }
+
+  /// ⌘/Ctrl+B·I·U: 지금 값을 뒤집는다.
+  void _toggleFormat(String key) {
+    final f = _ribbonFormat;
+    if (f == null) return;
+    _format(key, switch (key) {
+      'bold' => !f.bold,
+      'italic' => !f.italic,
+      'underline' => !f.underline,
+      _ => !f.strike,
+    });
+  }
+
+  void _formatInEditor(String key, Object? value) {
+    final e = _byId(_editingId);
+    if (e is! PageTextElement) return;
+    Attribute? attr(String k, Object? v) => Attribute.fromKeyValue(k, v);
+    switch (key) {
+      case 'align':
+        // 정렬은 상자 하나다. 편집기 줄마다에도 넣어 바로 보이게 한다(저장되는 rich 에는 안 남는다).
+        final align = value as TextAlign;
+        _replaceInSession(e.copyWith(align: align));
+        _quill.formatText(
+          0,
+          _quill.document.length,
+          attr('align', switch (align) {
+            TextAlign.center => 'center',
+            TextAlign.right => 'right',
+            _ => null,
+          }),
+        );
+      case 'list':
+        _quill.formatSelection(attr('list', value));
+      case 'clear':
+        for (final k in pageInlineKeys) {
+          _quill.formatSelection(attr(k, null));
+        }
+      case 'step':
+        final size = _ribbonFormat?.size ?? e.fontSize;
+        _formatInEditor('size', pageSizeStep(size, value as int));
+      case 'size':
+        final v = value as double;
+        _quill.formatSelection(
+          attr(
+            'size',
+            v == e.fontSize
+                ? null
+                : v == v.roundToDouble()
+                ? '${v.round()}'
+                : '$v',
+          ),
+        );
+      case 'color':
+        final c = value as Color;
+        _quill.formatSelection(
+          attr('color', c == e.color ? null : colorToHex(c)),
+        );
+      case 'font':
+        _quill.formatSelection(
+          attr('font', value == e.fontFamily ? null : value),
+        );
+      case 'bold':
+        // 상자 굵기와 같으면 직접 지정을 지운다(굵은 상자 안 보통 글자 = bold:false).
+        _quill.formatSelection(attr('bold', value == e.bold ? null : value));
+      default: // italic · underline · strike
+        _quill.formatSelection(attr(key, value == true ? true : null));
+    }
+    // 크기 칸·색 창에서 돌아오면 편집기로 포커스를 돌려준다.
+    if (!_textFocus.hasFocus) _textFocus.requestFocus();
   }
 
   void _showMessage(String text, {bool error = false, bool autoClear = false}) {
@@ -616,7 +970,7 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
     }
     if (added.isNotEmpty) {
       _commit([..._elements, ...added]);
-      _select(added.last.id);
+      _select([added.last.id]);
       _canvasFocus.requestFocus();
     }
     if (failed.isNotEmpty) {
@@ -681,45 +1035,66 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
     }
   }
 
+  /// 새 글 상자를 넣고 바로 편집한다.
   void _addTextBox({String text = ''}) {
-    final box = newTextBox(_elements, _selectedId, text: text);
+    final box = newTextBox(_elements, _selectedId ?? _editingId, text: text);
     _commit([..._elements, box]);
-    _select(box.id);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _focusText());
+    _select([box.id]);
+    _startEdit();
+  }
+
+  /// 새 도형을 가운데에 넣고 고른다(글은 더블클릭·Enter 로).
+  void _addShape(PageShapeKind kind) {
+    final shape = newShape(_elements, _selectedId, kind);
+    _commit([..._elements, shape]);
+    _select([shape.id]);
+    _canvasFocus.requestFocus();
   }
 
   // ── 편집 ────────────────────────────────────────────────────────────
 
+  void _align(PageAlign align) {
+    final next = alignPageElements(_elements, _selection.toSet(), align);
+    if (!listEquals(next, _elements)) _commit(next);
+  }
+
   void _duplicate() {
-    final e = _selected;
-    if (e == null) return;
-    final copy = e.copyWith(
-      id: PageElement.newId(),
-      rect: PageElement.clampRect(e.rect.shift(const Offset(0.02, 0.02))),
-    );
-    _commit([..._elements, copy]);
-    _select(copy.id);
+    final copies = [
+      for (final e in _selectedElements)
+        e.copyWith(
+          id: PageElement.newId(),
+          rect: e.fitRect(e.rect.shift(const Offset(0.02, 0.02))),
+        ),
+    ];
+    if (copies.isEmpty) return;
+    _commit([..._elements, ...copies]);
+    _select(copies.map((e) => e.id));
   }
 
   void _delete() {
-    if (_selected == null) return;
+    if (_selection.isEmpty) return;
+    final ids = _selection.toSet();
+    _select(const []);
     _commit([
       for (final e in _elements)
-        if (e.id != _selectedId) e,
+        if (!ids.contains(e.id)) e,
     ]);
-    _select(null);
   }
 
-  /// 순서 바꾸기. [to] = 새 자리(0 = 맨 뒤).
-  void _reorder(int to) {
-    final from = _selectedIndex;
-    if (from < 0) return;
-    to = to.clamp(0, _elements.length - 1);
-    if (to == from) return;
-    final next = [..._elements];
-    next.insert(to, next.removeAt(from));
-    _commit(next);
+  /// 고른 요소들의 순서 바꾸기(목록 뒤가 위).
+  void _reorder(PageOrder order) {
+    final next = reorderPageElements(_elements, _selection.toSet(), order);
+    if (!listEquals(next, _elements)) _commit(next);
   }
+
+  VoidCallback? _reorderAction(PageOrder order) =>
+      _selection.isNotEmpty &&
+          !listEquals(
+            reorderPageElements(_elements, _selection.toSet(), order),
+            _elements,
+          )
+      ? () => _reorder(order)
+      : null;
 
   void _undo() {
     final prev = _history.undo(_elements);
@@ -737,26 +1112,92 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
     _editSession = false;
     setState(() {
       _elements = elements;
-      if (_selected == null) _selectedId = null;
+      _selection = [
+        for (final id in _selection)
+          if (_byId(id) != null) id,
+      ];
     });
-    _syncFields();
   }
 
   void _nudge(Offset delta, {bool resize = false}) {
-    final e = _selected;
-    if (e == null) return;
-    final rect = resize
-        ? resizePageRect(e.rect, PageHandle.bottomRight, delta)
-        : PageElement.clampRect(e.rect.shift(delta));
-    _replace(e.copyWith(rect: rect));
+    if (resize) {
+      final e = _selected;
+      // 선·화살표는 끝점 손잡이로만 크기를 바꾼다.
+      if (e == null || (e is PageShapeElement && e.kind.isLine)) return;
+      _replace(
+        e.copyWith(rect: resizePageRect(e.rect, PageHandle.bottomRight, delta)),
+      );
+      return;
+    }
+    if (_selection.isEmpty) return;
+    _commit([
+      for (final e in _elements)
+        _selection.contains(e.id)
+            ? e.copyWith(rect: e.fitRect(e.rect.shift(delta)))
+            : e,
+    ]);
   }
 
   void _cycleSelection(bool backward) {
-    if (_elements.isEmpty) return;
-    final i = _selectedIndex;
-    final n = _elements.length;
-    _select(_elements[(i + (backward ? -1 : 1) + n) % n].id);
+    final items = _elements.where(_selectable).toList();
+    if (items.isEmpty) return;
+    final i = items.indexWhere((e) => e.id == _selectedId);
+    final n = items.length;
+    _select([items[(i + (backward ? -1 : 1) + n) % n].id]);
   }
+
+  // ── 끌기 ────────────────────────────────────────────────────────────
+
+  void _startDrag(PageElement e) {
+    if (!_selection.contains(e.id)) _select([e.id]);
+    if (_editingId == null) _canvasFocus.requestFocus();
+    _history.record(_elements);
+    // 편집 중 상자를 옮겨도 그 뒤 치는 글은 새 묶음으로(옮기기와 따로 되돌아가게).
+    _editSession = false;
+    setState(() {
+      _dragStarts = {for (final x in _selectedElements) x.id: x.rect};
+      _dragTotal = Offset.zero;
+      _dragging = true;
+    });
+  }
+
+  void _updateDrag(DragUpdateDetails d, Size size) {
+    final starts = _dragStarts;
+    if (starts == null) return;
+    _dragTotal += Offset(d.delta.dx / size.width, d.delta.dy / size.height);
+    _commit([
+      for (final e in _elements)
+        if (starts[e.id] case final start?)
+          e.copyWith(rect: e.fitRect(start.shift(_dragTotal)))
+        else
+          e,
+    ], record: false);
+  }
+
+  void _endDrag() => setState(() {
+    _dragStarts = null;
+    _dragging = false;
+  });
+
+  // 빈 곳 끌기 = 범위로 고르기. [at] = 캔버스 안 비율 좌표.
+  void _startMarquee(Offset at) {
+    final kb = HardwareKeyboard.instance;
+    final additive =
+        kb.isShiftPressed || (_isMac ? kb.isMetaPressed : kb.isControlPressed);
+    _marqueeBase = additive ? _selection : const [];
+    _canvasFocus.requestFocus();
+    setState(() => _marqueeFrom = _marqueeTo = at);
+  }
+
+  void _updateMarquee(Offset at) {
+    final from = _marqueeFrom;
+    if (from == null) return;
+    _marqueeTo = at;
+    final hit = pageElementsInRange(_elements, Rect.fromPoints(from, at));
+    _select({..._marqueeBase, ...hit});
+  }
+
+  void _endMarquee() => setState(() => _marqueeFrom = _marqueeTo = null);
 
   // ── 키 ──────────────────────────────────────────────────────────────
 
@@ -766,6 +1207,7 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
     final key = event.logicalKey;
     final cmd = _isMac ? keyboard.isMetaPressed : keyboard.isControlPressed;
     final shift = keyboard.isShiftPressed;
+    // 글 편집 중이면 글자·지우기·방향키·⌘A·⌘Z 는 편집기 것이다(요소를 건드리지 않는다).
     final inText = _inTextField;
 
     if (cmd) {
@@ -775,7 +1217,7 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
         return KeyEventResult.handled;
       }
       if (key == LogicalKeyboardKey.keyD) {
-        if (event is KeyDownEvent) _duplicate();
+        if (event is KeyDownEvent && !inText) _duplicate();
         return KeyEventResult.handled;
       }
       final redo =
@@ -786,14 +1228,28 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
         redo ? _redo() : _undo();
         return KeyEventResult.handled;
       }
+      final style = switch (key) {
+        LogicalKeyboardKey.keyB => 'bold',
+        LogicalKeyboardKey.keyI => 'italic',
+        LogicalKeyboardKey.keyU => 'underline',
+        _ => null,
+      };
+      if (style != null) {
+        if (inText) return KeyEventResult.ignored;
+        if (event is KeyDownEvent) _toggleFormat(style);
+        return KeyEventResult.handled;
+      }
       // Shift 와 같이 누르면 글자가 `{` `}` 로 바뀌므로 자리로 본다.
       final front = event.physicalKey == PhysicalKeyboardKey.bracketRight;
       final back = event.physicalKey == PhysicalKeyboardKey.bracketLeft;
       if (front || back) {
         if (inText) return KeyEventResult.ignored;
-        final i = _selectedIndex;
-        if (front) _reorder(shift ? _elements.length - 1 : i + 1);
-        if (back) _reorder(shift ? 0 : i - 1);
+        _reorder(switch ((front, shift)) {
+          (true, true) => PageOrder.toFront,
+          (true, false) => PageOrder.forward,
+          (false, true) => PageOrder.toBack,
+          (false, false) => PageOrder.backward,
+        });
         return KeyEventResult.handled;
       }
       return KeyEventResult.ignored;
@@ -801,10 +1257,12 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
 
     if (key == LogicalKeyboardKey.escape) {
       if (event is! KeyDownEvent) return KeyEventResult.handled;
-      if (inText) {
+      if (_editingId != null) {
+        _exitEdit();
+      } else if (inText) {
         _canvasFocus.requestFocus();
-      } else if (_selectedId != null) {
-        _select(null);
+      } else if (_selection.isNotEmpty) {
+        _select(const []);
         _canvasFocus.requestFocus();
       } else {
         _requestClose();
@@ -833,17 +1291,34 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
       );
       return KeyEventResult.handled;
     }
-    if (key == LogicalKeyboardKey.tab && _selectedId != null) {
+    if (key == LogicalKeyboardKey.tab && _selection.isNotEmpty) {
       if (event is KeyDownEvent) _cycleSelection(shift);
       return KeyEventResult.handled;
     }
+    final selected = _selected;
+    final textBox = selected is PageTextElement && selected.holdsText;
     if (key == LogicalKeyboardKey.enter ||
-        key == LogicalKeyboardKey.numpadEnter) {
-      if (_selected is PageTextElement) {
-        _focusText();
-        return KeyEventResult.handled;
-      }
-      return KeyEventResult.ignored;
+        key == LogicalKeyboardKey.numpadEnter ||
+        key == LogicalKeyboardKey.f2) {
+      if (!textBox) return KeyEventResult.ignored;
+      if (event is KeyDownEvent) _startEdit();
+      return KeyEventResult.handled;
+    }
+    // 글 상자를 고른 채 글자를 치면 편집만 시작한다(커서는 글 끝). 그 글자는 넣지 않는다 —
+    // 입력기에 안 붙은 캔버스가 받은 `character` 는 한글 입력기에서 'g' 같은 라틴 글자라
+    // 넣으면 '한' 이 'g'+'ㅏㄴ' 으로 갈라진다. ponytail: 첫 글자를 다시 쳐야 한다 — 화면 밖 입력칸으로
+    // 입력기를 붙여 두면 없앨 수 있다(qa-phase1.md 수정안 나).
+    final char = event.character;
+    if (textBox &&
+        event is KeyDownEvent &&
+        !keyboard.isAltPressed &&
+        !keyboard.isControlPressed &&
+        !keyboard.isMetaPressed &&
+        char != null &&
+        char.isNotEmpty &&
+        char.runes.every((r) => r >= 0x20 && r != 0x7F)) {
+      _startEdit();
+      return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.space) return KeyEventResult.handled;
     return KeyEventResult.ignored;
@@ -882,7 +1357,10 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
     // 빈 글 상자는 편집 창에서만 보이는 자리라 뺀다.
     final elements = [
       for (final e in _elements)
-        if (e is! PageTextElement || e.text.trim().isNotEmpty) e,
+        if (e is! PageTextElement ||
+            e is PageShapeElement ||
+            e.text.trim().isNotEmpty)
+          e,
     ];
     setState(() {
       _composing = true;
@@ -913,6 +1391,7 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final screen = MediaQuery.sizeOf(context);
+    final editing = _editingId != null;
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
@@ -946,7 +1425,45 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
                 _blockWhileComposing(
                   FocusTraversalOrder(
                     order: const NumericFocusOrder(1),
-                    child: _toolbar(cs),
+                    child: PageInsertRow(
+                      isMac: _isMac,
+                      pasting: _pasting,
+                      onPickImage: _pickImages,
+                      onPaste: _paste,
+                      onAddText: _addTextBox,
+                      onAddShape: _addShape,
+                      alignCount: _selection.length,
+                      onAlign: _selection.isEmpty ? null : _align,
+                      onDuplicate: _selection.isEmpty ? null : _duplicate,
+                      onDelete: _selection.isEmpty ? null : _delete,
+                      onToFront: _reorderAction(PageOrder.toFront),
+                      onForward: _reorderAction(PageOrder.forward),
+                      onBackward: _reorderAction(PageOrder.backward),
+                      onToBack: _reorderAction(PageOrder.toBack),
+                      // 편집 중에는 글자 단위(편집기), 아니면 창 되돌리기.
+                      onUndo: editing
+                          ? (_quill.hasUndo ? _quill.undo : null)
+                          : (_history.canUndo ? _undo : null),
+                      onRedo: editing
+                          ? (_quill.hasRedo ? _quill.redo : null)
+                          : (_history.canRedo ? _redo : null),
+                    ),
+                  ),
+                ),
+                _blockWhileComposing(
+                  FocusTraversalOrder(
+                    order: const NumericFocusOrder(2),
+                    // 리본을 눌러도 편집기 밖 누름으로 보지 않게(편집기와 같은 탭 영역 묶음).
+                    child: TextFieldTapRegion(
+                      child: PageFormatRow(
+                        isMac: _isMac,
+                        format: _ribbonFormat,
+                        shape: _shapeFormat,
+                        colors: [for (final (c, _) in _swatches) c],
+                        onFormat: _format,
+                        onShape: _formatShape,
+                      ),
+                    ),
                   ),
                 ),
                 Divider(height: 1, color: cs.outlineVariant),
@@ -957,17 +1474,17 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
                       Expanded(
                         child: _blockWhileComposing(
                           FocusTraversalOrder(
-                            order: const NumericFocusOrder(2),
+                            order: const NumericFocusOrder(3),
                             child: _canvasArea(cs),
                           ),
                         ),
                       ),
                       VerticalDivider(width: 1, color: cs.outlineVariant),
                       SizedBox(
-                        width: 320,
+                        width: 280,
                         child: _blockWhileComposing(
                           FocusTraversalOrder(
-                            order: const NumericFocusOrder(3),
+                            order: const NumericFocusOrder(4),
                             child: _propertiesPanel(cs),
                           ),
                         ),
@@ -977,7 +1494,7 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
                 ),
                 Divider(height: 1, color: cs.outlineVariant),
                 FocusTraversalOrder(
-                  order: const NumericFocusOrder(4),
+                  order: const NumericFocusOrder(5),
                   child: _bottomBar(cs),
                 ),
               ],
@@ -993,106 +1510,36 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
     child: ExcludeFocus(excluding: _composing, child: child),
   );
 
-  Widget _toolbar(ColorScheme cs) {
+  /// 캔버스 아래 상태 줄.
+  String get _statusText {
     final mod = _isMac ? '⌘' : 'Ctrl+';
-    final selected = _selectedIndex >= 0;
-    final atFront = _selectedIndex == _elements.length - 1;
-    final atBack = _selectedIndex == 0;
-    Widget button(IconData icon, String tooltip, VoidCallback? onPressed) =>
-        IconButton(
-          icon: Icon(icon, size: 20),
-          tooltip: tooltip,
-          onPressed: onPressed,
-        );
-    Widget divider() => SizedBox(
-      height: 24,
-      child: VerticalDivider(width: 17, color: cs.outlineVariant),
+    ({int images, int texts, int shapes}) count(List<PageElement> list) => (
+      images: list.whereType<PageImageElement>().length,
+      shapes: list.whereType<PageShapeElement>().length,
+      texts: list
+          .where((e) => e is PageTextElement && e is! PageShapeElement)
+          .length,
     );
-    return SizedBox(
-      height: 44,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        child: Row(
-          children: [
-            button(
-              Icons.add_photo_alternate_outlined,
-              '그림 추가 (파일)',
-              _pickImages,
-            ),
-            _pasting
-                ? const SizedBox(
-                    width: 40,
-                    child: Center(
-                      child: SizedBox.square(
-                        dimension: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                    ),
-                  )
-                : button(
-                    Icons.content_paste_rounded,
-                    '붙여 넣기 (⌘V / Ctrl+V)',
-                    _paste,
-                  ),
-            button(
-              Icons.text_fields_rounded,
-              '글 상자 추가 (고른 글 상자와 같은 글꼴·색)',
-              _addTextBox,
-            ),
-            divider(),
-            button(
-              Icons.copy_all_outlined,
-              '복제 (${mod}D)',
-              selected ? _duplicate : null,
-            ),
-            button(
-              Icons.delete_outline_rounded,
-              '삭제 (Delete)',
-              selected ? _delete : null,
-            ),
-            divider(),
-            button(
-              Icons.flip_to_front_outlined,
-              '맨 앞으로 ($mod${_isMac ? '⇧' : 'Shift+'}])',
-              selected && !atFront
-                  ? () => _reorder(_elements.length - 1)
-                  : null,
-            ),
-            button(
-              Icons.arrow_upward_rounded,
-              '앞으로 ($mod])',
-              selected && !atFront ? () => _reorder(_selectedIndex + 1) : null,
-            ),
-            button(
-              Icons.arrow_downward_rounded,
-              '뒤로 ($mod[)',
-              selected && !atBack ? () => _reorder(_selectedIndex - 1) : null,
-            ),
-            button(
-              Icons.flip_to_back_outlined,
-              '맨 뒤로 ($mod${_isMac ? '⇧' : 'Shift+'}[)',
-              selected && !atBack ? () => _reorder(0) : null,
-            ),
-            divider(),
-            button(
-              Icons.undo_rounded,
-              '되돌리기 (${mod}Z)',
-              _history.canUndo ? _undo : null,
-            ),
-            button(
-              Icons.redo_rounded,
-              _isMac ? '다시 하기 (⌘⇧Z)' : '다시 하기 (Ctrl+Y)',
-              _history.canRedo ? _redo : null,
-            ),
-          ],
-        ),
-      ),
-    );
+    if (_editingId != null) {
+      return '글 편집 중   ESC: 편집 끝내기 · 테두리를 끌어 옮기기 · 리본 서식은 고른 글자에만';
+    }
+    if (_selection.length > 1) {
+      final picked = _selectedElements;
+      final c = count(picked);
+      return '요소 ${picked.length}개 고름 (글 상자 ${c.texts} · 도형 ${c.shapes} · 그림 ${c.images})   '
+          '함께 끌어 옮기기 · Delete: 모두 지우기 · ${mod}D: 모두 복제';
+    }
+    if (_selected case PageShapeElement(:final kind)) {
+      return kind.isLine
+          ? '${kind.label} 고름   양 끝 손잡이: 방향·길이 · 방향키: 옮기기(Shift = 크게)'
+          : '도형 1개 고름   더블클릭·Enter: 안에 글 쓰기 · 방향키: 옮기기(Shift = 크게)';
+    }
+    final c = count(_elements);
+    return '그림 ${c.images} · 글 상자 ${c.texts} · 도형 ${c.shapes}   '
+        '더블클릭: 글 고치기 · Shift/$mod+클릭: 여러 개 고르기 · 빈 곳 끌기: 범위로 고르기';
   }
 
   Widget _canvasArea(ColorScheme cs) {
-    final images = _elements.whereType<PageImageElement>().length;
-    final texts = _elements.length - images;
     return ColoredBox(
       color: cs.surfaceContainerHighest,
       child: Column(
@@ -1104,7 +1551,7 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
               // 이쪽 tapDown 도 불려 방금 고른 것이 풀린다.
               behavior: HitTestBehavior.opaque,
               onTap: () {
-                _select(null);
+                _select(const []);
                 _canvasFocus.requestFocus();
               },
               child: Padding(
@@ -1123,9 +1570,7 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
             child: Text(
-              '그림 $images · 글 상자 $texts    '
-              '끌어서 옮기고, 모서리를 끌어 크기를 바꿉니다. Shift: 비율 풀기    '
-              '빈 곳 누르기: 페이지 배경',
+              _statusText,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
@@ -1143,7 +1588,14 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
       r.width * size.width,
       r.height * size.height,
     );
-    final selected = _selected;
+    final selected = _editingId == null ? _selected : null;
+    final editing = _byId(_editingId);
+    final picked = _selectedElements;
+    Offset ratio(Offset local) =>
+        Offset(local.dx / size.width, local.dy / size.height);
+    final marquee = _marqueeFrom != null && _marqueeTo != null
+        ? px(Rect.fromPoints(_marqueeFrom!, _marqueeTo!))
+        : null;
     return Focus(
       focusNode: _canvasFocus,
       autofocus: !_isNew,
@@ -1166,11 +1618,37 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
             clipBehavior: Clip.none,
             children: [
               Positioned.fill(
-                child: PageCanvas(
-                  elements: _elements,
-                  backgroundColor: _background.color,
-                  backgroundImage: _backgroundImage,
-                  images: _images,
+                // 빈 곳(요소 덮개 밖) 끌기 = 범위로 고르기. 편집 중에는 글자 고르기와 겹치지 않게 끈다.
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  // 범위는 누른 자리부터(기본은 끌기 문턱을 넘은 자리).
+                  dragStartBehavior: DragStartBehavior.down,
+                  onPanStart: editing != null
+                      ? null
+                      : (d) => _startMarquee(ratio(d.localPosition)),
+                  onPanUpdate: editing != null
+                      ? null
+                      : (d) => _updateMarquee(ratio(d.localPosition)),
+                  onPanEnd: editing != null ? null : (_) => _endMarquee(),
+                  child: PageCanvas(
+                    elements: _elements,
+                    backgroundColor: _background.color,
+                    backgroundImage: _backgroundImage,
+                    images: _images,
+                    editingId: editing?.id,
+                    editor: editing is PageTextElement
+                        ? PageTextEditor(
+                            element: editing,
+                            fontScale: PageCanvas.fontScale,
+                            controller: _quill,
+                            focusNode: _textFocus,
+                            scrollController: _quillScroll,
+                            editorKey: _editorKey,
+                            onExit: _exitEdit,
+                            onFormat: _toggleFormat,
+                          )
+                        : null,
+                  ),
                 ),
               ),
               if (_elements.isEmpty)
@@ -1206,13 +1684,45 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
                   ),
                 ),
               // 요소 위 누르기·끌기 자리. 뒤 요소가 위라 목록 순서대로 쌓으면 위 요소가 먼저 눌린다.
+              // 편집 중인 상자는 안쪽을 비워(편집기가 받는다) 테두리 띠만 둔다.
               for (final e in _elements)
+                if (e.id == _editingId)
+                  _editingFrame(cs, e, px(e.rect), size)
+                else if (_selectable(e))
+                  Positioned.fromRect(
+                    // 선은 높이 0 일 수 있어 덮개를 누를 만큼 넓힌다(누름은 선 가까이만 — _LineHitPainter).
+                    rect: _isLine(e) ? _lineBox(px(e.rect)) : px(e.rect),
+                    child: _elementOverlay(cs, e, size),
+                  ),
+              if (picked.length > 1)
                 Positioned.fromRect(
-                  rect: px(e.rect),
-                  child: _elementOverlay(cs, e, size),
+                  rect: px(
+                    picked
+                        .map((e) => e.rect)
+                        .reduce((a, b) => a.expandToInclude(b)),
+                  ).inflate(6),
+                  child: IgnorePointer(
+                    child: CustomPaint(
+                      painter: _DashedBorderPainter(cs.secondary),
+                    ),
+                  ),
                 ),
-              if (selected != null)
+              if (selected is PageShapeElement && selected.kind.isLine)
+                ..._lineHandles(cs, selected, size)
+              else if (selected != null)
                 ..._handles(cs, selected, px(selected.rect), size),
+              if (marquee != null)
+                Positioned.fromRect(
+                  rect: marquee,
+                  child: IgnorePointer(
+                    child: ColoredBox(
+                      color: cs.secondary.withValues(alpha: 0.08),
+                      child: CustomPaint(
+                        painter: _DashedBorderPainter(cs.secondary),
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
@@ -1220,19 +1730,97 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
     );
   }
 
+  /// 편집 중인 글 상자: 점선 + 바깥 옅은 띠. 띠를 끌면 상자를 옮긴다(안쪽 끌기는 글자 고르기).
+  Widget _editingFrame(ColorScheme cs, PageElement e, Rect box, Size size) {
+    const band = 6.0;
+    Widget strip(Positioned Function(Widget child) place) => place(
+      MouseRegion(
+        cursor: SystemMouseCursors.move,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onPanStart: (_) => _startDrag(e),
+          onPanUpdate: (d) => _updateDrag(d, size),
+          onPanEnd: (_) => _endDrag(),
+        ),
+      ),
+    );
+    return Positioned.fromRect(
+      key: const ValueKey('page-editing-frame'),
+      rect: box.inflate(band),
+      child: Semantics(
+        label: '글 상자 편집 중',
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: IgnorePointer(
+                child: DecoratedBox(
+                  // 어두운·밝은 슬라이드 모두 보이게: 옅은 surface 띠 + point(secondary) 점선.
+                  decoration: BoxDecoration(
+                    border: Border.all(
+                      color: cs.surface.withValues(alpha: 0.45),
+                      width: band,
+                    ),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(band),
+                    child: CustomPaint(
+                      painter: _DashedBorderPainter(cs.secondary),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            strip(
+              (c) =>
+                  Positioned(left: 0, top: 0, right: 0, height: band, child: c),
+            ),
+            strip(
+              (c) => Positioned(
+                left: 0,
+                bottom: 0,
+                right: 0,
+                height: band,
+                child: c,
+              ),
+            ),
+            strip(
+              (c) =>
+                  Positioned(left: 0, top: 0, bottom: 0, width: band, child: c),
+            ),
+            strip(
+              (c) => Positioned(
+                right: 0,
+                top: 0,
+                bottom: 0,
+                width: band,
+                child: c,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _elementOverlay(ColorScheme cs, PageElement e, Size size) {
-    final isSelected = e.id == _selectedId;
+    final isSelected = _selection.contains(e.id);
     final missingImage = e is PageImageElement && !_images.containsKey(e.path);
-    final emptyText = e is PageTextElement && e.text.trim().isEmpty;
+    final emptyText =
+        e is PageTextElement && e is! PageShapeElement && e.text.trim().isEmpty;
+    final line = _isLine(e);
+    String head(String t) => t.length > 20 ? t.substring(0, 20) : t;
     return Semantics(
       label: switch (e) {
+        PageShapeElement(:final kind, :final text) =>
+          '도형: ${kind.label}${text.trim().isEmpty ? '' : ' ${head(text)}'}',
         PageImageElement(:final path) =>
           '그림: ${BackgroundImageLibrary.displayName(path)}',
-        PageTextElement(:final text) =>
-          '글 상자: ${text.length > 20 ? text.substring(0, 20) : text}',
+        PageTextElement(:final text) => '글 상자: ${head(text)}',
+        PageUnknownElement(:final type) => '알 수 없는 요소: $type',
       },
       selected: isSelected,
       child: MouseRegion(
+        hitTestBehavior: line ? HitTestBehavior.deferToChild : null,
         cursor: _dragging && isSelected
             ? SystemMouseCursors.grabbing
             : SystemMouseCursors.move,
@@ -1241,44 +1829,55 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
           if (_hoverId == e.id) setState(() => _hoverId = null);
         },
         child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
+          behavior: line
+              ? HitTestBehavior.deferToChild
+              : HitTestBehavior.opaque,
           onTapDown: (_) {
-            if (!isSelected) _select(e.id);
+            final kb = HardwareKeyboard.instance;
+            _tapAdditive =
+                kb.isShiftPressed ||
+                (_isMac ? kb.isMetaPressed : kb.isControlPressed);
+            if (_tapAdditive) {
+              _select(
+                isSelected
+                    ? _selection.where((id) => id != e.id)
+                    : [..._selection, e.id],
+              );
+            } else if (!isSelected) {
+              _select([e.id]);
+            }
             _canvasFocus.requestFocus();
           },
-          onDoubleTap: e is PageTextElement ? _focusText : null,
-          onPanStart: (_) {
-            if (!isSelected) _select(e.id);
-            _canvasFocus.requestFocus();
-            _history.record(_elements);
-            setState(() {
-              _dragStart = e.rect;
-              _dragTotal = Offset.zero;
-              _dragging = true;
-            });
+          // 여러 개 고른 중 하나를 (끌지 않고) 누르면 그것만 남긴다.
+          onTap: () {
+            if (!_tapAdditive && _selection.length > 1) _select([e.id]);
           },
-          onPanUpdate: (d) {
-            final start = _dragStart;
-            final current = _selected;
-            if (start == null || current == null) return;
-            _dragTotal += Offset(
-              d.delta.dx / size.width,
-              d.delta.dy / size.height,
-            );
-            _replace(
-              current.copyWith(
-                rect: PageElement.clampRect(start.shift(_dragTotal)),
-              ),
-              record: false,
-            );
-          },
-          onPanEnd: (_) => setState(() {
-            _dragStart = null;
-            _dragging = false;
-          }),
+          // 글을 못 담는 요소(선)는 두 번 누름 인식기를 아예 안 단다 — 달면 빠른 두 번 누름이 고르기를 푼다.
+          onDoubleTapDown: e is PageTextElement && e.holdsText
+              ? (d) => _doubleTapAt = d.globalPosition
+              : null,
+          onDoubleTap: e is PageTextElement && e.holdsText
+              ? () {
+                  _select([e.id]);
+                  _startEdit(at: _doubleTapAt);
+                }
+              : null,
+          onPanStart: (_) => _startDrag(e),
+          onPanUpdate: (d) => _updateDrag(d, size),
+          onPanEnd: (_) => _endDrag(),
           child: Stack(
             fit: StackFit.expand,
             children: [
+              if (e is PageShapeElement && line)
+                LayoutBuilder(
+                  builder: (context, box) => CustomPaint(
+                    painter: _LineHitPainter(e.flipH != e.flipV, box.biggest),
+                    // 고르거나 올리면 선을 따라 옅은 띠(손잡이는 양 끝).
+                    foregroundPainter: isSelected || _hoverId == e.id
+                        ? _LineHighlightPainter(e.flipH != e.flipV, cs.primary)
+                        : null,
+                  ),
+                ),
               if (emptyText)
                 CustomPaint(
                   painter: _DashedBorderPainter(cs.outline),
@@ -1311,7 +1910,9 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
                     ),
                   ),
                 ),
-              if (isSelected)
+              if (line)
+                const SizedBox.shrink()
+              else if (isSelected)
                 // 흰·검정 배경 모두 보이게: 바깥 surface + 안쪽 primary.
                 IgnorePointer(
                   child: DecoratedBox(
@@ -1362,11 +1963,11 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
                 behavior: HitTestBehavior.opaque,
                 onPanStart: (_) {
                   _history.record(_elements);
-                  _dragStart = e.rect;
+                  _resizeStart = e.rect;
                   _dragTotal = Offset.zero;
                 },
                 onPanUpdate: (d) {
-                  final start = _dragStart;
+                  final start = _resizeStart;
                   final current = _selected;
                   if (start == null || current == null) return;
                   _dragTotal += Offset(
@@ -1379,15 +1980,16 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
                         start,
                         h,
                         _dragTotal,
+                        // 그림은 비율 고정(Shift = 풀기), 도형은 Shift = 비율 고정(PowerPoint 와 같다).
                         keepAspect:
-                            current is PageImageElement &&
-                            !HardwareKeyboard.instance.isShiftPressed,
+                            (current is PageImageElement) !=
+                            HardwareKeyboard.instance.isShiftPressed,
                       ),
                     ),
                     record: false,
                   );
                 },
-                onPanEnd: (_) => _dragStart = null,
+                onPanEnd: (_) => _resizeStart = null,
                 child: Center(
                   child: Container(
                     width: mark,
@@ -1404,43 +2006,177 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
     ];
   }
 
+  static bool _isLine(PageElement e) => e is PageShapeElement && e.kind.isLine;
+
+  /// 선 덮개: 짧은 쪽을 화면 16px 까지 넓힌다(가운데 기준).
+  static Rect _lineBox(Rect r) => Rect.fromCenter(
+    center: r.center,
+    width: math.max(r.width, 16),
+    height: math.max(r.height, 16),
+  );
+
+  /// 선·화살표 양 끝 손잡이 2개: 끌면 그 끝점만 옮겨 방향·길이를 바꾼다.
+  List<Widget> _lineHandles(ColorScheme cs, PageShapeElement e, Size size) {
+    const hit = 20.0, mark = 9.0;
+    final (a, b) = e.linePoints;
+    return [
+      for (final (end, point) in [(0, a), (1, b)])
+        Positioned(
+          key: ValueKey('page-line-end-$end'),
+          left: point.dx * size.width - hit / 2,
+          top: point.dy * size.height - hit / 2,
+          width: hit,
+          height: hit,
+          child: MouseRegion(
+            cursor: SystemMouseCursors.precise,
+            child: Semantics(
+              label: end == 0 ? '선 시작점' : '선 끝점',
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onPanStart: (_) {
+                  _history.record(_elements);
+                  _lineStart = e.linePoints;
+                  _dragTotal = Offset.zero;
+                },
+                onPanUpdate: (d) {
+                  final start = _lineStart;
+                  final current = _selected;
+                  if (start == null || current is! PageShapeElement) return;
+                  _dragTotal += Offset(
+                    d.delta.dx / size.width,
+                    d.delta.dy / size.height,
+                  );
+                  _replace(
+                    end == 0
+                        ? current.withLinePoints(
+                            start.$1 + _dragTotal,
+                            start.$2,
+                          )
+                        : current.withLinePoints(
+                            start.$1,
+                            start.$2 + _dragTotal,
+                          ),
+                    record: false,
+                  );
+                },
+                onPanEnd: (_) => _lineStart = null,
+                child: Center(
+                  child: Container(
+                    width: mark,
+                    height: mark,
+                    decoration: BoxDecoration(
+                      color: cs.surface,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: cs.primary, width: 1.5),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+    ];
+  }
+
   Widget _propertiesPanel(ColorScheme cs) {
     final e = _selected;
     final label = Theme.of(context).textTheme.labelMedium;
+    final hint = TextStyle(fontSize: 12, color: cs.onSurfaceVariant);
+    final picked = _selectedElements;
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: switch (e) {
-          null => [
-            TextField(
-              controller: _nameController,
-              decoration: InputDecoration(
-                labelText: widget.templateMode ? '틀 이름' : '페이지 이름',
-                hintText: pageAutoName(_elements),
-                helperText: widget.templateMode
-                    ? '새 페이지 추가 메뉴에 보이는 이름입니다.'
-                    : '콘티 목록에 보이는 이름입니다. 관객 화면에는 나오지 않습니다.',
-                helperMaxLines: 3,
-                border: const OutlineInputBorder(),
-                isDense: true,
-              ),
-              onChanged: (_) => setState(() {}),
-              onSubmitted: (_) => _confirm(),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              '요소를 누르면 여기서 고칩니다.',
-              style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
-            ),
-            ..._backgroundProperties(cs, label),
-          ],
-          PageTextElement() => _textProperties(cs, e, label),
-          PageImageElement() => _imageProperties(cs, e, label),
-        },
+        children: picked.length > 1
+            ? [
+                Text('요소 ${picked.length}개를 골랐습니다', style: label),
+                const SizedBox(height: 8),
+                Text('함께 옮기기·복제·삭제·순서가 됩니다. 크기는 하나만 골랐을 때 바꿉니다.', style: hint),
+                if (picked
+                        .where((e) => e is PageTextElement && e.holdsText)
+                        .length
+                    case final n when n > 0) ...[
+                  const SizedBox(height: 8),
+                  Text('리본 글자 서식은 고른 것 중 글 상자·도형 $n개에만 적용됩니다.', style: hint),
+                ],
+              ]
+            : switch (e) {
+                null || PageUnknownElement() => [
+                  TextField(
+                    controller: _nameController,
+                    decoration: InputDecoration(
+                      labelText: widget.templateMode ? '틀 이름' : '페이지 이름',
+                      hintText: pageAutoName(_elements),
+                      helperText: widget.templateMode
+                          ? '새 페이지 추가 메뉴에 보이는 이름입니다.'
+                          : '콘티 목록에 보이는 이름입니다. 관객 화면에는 나오지 않습니다.',
+                      helperMaxLines: 3,
+                      border: const OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    onChanged: (_) => setState(() {}),
+                    onSubmitted: (_) => _confirm(),
+                  ),
+                  const SizedBox(height: 16),
+                  Text('요소를 누르면 위 리본에서 고칩니다.', style: hint),
+                  ..._backgroundProperties(cs, label),
+                ],
+                PageShapeElement(:final kind) => [
+                  Text(kind.label, style: label),
+                  const SizedBox(height: 12),
+                  ..._rectProperties(e, label),
+                  const SizedBox(height: 12),
+                  Text(
+                    kind.isLine
+                        ? '색·두께는 위 리본에서 바꿉니다. 양 끝 손잡이를 끌어 방향·길이를 바꿉니다.'
+                        : '채우기·테두리·글자 서식은 위 리본에서 바꿉니다. 더블클릭하거나 Enter 를 누르면 안에 글을 씁니다.',
+                    style: hint,
+                  ),
+                  if (_textOverflows(e)) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      '글이 도형보다 깁니다. 도형을 키우거나 글자를 줄여 주세요.',
+                      style: TextStyle(fontSize: 12, color: cs.error),
+                    ),
+                  ],
+                ],
+                PageTextElement() => [
+                  Text('글 상자', style: label),
+                  const SizedBox(height: 12),
+                  ..._rectProperties(e, label),
+                  const SizedBox(height: 12),
+                  Text(
+                    '글자 서식은 위 리본에서 바꿉니다. 글을 고칠 때 고른 글자가 없으면 다음에 칠 글자에 적용됩니다.',
+                    style: hint,
+                  ),
+                  if (_textOverflows(e)) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      '글이 상자보다 깁니다. 상자를 키우거나 글자를 줄여 주세요.',
+                      style: TextStyle(fontSize: 12, color: cs.error),
+                    ),
+                  ],
+                ],
+                PageImageElement() => _imageProperties(cs, e, label),
+              },
       ),
     );
   }
+
+  /// 위치·크기 숫자 칸(1920x1080 기준).
+  List<Widget> _rectProperties(PageElement e, TextStyle? label) => [
+    Text('위치·크기 (1920×1080 기준)', style: label),
+    const SizedBox(height: 8),
+    PageRectFields(
+      key: ValueKey('rect-${e.id}'),
+      rect: e.rect,
+      clamp: e.fitRect,
+      onChanged: (r) {
+        final current = _byId(e.id);
+        if (current != null) _replace(current.copyWith(rect: r));
+      },
+    ),
+  ];
 
   /// 미선택 패널의 '페이지 배경': 색 + 공통 배경 이미지 모음.
   List<Widget> _backgroundProperties(ColorScheme cs, TextStyle? label) {
@@ -1499,328 +2235,15 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
     ];
   }
 
-  List<Widget> _textProperties(
-    ColorScheme cs,
-    PageTextElement e,
-    TextStyle? label,
-  ) {
-    return [
-      Text(
-        _quill.selection.isCollapsed ? '고른 글자 (글자를 드래그해 고르세요)' : '고른 글자',
-        style: label?.copyWith(fontWeight: FontWeight.w700),
-      ),
-      const SizedBox(height: 6),
-      Localizations.override(
-        context: context,
-        delegates: const [FlutterQuillLocalizations.delegate],
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            QuillSimpleToolbar(
-              controller: _quill,
-              config: QuillSimpleToolbarConfig(
-                multiRowsDisplay: true,
-                showDividers: false,
-                showUndo: false,
-                showRedo: false,
-                showFontFamily: false,
-                showSmallButton: false,
-                showInlineCode: false,
-                showBackgroundColorButton: false,
-                showClearFormat: true,
-                showAlignmentButtons: false,
-                showHeaderStyle: false,
-                showListCheck: false,
-                showCodeBlock: false,
-                showQuote: false,
-                showIndent: false,
-                showLink: false,
-                showDirection: false,
-                showSearchButton: false,
-                showSubscript: false,
-                showSuperscript: false,
-                showLineHeightButton: false,
-                buttonOptions: QuillSimpleToolbarButtonOptions(
-                  bold: const QuillToolbarToggleStyleButtonOptions(
-                    tooltip: '굵게',
-                  ),
-                  italic: const QuillToolbarToggleStyleButtonOptions(
-                    tooltip: '기울임',
-                  ),
-                  underLine: const QuillToolbarToggleStyleButtonOptions(
-                    tooltip: '밑줄',
-                  ),
-                  strikeThrough: const QuillToolbarToggleStyleButtonOptions(
-                    tooltip: '취소선',
-                  ),
-                  listBullets: const QuillToolbarToggleStyleButtonOptions(
-                    tooltip: '글머리 기호',
-                  ),
-                  listNumbers: const QuillToolbarToggleStyleButtonOptions(
-                    tooltip: '번호 목록',
-                  ),
-                  color: const QuillToolbarColorButtonOptions(tooltip: '글자 색'),
-                  clearFormat: const QuillToolbarClearFormatButtonOptions(
-                    tooltip: '고른 글자의 서식 지우기',
-                  ),
-                  fontSize: QuillToolbarFontSizeButtonOptions(
-                    tooltip: '글자 크기 (슬라이드 기준 pt)',
-                    items: {
-                      '기본값으로': '0',
-                      for (final n in const [
-                        24,
-                        30,
-                        36,
-                        40,
-                        48,
-                        60,
-                        72,
-                        96,
-                        120,
-                      ])
-                        '${n}pt': '$n',
-                    },
-                    defaultDisplayText: '${e.fontSize.round()}pt',
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 6),
-            // 슬라이드와 같은 글꼴·기본 색·페이지 배경 색(앱 테마가 아니라 슬라이드 색 — 의도된 예외).
-            // 크기는 비율만 보이게 줄여 그린다(textScaler).
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: _background.color,
-                border: Border.all(color: cs.outline),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: MediaQuery(
-                data: MediaQuery.of(
-                  context,
-                ).copyWith(textScaler: const TextScaler.linear(_previewScale)),
-                child: QuillEditor.basic(
-                  controller: _quill,
-                  focusNode: _textFocus,
-                  config: QuillEditorConfig(
-                    placeholder: '글을 입력하세요',
-                    minHeight: 120,
-                    maxHeight: 220,
-                    customStyles: DefaultStyles(
-                      paragraph: DefaultTextBlockStyle(
-                        _previewBase(e),
-                        HorizontalSpacing.zero,
-                        VerticalSpacing.zero,
-                        VerticalSpacing.zero,
-                        null,
-                      ),
-                      // 목록 줄도 같은 글꼴·색 — 안 넣으면 앱 테마 글자색이 슬라이드 배경에 묻힌다.
-                      lists: DefaultListBlockStyle(
-                        _previewBase(e),
-                        HorizontalSpacing.zero,
-                        VerticalSpacing.zero,
-                        VerticalSpacing.zero,
-                        null,
-                        null,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-      const SizedBox(height: 4),
-      Text(
-        '미리보기는 줄여서 보여 줍니다. 실제 크기는 캔버스에서 확인하세요.'
-        '${(e.rich?.contains('"list"') ?? false) ? ' 목록 기호는 슬라이드에서 글머리 문자로 표시됩니다.' : ''}',
-        style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
-      ),
-      if (_directFormatCount() > 0) ...[
-        const SizedBox(height: 12),
-        Text(
-          '직접 바꾼 글자 ${_directFormatCount()}곳(크기·색·굵기)은 아래 기본값을 따르지 않습니다.',
-          style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
-        ),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: TextButton(
-            onPressed: _clearDirectFormats,
-            child: const Text('모두 기본값으로'),
-          ),
-        ),
-      ],
-      const Divider(height: 28),
-      Text('상자 전체 기본값', style: label?.copyWith(fontWeight: FontWeight.w700)),
-      const SizedBox(height: 12),
-      Text('기본 글자 크기 ${e.fontSize.round()}pt', style: label),
-      Row(
-        children: [
-          Expanded(
-            child: Slider(
-              value: e.fontSize.clamp(10, 120).toDouble(),
-              min: 10,
-              max: 120,
-              onChangeStart: (_) => _editSession = false,
-              onChanged: (v) {
-                _replaceInSession(e.copyWith(fontSize: v.roundToDouble()));
-                _sizeController.text = v.round().toString();
-              },
-              onChangeEnd: (_) => _editSession = false,
-            ),
-          ),
-          SizedBox(
-            width: 56,
-            child: TextField(
-              controller: _sizeController,
-              keyboardType: TextInputType.number,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              textAlign: TextAlign.center,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                isDense: true,
-              ),
-              onSubmitted: (v) {
-                final n = double.tryParse(v);
-                if (n == null) return;
-                _replace(
-                  e.copyWith(
-                    fontSize: n
-                        .clamp(
-                          PageTextElement.minFontSize,
-                          PageTextElement.maxFontSize,
-                        )
-                        .toDouble(),
-                  ),
-                );
-                _syncFields();
-              },
-            ),
-          ),
-        ],
-      ),
-      const SizedBox(height: 12),
-      Text('기본 글자 색', style: label),
-      const SizedBox(height: 6),
-      Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: [
-          for (final (color, name) in _swatches)
-            Tooltip(
-              message: '$name ${colorToHex(color)}',
-              child: InkResponse(
-                radius: 14,
-                onTap: () => _replace(e.copyWith(color: color)),
-                child: Container(
-                  width: 22,
-                  height: 22,
-                  decoration: BoxDecoration(
-                    color: color,
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: color.toARGB32() == e.color.toARGB32()
-                          ? cs.primary
-                          : cs.outlineVariant,
-                      width: color.toARGB32() == e.color.toARGB32() ? 2 : 1,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          TextButton(
-            onPressed: () async {
-              final picked = await showDialog<Color>(
-                context: context,
-                builder: (_) => HexColorDialog(
-                  title: '글자 색',
-                  initialColor: e.color,
-                  colors: [for (final (c, _) in _swatches) c],
-                  inputFormatter: hexInputFormatter,
-                ),
-              );
-              final current = _selected;
-              if (picked != null && current is PageTextElement) {
-                _replace(current.copyWith(color: picked));
-              }
-            },
-            child: const Text('직접 고르기'),
-          ),
-        ],
-      ),
-      const SizedBox(height: 12),
-      Text('기본 굵게 · 상자 정렬', style: label),
-      const SizedBox(height: 6),
-      Row(
-        children: [
-          IconButton(
-            icon: const Icon(Icons.format_bold_rounded),
-            tooltip: '기본 굵게',
-            isSelected: e.bold,
-            style: IconButton.styleFrom(
-              backgroundColor: e.bold ? cs.secondaryContainer : null,
-              foregroundColor: e.bold ? cs.onSecondaryContainer : null,
-            ),
-            onPressed: () => _replace(e.copyWith(bold: !e.bold)),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: SegmentedButton<TextAlign>(
-              showSelectedIcon: false,
-              segments: const [
-                ButtonSegment(
-                  value: TextAlign.left,
-                  icon: Icon(Icons.format_align_left_rounded, size: 18),
-                  tooltip: '왼쪽',
-                ),
-                ButtonSegment(
-                  value: TextAlign.center,
-                  icon: Icon(Icons.format_align_center_rounded, size: 18),
-                  tooltip: '가운데',
-                ),
-                ButtonSegment(
-                  value: TextAlign.right,
-                  icon: Icon(Icons.format_align_right_rounded, size: 18),
-                  tooltip: '오른쪽',
-                ),
-              ],
-              selected: {e.align},
-              onSelectionChanged: (s) => _replace(e.copyWith(align: s.first)),
-            ),
-          ),
-        ],
-      ),
-      const SizedBox(height: 12),
-      Text('글꼴', style: label),
-      const SizedBox(height: 6),
-      FontFamilyPicker(
-        selected: e.fontFamily,
-        onChanged: (f) => _replace(e.copyWith(fontFamily: f)),
-      ),
-      if (_textOverflows(e)) ...[
-        const SizedBox(height: 12),
-        Text(
-          '글이 상자보다 깁니다. 상자를 키우거나 글자를 줄여 주세요.',
-          style: TextStyle(fontSize: 12, color: cs.error),
-        ),
-      ],
-    ];
-  }
-
-  /// 굽기와 같은 글자 배치(1920x1080)로 재서 상자 높이를 넘는지.
+  /// 굽기와 같은 글자 배치(1920x1080)로 재서 상자(도형은 안쪽 여백 뺀) 높이를 넘는지.
   bool _textOverflows(PageTextElement e) {
-    if (e.text.isEmpty) return false;
-    final painter = TextPainter(
-      text: pageTextSpan(e, PageCanvas.fontScale),
-      textAlign: e.align,
-      textDirection: TextDirection.ltr,
-      textScaler: TextScaler.noScaling,
-    )..layout(maxWidth: e.rect.width * PageCanvas.width);
-    final over = painter.height > e.rect.height * PageCanvas.height + 0.5;
-    painter.dispose();
-    return over;
+    if (e.text.isEmpty || !e.holdsText) return false;
+    final shape = e is PageShapeElement;
+    const k = PageCanvas.fontScale;
+    final insetH = shape ? PageShapeElement.textInsetH * k * 2 : 0.0;
+    final insetV = shape ? PageShapeElement.textInsetV * k * 2 : 0.0;
+    return measurePageText(e, k, e.rect.width * PageCanvas.width - insetH) >
+        e.rect.height * PageCanvas.height - insetV + 0.5;
   }
 
   List<Widget> _imageProperties(
@@ -1859,6 +2282,8 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
           style: TextStyle(fontSize: 12, color: cs.error),
         ),
       ],
+      const SizedBox(height: 16),
+      ..._rectProperties(e, label),
     ];
   }
 
@@ -1933,7 +2358,68 @@ class _DashedBorderPainter extends CustomPainter {
   bool shouldRepaint(_DashedBorderPainter old) => old.color != color;
 }
 
-extension on String {
-  /// Quill 문서 평문은 늘 줄바꿈 하나로 끝난다 — 그 하나만 뗀다.
-  String trimRightNewline() => endsWith('\n') ? substring(0, length - 1) : this;
+/// 선 덮개의 누름 판정: 대각선(또는 가로·세로선)에서 화면 8px 안만 누른 것으로 본다.
+/// [rising] = 왼쪽 아래 → 오른쪽 위 대각선(flipH 와 flipV 가 다를 때).
+class _LineHitPainter extends CustomPainter {
+  const _LineHitPainter(this.rising, this.size);
+
+  final bool rising;
+  final Size size;
+
+  /// 덮개는 짧은 쪽을 넓혀 둔 것이라 그 축은 가운데 줄로 본다.
+  static (Offset, Offset) lineIn(Size size, bool rising) {
+    if (size.height <= 16.5) {
+      return (Offset(0, size.height / 2), Offset(size.width, size.height / 2));
+    }
+    if (size.width <= 16.5) {
+      return (Offset(size.width / 2, 0), Offset(size.width / 2, size.height));
+    }
+    return rising
+        ? (Offset(0, size.height), Offset(size.width, 0))
+        : (Offset.zero, Offset(size.width, size.height));
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {}
+
+  @override
+  bool hitTest(Offset position) {
+    final (a, b) = lineIn(size, rising);
+    final ab = b - a;
+    final len2 = ab.distanceSquared;
+    final t = len2 == 0
+        ? 0.0
+        : (((position - a).dx * ab.dx + (position - a).dy * ab.dy) / len2)
+              .clamp(0.0, 1.0);
+    return (position - (a + ab * t)).distance <= 8;
+  }
+
+  @override
+  bool shouldRepaint(_LineHitPainter old) =>
+      old.rising != rising || old.size != size;
+}
+
+/// 고른·올린 선을 따라 옅은 띠.
+class _LineHighlightPainter extends CustomPainter {
+  const _LineHighlightPainter(this.rising, this.color);
+
+  final bool rising;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final (a, b) = _LineHitPainter.lineIn(size, rising);
+    canvas.drawLine(
+      a,
+      b,
+      Paint()
+        ..color = color.withValues(alpha: 0.35)
+        ..strokeWidth = 6
+        ..strokeCap = StrokeCap.round,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_LineHighlightPainter old) =>
+      old.rising != rising || old.color != color;
 }

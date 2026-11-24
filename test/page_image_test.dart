@@ -63,7 +63,7 @@ void main() {
     expect(text.toJson()['color'], '#112233');
   });
 
-  test('틀린 요소는 버리고 나머지는 남긴다', () {
+  test('틀린 요소는 버리고 나머지는 남긴다(모르는 종류는 보존)', () {
     final list = PageElement.listFromJson([
       {
         'type': 'image',
@@ -89,8 +89,10 @@ void main() {
         'font_size': -3,
       },
     ]);
-    expect(list, hasLength(1));
-    final t = list.single as PageTextElement;
+    // 이 판이 모르는 종류(video)는 버리지 않고 그대로 들고 있는다.
+    expect(list, hasLength(2));
+    expect((list.first as PageUnknownElement).type, 'video');
+    final t = list.last as PageTextElement;
     expect(t.fontSize, PageTextElement.defaultFontSize);
     expect(t.color, Colors.white);
     expect(t.align, TextAlign.center);

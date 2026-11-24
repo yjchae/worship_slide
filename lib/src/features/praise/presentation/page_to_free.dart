@@ -88,13 +88,7 @@ List<PageElement> freePageElements(
   );
 
   final boxW = SlideTextLayout.boxW(isBible);
-  final painter = TextPainter(
-    text: pageTextSpan(body, 1),
-    textAlign: align,
-    textDirection: TextDirection.ltr,
-  )..layout(maxWidth: boxW * 72);
-  final textH = painter.height / 72;
-  painter.dispose();
+  final textH = measurePageText(body, 1, boxW * 72) / 72;
   final boxTop =
       SlideTextLayout.lyricsBoxT +
       clampTextOffsetY(isBible ? style.bibleTextOffsetY : style.textOffsetY);

@@ -301,8 +301,11 @@ class FontFamilyPicker extends StatelessWidget {
     required this.onChanged,
   });
 
-  final String selected;
-  final ValueChanged<String> onChanged;
+  /// null = 여러 글꼴이 섞임(빈칸). 목록에 없는 이름은 '(없는 글꼴)'을 붙여 그대로 보인다.
+  final String? selected;
+
+  /// null 이면 비활성.
+  final ValueChanged<String>? onChanged;
 
   static const _bundled = [
     ('Pretendard', 'Pretendard'),
@@ -315,13 +318,21 @@ class FontFamilyPicker extends StatelessWidget {
     for (final f in FontLibrary.fonts) (f.family, f.displayName),
   ];
 
-  String get _displayName =>
-      _fonts.firstWhere((f) => f.$1 == selected, orElse: () => _fonts.first).$2;
+  String get _displayName => selected == null
+      ? ''
+      : _fonts
+            .firstWhere(
+              (f) => f.$1 == selected,
+              orElse: () => (selected!, '$selected (없는 글꼴)'),
+            )
+            .$2;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return PopupMenuButton<String>(
+      enabled: onChanged != null,
+      tooltip: '글꼴',
       offset: const Offset(0, 4),
       onSelected: onChanged,
       itemBuilder: (_) => _fonts
@@ -347,10 +358,13 @@ class FontFamilyPicker extends StatelessWidget {
               child: Text(
                 _displayName,
                 overflow: TextOverflow.ellipsis,
+                semanticsLabel: selected == null ? '여러 값' : null,
                 style: TextStyle(
                   fontFamily: selected,
                   fontSize: 13,
-                  color: cs.onSurface,
+                  color: onChanged == null
+                      ? cs.onSurface.withValues(alpha: 0.38)
+                      : cs.onSurface,
                   fontWeight: FontWeight.w600,
                 ),
               ),

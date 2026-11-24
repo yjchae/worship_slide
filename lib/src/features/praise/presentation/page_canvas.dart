@@ -24,6 +24,10 @@ import 'lyrics_overlay_renderer.dart';
 /// 그림은 미리 디코딩한 [images](경로 → [ui.Image], [PageComposer.loadImages])로 그린다 —
 /// `Image.file` 은 화면 밖 굽기에서 읽히기 전에 찍혀 빈칸이 된다. 맵에 없는 그림은 안 그린다.
 /// 주변 테마·글자 배율을 타지 않는다(편집 창과 굽기가 달라지지 않게).
+///
+/// 편집 창은 [editingId] 요소의 글 대신 [editor](캔버스 안 편집기)를 같은 자리에 끼운다 — 편집 중 글자 자리와
+/// 굽기 자리가 레이아웃부터 같다. 굽기는 둘 다 null. 이 판이 모르는 요소([PageUnknownElement])는 그리지 않는다.
+/// 도형은 [PageShapePainter] 위에 같은 글 칸을 안쪽 여백만큼 들여 놓는다. 글은 [PageTextElement.valign] 대로.
 class PageCanvas extends StatelessWidget {
   const PageCanvas({
     super.key,
@@ -31,6 +35,8 @@ class PageCanvas extends StatelessWidget {
     required this.backgroundColor,
     this.backgroundImage,
     this.images = const {},
+    this.editingId,
+    this.editor,
   });
 
   static const double width = 1920;
@@ -43,6 +49,8 @@ class PageCanvas extends StatelessWidget {
   final Color backgroundColor;
   final ui.Image? backgroundImage;
   final Map<String, ui.Image> images;
+  final String? editingId;
+  final Widget? editor;
 
   @override
   Widget build(BuildContext context) {
@@ -71,6 +79,8 @@ class PageCanvas extends StatelessWidget {
                   ),
                 for (final element in elements)
                   Positioned(
+                    // 배경 그림이 늦게 읽혀 앞 칸이 늘어도 편집기 상태(커서·한글 조합)가 남게.
+                    key: ValueKey(element.id),
                     left: element.rect.left * width,
                     top: element.rect.top * height,
                     width: element.rect.width * width,
@@ -81,7 +91,9 @@ class PageCanvas extends StatelessWidget {
                         fit: BoxFit.fill,
                         filterQuality: FilterQuality.high,
                       ),
+                      PageShapeElement() => _shape(element),
                       PageTextElement() => _text(element),
+                      PageUnknownElement() => const SizedBox.shrink(),
                     },
                   ),
               ],
@@ -92,16 +104,107 @@ class PageCanvas extends StatelessWidget {
     );
   }
 
+  /// 채우기 → 테두리, 그 위 안쪽 여백 안에 글(선·화살표는 글 없음).
+  Widget _shape(PageShapeElement e) => Stack(
+    fit: StackFit.expand,
+    children: [
+      CustomPaint(painter: PageShapePainter(e, fontScale)),
+      if (e.holdsText)
+        Padding(
+          padding: EdgeInsets.symmetric(
+            horizontal: PageShapeElement.textInsetH * fontScale,
+            vertical: PageShapeElement.textInsetV * fontScale,
+          ),
+          child: _text(e),
+        ),
+    ],
+  );
+
   Widget _text(PageTextElement e) => OverflowBox(
-    alignment: Alignment.topCenter,
+    alignment: switch (e.valign) {
+      PageVAlign.top => Alignment.topCenter,
+      PageVAlign.middle => Alignment.center,
+      PageVAlign.bottom => Alignment.bottomCenter,
+    },
     minHeight: 0,
     maxHeight: double.infinity,
-    child: Text.rich(
-      pageTextSpan(e, fontScale),
-      textAlign: e.align,
-      textScaler: TextScaler.noScaling,
-    ),
+    child: e.id == editingId && editor != null
+        ? editor
+        : PageTextBlock(element: e, fontScale: fontScale),
   );
+}
+
+/// 도형 모양(채우기 → 테두리). 편집 창 캔버스와 굽기가 같이 쓴다. [scale] = 540pt → px.
+/// 사각형·타원 테두리는 상자 안쪽으로 그린다(상자 밖으로 안 나가게 — PowerPoint 는 선 가운데 기준이라 반 두께 차이).
+class PageShapePainter extends CustomPainter {
+  const PageShapePainter(this.shape, this.scale);
+
+  final PageShapeElement shape;
+  final double scale;
+
+  /// 화살표 머리 길이·폭 = 두께 × 이 값.
+  static const double arrowHead = 4;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final e = shape;
+    final width = e.strokeWidth * scale;
+    final stroke = e.stroke != null && width > 0
+        ? (Paint()
+            ..color = e.stroke!
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = width
+            ..isAntiAlias = true)
+        : null;
+    if (e.kind.isLine) {
+      if (stroke == null) return;
+      final a = Offset(e.flipH ? size.width : 0, e.flipV ? size.height : 0);
+      final b = Offset(e.flipH ? 0 : size.width, e.flipV ? 0 : size.height);
+      final length = (b - a).distance;
+      if (length == 0) return;
+      if (e.kind == PageShapeKind.line) {
+        canvas.drawLine(a, b, stroke);
+        return;
+      }
+      final dir = (b - a) / length;
+      final head = math.min(width * arrowHead, length);
+      final base = b - dir * head;
+      canvas.drawLine(a, base, stroke);
+      final side = Offset(-dir.dy, dir.dx) * head / 2;
+      canvas.drawPath(
+        Path()
+          ..moveTo(b.dx, b.dy)
+          ..lineTo(base.dx + side.dx, base.dy + side.dy)
+          ..lineTo(base.dx - side.dx, base.dy - side.dy)
+          ..close(),
+        Paint()..color = e.stroke!,
+      );
+      return;
+    }
+    final box = Offset.zero & size;
+    final inset = stroke == null
+        ? box
+        : box.deflate(math.min(width, size.shortestSide) / 2);
+    void draw(Rect r, Paint paint) => switch (e.kind) {
+      PageShapeKind.ellipse => canvas.drawOval(r, paint),
+      PageShapeKind.roundRect => canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          r,
+          Radius.circular(e.radius * size.shortestSide),
+        ),
+        paint,
+      ),
+      _ => canvas.drawRect(r, paint),
+    };
+    if (e.fill case final fill?) {
+      draw(inset, Paint()..color = fill.withValues(alpha: e.fillAlpha));
+    }
+    if (stroke != null) draw(inset, stroke);
+  }
+
+  @override
+  bool shouldRepaint(PageShapePainter old) =>
+      old.shape != shape || old.scale != scale;
 }
 
 /// [PageCanvas] 를 1920x1080 PNG 한 장으로 굽는다. 구운 PNG 는 `ImageStagingItem` 의 이미지가
@@ -115,7 +218,8 @@ class PageComposer {
   const PageComposer();
 
   /// 그리는 방식이 바뀌면 올린다. 키가 달라져 새로 굽는다.
-  static const int _renderVersion = 1;
+  /// 2: 글을 줄 단위(편집기와 같은 strut·목록 내어쓰기)로 그린다.
+  static const int _renderVersion = 2;
 
   /// 디코딩할 때 긴 변을 이만큼으로 줄인다(큰 캡처가 메모리를 다 먹지 않게).
   static const int maxDecodeSide = 2560;

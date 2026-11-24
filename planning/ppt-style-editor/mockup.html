@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8">
+<title>슬라이드 편집 창 — PowerPoint 방식 목업</title>
+<style>
+:root{--canvas:#F4F5F8;--surface:#fff;--line:#D6DBE6;--outline:#B4BCCC;--point:#4D5E82;--ink:#1C1C21;--muted:#6E6E7A;--subtle:#EDEDF1;--graphite:#2C2E35;--hi:#E9E9ED;--sel:#E3E7F0}
+*{box-sizing:border-box}
+body{margin:0;background:#cfd2d8;font-family:Pretendard,'Apple SD Gothic Neo',sans-serif;color:var(--ink);font-size:13px}
+.screen{width:1400px;padding:24px 16px 28px;margin:0 auto 24px;background:#cfd2d8;position:relative}
+.cap{font-weight:700;font-size:15px;margin:0 0 10px 4px}.cap span{font-weight:400;color:#44464f;margin-left:8px;font-size:13px}
+.dlg{width:1368px;height:820px;background:var(--surface);border-radius:14px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 8px 30px rgba(0,0,0,.18);position:relative}
+.title{padding:14px 20px 6px;font-size:16px;font-weight:600}
+.r{height:42px;display:flex;align-items:center;padding:0 12px;gap:2px;border-bottom:1px solid var(--line)}
+.r2{background:#FAFAFB}
+.tag{font-size:11px;font-weight:700;color:var(--point);width:64px;flex:none;letter-spacing:-.2px}
+.r2.off .tag{color:var(--muted)}
+.b{height:32px;min-width:32px;padding:0 7px;border-radius:6px;display:inline-flex;align-items:center;gap:5px;color:var(--ink);font-size:12.5px;border:1px solid transparent;white-space:nowrap}
+.b svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.b.on{background:var(--sel);border-color:var(--outline)}
+.b.dis{color:#B9BAC2}
+.b.open{background:var(--sel);border-color:var(--point)}
+.b.focus{outline:2px solid var(--point);outline-offset:1px}
+.sep{width:1px;height:22px;background:var(--line);margin:0 6px}
+.dd{white-space:nowrap;height:30px;border:1px solid var(--outline);border-radius:6px;display:inline-flex;align-items:center;padding:0 8px;gap:6px;font-size:12.5px;background:#fff}
+.dd .car{color:var(--muted);font-size:10px;margin-left:auto}
+.dd.dis{color:#B9BAC2;border-color:var(--line);background:#fafafb}
+.dd.mixed .v{color:var(--muted)}
+.lbl{white-space:nowrap;font-size:11.5px;color:var(--muted);margin:0 4px 0 2px}
+.sw{width:16px;height:16px;border-radius:4px;border:1px solid var(--outline);display:inline-block}
+.Aclr{display:inline-flex;flex-direction:column;align-items:center;font-weight:700;font-size:14px;line-height:12px}
+.Aclr i{display:block;width:16px;height:4px;margin-top:2px;border-radius:1px}
+.body{flex:1;display:flex;min-height:0}
+.area{flex:1;background:var(--hi);display:flex;flex-direction:column;min-width:0}
+.stage{flex:1;display:flex;align-items:center;justify-content:center;padding:16px}
+.slide{width:960px;height:540px;position:relative;background:#111;overflow:visible}
+.slide .bg{position:absolute;inset:0;background:radial-gradient(ellipse at 30% 35%,#5a5f6b,#1d1f25 70%);}
+.status{padding:0 16px 10px;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.panel{width:300px;border-left:1px solid var(--line);padding:16px;overflow:hidden}
+.panel h4{font-size:12px;font-weight:600;color:var(--ink);margin:16px 0 6px}
+.panel .hint{font-size:12px;color:var(--muted);line-height:1.5}
+.field{border:1px solid var(--outline);border-radius:6px;padding:8px 10px;font-size:13px;position:relative}
+.field .fl{position:absolute;top:-8px;left:8px;background:#fff;padding:0 4px;font-size:11px;color:var(--muted)}
+.field .ph{color:#9a9aa6}
+.helper{font-size:11.5px;color:var(--muted);margin:4px 2px 0;line-height:1.45}
+.chips{display:flex;gap:6px;flex-wrap:wrap}.chip{border:1px solid var(--outline);border-radius:14px;padding:4px 10px;font-size:12px}
+.sws{display:flex;gap:6px}.sws .sw{width:24px;height:24px;border-radius:5px}.sws .sw.cur{outline:2px solid var(--point);outline-offset:2px}
+.gal{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.gal div{aspect-ratio:16/9;border-radius:5px;border:1px solid var(--line)}
+.gal .none{display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--muted);background:#fafafb}
+.gal .cur{outline:2px solid var(--point);outline-offset:1px}
+.grid4{display:grid;grid-template-columns:1fr 1fr;gap:10px 8px}
+.num{border:1px solid var(--outline);border-radius:6px;height:30px;display:flex;align-items:center;padding:0 8px;font-size:12.5px;gap:6px}.num b{font-weight:400;color:var(--muted);font-size:11px;width:24px;white-space:nowrap}
+.bottom{height:52px;border-top:1px solid var(--line);display:flex;align-items:center;padding:0 20px;gap:8px}
+.bottom .msg{flex:1;font-size:12px;color:var(--muted)}
+.tb{color:var(--graphite);padding:8px 14px;font-weight:600;font-size:13px}
+.fb{background:var(--graphite);color:#fff;border-radius:18px;padding:8px 20px;font-weight:600;font-size:13px}
+/* elements */
+.el{position:absolute}
+.sel{outline:1.5px solid var(--point)}
+.edit{outline:1.5px dashed var(--point);box-shadow:0 0 0 6px rgba(77,94,130,.14)}
+.h{position:absolute;width:10px;height:10px;background:#fff;border:1.5px solid var(--point);border-radius:2px;margin:-5px 0 0 -5px}
+.txt{color:#fff;font-weight:700;text-align:center;line-height:1.2}
+.caret{display:inline-block;width:2px;height:1.05em;background:#fff;vertical-align:-.12em;margin:0 -1px;animation:none}
+.hl{background:rgba(147,165,204,.55)}
+.menu{position:absolute;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.16);padding:6px;z-index:5;min-width:200px}
+.mi{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:6px;font-size:13px}
+.mi svg{width:20px;height:20px;stroke:var(--ink);fill:none;stroke-width:1.6}
+.mi .k{margin-left:auto;color:var(--muted);font-size:11.5px}
+.mi.f{background:var(--sel);outline:2px solid var(--point);outline-offset:-2px}
+.mh{font-size:11px;color:var(--muted);padding:6px 10px 4px}
+.ms{height:1px;background:var(--line);margin:5px 4px}
+.slider{display:inline-flex;align-items:center;gap:6px}.track{width:90px;height:4px;background:var(--line);border-radius:2px;position:relative}.track i{position:absolute;left:0;top:0;bottom:0;width:40%;background:var(--point);border-radius:2px}.track b{position:absolute;left:40%;top:50%;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;background:#fff;border:2px solid var(--point)}
+/* s6 */
+.scrim{position:absolute;inset:0;background:rgba(20,20,24,.45);display:flex;align-items:center;justify-content:center}
+.res{width:600px;background:#fff;border-radius:14px;padding:22px 24px 16px;box-shadow:0 12px 40px rgba(0,0,0,.3)}
+.res h3{margin:0 0 4px;font-size:18px}.res .file{color:var(--muted);font-size:12.5px;margin-bottom:16px}
+.big{display:flex;align-items:baseline;gap:8px;padding:14px 16px;background:var(--canvas);border-radius:10px;margin-bottom:12px}
+.big b{font-size:28px}.big span{color:var(--muted)}
+.row{display:flex;gap:12px;padding:10px 4px;border-bottom:1px solid var(--subtle);align-items:flex-start}
+.row .ic{width:22px;height:22px;flex:none;border-radius:50%;background:var(--subtle);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--graphite)}
+.row .ic.w{background:#FFF3D6;color:#8A5A00}
+.row .t{font-weight:600}.row .d{color:var(--muted);font-size:12.5px;margin-top:2px;line-height:1.45}
+.row .n{margin-left:auto;font-weight:700;white-space:nowrap}
+.link{color:var(--point);font-size:12.5px;text-decoration:underline}
+.btns{display:flex;justify-content:flex-end;gap:8px;margin-top:16px;align-items:center}
+.ob{border:1px solid var(--outline);border-radius:18px;padding:7px 16px;font-weight:600;font-size:13px}
+</style></head><body>
+<script>
+const I={
+img:'<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M4 18l5-5 4 4 3-3 4 4"/></svg>',
+paste:'<svg viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4h6v3H9z"/></svg>',
+text:'<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="1.5" stroke-dasharray="2 2"/><path d="M8 9h8M12 9v7"/></svg>',
+shape:'<svg viewBox="0 0 24 24"><rect x="3" y="10" width="10" height="10" rx="1"/><circle cx="15.5" cy="8.5" r="5.5"/></svg>',
+copy:'<svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/></svg>',
+del:'<svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',
+front:'<svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="1" fill="currentColor" stroke="none"/><rect x="4" y="4" width="11" height="11" rx="1"/></svg>',
+up:'<svg viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg>',
+down:'<svg viewBox="0 0 24 24"><path d="M12 5v14M6 13l6 6 6-6"/></svg>',
+back:'<svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="1"/><rect x="4" y="4" width="11" height="11" rx="1" fill="currentColor" stroke="none" opacity=".35"/></svg>',
+align:'<svg viewBox="0 0 24 24"><path d="M4 3v18"/><rect x="7" y="6" width="12" height="4" rx="1"/><rect x="7" y="14" width="7" height="4" rx="1"/></svg>',
+undo:'<svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>',
+redo:'<svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></svg>',
+al:'<svg viewBox="0 0 24 24"><path d="M4 6h16M4 10h10M4 14h16M4 18h10"/></svg>',
+ac:'<svg viewBox="0 0 24 24"><path d="M4 6h16M7 10h10M4 14h16M7 18h10"/></svg>',
+ar:'<svg viewBox="0 0 24 24"><path d="M4 6h16M10 10h10M4 14h16M10 18h10"/></svg>',
+bul:'<svg viewBox="0 0 24 24"><circle cx="5" cy="7" r="1.3" fill="currentColor"/><circle cx="5" cy="17" r="1.3" fill="currentColor"/><path d="M9 7h11M9 17h11"/></svg>',
+numl:'<svg viewBox="0 0 24 24"><path d="M9 7h11M9 17h11"/><text x="2" y="10" font-size="7" fill="currentColor" stroke="none">1</text><text x="2" y="20" font-size="7" fill="currentColor" stroke="none">2</text></svg>',
+clr:'<svg viewBox="0 0 24 24"><path d="M6 5h12M12 5l-3 14"/><path d="M14 15l6 6M20 15l-6 6"/></svg>',
+vt:'<svg viewBox="0 0 24 24"><path d="M4 4h16M12 8v12M8 12l4-4 4 4"/></svg>',
+vm:'<svg viewBox="0 0 24 24"><path d="M4 12h16M12 3v5M12 16v5M9 6l3 2 3-2M9 18l3-2 3 2"/></svg>',
+vb:'<svg viewBox="0 0 24 24"><path d="M4 20h16M12 4v12M8 12l4 4 4-4"/></svg>',
+rect:'<svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12"/></svg>',
+rrect:'<svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="4"/></svg>',
+ell:'<svg viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="9" ry="6.5"/></svg>',
+line:'<svg viewBox="0 0 24 24"><path d="M4 19L20 5"/></svg>',
+arrow:'<svg viewBox="0 0 24 24"><path d="M4 19L19 6M12 6h7v7"/></svg>',
+aL:'<svg viewBox="0 0 24 24"><path d="M4 3v18"/><rect x="7" y="6" width="12" height="4"/><rect x="7" y="14" width="7" height="4"/></svg>',
+aC:'<svg viewBox="0 0 24 24"><path d="M12 3v18"/><rect x="5" y="6" width="14" height="4"/><rect x="8" y="14" width="8" height="4"/></svg>',
+aR:'<svg viewBox="0 0 24 24"><path d="M20 3v18"/><rect x="5" y="6" width="12" height="4"/><rect x="10" y="14" width="7" height="4"/></svg>',
+aT:'<svg viewBox="0 0 24 24"><path d="M3 4h18"/><rect x="6" y="7" width="4" height="12"/><rect x="14" y="7" width="4" height="7"/></svg>',
+aM:'<svg viewBox="0 0 24 24"><path d="M3 12h18"/><rect x="6" y="5" width="4" height="14"/><rect x="14" y="8" width="4" height="8"/></svg>',
+aB:'<svg viewBox="0 0 24 24"><path d="M3 20h18"/><rect x="6" y="5" width="4" height="12"/><rect x="14" y="10" width="4" height="7"/></svg>',
+};
+const b=(ic,label,cls='')=>`<span class="b ${cls}">${I[ic]||''}${label?`<span>${label}</span>`:''}</span>`;
+const sep='<span class="sep"></span>';
+// 줄 1. o = {sel, multi, shapeOpen, alignOpen}
+function row1(o={}){const s=o.sel?'':'dis', m=o.multi?'':'dis';
+ return `<div class="r">${b('img','그림')}${b('paste','붙여 넣기')}${b('text','글 상자')}${b('shape','도형 ▾',o.shapeOpen?'open':'')}${sep}${b('copy','복제',s)}${b('del','삭제',s)}${sep}${b('front','',s)}${b('up','',s)}${b('down','',s)}${b('back','',s)}${sep}${b('align','맞춤 ▾',(o.sel?'':'dis')+(o.alignOpen?' open':''))}${sep}${b('undo','')}${b('redo','','dis')}</div>`}
+// 글자 서식 묶음. f = {font,size,bold,ital,und,str,color,align,off}
+function textFmt(f){const d=f.off?' dis':'';const on=(x)=>x?' on':'';
+ return `<span class="dd${d}" style="width:150px"><span class="v">${f.font||'&nbsp;'}</span><span class="car">▾</span></span>
+ <span class="dd${d}${f.size===''?' mixed':''}" style="width:62px;margin-left:4px"><span class="v">${f.size===''?'&nbsp;':f.size}</span><span class="car">▾</span></span>
+ <span class="b${d}" title="한 단계 크게" style="font-weight:700">가<sup style="font-size:9px">+</sup></span><span class="b${d}" title="한 단계 작게" style="font-size:11px">가<sup style="font-size:9px">−</sup></span>${sep}
+ <span class="b${d}${on(f.bold)}" style="font-weight:800">B</span><span class="b${d}${on(f.ital)}" style="font-style:italic;font-family:serif">I</span><span class="b${d}${on(f.und)}" style="text-decoration:underline">U</span><span class="b${d}${on(f.str)}" style="text-decoration:line-through">S</span>
+ <span class="b${d}"><span class="Aclr">가<i style="background:${f.color||'transparent'};${f.color?'':'border:1px dashed #9a9aa6'}"></i></span><span class="car" style="font-size:10px;color:var(--muted)">▾</span></span>${sep}
+ ${b('al','',d+on(f.align==='l'))}${b('ac','',d+on(f.align==='c'))}${b('ar','',d+on(f.align==='r'))}${sep}${b('bul','',d)}${b('numl','',d)}${sep}${b('clr','서식 지우기',d)}`}
+function row2text(f,tag='글자 서식'){return `<div class="r r2${f.off?' off':''}"><span class="tag">${tag}</span>${textFmt(f)}${f.off?'<span class="lbl" style="margin-left:12px">글 상자나 도형을 고르면 쓸 수 있습니다.</span>':''}</div>`}
+function dialog(title,r1,r2,canvas,status,panel,msg='',extra=''){return `<div class="dlg"><div class="title">${title}</div>${r1}${r2}
+<div class="body"><div class="area"><div class="stage"><div class="slide"><div class="bg"></div>${canvas}</div></div><div class="status">${status}</div></div><div class="panel">${panel}</div></div>
+<div class="bottom"><span class="msg">${msg}</span><span class="tb">취소</span><span class="fb">확인</span></div>${extra}</div>`}
+const H=(l,t,w,h)=>[[0,0],[.5,0],[1,0],[0,.5],[1,.5],[0,1],[.5,1],[1,1]].map(([x,y])=>`<span class="h" style="left:${l+w*x}px;top:${t+h*y}px"></span>`).join('');
+const pageBgPanel=`<div class="field"><span class="fl">페이지 이름</span><span class="ph">주일 예배</span></div>
+<div class="helper">콘티 목록에 보이는 이름입니다. 관객 화면에는 나오지 않습니다.</div>
+<div class="hint" style="margin-top:14px">요소를 누르면 위 리본에서 고칩니다.</div>
+<div style="height:1px;background:var(--line);margin:16px 0 0"></div>
+<h4>페이지 배경</h4><div class="chips"><span class="chip">예배 시작</span><span class="chip">주일 광고</span><span class="chip">생일자</span></div>
+<h4>색</h4><div class="sws"><span class="sw" style="background:#fff"></span><span class="sw" style="background:#EDEDED"></span><span class="sw" style="background:#9E9E9E"></span><span class="sw" style="background:#424242"></span><span class="sw cur" style="background:#000"></span><span class="sw" style="background:#FFF176"></span></div>
+<h4>배경 이미지 (공통 모음)</h4><div class="gal"><div class="none">없음</div><div class="cur" style="background:radial-gradient(ellipse at 30% 35%,#5a5f6b,#1d1f25 70%)"></div><div style="background:linear-gradient(160deg,#c9ccd4,#7d8290)"></div><div style="background:linear-gradient(20deg,#26282e,#5d6272)"></div><div style="background:linear-gradient(90deg,#e8e4da,#bdb8ad)"></div><div style="background:#3b3f4a"></div></div>
+<div class="helper" style="margin-top:8px">이미지는 화면을 가득 채우게 잘려 들어갑니다.</div>`;
+const geo=(name,x,y,w,h)=>`<h4 style="margin-top:0">${name}</h4><div class="hint" style="margin-bottom:10px">위치·크기 (1920×1080 기준)</div><div class="grid4"><span class="num"><b>X</b>${x}</span><span class="num"><b>Y</b>${y}</span><span class="num"><b>폭</b>${w}</span><span class="num"><b>높이</b>${h}</span></div>`;
+// 공통 캔버스 요소
+const title1=(cls='')=>`<div class="el txt ${cls}" style="left:160px;top:100px;width:640px;height:170px;font-size:56px;display:flex;align-items:flex-start;justify-content:center">주일 예배</div>`;
+const sub1=`<div class="el txt" style="left:240px;top:300px;width:480px;height:60px;font-size:26px;font-weight:500;color:#d9dbe1">2026년 11월 29일 · 오전 11시</div>`;
+const pic=`<div class="el" style="left:400px;top:385px;width:160px;height:120px;border-radius:2px;background:linear-gradient(135deg,#9aa0ad,#4b505c);display:flex;align-items:center;justify-content:center;color:#eef;font-size:11px">교회 로고.png</div>`;
+const S=(id,cap,html)=>document.write(`<section class="screen" id="${id}"><div class="cap">${cap}</div>${html}</section>`);
+
+// s1
+S('s1','s1 · 아무것도 안 고름<span>줄 1 삽입·정렬 / 줄 2 비활성(자리는 그대로) / 오른쪽 = 페이지 이름·배경</span>',
+ dialog('슬라이드 편집 페이지 수정',row1(),row2text({off:true}),title1()+sub1+pic,
+ '그림 1 · 글 상자 2 · 도형 0 &nbsp;&nbsp; 더블클릭: 글 고치기 · Shift/⌘+클릭: 여러 개 고르기 · 빈 곳 끌기: 범위로 고르기',pageBgPanel));
+
+// s2
+S('s2','s2 · 글 상자를 캔버스 안에서 편집 중<span>"은혜가" 선택 + 커서 / 크기 섞임 = 빈칸 / 테두리 띠 = 옮기기</span>',
+ dialog('슬라이드 편집 페이지 수정',row1({sel:true}),row2text({font:'Pretendard',size:'',bold:true,color:'#FFFFFF',align:'c'}),
+ `<div class="el txt edit" style="left:160px;top:100px;width:640px;height:170px;font-size:48px;padding-top:0">주님의 <span class="hl" style="font-size:60px">은혜가</span><span class="caret"></span><br>넘치는 이 자리에</div>`+sub1+pic,
+ '글 편집 중 &nbsp; ESC: 편집 끝내기 · 테두리를 끌어 옮기기 · 리본 서식은 고른 글자에만',
+ geo('글 상자','320','240','1280','300')+`<div class="hint" style="margin-top:16px">글자 서식은 위 리본에서 바꿉니다.<br>고른 글자가 없으면 다음에 칠 글자에 적용됩니다.</div>`));
+
+// s3
+S('s3','s3 · 도형 ▾ 메뉴 열림<span>첫 항목에 키보드 포커스 / ↑↓ 이동 · Enter 넣기 · ESC 닫기</span>',
+ dialog('슬라이드 편집 페이지 수정',row1({shapeOpen:true}),row2text({off:true}),title1()+sub1+pic,
+ '그림 1 · 글 상자 2 · 도형 0',pageBgPanel,'',
+ `<div class="menu" style="left:250px;top:84px;width:220px"><div class="mh">도형 넣기</div>
+ <div class="mi f">${I.rect}사각형</div><div class="mi">${I.rrect}둥근 사각형</div><div class="mi">${I.ell}타원</div><div class="ms"></div><div class="mi">${I.line}선</div><div class="mi">${I.arrow}화살표</div></div>`));
+
+// s4
+const shapeRow=`<div class="r r2"><span class="tag">도형 서식</span>
+<span class="lbl">채우기</span><span class="dd" style="width:58px"><span class="sw" style="background:#000"></span><span class="car">▾</span></span>
+<span class="lbl" style="margin-left:8px">투명도</span><span class="slider"><span class="track"><i></i><b></b></span><span style="width:30px">40%</span></span>
+<span class="lbl" style="margin-left:6px">테두리</span><span class="dd" style="width:66px"><span>없음</span><span class="car">▾</span></span>
+<span class="dd dis" style="width:58px;margin-left:4px"><span>3 pt</span><span class="car">▾</span></span>${sep}
+${b('vt','')}${b('vm','','on')}${b('vb','')}${sep}${textFmt({font:'Pretendard',size:'36',bold:true,color:'#FFFFFF',align:'c'}).replace(/style="width:150px"/,'style="width:118px"').replace('<span>서식 지우기</span>','')}</div>`;
+S('s4','s4 · 도형(둥근 사각형) 고름<span>줄 2 = 도형 서식(채우기·투명도·테두리·두께·세로 맞춤) + 글자 서식 / 테두리 없음 → 두께 비활성</span>',
+ dialog('슬라이드 편집 페이지 수정',row1({sel:true}),shapeRow.replace(/<span class="b"><\/span>/g,''),
+ title1()+sub1+`<div class="el sel" style="left:80px;top:400px;width:800px;height:96px;border-radius:16px;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center"><span class="txt" style="font-size:34px">말씀 · 요한복음 3:16</span></div>${H(80,400,800,96)}`,
+ '도형 1개 고름 &nbsp; 더블클릭·Enter: 안에 글 쓰기 · 방향키: 옮기기(Shift = 크게)',
+ geo('둥근 사각형','160','800','1600','192')));
+
+// s5
+S('s5','s5 · 여러 요소 고름 + 맞춤 ▾<span>3개 = 고른 범위 기준 / 손잡이 없음 / 줄 2 는 글 상자 2개에만 적용</span>',
+ dialog('슬라이드 편집 페이지 수정',row1({sel:true,alignOpen:true}),row2text({font:'Pretendard',size:'',bold:false,color:'',align:''},'글자 서식'),
+ `<div style="position:absolute;left:150px;top:90px;width:660px;height:425px;outline:1px dashed rgba(147,165,204,.8)"></div>`+title1('sel')+sub1.replace('class="el txt"','class="el txt sel"')+pic.replace('class="el"','class="el sel"'),
+ '요소 3개 고름 (글 상자 2 · 그림 1) &nbsp; 함께 끌어 옮기기 · Delete: 모두 지우기 · ⌘D: 모두 복제',
+ `<h4 style="margin-top:0">요소 3개를 골랐습니다</h4><div class="hint">함께 옮기기·복제·삭제·순서·맞춤이 됩니다.<br>크기는 하나만 골랐을 때 바꿉니다.<br><br>리본 글자 서식은 고른 것 중 글 상자 2개에만 적용됩니다.</div>`,'',
+ `<div class="menu" style="left:574px;top:84px;width:230px"><div class="mh">고른 요소 3개 기준</div>
+ <div class="mi">${I.aL}왼쪽 맞춤</div><div class="mi f">${I.aC}가운데 맞춤</div><div class="mi">${I.aR}오른쪽 맞춤</div><div class="ms"></div><div class="mi">${I.aT}위쪽 맞춤</div><div class="mi">${I.aM}중간 맞춤</div><div class="mi">${I.aB}아래쪽 맞춤</div></div>`));
+
+// s6
+S('s6','s6 · (3단계) PPT 를 편집 페이지로 가져오기 — 결과 창<span>콘티에 담기 전에 보여 준다</span>',
+ `<div class="dlg" style="background:#e9e9ed"><div class="scrim"><div class="res">
+ <h3>편집 페이지로 가져올 준비가 됐습니다</h3><div class="file">2026 성탄 예배.pptx</div>
+ <div class="big"><span>슬라이드 24장 중</span><b>21장</b><span>을 편집 페이지로 만들었습니다</span></div>
+ <div class="row"><span class="ic">▣</span><div><div class="t">그림으로 둔 요소</div><div class="d">표·차트·회전한 도형처럼 고칠 수 없는 것은 페이지 배경 그림에 들어갔습니다.</div><span class="link">어느 장인지 보기</span></div><span class="n">7개</span></div>
+ <div class="row"><span class="ic">✦</span><div><div class="t">빠진 꾸밈</div><div class="d">글 그림자·윤곽선을 빼고 글만 가져왔습니다. 사진 배경 위에서 글이 잘 안 보일 수 있습니다.</div></div><span class="n">4곳</span></div>
+ <div class="row"><span class="ic w">!</span><div><div class="t">없는 글꼴</div><div class="d">맑은 고딕, 나눔스퀘어 ExtraBold<br>이 PC 에 없어 다른 글꼴로 보입니다. 글꼴 이름은 그대로 남습니다.</div></div><span class="n">2개</span></div>
+ <div class="row"><span class="ic w">!</span><div><div class="t">16:9 가 아님</div><div class="d">12, 13번째 장은 편집 페이지로 만들지 않았습니다. 필요하면 '외부 PPT 이미지'로 넣어 주세요.</div></div><span class="n">2장</span></div>
+ <div class="row" style="border:none"><span class="ic">–</span><div><div class="t">숨긴 슬라이드</div><div class="d">20번째 장은 건너뛰었습니다.</div></div><span class="n">1장</span></div>
+ <div class="d" style="color:var(--muted);font-size:12px;margin-top:10px">글자 크기·색은 원본 PowerPoint 와 조금 다를 수 있습니다. 콘티 끝에 '2026 성탄 예배' 그룹으로 담깁니다.</div>
+ <div class="btns"><span class="tb">담지 않기</span><span class="fb">콘티에 담기 (21장)</span></div>
+ </div></div></div>`);
+</script></body></html>

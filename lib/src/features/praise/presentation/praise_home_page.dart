@@ -9117,7 +9117,7 @@ class _StagingPanel extends StatelessWidget {
                         final isFreePage =
                             item is ImageStagingItem &&
                             background?.isFreePage == true;
-                        // 편집 페이지 둘째 줄 = 글 상자 글, 없으면 그림 수.
+                        // 편집 페이지 둘째 줄 = 글 상자·도형 글, 없으면 그림·도형 수.
                         final elements = isFreePage
                             ? background!.pageElements!
                             : const <PageElement>[];
@@ -9131,7 +9131,14 @@ class _StagingPanel extends StatelessWidget {
                             ? item.previewText
                             : texts.isNotEmpty
                             ? texts.join(' · ')
-                            : '그림 ${elements.whereType<PageImageElement>().length}장';
+                            : [
+                                '그림 ${elements.whereType<PageImageElement>().length}장',
+                                if (elements
+                                        .whereType<PageShapeElement>()
+                                        .length
+                                    case final n when n > 0)
+                                  '도형 $n개',
+                              ].join(' · ');
                         final target = ContiInsertTarget(
                           key: ValueKey(entry.uid),
                           groupPath: row.group,

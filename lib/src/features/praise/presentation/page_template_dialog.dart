@@ -295,9 +295,14 @@ class _PageTemplateDialogState extends State<PageTemplateDialog> {
 
   Widget _row(ColorScheme cs, int index, PageTemplate t) {
     final elements = t.design.pageElements ?? const <PageElement>[];
-    final texts = elements.whereType<PageTextElement>().length;
-    final images = elements.length - texts;
-    final what = [if (texts > 0) '글 상자 $texts개', if (images > 0) '그림 $images개'];
+    final shapes = elements.whereType<PageShapeElement>().length;
+    final texts = elements.whereType<PageTextElement>().length - shapes;
+    final images = elements.whereType<PageImageElement>().length;
+    final what = [
+      if (texts > 0) '글 상자 $texts개',
+      if (images > 0) '그림 $images개',
+      if (shapes > 0) '도형 $shapes개',
+    ];
     final imageMissing =
         t.design.hasImage && !File(t.design.imagePath!).existsSync();
     final background = t.design.hasImage ? '배경 그림' : '배경 색';
