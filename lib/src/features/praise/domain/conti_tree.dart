@@ -654,7 +654,7 @@ String uniqueGroupName(String name, Iterable<String> used, {int max = 12}) {
   for (var n = 2; ; n++) {
     final tail = ' ($n)';
     final base = name.length + tail.length > max
-        ? name.substring(0, max - tail.length)
+        ? name.substring(0, max - tail.length).trimRight()
         : name;
     if (!taken.contains('$base$tail')) return '$base$tail';
   }

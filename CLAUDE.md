@@ -37,6 +37,7 @@ flutter test test/page_editor_test.dart # 슬라이드 편집 창: 손잡이·�
 flutter test test/page_shape_test.dart # 편집 페이지 도형: shape JSON 왕복·틀린 값·선 높이 0·끝점 flip·valign 없는 옛 JSON·굽기 픽셀·도형 넣기/서식/안 글·선 끝점 손잡이·범위 고르기·맞춤
 flutter test test/page_text_layout_test.dart # 캔버스 안 편집기(Quill)와 굽기(PageTextBlock) 줄 배치 일치: 24·40·96pt × Pretendard·나눔명조 × 정렬 × 목록
 flutter test test/page_template_test.dart # 페이지 틀: JSON 왕복·깨진 항목·기본 3개·그림 없으면 색만·틀 배경 입히기
+flutter test test/ppt_layout_import_test.dart # PPT 를 편집 페이지로: 계약 JSON → 페이지·배경·요소·그룹 이름, 결과 창(0 인 줄 숨김·담지 않기)
 flutter test test/chord_lyrics_test.dart # 코드 가사 순수 함수: 문법·strip·이스케이프·페이지 짝·조 바꾸기·다시 맞추기·코드 위 가사 변환
 flutter test test/chord_repository_test.dart test/chord_conti_test.dart test/chord_leak_test.dart # 코드 저장 길(saveChords)·콘티 스냅샷·관객/PPTX 누출 없음
 flutter test test/chord_sheet_test.dart  # 코드 악보 조각·ChordSheetView 배치·싱어 chord_lines/key_label·조 배지
@@ -54,6 +55,7 @@ python3 python/test_sheet_lyrics.py      # 악보 가사 추출 self-check (Tess
 python3 python/test_media.py             # PPT 안 동영상 꺼내기 self-check (LibreOffice 불필요)
 python3 python/test_clipboard.py         # 편집 페이지 클립보드 그림(`clipboard` 명령) self-check
 python3 python/test_eot_font.py [pptx]   # PPT 심은 글꼴(EOT/MTX) 풀기 self-check (pptx 를 주면 실제 글꼴까지 풀어 본다)
+python3 python/test_pptx_layout.py       # PPT → 편집 페이지 요소(layout 명령) self-check (LibreOffice 없으면 두 번 굽기만 skip)
 
 # 배포용 전체 빌드 (PyInstaller + Flutter 릴리즈 + dist/ 구성)
 ./scripts/build.sh    # macOS
@@ -270,6 +272,8 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
 - `sheet <파일 | --clipboard> --ocr-lines <폴더>` — OS 내장 OCR 1단계: 가사 줄 이미지만 잘라 두고
   `{needs_ocr: true, job, images}` (OCR 이 필요 없으면 위와 같은 최종 결과)
 - `clipboard <out.png>` — 클립보드 그림 → `{path}`(복사한 그림 파일이면 그 경로) / `{"error": "clipboard_empty"}`. Windows 편집 페이지 붙여넣기용
+- `layout <pptx|ppt> <작업 폴더>` — 슬라이드마다 편집 페이지 요소(`page_elements` 형식) + 요소를 지우고 구운 배경 PNG(`python/pptx_layout.py`).
+  계약은 `planning/ppt-style-editor/shapes-contract.md`. 그림·배경은 작업 폴더에 생기고 앱이 `page_images/` 로 복사한 뒤 지운다. `{"error": "libreoffice_missing"}`
 - `sheet-finish <job.json> <ocr.json>` — 2단계: 앱이 읽은 결과(`{경로: [{text, confidence, x, y, w, h}]}`)로 마무리
 
 ## 중요 설계 결정
@@ -659,6 +663,12 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   - 편집 창 `PageEditorDialog`(`presentation/page_editor_dialog.dart`)는 '완료' 때 창 안에서 `compose` 콜백으로 굽고, 실패하면 창을 닫지 않는다. 다시 고쳐도 항목 uid 는 그대로
   - 콘티 불러오기·뒤에 붙이기 때 구운 PNG 가 없으면 요소 목록으로 다시 굽는다(`_restoreFreePages`, `app.log` `[page]`)
   - 2차 '이미지 페이지'(`image_rect`·제목 키, 렌더러 네 곳 변경)는 되돌렸다(`SlideBackground.imageRect` 등도 지웠다)
+  - **PPT 를 편집 페이지로 가져오기** (기획 `planning/ppt-style-editor/` 3단계, 가져오기 메뉴): 파일 → `PythonBridge.layout`(임시 작업 폴더, 진행 창 '취소' = 결과만 버림) →
+    결과 창 `PptLayoutResultDialog`(s6: 슬라이드 N장 중 M장·그림으로 둔 요소·빠진 꾸밈·없는 글꼴·16:9 아님·숨긴 슬라이드, 0 인 줄 숨김) → '콘티에 담기'면
+    배경 PNG·그림을 `page_images/` 로 복사(`register`)하고 작업 폴더를 지운 뒤 슬라이드마다 편집 페이지(검정 + 배경 PNG + 요소, 이름 = 슬라이드 제목 또는 '파일 이름 N')를 구워
+    콘티 끝에 파일 이름 그룹(`pptImportGroupName`)으로 넣는다(`_importPptAsPages`, `_trackedEdit` 라 되돌리기 됨). 숨긴 슬라이드는 건너뛰고, 4:3 은 여백을 둔 16:9 로 만든다.
+    순수 함수는 `domain/ppt_layout.dart`(`PptLayout`·`pptLayoutFiles`·`pptLayoutPages` — 못 옮긴 그림 요소는 뺀다). 편집 창 배경 격자는 모음 밖 `page_images/` 배경을 '가져온 배경' 칸으로 보이고 다른 칸을 골라도 남긴다.
+    없는 글꼴은 이름 그대로 두고 `FontFamilyPicker` 가 '(없는 글꼴)' 로 보인다
   - **페이지 틀** (기획 `.claude-office/work/20261108-1745-fixed-backgrounds/`): 예배 시작·주일 광고·생일자처럼 자주 쓰는 편집 페이지의 시작값(이름 + 배경 색·그림 + 요소)을
     `page_templates.json`(`PageTemplateStore`, 처음 켜면 기본 3개 = 그때 전역 배경)에 둔다. 리본 '공통' '페이지 틀' 묶음·'새 페이지 추가' 메뉴 '페이지 틀 관리…' → `PageTemplateDialog`.
     틀 편집은 같은 `PageEditorDialog(templateMode: true)` — 이름 칸 '틀 이름', 빈 글 상자(광고 내용·생일자 이름 자리)도 남기고, 구운 PNG 는 썸네일(`previewPath`)이 된다.

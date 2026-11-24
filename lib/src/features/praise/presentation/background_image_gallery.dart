@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
 
 import '../data/background_image_library.dart';
 
@@ -43,11 +44,19 @@ class _BackgroundImageGalleryState extends State<BackgroundImageGallery> {
   /// 등록(복사) 중이면 '+' 칸 대신 진행 표시. 큰 영상은 몇 초 걸린다.
   bool _registering = false;
 
+  /// 처음 열 때 고른 모음 밖 그림(가져온 PPT 배경 등). 다른 칸을 골라도 격자에 남겨 다시 고를 수 있게.
+  String? _initial;
+
   @override
   void initState() {
     super.initState();
+    _initial = widget.selected;
     _reload();
   }
+
+  /// `page_images/` 의 그림 = PPT 를 편집 페이지로 가져올 때 들어온 배경.
+  static bool _imported(String path) =>
+      p.split(path).contains(BackgroundImageLibrary.pageImagesFolder);
 
   Future<void> _reload() async {
     final paths = await widget.library.list();
@@ -133,9 +142,9 @@ class _BackgroundImageGalleryState extends State<BackgroundImageGallery> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final selected = widget.selected;
-    // 모음 밖의 이미지(예전에 직접 고른 원본)도 선택된 상태면 보여 준다.
+    // 모음 밖의 이미지(예전에 직접 고른 원본·가져온 PPT 배경)도 고른 상태였으면 보여 준다.
     final paths = [
-      if (selected != null && !_paths.contains(selected)) selected,
+      ...{?selected, ?_initial}.where((path) => !_paths.contains(path)),
       ..._paths,
     ];
 
@@ -166,15 +175,23 @@ class _BackgroundImageGalleryState extends State<BackgroundImageGallery> {
             onRemove: _paths.contains(path) ? () => _remove(path) : null,
             tooltip: widget.library.isVideo
                 ? BackgroundImageLibrary.displayName(path)
+                : _imported(path)
+                ? '가져온 PPT 의 배경 (공통 모음 밖)'
                 : null,
             child: widget.library.isVideo
                 ? _videoTile(context, path)
-                : Image.file(
-                    File(path),
-                    fit: BoxFit.cover,
-                    cacheWidth: 192,
-                    errorBuilder: (_, _, _) =>
-                        const Icon(Icons.broken_image_outlined, size: 18),
+                : Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      Image.file(
+                        File(path),
+                        fit: BoxFit.cover,
+                        cacheWidth: 192,
+                        errorBuilder: (_, _, _) =>
+                            const Icon(Icons.broken_image_outlined, size: 18),
+                      ),
+                      if (_imported(path)) const _Caption('가져온 배경'),
+                    ],
                   ),
           ),
         _tile(
@@ -221,20 +238,7 @@ class _BackgroundImageGalleryState extends State<BackgroundImageGallery> {
               color: cs.onSurfaceVariant,
             ),
           ),
-          Align(
-            alignment: Alignment.bottomCenter,
-            child: Container(
-              width: double.infinity,
-              color: Colors.black54,
-              padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
-              child: Text(
-                BackgroundImageLibrary.displayName(path),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 9, color: Colors.white),
-              ),
-            ),
-          ),
+          _Caption(BackgroundImageLibrary.displayName(path)),
         ],
       );
     }
@@ -337,4 +341,27 @@ class _HoverRemoveState extends State<_HoverRemove> {
       ),
     );
   }
+}
+
+/// 썸네일 아래 띠 글(영상 이름·'가져온 배경'). 그림 위라 테마와 상관없이 어두운 띠에 흰 글.
+class _Caption extends StatelessWidget {
+  const _Caption(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Align(
+    alignment: Alignment.bottomCenter,
+    child: Container(
+      width: double.infinity,
+      color: Colors.black54,
+      padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+      child: Text(
+        text,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontSize: 9, color: Colors.white),
+      ),
+    ),
+  );
 }

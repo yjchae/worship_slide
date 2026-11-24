@@ -1561,6 +1561,32 @@ def render_presentation(file_path, expand_animation=True):
     )
 
 
+def layout_presentation(file_path, out_dir):
+    """PPT/PPTX 슬라이드 → 편집 페이지 요소 + 슬라이드마다 배경 PNG(pptx_layout.py, 계약은
+    planning/ppt-style-editor/shapes-contract.md). 배경은 렌더 캐시(ppt_slides)가 아니라 out_dir 에 굽는다 —
+    지운 사본은 가져올 때마다 달라서 캐시에 두면 쌓이기만 한다."""
+    import pptx_layout
+
+    source_path = Path(file_path)
+    if not source_path.exists():
+        raise RuntimeError(f"파일을 찾을 수 없습니다: {file_path}")
+    if get_libreoffice_executable() is None and not powerpoint_available():
+        return {"error": "libreoffice_missing"}
+    source_name = unicodedata.normalize("NFC", source_path.name)
+    temp_dir = Path(tempfile.mkdtemp(prefix="praise_ppt_layout_src_"))
+    try:
+        pptx_path = source_path
+        if source_path.suffix.lower() != ".pptx":
+            pptx_path = convert_ppt_group_to_pptx([source_path], temp_dir).get(source_path)
+            if pptx_path is None:
+                raise RuntimeError(f"pptx 로 바꾸지 못했습니다: {source_name}")
+        return pptx_layout.layout_presentation(pptx_path, out_dir, _convert_to_pdf, source_name)
+    except LibreOfficeMissing:
+        return {"error": "libreoffice_missing"}
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def parse_hex_color(hex_color):
     value = hex_color.replace("#", "")
     return RGBColor(int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16))
@@ -3368,7 +3394,7 @@ def clipboard_image(out_path, grab=None):
 
 def main():
     if len(sys.argv) < 3:
-        raise SystemExit("usage: ppt_tool.py [import|export|render|sheet|sheet-finish|clipboard] [payload]")
+        raise SystemExit("usage: ppt_tool.py [import|export|render|layout|sheet|sheet-finish|clipboard] [payload]")
 
     command = sys.argv[1]
     payload = sys.argv[2]
@@ -3384,6 +3410,12 @@ def main():
     if command == "render":
         # --no-animation: 애니메이션을 펼치지 않고 슬라이드당 한 장만 굽는다.
         render_presentation(payload, expand_animation="--no-animation" not in sys.argv[3:])
+        return
+
+    if command == "layout":
+        if len(sys.argv) < 4:
+            raise SystemExit("usage: ppt_tool.py layout <pptx> <out_dir>")
+        print(json.dumps(layout_presentation(payload, sys.argv[3]), ensure_ascii=True))
         return
 
     if command == "sheet":

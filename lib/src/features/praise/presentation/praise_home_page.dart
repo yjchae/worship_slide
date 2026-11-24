@@ -50,6 +50,7 @@ import '../domain/export_style.dart';
 import '../domain/offering_design.dart';
 import '../domain/page_element.dart';
 import '../domain/page_format.dart';
+import '../domain/ppt_layout.dart';
 import '../domain/praise_song.dart';
 import '../domain/song_form.dart';
 import '../domain/slide_background.dart';
@@ -70,6 +71,7 @@ import 'page_to_free.dart';
 import 'page_editor_dialog.dart';
 import 'page_format_editor.dart';
 import 'page_template_dialog.dart';
+import 'ppt_layout_dialog.dart';
 import 'auto_advance_box.dart';
 import 'auto_advance_timer.dart';
 import 'presentation_timer.dart';
@@ -5123,6 +5125,143 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     }
   }
 
+  /// 'PPT 를 편집 페이지로 가져오기': `ppt_tool layout` → 결과 창(s6) → '콘티에 담기'면 슬라이드마다
+  /// 편집 페이지를 구워 콘티 끝에 파일 이름 그룹으로 넣는다. [path] 는 LibreOffice 설치 뒤 다시 할 때.
+  Future<void> _importPptAsPages([String? path]) async {
+    if (path == null) {
+      await FilePicker.skipEntitlementsChecks();
+      final picked = await FilePicker.pickFiles(
+        dialogTitle: '편집 페이지로 가져올 PPT 파일 선택',
+        type: FileType.custom,
+        allowedExtensions: ['pptx', 'ppt'],
+      );
+      path = picked?.paths.whereType<String>().firstOrNull;
+    }
+    if (path == null || !mounted) return;
+    final name = p.basename(path);
+    final work = await Directory.systemTemp.createTemp('ws_ppt_layout_');
+    Future<void> dropWork() async {
+      try {
+        await work.delete(recursive: true);
+      } catch (_) {}
+    }
+
+    final progress = ValueNotifier<String>("'$name' 을 읽는 중…");
+    // 취소하면 창만 닫고 결과를 버린다(돌고 있는 ppt_tool 은 끝까지 돌고, 작업 폴더는 그 뒤에 지운다).
+    var cancelled = false;
+    _showProgressDialog(
+      progress,
+      onCancel: () {
+        if (cancelled) return;
+        cancelled = true;
+        Navigator.of(context, rootNavigator: true).pop();
+      },
+    );
+    PptLayout? layout;
+    var libreofficeMissing = false;
+    try {
+      layout = await _pythonBridge.layout(path, work.path);
+    } on LibreOfficeMissingException {
+      libreofficeMissing = true;
+    } catch (e, st) {
+      await AppLogger.instance.error('[page] PPT 편집 페이지 가져오기 실패', e, st);
+    }
+    progress.dispose();
+    if (cancelled || !mounted) {
+      await dropWork();
+      return;
+    }
+    Navigator.of(context, rootNavigator: true).pop();
+
+    if (layout == null) {
+      await dropWork();
+      if (libreofficeMissing) {
+        final installed = await _showLibreofficeDialog(
+          reason: 'PPT 를 편집 페이지로 가져오려면 PowerPoint 나 LibreOffice 가 있어야 합니다.',
+        );
+        if (installed && mounted) await _importPptAsPages(path);
+      } else {
+        _showSnack('PPT 파일을 열지 못했습니다. 파일이 PowerPoint 에서 열리는지 확인해 주세요.');
+      }
+      return;
+    }
+
+    final group = pptImportGroupName(layout, _groupNames());
+    final ok = await PptLayoutResultDialog.show(context, layout, group);
+    if (ok != true || !mounted) {
+      await dropWork();
+      return;
+    }
+
+    final total = layout.editable.length;
+    final making = ValueNotifier<String>('페이지를 만드는 중… (0 / $total)');
+    _showProgressDialog(making);
+    final made = <({String name, SlideBackground background, String png})>[];
+    var failed = 0;
+    try {
+      // 작업 폴더는 지우므로 그림·배경을 page_images/ 로 옮겨 두고 그 경로로 저장한다.
+      const library = BackgroundImageLibrary.pages();
+      final copied = <String, String>{};
+      for (final file in pptLayoutFiles(layout)) {
+        try {
+          copied[file] = await library.register(file);
+        } catch (e, st) {
+          await AppLogger.instance.error('[page] 가져온 그림 복사 실패', e, st);
+        }
+      }
+      for (final page in pptLayoutPages(layout, copied)) {
+        making.value = '페이지를 만드는 중… (${made.length + failed + 1} / $total)';
+        try {
+          made.add((
+            name: page.name,
+            background: page.background,
+            png: await _composeFreePage(page.background),
+          ));
+        } catch (e, st) {
+          failed++;
+          await AppLogger.instance.error('[page] 가져온 페이지 굽기 실패', e, st);
+        }
+      }
+    } finally {
+      await dropWork();
+      making.dispose();
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+    }
+    if (!mounted || made.isEmpty) {
+      if (mounted) _showSnack('페이지를 만들지 못했습니다. 다시 시도해 주세요.');
+      return;
+    }
+
+    final uids = <int>{};
+    // 그룹 이름은 결과 창을 보는 사이 생긴 그룹과도 겹치지 않게 다시 정한다.
+    final finalGroup = pptImportGroupName(layout, _groupNames());
+    _trackedEdit(
+      "'$finalGroup' 그룹으로 편집 페이지 ${made.length}장을 담았습니다."
+          '${failed > 0 ? ' ($failed장은 만들지 못했습니다)' : ''}',
+      'PPT 가져오기를 되돌렸습니다.',
+      () {
+        for (final page in made) {
+          final uid = _nextUid++;
+          uids.add(uid);
+          _stagingItems.add((
+            uid: uid,
+            item: ImageStagingItem(
+              sourceName: page.name,
+              imagePaths: [page.png],
+            ),
+          ));
+          _itemGroups[uid] = finalGroup;
+          _itemBackgrounds[uid] = page.background;
+        }
+        // 슬라이드 사이에 자동 여백(빈 장)을 끼우지 않는다 — 원본 PPT 장 수 그대로.
+        // 마지막 장은 두어 뒤에 담는 곡 앞에 평소처럼 여백이 붙게 한다.
+        _noSpacerUids.addAll(uids.take(uids.length - 1));
+        _previewStagingUid = uids.first;
+      },
+      flash: uids,
+    );
+  }
+
   /// PPT 항목의 원본 파일을 기본 프로그램(PowerPoint 등)으로 열고, 저장되면 다시 굽도록 지켜본다.
   Future<void> _openImageSource(int uid) async {
     final path = _imageSourcePath(uid);
@@ -7578,6 +7717,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                           onImportPressed: _pickAndImportFolder,
                           onBibleImportPressed: _pickAndImportBible,
                           onImportPptPressed: _addPptImages,
+                          onImportPptPagesPressed: _importPptAsPages,
                           onImportSheetPressed: _importSheetMusic,
                           onPasteSheetPressed: () =>
                               _importSheetMusic(fromClipboard: true),
@@ -8264,6 +8404,7 @@ class _TopBar extends StatelessWidget {
     required this.onImportPressed,
     required this.onBibleImportPressed,
     required this.onImportPptPressed,
+    required this.onImportPptPagesPressed,
     required this.onImportSheetPressed,
     required this.onPasteSheetPressed,
     required this.onExportSongsPressed,
@@ -8283,6 +8424,7 @@ class _TopBar extends StatelessWidget {
   final VoidCallback onImportPressed;
   final VoidCallback onBibleImportPressed;
   final VoidCallback onImportPptPressed;
+  final VoidCallback onImportPptPagesPressed;
   final VoidCallback onImportSheetPressed;
   final VoidCallback onPasteSheetPressed;
   final VoidCallback onExportSongsPressed;
@@ -8344,6 +8486,12 @@ class _TopBar extends StatelessWidget {
                 onImportPptPressed,
                 Icons.slideshow_rounded,
                 'PPT · PDF 가져오기',
+              ),
+              _item(
+                onImportPptPagesPressed,
+                Icons.edit_note_rounded,
+                'PPT 를 편집 페이지로 가져오기…',
+                subtitle: '글·도형을 고칠 수 있게',
               ),
               _item(
                 onImportSheetPressed,

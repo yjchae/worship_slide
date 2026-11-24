@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 
 import '../domain/export_style.dart';
 import '../domain/page_format.dart';
+import '../domain/ppt_layout.dart';
 import '../domain/praise_song.dart';
 import '../domain/slide_background.dart';
 import '../domain/staging_item.dart';
@@ -132,6 +133,17 @@ class PythonBridge {
       imagePaths: (json['image_paths'] as List<dynamic>).cast<String>(),
       sourcePath: filePath,
     );
+  }
+
+  /// PPT/PPTX 슬라이드를 편집 페이지 요소 + 배경 PNG 로 푼다(`ppt_tool layout`).
+  /// 그림·배경은 [workDir] 에 생기니 받은 쪽이 `page_images/` 로 복사한 뒤 폴더를 지운다.
+  Future<PptLayout> layout(String filePath, String workDir) async {
+    final result = await _runTool(['layout', filePath, workDir]);
+    final json = jsonDecode(result.stdout as String) as Map<String, dynamic>;
+    if (json['error'] == 'libreoffice_missing') {
+      throw const LibreOfficeMissingException();
+    }
+    return PptLayout.fromJson(json);
   }
 
   /// 렌더 폴더 [dir] 이 애니메이션을 단계별로 펼쳐 구운 것인지(`meta.json`). 못 읽으면 false.
