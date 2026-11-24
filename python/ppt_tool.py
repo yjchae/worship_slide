@@ -838,8 +838,11 @@ def _paragraph_range(shape_target):
     return tuple(range(start, max(start, end) + 1))
 
 
-def _click_steps(slide_root):
-    """메인 시퀀스를 클릭 단위로 끊는다 → [[(entr|exit, spid, 문단들|None), ...], ...]"""
+def _click_steps(slide_root, with_kind=False):
+    """메인 시퀀스를 클릭 단위로 끊는다 → [[(entr|exit, spid, 문단들|None), ...], ...]
+
+    with_kind=True 면 묶음마다 (첫 효과의 nodeType, 효과들) — 편집 페이지 가져오기(pptx_layout)가
+    첫 묶음이 클릭 없이 시작(withEffect·afterEffect)하는지 본다."""
     timing = slide_root.find(_p("timing"))
     if timing is None:
         return []
@@ -858,8 +861,11 @@ def _click_steps(slide_root):
     steps = []
     for click_group in children:
         effects = []
+        kind = None
         for node in click_group.iter(_p("cTn")):
             preset = node.get("presetClass")
+            if preset and kind is None:
+                kind = node.get("nodeType")
             if preset not in ("entr", "exit"):
                 continue
             for target in node.iter(_p("spTgt")):
@@ -867,7 +873,7 @@ def _click_steps(slide_root):
                 if spid:
                     effects.append((preset, spid, _paragraph_range(target)))
         if effects:
-            steps.append(effects)
+            steps.append((kind, effects) if with_kind else effects)
     return steps
 
 

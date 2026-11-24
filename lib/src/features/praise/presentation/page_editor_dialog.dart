@@ -26,10 +26,11 @@ import 'page_text_editor.dart';
 import 'style_fields.dart';
 
 /// 편집 창 결과: 페이지 이름(빈칸이면 자동 이름) + 요소 + 구운 PNG + 페이지 배경.
+/// [imagePaths] = 클릭 단계마다 한 장([pageSteps], 애니메이션이 없으면 한 장). 틀 모드는 마지막 단계 한 장(썸네일).
 typedef PageEditorResult = ({
   String name,
   List<PageElement> elements,
-  String imagePath,
+  List<String> imagePaths,
   SlideBackground background,
 });
 
@@ -396,7 +397,7 @@ class PageEditorDialog extends StatefulWidget {
   final SlideBackground? background;
   final ExportStyle style;
 
-  /// 요소를 [background] 위에 굽는다.
+  /// 요소를 [background] 위에 PNG 한 장으로 굽는다. 클릭 단계마다 한 번씩 부른다.
   final Future<String> Function(
     List<PageElement> elements,
     SlideBackground background,
@@ -521,7 +522,9 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
             // 빈 도형(띠·자막 상자)은 '첫 빈 글 상자'가 아니다.
             .where(
               (e) =>
-                  e is! PageShapeElement && e.holdsText && e.text.trim().isEmpty,
+                  e is! PageShapeElement &&
+                  e.holdsText &&
+                  e.text.trim().isEmpty,
             )
             .firstOrNull ??
         _initialElements.where(_selectable).firstOrNull;
@@ -1354,27 +1357,33 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
 
   Future<void> _confirm() async {
     if (_composing) return;
-    // 빈 글 상자는 편집 창에서만 보이는 자리라 뺀다.
-    final elements = [
+    // 빈 글 상자는 편집 창에서만 보이는 자리라 뺀다. 빈 단계는 당겨 같은 그림이 두 장 생기지 않게.
+    final all = normalizeAppear(_elements);
+    final elements = normalizeAppear([
       for (final e in _elements)
         if (e is! PageTextElement ||
             e is PageShapeElement ||
             e.text.trim().isNotEmpty)
           e,
-    ];
+    ]);
     setState(() {
       _composing = true;
       _message = null;
     });
     try {
-      final path = await widget.compose(elements, _background);
-      if (!mounted || !_composing) return;
+      final paths = <String>[];
+      // 틀은 썸네일 한 장(마지막 단계 = 전부)만. 요소의 appear 는 남는다.
+      for (final step
+          in widget.templateMode ? [elements] : pageSteps(elements)) {
+        paths.add(await widget.compose(step, _background));
+        if (!mounted || !_composing) return;
+      }
       Navigator.of(context).pop<PageEditorResult>((
         name: _nameController.text.trim().isEmpty
             ? pageAutoName(elements)
             : _nameController.text.trim(),
-        elements: widget.templateMode ? _elements : elements,
-        imagePath: path,
+        elements: widget.templateMode ? all : elements,
+        imagePaths: paths,
         background: _background,
       ));
     } catch (e, st) {
@@ -1910,6 +1919,12 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
                     ),
                   ),
                 ),
+              if (e.appear > 0)
+                Positioned(
+                  left: 2,
+                  top: 2,
+                  child: IgnorePointer(child: _AppearBadge(e.appear)),
+                ),
               if (line)
                 const SizedBox.shrink()
               else if (isSelected)
@@ -2092,6 +2107,8 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
                 Text('요소 ${picked.length}개를 골랐습니다', style: label),
                 const SizedBox(height: 8),
                 Text('함께 옮기기·복제·삭제·순서가 됩니다. 크기는 하나만 골랐을 때 바꿉니다.', style: hint),
+                const SizedBox(height: 16),
+                _appearField(picked),
                 if (picked
                         .where((e) => e is PageTextElement && e.holdsText)
                         .length
@@ -2119,6 +2136,10 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
                   ),
                   const SizedBox(height: 16),
                   Text('요소를 누르면 위 리본에서 고칩니다.', style: hint),
+                  if (pageStepCount(_elements) case final n when n > 1) ...[
+                    const SizedBox(height: 8),
+                    Text('클릭 단계 $n장 — 발표에서 넘길 때마다 번호 순서대로 나타납니다.', style: hint),
+                  ],
                   ..._backgroundProperties(cs, label),
                 ],
                 PageShapeElement(:final kind) => [
@@ -2163,7 +2184,7 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
     );
   }
 
-  /// 위치·크기 숫자 칸(1920x1080 기준).
+  /// 위치·크기 숫자 칸(1920x1080 기준) + 나타나는 순서.
   List<Widget> _rectProperties(PageElement e, TextStyle? label) => [
     Text('위치·크기 (1920×1080 기준)', style: label),
     const SizedBox(height: 8),
@@ -2176,7 +2197,46 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
         if (current != null) _replace(current.copyWith(rect: r));
       },
     ),
+    const SizedBox(height: 16),
+    _appearField([e]),
   ];
+
+  /// '나타나는 순서': 처음부터 / k번째 클릭(지금 가장 큰 번호 + 1 까지). 여럿이면 한꺼번에, 값이 섞이면 빈칸.
+  /// 바꾸기 한 번 = 되돌리기 한 묶음.
+  Widget _appearField(List<PageElement> picked) {
+    final values = picked.map((e) => e.appear).toSet();
+    final value = values.length == 1 ? values.single : null;
+    final last = math.min(
+      _elements.fold(0, (a, e) => math.max(a, e.appear)) + 1,
+      PageElement.maxAppear,
+    );
+    return DropdownButtonFormField<int>(
+      // 되돌리기·다른 요소 고르기로 값이 밖에서 바뀌면 다시 그리게.
+      key: ValueKey(('appear', picked.map((e) => e.id).join(','), value)),
+      initialValue: value,
+      isDense: true,
+      decoration: const InputDecoration(
+        labelText: '나타나는 순서',
+        helperText: '발표에서 클릭(넘기기)할 때마다 번호 순서대로 나타납니다.',
+        helperMaxLines: 2,
+        border: OutlineInputBorder(),
+        isDense: true,
+      ),
+      items: [
+        for (var k = 0; k <= last; k++)
+          DropdownMenuItem(value: k, child: Text(k == 0 ? '처음부터' : '$k번째 클릭')),
+      ],
+      onChanged: (k) {
+        if (k == null) return;
+        final ids = {for (final e in picked) e.id};
+        final next = [
+          for (final e in _elements)
+            ids.contains(e.id) && e.appear != k ? e.copyWith(appear: k) : e,
+        ];
+        if (!listEquals(next, _elements)) _commit(next);
+      },
+    );
+  }
 
   /// 미선택 패널의 '페이지 배경': 색 + 공통 배경 이미지 모음.
   List<Widget> _backgroundProperties(ColorScheme cs, TextStyle? label) {
@@ -2317,6 +2377,39 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
                 : const Text('확인'),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// 요소 왼쪽 위 클릭 단계 번호(편집 창에서만 — 굽기엔 없다).
+class _AppearBadge extends StatelessWidget {
+  const _AppearBadge(this.step);
+
+  final int step;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    // 말풍선은 안 단다 — 배지는 IgnorePointer 안이라 요소 고르기·끌기를 막지 않아야 한다.
+    return Semantics(
+      label: '$step번째 클릭에 나타남',
+      child: Container(
+        constraints: const BoxConstraints(minWidth: 20),
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+        decoration: BoxDecoration(
+          color: cs.inverseSurface,
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Text(
+          '$step',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: cs.onInverseSurface,
+          ),
+        ),
       ),
     );
   }

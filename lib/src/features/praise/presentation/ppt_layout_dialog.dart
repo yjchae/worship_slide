@@ -25,6 +25,15 @@ class PptLayoutResultDialog extends StatelessWidget {
     builder: (_) => PptLayoutResultDialog(layout: layout, groupName: groupName),
   );
 
+  /// 처음부터 보이게 둔 애니메이션의 까닭 이름(`anim_lost` 키).
+  static const _animLostLabels = {
+    'exit': '사라짐',
+    'paragraph': '문단 단위',
+    'group_child': '그룹 안 도형',
+    'overlap': '겹침',
+    'too_many': '30단계 넘음',
+  };
+
   static String _numbers(Iterable<PptLayoutSlide> slides) =>
       slides.map((s) => s.index).join(', ');
 
@@ -37,6 +46,13 @@ class PptLayoutResultDialog extends StatelessWidget {
     final dropped = editable.fold(0, (a, s) => a + s.droppedCount);
     final droppedSlides = editable.where((s) => s.droppedCount > 0);
     final effects = editable.fold(0, (a, s) => a + s.effectsLost);
+    final animated = editable.where((s) => s.steps > 1);
+    final animSteps = animated.fold(0, (a, s) => a + s.steps);
+    final animLost = <String, int>{};
+    for (final s in editable) {
+      s.animLost.forEach((k, v) => animLost[k] = (animLost[k] ?? 0) + v);
+    }
+    final animLostCount = animLost.values.fold(0, (a, b) => a + b);
     final muted = TextStyle(fontSize: 13, color: cs.onSurfaceVariant);
 
     return AlertDialog(
@@ -108,6 +124,24 @@ class PptLayoutResultDialog extends StatelessWidget {
                   '빠진 꾸밈',
                   '글 그림자·윤곽선을 빼고 글만 가져왔습니다. 사진 배경 위에서 글이 잘 안 보일 수 있습니다.',
                   '$effects곳',
+                ),
+              if (animated.isNotEmpty)
+                _row(
+                  context,
+                  Icons.animation_rounded,
+                  '애니메이션',
+                  '${animated.length}장 → 클릭 단계 $animSteps장으로 나눔. '
+                      '발표에서 넘길 때마다 원본 순서대로 하나씩 나타납니다(움직이는 효과는 빠집니다).\n'
+                      '${_numbers(animated)}번째 장',
+                  '$animSteps장',
+                ),
+              if (animLostCount > 0)
+                _row(
+                  context,
+                  Icons.info_outline_rounded,
+                  '처음부터 보이게 둔 애니메이션',
+                  '${[for (final MapEntry(:key) in animLost.entries) _animLostLabels[key] ?? key].join('·')} — 클릭 단계로 옮기지 못해 처음부터 보입니다.',
+                  '$animLostCount곳',
                 ),
               if (layout.fontsMissing.isNotEmpty)
                 _row(

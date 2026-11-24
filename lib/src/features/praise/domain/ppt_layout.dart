@@ -1,3 +1,4 @@
+import 'dart:math' show max;
 import 'dart:ui' show Color;
 
 import 'package:path/path.dart' as p;
@@ -74,6 +75,8 @@ class PptLayoutSlide {
     this.elements = const [],
     this.droppedCount = 0,
     this.effectsLost = 0,
+    this.steps = 1,
+    this.animLost = const {},
   });
 
   factory PptLayoutSlide.fromJson(Map<String, dynamic> json) {
@@ -89,6 +92,12 @@ class PptLayoutSlide {
           ? dropped.values.whereType<num>().fold(0, (a, b) => a + b.toInt())
           : 0,
       effectsLost: (json['effects_lost'] as num?)?.toInt() ?? 0,
+      steps: max(1, (json['steps'] as num?)?.toInt() ?? 1),
+      animLost: {
+        if (json['anim_lost'] case final Map lost)
+          for (final MapEntry(:key, :value) in lost.entries)
+            if (key is String && value is num && value > 0) key: value.toInt(),
+      },
     );
   }
 
@@ -104,6 +113,13 @@ class PptLayoutSlide {
   /// 배경 그림으로 둔 요소 수(까닭 합).
   final int droppedCount;
   final int effectsLost;
+
+  /// 클릭 단계 장 수(1 = 애니메이션 없음). 요소마다 `appear` 가 단계를 정한다.
+  final int steps;
+
+  /// 단계로 옮기지 못해 처음부터 보이게 둔 애니메이션 수(까닭 → 수, 0 인 까닭은 없다):
+  /// paragraph(문단 단위)·exit(사라짐)·group_child(그룹 안 도형)·overlap(겹침)·too_many(30단계 넘음).
+  final Map<String, int> animLost;
 }
 
 /// 작업 폴더에서 `page_images/` 로 복사할 파일(배경 PNG·그림 요소). 숨긴 장은 뺀다.
@@ -152,7 +168,7 @@ String? pptLayoutProgressLabel(Map<String, dynamic> progress) =>
     switch (progress['progress']) {
       'convert' => 'PPT 를 pptx 로 바꾸는 중…',
       'read' => '슬라이드 읽는 중… (${progress['n']} / ${progress['total']})',
-      'render' => '배경 굽는 중…',
+      'render' => progress['n'] == 2 ? '애니메이션 배경 굽는 중…' : '배경 굽는 중…',
       'fonts' => '글꼴 확인 중…',
       _ => null,
     };

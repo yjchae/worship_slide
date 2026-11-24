@@ -806,8 +806,49 @@ def _slide_title(slide):
     return None
 
 
+def _appear_steps(root, items):
+    """메인 시퀀스 → ({맨 위 도형 번호: 나타나는 클릭 단계 ≥ 1}, anim_lost 셈).
+
+    클릭 순서만 살린다(효과 종류·속도는 버림). 첫 묶음이 클릭 없이 시작(withEffect·afterEffect)하면 그 묶음은
+    처음부터 보인다. 문단 단위는 상자째 첫 문단 단계, 사라짐·그룹 안 도형만 노린 것은 무시하고 센다.
+    """
+    import ppt_tool  # 늦은 import — ppt_tool 이 이 모듈을 부른다
+
+    groups = ppt_tool._click_steps(root, with_kind=True)
+    top = {ppt_tool._shape_id(el): n for n, el in enumerate(items)}
+    nested = {ppt_tool._shape_id(c) for el in items if _local(el.tag) == "grpSp" for c in ppt_tool._iter_shapes(el)}
+    auto = 1 if groups and groups[0][0] != "clickEffect" else 0
+    appear, lost = {}, {}
+    for g, (_, effects) in enumerate(groups):
+        step = g + 1 - auto
+        for preset, spid, paragraphs in effects:
+            if preset == "exit":
+                lost.setdefault("exit", set()).add(spid)
+            elif spid in top:
+                if paragraphs is not None:
+                    lost.setdefault("paragraph", set()).add(spid)
+                n = top[spid]
+                appear[n] = min(appear.get(n, step), step)
+            elif spid in nested:
+                lost.setdefault("group_child", set()).add(spid)
+    appear = {n: k for n, k in appear.items() if k > 0}
+    if len(set(appear.values())) > ppt_tool.ANIM_MAX_STEPS_PER_SLIDE:
+        lost["too_many"] = set(appear)
+        appear = {}
+    return appear, {kind: len(v) for kind, v in lost.items()}
+
+
+def _number_steps(info):
+    """쓰인 단계만 1..n 으로 다시 매기고 info['steps'] = n + 1(1 = 애니메이션 없음)."""
+    rank = {k: i + 1 for i, k in enumerate(sorted({e["appear"] for e in info["elements"] if "appear" in e}))}
+    for e in info["elements"]:
+        if "appear" in e:
+            e["appear"] = rank[e["appear"]]
+    info["steps"] = len(rank) + 1
+
+
 def convert_slide(prs, slide, index, frame, out_dir, theme_cache):
-    """슬라이드 하나 → (결과 dict, 사본에서 지울 도형 목록)."""
+    """슬라이드 하나 → (결과 dict, 사본에서 지울 도형 목록, 애니메이션 걸린 배경 도형 [(도형, 바깥 상자, 단계, 번호)])."""
     ctx = _Slide(prs, slide, theme_cache)
     tree = slide._element.find(f"{_P}cSld/{_P}spTree")
     items = [c for c in tree if _local(c.tag) not in ("nvGrpSpPr", "grpSpPr", "extLst")]
@@ -842,7 +883,25 @@ def convert_slide(prs, slide, index, frame, out_dir, theme_cache):
     for _, _, reason, _ in results:
         if reason:
             dropped[reason] = dropped.get(reason, 0) + 1
-    return {
+    appear, lost = _appear_steps(slide._element, items)
+    anim_bg = []
+    for n, (el, elements, reason, _) in enumerate(results):
+        if n not in appear:
+            continue
+        if reason is None:
+            for e in elements:
+                e["appear"] = appear[n]
+        else:
+            anim_bg.append((el, _item_bbox(ctx, el), appear[n], n))
+    # 배경 도형은 A 판(다 있음)에서 잘라 내므로, 단계가 다른 것끼리 겹치면 늦은 것이 일찍 보인다 → 처음부터 보이게 둔다.
+    overlap = {
+        i for i, a in enumerate(anim_bg) for j, b in enumerate(anim_bg)
+        if i != j and a[2] != b[2] and _overlaps(a[1], b[1])
+    }
+    if overlap:
+        lost["overlap"] = len(overlap)
+        anim_bg = [a for i, a in enumerate(anim_bg) if i not in overlap]
+    info = {
         "index": index,
         "hidden": False,
         "title": _slide_title(slide),
@@ -850,7 +909,10 @@ def convert_slide(prs, slide, index, frame, out_dir, theme_cache):
         "elements": [e for r in results if r[1] for e in r[1]],
         "dropped": dropped,
         "effects_lost": sum(r[3] for r in results if r[2] is None),
-    }, [r[0] for r in results if r[2] is None]
+    }
+    if lost:
+        info["anim_lost"] = lost
+    return info, [r[0] for r in results if r[2] is None], anim_bg
 
 
 # ── 글꼴 ──────────────────────────────────────────────────────────────
@@ -936,45 +998,91 @@ def _progress(stage, **counts):
 
 # ── 두 번 굽기 ────────────────────────────────────────────────────────
 
-def _bake_backgrounds(prs, slides, removals, out_dir, to_pdf):
-    """요소로 바꾼 도형을 지운 사본을 구워 slides[i]['background_png'] 를 채운다."""
+def _remove(elements):
+    for el in elements:
+        parent = el.getparent()
+        if parent is not None:
+            parent.remove(el)
+
+
+def _baked_pages(prs, folder, to_pdf, slides):
+    """지금 prs 를 구워 숨기지 않은 슬라이드마다 (1920x1080 그림, slides[i])."""
     import pymupdf
     from PIL import Image
 
+    folder.mkdir()
+    stripped = folder / "layout.pptx"
+    prs.save(str(stripped))
+    pdf_dir = folder / "pdf"
+    pdf_dir.mkdir()
+    pdf_path = to_pdf(stripped, pdf_dir)
+    pymupdf.TOOLS.mupdf_display_errors(False)
+    pymupdf.TOOLS.mupdf_display_warnings(False)
+    with pymupdf.open(str(pdf_path)) as document:
+        if document.page_count != len(slides):
+            raise RuntimeError(f"구운 쪽 수({document.page_count})가 슬라이드 수({len(slides)})와 다릅니다")
+        for page, info in zip(document, slides):
+            if info["hidden"]:
+                continue
+            zoom = min(CANVAS_W / max(page.rect.width, 1), CANVAS_H / max(page.rect.height, 1))
+            pixmap = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))
+            image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+            if image.size != (CANVAS_W, CANVAS_H):
+                canvas = Image.new("RGB", (CANVAS_W, CANVAS_H), "black")
+                canvas.paste(image, ((CANVAS_W - image.width) // 2, (CANVAS_H - image.height) // 2))
+                image = canvas
+            yield image, info
+
+
+def _crop_box(frame, bbox):
+    """슬라이드 EMU 바깥 상자 → 캔버스 픽셀 (x0, y0, x1, y1), 캔버스 밖은 자른다."""
+    def px(v, off, size, full):
+        return min(max(round((v + off) / size * full), 0), full)
+    return (
+        px(bbox[0], frame.off_x, frame.canvas_w, CANVAS_W), px(bbox[1], frame.off_y, frame.canvas_h, CANVAS_H),
+        px(bbox[2], frame.off_x, frame.canvas_w, CANVAS_W), px(bbox[3], frame.off_y, frame.canvas_h, CANVAS_H),
+    )
+
+
+def _bake_backgrounds(prs, slides, removals, anim_bg, frame, out_dir, to_pdf):
+    """요소로 바꾼 도형을 지운 사본을 구워 slides[i]['background_png'] 를 채운다.
+
+    애니메이션 걸린 배경 도형(anim_bg: 장 번호 → convert_slide 의 목록)이 있으면 두 번 굽는다 — A 판(그 도형 있음)에서
+    그 자리를 잘라 그림 요소(+ appear)로 요소 목록 맨 앞에 넣고, 배경은 그 도형까지 지운 B 판.
+    ponytail: 회전 도형은 바깥 상자째, PDF 해상도 그대로 잘린다.
+    """
     for slide in prs.slides:
         root = slide._element
         root.attrib.pop("show", None)  # 숨긴 장도 굽는다 — 쪽 번호 = 슬라이드 번호로 맞추려고
         timing = root.find(f"{_P}timing")
         if timing is not None:
             root.remove(timing)  # 지운 도형을 가리키는 애니메이션이 남지 않게
-    for el in removals:
-        parent = el.getparent()
-        if parent is not None:
-            parent.remove(el)
+    _remove(removals)
     with tempfile.TemporaryDirectory(prefix="praise_ppt_layout_") as temp:
-        stripped = Path(temp) / "layout.pptx"
-        prs.save(str(stripped))
-        pdf_dir = Path(temp) / "pdf"
-        pdf_dir.mkdir()
-        pdf_path = to_pdf(stripped, pdf_dir)
-        pymupdf.TOOLS.mupdf_display_errors(False)
-        pymupdf.TOOLS.mupdf_display_warnings(False)
-        with pymupdf.open(str(pdf_path)) as document:
-            if document.page_count != len(slides):
-                raise RuntimeError(f"구운 쪽 수({document.page_count})가 슬라이드 수({len(slides)})와 다릅니다")
-            for page, info in zip(document, slides):
-                if info["hidden"]:
-                    continue
-                zoom = min(CANVAS_W / max(page.rect.width, 1), CANVAS_H / max(page.rect.height, 1))
-                pixmap = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))
-                image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
-                if image.size != (CANVAS_W, CANVAS_H):
-                    canvas = Image.new("RGB", (CANVAS_W, CANVAS_H), "black")
-                    canvas.paste(image, ((CANVAS_W - image.width) // 2, (CANVAS_H - image.height) // 2))
-                    image = canvas
-                path = Path(out_dir) / f"bg_{info['index']:03d}.png"
-                image.save(path)
-                info["background_png"] = str(path)
+        if anim_bg:
+            cut = []
+            for image, info in _baked_pages(prs, Path(temp) / "a", to_pdf, slides):
+                crops = []
+                for el, bbox, step, n in anim_bg.get(info["index"], ()):
+                    box = _crop_box(frame, bbox)
+                    if box[2] <= box[0] or box[3] <= box[1]:
+                        continue  # 캔버스 밖 — 배경에 그대로(어차피 안 보인다)
+                    path = Path(out_dir) / f"s{info['index']:03d}_{n + 1}.png"
+                    image.crop(box).save(path)
+                    crops.append({
+                        "type": "image", "id": _new_id(),
+                        "rect": [round(box[0] / CANVAS_W, 5), round(box[1] / CANVAS_H, 5),
+                                 round((box[2] - box[0]) / CANVAS_W, 5), round((box[3] - box[1]) / CANVAS_H, 5)],
+                        "path": str(path), "appear": step,
+                    })
+                    cut.append(el)
+                info["elements"][:0] = crops
+            _remove(cut)
+            _progress("render", n=2)
+        for image, info in _baked_pages(prs, Path(temp) / "b", to_pdf, slides):
+            path = Path(out_dir) / f"bg_{info['index']:03d}.png"
+            image.save(path)
+            info["background_png"] = str(path)
 
 
 def layout_presentation(pptx_path, out_dir, to_pdf=None, source_name=None):
@@ -984,22 +1092,27 @@ def layout_presentation(pptx_path, out_dir, to_pdf=None, source_name=None):
     prs = Presentation(str(pptx_path))
     width, height = prs.slide_width, prs.slide_height
     frame = _Frame(width, height)
-    theme_cache, slides, removals = {}, [], []
+    theme_cache, slides, removals, anim_bg = {}, [], [], {}
     total = len(prs.slides)
     for index, slide in enumerate(prs.slides, start=1):
         _progress("read", n=index, total=total)
         if slide._element.get("show") in ("0", "false"):
             slides.append({
                 "index": index, "hidden": True, "title": _slide_title(slide), "background_png": None,
-                "elements": [], "dropped": {}, "effects_lost": 0,
+                "elements": [], "dropped": {}, "effects_lost": 0, "steps": 1,
             })
             continue
-        info, remove = convert_slide(prs, slide, index, frame, out_dir, theme_cache)
+        info, remove, animated = convert_slide(prs, slide, index, frame, out_dir, theme_cache)
         slides.append(info)
         removals += remove
+        if animated:
+            anim_bg[index] = animated
     if to_pdf is not None:
         _progress("render")
-        _bake_backgrounds(prs, slides, removals, out_dir, to_pdf)
+        _bake_backgrounds(prs, slides, removals, anim_bg, frame, out_dir, to_pdf)
+    for info in slides:
+        if not info["hidden"]:
+            _number_steps(info)
     used = _used_fonts(slides)
     if used - APP_FONTS:
         _progress("fonts")

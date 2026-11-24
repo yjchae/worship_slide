@@ -1,8 +1,8 @@
 """layout 명령(PPTX → 편집 페이지 요소) self-check: python3 python/test_pptx_layout.py
 
 python-pptx 로 견본을 만들어 받음·떨어뜨림 분류, 좌표·글자 크기 환산, 상속(마스터 제목 크기·테마 색),
-Delta 서식, 그룹 풀기, 그림 자르기, 4:3 여백, 숨긴 슬라이드를 확인한다.
-두 번 굽기(배경 PNG)는 LibreOffice·PowerPoint 가 없으면 skip.
+Delta 서식, 그룹 풀기, 그림 자르기, 4:3 여백, 숨긴 슬라이드, 애니메이션 클릭 단계(appear·steps·anim_lost)를 확인한다.
+두 번 굽기(배경 PNG, 애니메이션 배경 도형 잘라 내기)는 LibreOffice·PowerPoint 가 없으면 skip.
 """
 import io
 import json
@@ -23,6 +23,7 @@ from pptx.util import Emu, Inches, Pt
 
 import ppt_tool
 import pptx_layout
+from test_animation import _NS_DECL, _timing
 
 A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
 # Dart PageTextElement/PageShapeElement/PageImageElement.toJson 의 키
@@ -158,6 +159,100 @@ def make_sized(path, width, height, size):
     prs.save(str(path))
 
 
+def effect(spid, node_type="clickEffect", preset="entr", paragraph=None):
+    """메인 시퀀스 효과 하나. 클릭 묶음 = effect 들을 이은 글."""
+    target = f'<p:txEl><p:pRg st="{paragraph}" end="{paragraph}"/></p:txEl>' if paragraph is not None else ""
+    return (
+        f'<p:par><p:cTn id="{900 + int(spid)}" presetID="1" presetClass="{preset}" fill="hold" nodeType="{node_type}">'
+        f'<p:childTnLst><p:set><p:cBhvr><p:cTn id="{950 + int(spid)}" dur="1" fill="hold"/>'
+        f'<p:tgtEl><p:spTgt spid="{spid}">{target}</p:spTgt></p:tgtEl>'
+        f'<p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr>'
+        f'<p:to><p:strVal val="visible"/></p:to></p:set></p:childTnLst></p:cTn></p:par>'
+    )
+
+
+def animate(slide, clicks):
+    slide._element.append(etree.fromstring(_timing(clicks)))
+
+
+def make_anim(path):
+    """애니메이션 견본. 1: 클릭·이전과 함께·클릭 2: 첫 묶음 이전과 함께 3: 첫 묶음 이전 다음 뿐
+    4: 문단·사라짐·그룹 자식·그룹째 5: 31단계 6: 회전(배경) 도형 둘 — 하나 겹침 없음, 둘은 서로 겹치고 단계가 다름."""
+    prs = Presentation()
+    prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
+    blank = prs.slide_layouts[6]
+    def new(color):
+        slide = prs.slides.add_slide(blank)
+        solid_bg(slide, color)
+        return slide
+
+    s1 = new("101010")
+    a, b, c = (textbox(s1, 1, y, 4, 1, t).shape_id for y, t in ((1, "가"), (2, "나"), (3, "다")))
+    animate(s1, [effect(a) + effect(b, "withEffect"), effect(c)])
+
+    s2 = new("101010")
+    a, b = (textbox(s2, 1, y, 4, 1, t).shape_id for y, t in ((1, "가"), (2, "나")))
+    animate(s2, [effect(a, "withEffect"), effect(b)])
+
+    s3 = new("101010")
+    a = textbox(s3, 1, 1, 4, 1, "가").shape_id
+    animate(s3, [effect(a, "afterEffect")])
+
+    s4 = new("101010")
+    para = textbox(s4, 1, 1, 4, 2, "첫 줄")
+    para.text_frame.add_paragraph().text = "둘째 줄"
+    gone = textbox(s4, 6, 1, 4, 1, "사라짐").shape_id
+    child_group = s4.shapes.add_group_shape()
+    child = solid_shape(child_group.shapes, MSO_SHAPE.RECTANGLE, 1, 4, 1, 1, "FF0000").shape_id
+    whole = s4.shapes.add_group_shape()
+    solid_shape(whole.shapes, MSO_SHAPE.RECTANGLE, 6, 4, 1, 1, "00FF00")
+    solid_shape(whole.shapes, MSO_SHAPE.RECTANGLE, 8, 4, 1, 1, "0000FF")
+    animate(s4, [effect(para.shape_id, paragraph=1), effect(gone, preset="exit"), effect(child), effect(whole.shape_id)])
+
+    s5 = new("101010")
+    ids = [textbox(s5, 0.4 * (i % 30), 0.5 + 3 * (i // 30), 0.4, 1, str(i)).shape_id for i in range(31)]
+    animate(s5, [effect(i) for i in ids])
+
+    s6 = new("202020")
+    text = textbox(s6, 1, 6, 4, 1, "글").shape_id
+    lone = solid_shape(s6, MSO_SHAPE.RECTANGLE, 2, 2, 2, 2, "FF0000")
+    lone.rotation = 45
+    left = solid_shape(s6, MSO_SHAPE.RECTANGLE, 8, 2, 2, 2, "00FF00")
+    right = solid_shape(s6, MSO_SHAPE.RECTANGLE, 9, 2, 2, 2, "0000FF")
+    left.rotation = right.rotation = 10
+    animate(s6, [effect(text), effect(lone.shape_id), effect(left.shape_id), effect(right.shape_id)])
+    prs.save(str(path))
+
+
+def check_anim(result):
+    s1, s2, s3, s4, s5, s6 = result["slides"]
+    assert [e.get("appear") for e in s1["elements"]] == [1, 1, 2] and s1["steps"] == 3, s1
+    assert [e.get("appear") for e in s2["elements"]] == [None, 1] and s2["steps"] == 2, s2
+    assert [e.get("appear") for e in s3["elements"]] == [None] and s3["steps"] == 1 and "anim_lost" not in s3, s3
+    # 문단 단위 = 상자째 그 단계, 사라짐·그룹 자식은 처음부터, 그룹째는 자식 모두 같은 단계. 빈 단계(사라짐)는 다시 매김.
+    assert [e.get("appear") for e in s4["elements"]] == [1, None, None, 2, 2] and s4["steps"] == 3, s4["elements"]
+    assert s4["anim_lost"] == {"paragraph": 1, "exit": 1, "group_child": 1}, s4["anim_lost"]
+    assert all("appear" not in e for e in s5["elements"]) and s5["steps"] == 1 and s5["anim_lost"] == {"too_many": 31}, s5
+    assert s6["anim_lost"] == {"overlap": 2}, s6
+    return s6
+
+
+def check_anim_baked(s6):
+    """배경 도형 애니메이션: 배경(B 판)엔 없고, 같은 자리 그림 요소가 appear 와 함께 맨 앞. 겹친 둘은 배경에 그대로."""
+    first = s6["elements"][0]
+    assert first["type"] == "image" and first["appear"] == 2, s6["elements"]
+    assert [e.get("appear") for e in s6["elements"]] == [2, 1] and s6["steps"] == 3, s6["elements"]
+    x, y, w, h = first["rect"]
+    with Image.open(first["path"]) as crop:  # 45° 정사각형 바깥 상자 — 가운데는 빨강
+        assert abs(crop.width - w * 1920) <= 1 and crop.getpixel((crop.width // 2, crop.height // 2))[:3][0] > 200
+    assert close(x + w / 2, 3 / 13.333, 0.003) and close(y + h / 2, 3 / 7.5, 0.003), first["rect"]
+    with Image.open(s6["background_png"]) as bg:
+        def px(x_in, y_in):
+            return bg.getpixel((round(x_in / 13.333 * 1920), round(y_in / 7.5 * 1080)))[:3]
+        assert all(abs(v - 0x20) <= 6 for v in px(3, 3)), "애니메이션 배경 도형이 B 판에 남았다"
+        assert px(8.5, 3)[1] > 200, "겹친 도형은 처음부터 보이게 배경에 남아야 한다"
+
+
 def by(slide, **want):
     return [e for e in slide["elements"] if all(e.get(k) == v for k, v in want.items())]
 
@@ -167,6 +262,7 @@ def check_main(result, tmp):
     assert [s["index"] for s in slides] == [1, 2, 3, 4, 5]
     assert result["letterboxed"] is False and result["aspect"] == round(Inches(13.333) / Inches(7.5), 4)
     for s in slides:
+        assert s["steps"] == 1 and "anim_lost" not in s, s  # 애니메이션 없는 슬라이드는 steps 만 더해진다
         for e in s["elements"]:
             keys = {"text": TEXT_KEYS, "shape": SHAPE_KEYS, "image": IMAGE_KEYS}[e["type"]]
             assert keys <= set(e) <= keys | {"rich", "valign"}, (e["type"], set(e) ^ keys)
@@ -347,7 +443,13 @@ def main():
         check_font_names()
         check_progress(sample, tmp)
         check_sigterm_kills_tree(tmp)
+        anim = tmp / "anim.pptx"
+        make_anim(anim)
+        s6 = check_anim(pptx_layout.layout_presentation(anim, tmp / "out_anim_plain"))
+        # 굽지 않으면 배경 도형 애니메이션은 잘라 낼 수 없다 — 글 상자(1번째 클릭)만 남는다
+        assert [e.get("appear") for e in s6["elements"]] == [1] and s6["steps"] == 2, s6["elements"]
         if bake:
+            check_anim_baked(check_anim(pptx_layout.layout_presentation(anim, tmp / "out_anim", bake)))
             check_baked(result)
             via_command = ppt_tool.layout_presentation(sample, tmp / "out_cmd")
             assert "error" not in via_command and len(via_command["slides"]) == 5

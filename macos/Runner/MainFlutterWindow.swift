@@ -75,6 +75,7 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate, WKNavi
     webView.setValue(false, forKey: "drawsBackground")
     if #available(macOS 12.0, *) { webView.underPageBackgroundColor = .black }
     webView.autoresizingMask = [.width, .height]
+    webView.navigationDelegate = self
     window.contentView!.addSubview(webView)
     window.delegate = self
     NSScreen.observeChanges(self, #selector(screensChanged))
@@ -199,24 +200,40 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate, WKNavi
 
   /// 슬라이드 웹뷰에 마지막으로 올린 HTML(같으면 다시 안 읽는다).
   private var _loadedHTML: String?
+  /// 지금 띄운 이미지 페이지의 바탕(배경 색·배경 그림). 이미지 페이지가 아니면 nil.
+  /// 그 문서를 다 읽은 뒤(didFinish)에만 채운다 — 읽는 중엔 swapImage 가 없거나 옛 문서에서 돈다.
+  private var _loadedImageShell: String?
+  private var _pendingImageShell: (nav: WKNavigation?, shell: String)?
 
-  private func load(_ html: String) {
+  private func load(_ html: String, imageShell: String? = nil) {
     _loadedHTML = html
-    webView.loadHTMLString(html, baseURL: nil)
+    _loadedImageShell = nil
+    let nav = webView.loadHTMLString(html, baseURL: nil)
+    _pendingImageShell = imageShell.map { (nav, $0) }
   }
 
   // data: Dart의 SlidePageData.toJson() 결과 ([String:Any])
   func updatePage(data: [String: Any]) {
     _lastData = data
     if _isBlackout { return }
-    let html = buildHTML(data: data)
+    let page = imagePage(data)
+    let html = buildHTML(data: data, image: page)
     // 같은 HTML 이면 다시 읽지 않는다(다시 읽으면 번쩍인다). 확대·포인터는 HTML 이 아니라 JS 로 따로 오므로 영향 없고,
     // 블랙아웃 토글은 아래 _loadedHTML 을 직접 갱신한다. 미디어는 HTML 과 무관하게 늘 맞춘다.
     let skip = html == _loadedHTML
     #if DEBUG
     NSLog("[audience] updatePage skip=\(skip) len=\(html.count)")
     #endif
-    if !skip { load(html) }
+    if !skip {
+      // 바탕이 같은 이미지 페이지끼리(PPT 애니메이션 단계·편집 페이지 단계)는 문서를 다시 읽지 않고 그림만 바꾼다.
+      // 다시 읽으면 새 문서가 그림을 다 풀기 전에 한두 프레임 먼저 그려져(실측 5~23ms) 배경만 번쩍여 화면이 떨려 보였다.
+      if let page = page, let src = page.src, page.shell == _loadedImageShell {
+        _loadedHTML = html
+        webView.evaluateJavaScript("window.swapImage&&swapImage('\(src)')", completionHandler: nil)
+      } else {
+        load(html, imageShell: page?.src == nil ? nil : page?.shell)
+      }
+    }
     updateMedia(data["media"] as? [String: Any])
   }
 
@@ -378,7 +395,8 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate, WKNavi
       mediaView?.evaluateJavaScript("window.setBlack&&setBlack(true)", completionHandler: nil)
     } else {
       if let d = _lastData {
-        load(buildHTML(data: d))
+        let page = imagePage(d)
+        load(buildHTML(data: d, image: page), imageShell: page?.src == nil ? nil : page?.shell)
         // 꺼진 사이 페이지를 넘겼으면 새 미디어로 바뀐다. 같은 미디어면 멈춘 자리에서 다시.
         let media = d["media"] as? [String: Any]
         let same = (media?["key"] as? String) == mediaKey
@@ -451,6 +469,10 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate, WKNavi
 
   func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
     if webView === subView { webView.isHidden = false }
+    if webView === self.webView, let pending = _pendingImageShell, pending.nav === navigation {
+      _loadedImageShell = pending.shell
+      _pendingImageShell = nil
+    }
   }
 
   // 서버가 뜨는 중이라 오류 페이지를 받은 경우(500 등)도 실패로 친다.
@@ -472,6 +494,8 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate, WKNavi
   }
 
   func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+    // 슬라이드 문서가 죽었으면 다음 페이지는 그림만 바꾸지 말고 통째로 읽는다.
+    if webView === self.webView { _loadedHTML = nil; _loadedImageShell = nil }
     retrySubtitle(webView)
   }
 
@@ -611,6 +635,19 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate, WKNavi
     };
     setPtr('\(_ptrMode)',\(_ptrX),\(_ptrY),\(_ptrSize));
     \(zoomCall());
+    // 같은 바탕의 다음 이미지 페이지: 새 그림을 다 푼 뒤에 바꿔 끼운다(그 사이엔 지금 그림 그대로).
+    // 빠르게 넘기면 마지막 것만 끼운다.
+    window.swapImage=function(src){
+      window.__swapSrc=src;
+      var n=new Image(); n.src=src;
+      var put=function(){
+        var im=document.querySelector('#stage img');
+        if(!im || window.__swapSrc!==src) return;
+        im.replaceWith(n);
+        var z=window.__z; setZoom(z.on,z.x,z.y,z.s);
+      };
+      n.decode().then(put, put);
+    };
     // data: URI 이미지는 이 스크립트가 도는 시점엔 아직 디코딩 전이라 naturalWidth 가 0 이다.
     // 레터박스 계산이 어긋나므로 로드가 끝나면 확대·포인터를 다시 적용한다.
     (function(){
@@ -624,10 +661,27 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate, WKNavi
     """
   }
 
+  /// 이미지 페이지의 바탕(배경 색·배경 그림 CSS)과 그림 data URI(못 읽으면 nil). 이미지 페이지가 아니면 nil.
+  typealias ImagePage = (bgColor: String, bgImageCSS: String, src: String?, shell: String)
+
+  private func imagePage(_ data: [String: Any]) -> ImagePage? {
+    guard let imagePath = data["image_path"] as? String, !imagePath.isEmpty else { return nil }
+    let style = (data["style"] as? [String: Any]) ?? [:]
+    let bgColor = style["background_color"] as? String ?? "#1b1b1b"
+    let bgImageCSS = backgroundImageCSS(path: style["background_image_path"] as? String)
+    var src: String?
+    if let bytes = try? Data(contentsOf: URL(fileURLWithPath: imagePath)) {
+      let ext = (imagePath as NSString).pathExtension.lowercased()
+      let mime = ext == "jpg" || ext == "jpeg" ? "image/jpeg" : "image/png"
+      src = "data:\(mime);base64,\(bytes.base64EncodedString())"
+    }
+    return (bgColor, bgImageCSS, src, bgColor + "|" + bgImageCSS)
+  }
+
   // bgImageCSS: 원본 이미지가 슬라이드를 꽉 채우지 못할 때 남는 여백에 깔리는 배경.
   // PPTX 내보내기·미리보기와 같게 보이도록 여기서도 배경 이미지를 깐다.
-  private func buildImageHTML(imagePath: String, bgColor: String, bgImageCSS: String) -> String {
-    guard let data = try? Data(contentsOf: URL(fileURLWithPath: imagePath)) else {
+  private func buildImageHTML(bgColor: String, bgImageCSS: String, src: String?) -> String {
+    guard let src = src else {
       return """
       <!DOCTYPE html><html><head><meta charset="utf-8">
       <style>*{margin:0;padding:0;}
@@ -635,9 +689,6 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate, WKNavi
       </head><body></body></html>
       """
     }
-    let ext = (imagePath as NSString).pathExtension.lowercased()
-    let mime = ext == "jpg" || ext == "jpeg" ? "image/jpeg" : "image/png"
-    let b64 = data.base64EncodedString()
     return """
     <!DOCTYPE html><html><head><meta charset="utf-8">
     <style>
@@ -647,21 +698,17 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate, WKNavi
       img{width:100%;height:100%;object-fit:contain;display:block;}
       \(Self.pointerCSS)
     </style></head><body>
-      <div id="stage"><img src="data:\(mime);base64,\(b64)"></div>
+      <div id="stage"><img src="\(src)"></div>
       \(Self.pointerHTML)
       <script>\(pointerScript())</script>
     </body></html>
     """
   }
 
-  private func buildHTML(data: [String: Any]) -> String {
-    let styleForImage = (data["style"] as? [String: Any]) ?? [:]
-    if let imagePath = data["image_path"] as? String, !imagePath.isEmpty {
-      return buildImageHTML(
-        imagePath: imagePath,
-        bgColor: styleForImage["background_color"] as? String ?? "#1b1b1b",
-        bgImageCSS: backgroundImageCSS(path: styleForImage["background_image_path"] as? String)
-      )
+  /// [image] = 미리 읽어 둔 [imagePage] 결과(그림을 두 번 읽지 않게).
+  private func buildHTML(data: [String: Any], image: ImagePage?) -> String {
+    if let page = image {
+      return buildImageHTML(bgColor: page.bgColor, bgImageCSS: page.bgImageCSS, src: page.src)
     }
 
     let mainText = escapeHtml((data["main_text"] as? String) ?? "")

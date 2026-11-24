@@ -262,7 +262,7 @@ void main() {
     expect(composed, hasLength(1));
     expect((composed!.single as PageTextElement).text, '광고');
     expect(result?.name, '광고');
-    expect(result?.imagePath, '/tmp/render.png');
+    expect(result?.imagePaths, ['/tmp/render.png']);
   });
 
   testWidgets('편집 중 되돌리기는 글자 단위, 편집을 끝낸 뒤 되돌리기 한 번 = 편집 통째', (tester) async {
@@ -412,38 +412,41 @@ void main() {
     expect((h.result!.elements.single as PageTextElement).text.length, 5);
   });
 
-  testWidgets('상자를 고른 채 글자를 치면 편집만 시작하고(글자는 안 넣음 — 한글 입력기), 편집 밖 Delete 는 상자를 지운다', (
-    tester,
-  ) async {
-    final a = PageTextElement(
-      id: 'a',
-      rect: const Rect.fromLTWH(0.1, 0.1, 0.4, 0.2),
-      text: '광고',
-    );
-    final b = PageTextElement(
-      id: 'b',
-      rect: const Rect.fromLTWH(0.1, 0.6, 0.4, 0.2),
-      text: '지울 것',
-    );
-    final h = await _open(tester, elements: [a, b]);
-    await tester.tapAt(_at(tester, a.rect));
-    await tester.pump(const Duration(milliseconds: 500));
-    await tester.sendKeyEvent(LogicalKeyboardKey.keyX);
-    await tester.pump();
-    expect(find.byType(QuillEditor), findsOneWidget);
-    expect(_quill(tester).document.toPlainText(), '광고\n');
-    expect(_quill(tester).selection.baseOffset, 2);
-    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-    await tester.pump();
+  testWidgets(
+    '상자를 고른 채 글자를 치면 편집만 시작하고(글자는 안 넣음 — 한글 입력기), 편집 밖 Delete 는 상자를 지운다',
+    (tester) async {
+      final a = PageTextElement(
+        id: 'a',
+        rect: const Rect.fromLTWH(0.1, 0.1, 0.4, 0.2),
+        text: '광고',
+      );
+      final b = PageTextElement(
+        id: 'b',
+        rect: const Rect.fromLTWH(0.1, 0.6, 0.4, 0.2),
+        text: '지울 것',
+      );
+      final h = await _open(tester, elements: [a, b]);
+      await tester.tapAt(_at(tester, a.rect));
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyX);
+      await tester.pump();
+      expect(find.byType(QuillEditor), findsOneWidget);
+      expect(_quill(tester).document.toPlainText(), '광고\n');
+      expect(_quill(tester).selection.baseOffset, 2);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
 
-    await tester.tapAt(_at(tester, b.rect));
-    await tester.pump(const Duration(milliseconds: 500));
-    await tester.sendKeyEvent(LogicalKeyboardKey.delete);
-    await tester.pump();
-    await tester.tap(find.text('확인'));
-    await tester.pumpAndSettle();
-    expect(h.result!.elements.map((e) => (e as PageTextElement).text), ['광고']);
-  });
+      await tester.tapAt(_at(tester, b.rect));
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.sendKeyEvent(LogicalKeyboardKey.delete);
+      await tester.pump();
+      await tester.tap(find.text('확인'));
+      await tester.pumpAndSettle();
+      expect(h.result!.elements.map((e) => (e as PageTextElement).text), [
+        '광고',
+      ]);
+    },
+  );
 
   testWidgets('아무것도 안 고르면 글자 서식 줄은 비활성, 골라도 캔버스 위치는 그대로', (tester) async {
     final box = PageTextElement(
@@ -571,6 +574,58 @@ void main() {
       jsonEncode(h.result!.elements.first.toJson()),
       jsonEncode(unknown.raw),
     );
+  });
+
+  testWidgets('나타나는 순서: 바꾸면 클릭 단계마다 굽고 배지가 붙는다, 되돌리면 한 장', (tester) async {
+    const a = PageTextElement(
+      id: 'a',
+      rect: Rect.fromLTWH(0.1, 0.1, 0.4, 0.2),
+      text: '처음',
+    );
+    const b = PageTextElement(
+      id: 'b',
+      rect: Rect.fromLTWH(0.1, 0.6, 0.4, 0.2),
+      text: '나중',
+    );
+    Future<void> pickAppear(String label) async {
+      await tester.tap(find.byType(DropdownButtonFormField<int>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(label).last);
+      await tester.pumpAndSettle();
+    }
+
+    var h = await _open(tester, elements: [a, b]);
+    await tester.tapAt(_at(tester, b.rect));
+    await tester.pump(const Duration(milliseconds: 500));
+    await pickAppear('1번째 클릭');
+    expect(
+      find.byWidgetPredicate(
+        (w) => w is Semantics && w.properties.label == '1번째 클릭에 나타남',
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('확인'));
+    await tester.pumpAndSettle();
+    expect(h.result!.imagePaths, hasLength(2));
+    expect(h.result!.elements.map((e) => e.appear), [0, 1]);
+    expect(h.composed, h.result!.elements); // 마지막 장 = 전부
+
+    h = await _open(tester, elements: [a, b]);
+    await tester.tapAt(_at(tester, b.rect));
+    await tester.pump(const Duration(milliseconds: 500));
+    await pickAppear('1번째 클릭');
+    expect(
+      find.byWidgetPredicate(
+        (w) => w is Semantics && w.properties.label == '1번째 클릭에 나타남',
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.byTooltip(RegExp('^되돌리기')));
+    await tester.pump();
+    await tester.tap(find.text('확인'));
+    await tester.pumpAndSettle();
+    expect(h.result!.imagePaths, hasLength(1));
+    expect(h.result!.elements, [a, b]);
   });
 
   testWidgets('클립보드 그림 읽기가 실패해도 글자가 있으면 글 상자로 넣는다', (tester) async {

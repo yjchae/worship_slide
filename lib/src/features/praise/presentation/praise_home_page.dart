@@ -2697,7 +2697,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         info.pageIndexInItem,
         ImageStagingItem(
           sourceName: result.name,
-          imagePaths: [result.imagePath],
+          imagePaths: result.imagePaths,
         ),
         result.background.copyWith(pageElements: result.elements),
       );
@@ -3608,21 +3608,30 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   // ── 슬라이드 편집 페이지 ──────────────────────────────────────────────
   //
-  // 그림·글 상자 목록(SlideBackground.pageElements)을 PageComposer 가 PNG 한 장으로 구워
-  // ImageStagingItem 으로 넣는다(sourceName = 페이지 이름). 화면·PPTX·저장은 PPT 이미지 길 그대로.
+  // 그림·글 상자 목록(SlideBackground.pageElements)을 PageComposer 가 클릭 단계마다 PNG 한 장씩 구워
+  // (애니메이션이 없으면 한 장) ImageStagingItem 으로 넣는다(sourceName = 페이지 이름).
+  // 화면·PPTX·저장은 PPT 이미지 길 그대로.
 
   bool _isFreePage(int uid) => _itemBackgrounds[uid]?.isFreePage == true;
 
-  Future<String> _composeFreePage(SlideBackground background) async {
-    await FontLibrary.ensureFamilies(
-      pageFontFamilies(background.pageElements!),
-    );
+  /// [elements] 를 [background] 위에 PNG 한 장으로 굽는다(편집 창은 단계마다 이걸 부른다).
+  Future<String> _composeFreeStep(
+    SlideBackground background,
+    List<PageElement> elements,
+  ) async {
+    await FontLibrary.ensureFamilies(pageFontFamilies(elements));
     return const PageComposer().compose(
-      elements: background.pageElements!,
+      elements: elements,
       background: background,
       style: _style,
     );
   }
+
+  /// 편집 페이지의 클릭 단계마다 한 장([pageSteps]).
+  Future<List<String>> _composeFreePage(SlideBackground background) async => [
+    for (final step in pageSteps(background.pageElements!))
+      await _composeFreeStep(background, step),
+  ];
 
   Future<PageEditorResult?> _showPageEditor({
     String name = '',
@@ -3643,8 +3652,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         elements: background.pageElements,
         background: background,
         style: _style,
-        compose: (elements, bg) =>
-            _composeFreePage(bg.copyWith(pageElements: elements)),
+        compose: (elements, bg) => _composeFreeStep(bg, elements),
         readClipboardImage: _pythonBridge.clipboardImage,
         templates: _pageTemplates,
         templateMode: templateMode,
@@ -3675,7 +3683,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         uid: uid,
         item: ImageStagingItem(
           sourceName: result.name,
-          imagePaths: [result.imagePath],
+          imagePaths: result.imagePaths,
         ),
       ));
       if (group != null) _itemGroups[uid] = group;
@@ -3715,7 +3723,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       design: templateDesign(
         result.background.copyWith(pageElements: result.elements),
       ),
-      previewPath: result.imagePath,
+      previewPath: result.imagePaths.last,
     );
   }
 
@@ -3736,7 +3744,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     return true;
   }
 
-  /// 편집 페이지를 다시 연다. uid 는 그대로라 메모·여백 설정이 남고 장 수도 늘 1장이다.
+  /// 편집 페이지를 다시 연다. uid 는 그대로라 메모·여백 설정이 남는다. 장 수는 클릭 단계 수를 따른다.
   Future<void> _editFreePage(int uid) async {
     final item = _stagingItems.where((e) => e.uid == uid).firstOrNull?.item;
     final background = _itemBackgrounds[uid];
@@ -3748,13 +3756,12 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     if (result == null || !mounted) return;
     final index = _stagingItems.indexWhere((e) => e.uid == uid);
     if (index < 0) return;
+    var restoredPages = false;
     setState(() {
-      _stagingItems[index] = (
-        uid: uid,
-        item: ImageStagingItem(
-          sourceName: result.name,
-          imagePaths: [result.imagePath],
-        ),
+      restoredPages = _setFreePageImages(
+        uid,
+        result.imagePaths,
+        name: result.name,
       );
       _itemBackgrounds[uid] = result.background.copyWith(
         pageElements: result.elements,
@@ -3762,31 +3769,65 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       _previewStagingUid = uid;
     });
     await _sendCurrentSlide();
+    if (restoredPages) {
+      _showSnack(
+        '편집 페이지를 바꿨습니다 (${result.imagePaths.length}장). 장 수가 바뀌어 지웠던 페이지가 다시 보입니다.',
+      );
+    }
   }
 
-  /// 편집 페이지 [uid] 의 PNG 를 바꾼다(이름·uid 그대로).
-  void _setFreePageImage(int uid, String path) {
+  /// 편집 페이지 [uid] 의 PNG(클릭 단계마다 한 장)를 바꾼다(uid 그대로, [name] 이 없으면 이름도 그대로).
+  /// 장 수가 바뀌면 지운 표시·메모를 맞추고(범위 밖 메모만 버림) 보던 슬라이드는 (항목, 페이지)로 다시 찾는다.
+  /// setState 안에서 부른다. 지운 표시가 풀렸으면 true.
+  bool _setFreePageImages(int uid, List<String> paths, {String? name}) {
     final index = _stagingItems.indexWhere((e) => e.uid == uid);
     final item = index < 0 ? null : _stagingItems[index].item;
-    if (item is! ImageStagingItem) return;
+    if (item is! ImageStagingItem) return false;
+    final slides = _allSlides;
+    final current = slides.isEmpty
+        ? null
+        : slides[_currentSlideIndex.clamp(0, slides.length - 1)];
+    final restored = remapReloadedPages(
+      uid: uid,
+      oldCount: item.imagePaths.length,
+      newCount: paths.length,
+      deletedKeys: _deletedSlideKeys,
+      notes: _slideNotes,
+    );
     _stagingItems[index] = (
       uid: uid,
-      item: ImageStagingItem(sourceName: item.sourceName, imagePaths: [path]),
+      item: ImageStagingItem(
+        sourceName: name ?? item.sourceName,
+        imagePaths: paths,
+      ),
     );
+    if (current != null) {
+      _currentSlideIndex = _findSlideAfterReload(
+        current,
+        paths.length,
+        reloaded: current.stagingUid == uid,
+      );
+    }
+    _clampCurrentSlideIndex();
+    return restored;
   }
 
-  /// 불러온 콘티의 편집 페이지 PNG 가 없으면(지웠거나 다른 PC) 요소 목록으로 다시 굽는다.
-  /// 글꼴은 main 에서 FontLibrary.load 로 이미 올라와 있다.
+  /// 불러온 콘티의 편집 페이지 PNG 가 하나라도 없거나(지웠거나 다른 PC) 장 수가 클릭 단계 수와 다르면
+  /// 요소 목록으로 모든 단계를 다시 굽는다. 글꼴은 main 에서 FontLibrary.load 로 이미 올라와 있다.
   Future<void> _restoreFreePages() async {
     final missing = [
       for (final entry in _stagingItems)
         if (entry.item case ImageStagingItem(:final imagePaths)
             when _isFreePage(entry.uid) &&
-                (imagePaths.isEmpty || !File(imagePaths.first).existsSync()))
+                (imagePaths.length !=
+                        pageStepCount(
+                          _itemBackgrounds[entry.uid]!.pageElements!,
+                        ) ||
+                    imagePaths.any((path) => !File(path).existsSync())))
           entry.uid,
     ];
     if (missing.isEmpty) return;
-    final restored = <int, (SlideBackground, String)>{};
+    final restored = <int, (SlideBackground, List<String>)>{};
     for (final uid in missing) {
       final background = _itemBackgrounds[uid];
       if (background == null) continue;
@@ -3797,13 +3838,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       }
     }
     // 굽는 사이 고쳤거나(배경이 새 객체) 지운 항목은 옛 그림으로 덮지 않는다.
-    // 항목이 없으면 _setFreePageImage 가 건너뛴다.
+    // 항목이 없으면 _setFreePageImages 가 건너뛴다.
     restored.removeWhere(
       (uid, value) => !identical(_itemBackgrounds[uid], value.$1),
     );
     if (!mounted || restored.isEmpty) return;
     setState(
-      () => restored.forEach((uid, value) => _setFreePageImage(uid, value.$2)),
+      () => restored.forEach((uid, value) => _setFreePageImages(uid, value.$2)),
     );
     await _sendCurrentSlide();
   }
@@ -3948,7 +3989,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     final picked = [
       for (final i in _pickMovableSlides(slides, slideIndexes)) slides[i],
     ];
-    final copied = _slidesToPieces(picked);
+    // 원본은 그대로라 '나눠 일반 그림 페이지가 됐다' 안내는 안 띄운다.
+    final copied = _slidesToPieces(picked, notice: false);
     if (copied.isEmpty) return;
     _slideClipboard = copied;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -3977,7 +4019,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   /// 고른 페이지를 콘티 항목 조각으로 만든다. 같은 항목의 페이지는 한 항목으로 묶는다 —
   /// 곡 페이지를 한 장씩 따로 만들면 사이사이에 자동 여백이 끼기 때문이다.
-  List<_SlidePiece> _slidesToPieces(List<_SlideInfo> picked) {
+  List<_SlidePiece> _slidesToPieces(
+    List<_SlideInfo> picked, {
+    bool notice = true,
+  }) {
     final groups = <List<_SlideInfo>>[];
     for (final info in picked) {
       if (groups.isNotEmpty &&
@@ -3997,7 +4042,12 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       for (var k = 0; k < pieces.length; k++) {
         result.add((
           item: pieces[k].item,
-          background: _itemBackgrounds[uid],
+          background: _pieceBackground(
+            _itemBackgrounds[uid],
+            entry.item,
+            pieces[k].from,
+            notice: notice,
+          ),
           format: _itemFormats[uid],
           pages: [for (final j in pieces[k].from) byPage[j]!],
         ));
@@ -4005,6 +4055,26 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     }
     return result;
   }
+
+  /// [pieceBackground] + 요소를 뺐으면 안내(같은 동작 안에서 여러 번 불려도 한 번, setState 뒤에 뜬다).
+  SlideBackground? _pieceBackground(
+    SlideBackground? background,
+    StagingItem item,
+    List<int> from, {
+    bool notice = true,
+  }) {
+    final result = pieceBackground(background, _pageCount(item), from.length);
+    if (notice && !identical(result, background) && !_animSplitNoticed) {
+      _animSplitNoticed = true;
+      Future.microtask(() {
+        _animSplitNoticed = false;
+        _showSnack('애니메이션 편집 페이지를 나눠 일반 그림 페이지가 됐습니다.', replace: false);
+      });
+    }
+    return result;
+  }
+
+  bool _animSplitNoticed = false;
 
   /// 콘티 [index] 항목을 [parts](각각 원래 페이지 번호 목록)로 다시 만든다. 나누기·옮기기에서 쓴다.
   /// 첫 조각이 원래 uid 를 이어받고 나머지는 새 uid 다. 한 part 안의 조각끼리는 여백 없이 잇고,
@@ -4044,8 +4114,18 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         placed.add((uid: pieceUid, item: pieces[k].item));
         uids.add(pieceUid);
         if (k < pieces.length - 1) _noSpacerUids.add(pieceUid);
+        final pieceBackground = _pieceBackground(
+          background,
+          item,
+          pieces[k].from,
+        );
+        if (pieceUid == uid && !identical(pieceBackground, background)) {
+          _itemBackgrounds[uid] = pieceBackground!;
+        }
         if (pieceUid != uid) {
-          if (background != null) _itemBackgrounds[pieceUid] = background;
+          if (pieceBackground != null) {
+            _itemBackgrounds[pieceUid] = pieceBackground;
+          }
           if (format != null) _itemFormats[pieceUid] = format;
           if (itemGroup != null) _itemGroups[pieceUid] = itemGroup;
           _mediaGroups[pieceUid] = group;
@@ -4846,9 +4926,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       final background =
           (result.background ?? SlideBackground.fromStyle(_style))
               .withPageElementsOf(old);
-      final String path;
+      final List<String> paths;
       try {
-        path = await _composeFreePage(background);
+        paths = await _composeFreePage(background);
       } catch (e, st) {
         await AppLogger.instance.error('[page] 편집 페이지 배경 굽기 실패', e, st);
         _showSnack('페이지 그림을 만들지 못했습니다. 다시 시도해 주세요.');
@@ -4857,7 +4937,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       if (!mounted) return;
       setState(() {
         _itemBackgrounds[uid] = background;
-        _setFreePageImage(uid, path);
+        _setFreePageImages(uid, paths);
         _previewStagingUid = uid;
       });
       await _sendCurrentSlide();
@@ -5190,7 +5270,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     final total = layout.editable.length;
     final making = ValueNotifier<String>('페이지를 만드는 중… (0 / $total)');
     _showProgressDialog(making);
-    final made = <({String name, SlideBackground background, String png})>[];
+    final made =
+        <({String name, SlideBackground background, List<String> pngs})>[];
     var failed = 0;
     var lost = (images: 0, backgrounds: 0);
     final copied = <String, String>{};
@@ -5223,7 +5304,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
           made.add((
             name: page.name,
             background: page.background,
-            png: await _composeFreePage(page.background),
+            pngs: await _composeFreePage(page.background),
           ));
         } catch (e, st) {
           failed++;
@@ -5268,7 +5349,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
             uid: uid,
             item: ImageStagingItem(
               sourceName: page.name,
-              imagePaths: [page.png],
+              imagePaths: page.pngs,
             ),
           ));
           _itemGroups[uid] = finalGroup;
@@ -6136,7 +6217,11 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         choice.name,
         _effectiveStagingItems,
         notes: _effectiveSlideNotes,
-        backgrounds: _itemBackgrounds,
+        backgrounds: savedBackgrounds(
+          _stagingItems,
+          _itemBackgrounds,
+          _deletedSlideKeys,
+        ),
         noSpacerUids: _noSpacerUids,
         itemGroups: _itemGroups,
         pageFormats: _liveFormats(_effectiveStagingItems),
@@ -12996,6 +13081,41 @@ List<({int n, int total})?> sameTitleOrdinals(List<String> titles) {
       else
         (n: seen[t] = (seen[t] ?? 0) + 1, total: total[t]!),
   ];
+}
+
+/// 장 수 [total] 인 항목에서 [taken] 장만 떼어 낸 조각의 배경. 클릭 단계 여러 장인 편집 페이지를 일부만 떼면
+/// 요소 목록이 그 장들과 안 맞으므로 요소를 빼 일반 그림 페이지로 둔다(통째면 [background] 그대로).
+/// 나누기·옮기기(`_rebuildItem`)·복사(`_slidesToPieces`)가 같이 쓴다.
+@visibleForTesting
+SlideBackground? pieceBackground(
+  SlideBackground? background,
+  int total,
+  int taken,
+) => background?.isFreePage == true && taken < total
+    ? background!.copyWith(pageElements: null)
+    : background;
+
+/// 콘티 저장용 배경. 지운 장이 있는 클릭 단계 편집 페이지는 저장되는 그림(지운 장 뺌)과 요소 목록의
+/// 단계 수가 안 맞아 불러올 때 지운 장까지 다시 구워지므로 [pieceBackground] 처럼 요소를 뺀다.
+/// 작업 콘티의 배경은 그대로 둔다. `.wsconti`·클라우드는 저장한 콘티에서 나가므로 같이 맞는다.
+@visibleForTesting
+Map<int, SlideBackground> savedBackgrounds(
+  List<({int uid, StagingItem item})> items,
+  Map<int, SlideBackground> backgrounds,
+  Set<String> deletedKeys,
+) {
+  final out = Map.of(backgrounds);
+  for (final (:uid, :item) in items) {
+    final background = out[uid];
+    if (background?.isFreePage != true) continue;
+    final total = _PraiseHomePageState._pageCount(item);
+    var kept = 0;
+    for (var j = 0; j < total; j++) {
+      if (!deletedKeys.contains(_PraiseHomePageState._slideKey(uid, j))) kept++;
+    }
+    out[uid] = pieceBackground(background, total, kept)!;
+  }
+  return out;
 }
 
 /// [item] 의 [pages](원래 페이지 번호, 오름차순)만 담은 항목들. 나누기·복사·옮기기가 같이 쓴다.

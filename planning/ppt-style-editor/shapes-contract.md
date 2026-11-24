@@ -28,6 +28,7 @@ ppt_tool layout <pptx|ppt 경로> <작업 폴더>
 | `{"progress": "convert"}` | `.ppt` → pptx 바꾸기 전 | 'PPT 를 pptx 로 바꾸는 중…' |
 | `{"progress": "read", "n": 3, "total": 15}` | 슬라이드마다 읽기 전(n 은 1부터, 숨긴 장 포함) | '슬라이드 읽는 중… (3 / 15)' |
 | `{"progress": "render"}` | 배경 굽기(두 번 굽기) 전 | '배경 굽는 중…' |
+| `{"progress": "render", "n": 2}` | 애니메이션 걸린 배경 도형이 있는 파일만 — A 판을 구운 뒤 B 판 굽기 전 | '배경 굽는 중…' (같아도 된다) |
 | `{"progress": "fonts"}` | 앱 목록 밖 글꼴이 있어 시스템 글꼴을 훑기 전 | '글꼴 확인 중…' |
 
 모르는 단계는 앱이 무시한다(문구 그대로). `progress` 도 `warning` 도 아닌 stderr 줄은 실패했을 때 오류 문구가 된다.
@@ -66,11 +67,32 @@ ppt_tool layout <pptx|ppt 경로> <작업 폴더>
   "background_png": "/작업폴더/bg_003.png" | null,  // 1920x1080 PNG. 요소로 바꾼 도형을 지운 슬라이드(마스터·배경·표·회전 도형 등 포함)
   "elements": [ /* page_elements 그대로, 뒤가 위 */ ],
   "dropped": {"rotated": 1, "table": 1},  // 배경 그림으로 둔 '맨 위 도형' 수(까닭별). 그룹은 1개로 센다
-  "effects_lost": 2           // 요소로 받았지만 꾸밈(그림자·네온·윤곽선 글자·형광펜·그림 테두리)을 버린 요소 수
+  "effects_lost": 2,          // 요소로 받았지만 꾸밈(그림자·네온·윤곽선 글자·형광펜·그림 테두리)을 버린 요소 수
+  "steps": 3,                 // 클릭 단계 장 수(1 = 애니메이션 없음, 숨긴 장도 1). 요소 appear 의 최댓값 + 1
+  "anim_lost": {"exit": 1}    // 처음부터 보이게 둔 애니메이션(아래 표) — 0 이 아닌 것만, 하나도 없으면 키 없음
 }
 ```
 
-- 앱 항목: `ImageStagingItem(imagePaths: [구운 PNG], sourceName: title ?? '파일 이름 index', sourcePath: null)` +
+### 애니메이션 (`appear`·`steps`·`anim_lost`)
+
+- 메인 시퀀스(`p:timing`)의 **클릭 순서만** 살린다. 효과 종류·속도·지연·강조·트리거는 버린다(늘 '나타내기' 한 번).
+- 요소 `"appear": k`(k ≥ 1) = k 번째 클릭에 나타난다. 처음부터 보이면 키 없음. 한 슬라이드 안 `appear` 는 **1..n 연속**(쓰인 단계만 다시 매김),
+  `steps` = n + 1. 애니메이션 없는 슬라이드는 `steps: 1` 말고는 예전 JSON 과 같다.
+- 첫 클릭 묶음이 클릭 없이 시작(첫 효과 `nodeType` 이 `withEffect`·`afterEffect`)하면 그 묶음은 처음부터 보인다(빈 첫 장이 생기지 않게). 긴 지연도 마찬가지.
+- 한 도형에 효과가 여럿이면 가장 이른 단계. 그룹째 나타나면 그 그룹에서 나온 요소 모두 같은 `appear`.
+- **배경으로 남는 도형**(`dropped`)에 걸린 애니메이션: 그 도형까지 있는 A 판과 지운 B 판을 두 번 굽는다. `background_png` = B 판,
+  도형의 바깥 상자를 A 판에서 잘라 `type: "image"` 요소(`appear` 있음, 파일 `s<장>_<도형 번호>.png`)로 **요소 목록 맨 앞**에 넣는다.
+  회전 도형은 바깥 상자째, 1920x1080 해상도 그대로. 굽지 않으면(앱 밖 시험) 이 애니메이션은 없어진다.
+
+| `anim_lost` 키 | 뜻 (값 = 도형 수) |
+|---|---|
+| `paragraph` | 문단 단위 등장 — 상자째 **첫 문단 단계**에 나타난다(`appear` 있음) |
+| `exit` | 사라짐 — 무시(마지막까지 보임) |
+| `group_child` | 그룹 안 도형만 노린 효과 — 처음부터 보임 |
+| `overlap` | 배경 도형끼리 겹치는데 단계가 다름 — 잘라 내면 늦은 것이 일찍 보이므로 처음부터 배경에 남김 |
+| `too_many` | 단계가 30(`ANIM_MAX_STEPS_PER_SLIDE`) 넘음 — 그 슬라이드 애니메이션 모두 버림(값 = 걸린 맨 위 도형 수) |
+
+- 앱 항목: `ImageStagingItem(imagePaths: [단계마다 구운 PNG — steps 장], sourceName: title ?? '파일 이름 index', sourcePath: null)` +
   `SlideBackground(color: 검정, imagePath: background_png(복사본), pageElements: elements)` → `PageComposer.compose`(plan 3단계 그대로).
 - 결과 창 숫자: '그림으로 둔 요소 K개' = Σ`dropped` 값, '빠진 꾸밈 J곳' = Σ`effects_lost`, '숨긴 슬라이드 n장' = `hidden` 수,
   '16:9 아님(여백을 둠)' = `letterboxed`, '없는 글꼴' = `fonts_missing`. 장 번호가 필요하면 `index`.
@@ -94,7 +116,7 @@ ppt_tool layout <pptx|ppt 경로> <작업 폴더>
 | `covered` | 받을 수 있지만 **위에 배경으로 남는 도형이 겹쳐** 같이 배경에 둔 그림·도형(겹침 순서가 뒤집히지 않게). 글 상자는 해당 없음 |
 | `other` | 그 밖(AlternateContent·잉크 등) 또는 읽다 난 예외 |
 
-버리는 것(세지 않음): 빈 자리표시자·글 없는 투명 도형, 애니메이션(마지막 상태 = 모두 보임), 노트·전환, 슬라이드 밖에 완전히 나간 요소는 그대로 내보내 Dart `clampRect` 가 안으로 당긴다(PowerPoint 에서도 안 보이니 대개 없다).
+버리는 것(세지 않음): 빈 자리표시자·글 없는 투명 도형, 애니메이션 효과 모양(클릭 순서만 `appear` 로 살림), 노트·전환, 슬라이드 밖에 완전히 나간 요소는 그대로 내보내 Dart `clampRect` 가 안으로 당긴다(PowerPoint 에서도 안 보이니 대개 없다).
 
 ## 요소 (page_element.dart 와 같은 키)
 
@@ -137,6 +159,8 @@ ppt_tool layout <pptx|ppt 경로> <작업 폴더>
 ```jsonc
 {"type":"image","id":"…","rect":[…],"path":"/작업폴더/s003_2.png"}
 ```
+
+모든 요소에 `"appear": k` 가 붙을 수 있다(위 '애니메이션').
 
 - png·jpg(jpeg)만. `srcRect` 자르기·좌우/상하 뒤집기는 Pillow 로 미리 적용한 파일. 자르기·뒤집기가 없으면 원본 바이트 그대로.
 - 파일 이름 `s<장 3자리>_<도형 번호>[_<그룹 안 번호>…].<png|jpg>`. 확장자 그대로 `page_images/` 로 복사하면 된다(`PageComposer` 가 읽는 형식).

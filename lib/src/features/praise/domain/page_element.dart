@@ -31,10 +31,16 @@ enum PageShapeKind {
 /// 저장은 `SlideBackground.pageElements` → 배경 JSON `page_elements`.
 @immutable
 sealed class PageElement {
-  const PageElement({required this.id, required this.rect});
+  const PageElement({required this.id, required this.rect, this.appear = 0});
 
   final String id;
   final Rect rect;
+
+  /// 몇 번째 클릭에 나타나는지(0 = 처음부터, 1..[maxAppear]). 편집 페이지는 단계마다 PNG 한 장을 굽는다
+  /// ([pageSteps]). JSON `appear`, 0 이면 키를 안 쓴다(옛 페이지 JSON·굽기 캐시 키 그대로).
+  final int appear;
+
+  static const int maxAppear = 30;
 
   /// 가장 작은 너비·높이(슬라이드 비율).
   static const double minSize = 0.02;
@@ -90,11 +96,13 @@ sealed class PageElement {
     ).join();
   }
 
-  PageElement copyWith({String? id, Rect? rect});
+  PageElement copyWith({String? id, Rect? rect, int? appear});
 
   Map<String, dynamic> toJson();
 
   List<double> get _rectJson => [rect.left, rect.top, rect.width, rect.height];
+
+  Map<String, dynamic> get _appearJson => {if (appear > 0) 'appear': appear};
 
   /// 모양이 틀린 요소(종류·자리·경로가 없거나 숫자가 아님)는 null. 틀린 숫자는 범위 안으로, 모르는 `shape` 는 사각형.
   /// 이 판이 모르는 종류(`type` 이 글자)는 [PageUnknownElement] 로 그대로 보존한다.
@@ -124,10 +132,13 @@ sealed class PageElement {
         : null;
     final rect = _parseRect(raw['rect'], flat: kind?.isLine ?? false);
     if (rect == null) return null;
+    final appear = raw['appear'] is num && (raw['appear'] as num).isFinite
+        ? (raw['appear'] as num).toInt().clamp(0, maxAppear)
+        : 0;
     if (type == 'image') {
       final path = raw['path'];
       if (path is! String || path.isEmpty) return null;
-      return PageImageElement(id: id, rect: rect, path: path);
+      return PageImageElement(id: id, rect: rect, path: path, appear: appear);
     }
     if (type != 'text' && kind == null) return null;
     double num01(Object? v, double fallback, double max) =>
@@ -137,6 +148,7 @@ sealed class PageElement {
     final text = PageTextElement(
       id: id,
       rect: rect,
+      appear: appear,
       text: raw['text'] is String ? raw['text'] as String : '',
       fontSize: size is num && size.isFinite && size > 0
           ? size.toDouble().clamp(
@@ -220,17 +232,23 @@ final class PageImageElement extends PageElement {
     required super.id,
     required super.rect,
     required this.path,
+    super.appear,
   });
 
   final String path;
 
   @override
-  PageImageElement copyWith({String? id, Rect? rect, String? path}) =>
-      PageImageElement(
-        id: id ?? this.id,
-        rect: rect ?? this.rect,
-        path: path ?? this.path,
-      );
+  PageImageElement copyWith({
+    String? id,
+    Rect? rect,
+    String? path,
+    int? appear,
+  }) => PageImageElement(
+    id: id ?? this.id,
+    rect: rect ?? this.rect,
+    path: path ?? this.path,
+    appear: appear ?? this.appear,
+  );
 
   @override
   Map<String, dynamic> toJson() => {
@@ -238,6 +256,7 @@ final class PageImageElement extends PageElement {
     'id': id,
     'rect': _rectJson,
     'path': path,
+    ..._appearJson,
   };
 
   @override
@@ -245,10 +264,11 @@ final class PageImageElement extends PageElement {
       other is PageImageElement &&
       other.id == id &&
       other.rect == rect &&
-      other.path == path;
+      other.path == path &&
+      other.appear == appear;
 
   @override
-  int get hashCode => Object.hash(id, rect, path);
+  int get hashCode => Object.hash(id, rect, path, appear);
 }
 
 /// 글 상자. 글은 상자 너비에서 줄을 바꾸고 [valign] 대로 놓인다(넘치면 위아래로 삐져나온다).
@@ -265,6 +285,7 @@ base class PageTextElement extends PageElement {
     this.fontFamily = defaultFontFamily,
     this.rich,
     this.valign = PageVAlign.top,
+    super.appear,
   });
 
   /// 글 전체(서식 뺀 평문). 비었는지·넘침·페이지 이름은 이걸로 본다.
@@ -306,9 +327,11 @@ base class PageTextElement extends PageElement {
     String? fontFamily,
     Object? rich = _keep,
     PageVAlign? valign,
+    int? appear,
   }) => PageTextElement(
     id: id ?? this.id,
     rect: rect ?? this.rect,
+    appear: appear ?? this.appear,
     text: text ?? this.text,
     fontSize: fontSize ?? this.fontSize,
     color: color ?? this.color,
@@ -343,6 +366,7 @@ base class PageTextElement extends PageElement {
     ..._textJson,
     // top 은 안 쓴다 — 옛 페이지 JSON(굽기 캐시 키)이 그대로다.
     if (valign != PageVAlign.top) 'valign': valign.name,
+    ..._appearJson,
   };
 
   @override
@@ -358,7 +382,8 @@ base class PageTextElement extends PageElement {
       other.align == align &&
       other.fontFamily == fontFamily &&
       other.rich == rich &&
-      other.valign == valign;
+      other.valign == valign &&
+      other.appear == appear;
 
   @override
   int get hashCode => Object.hash(
@@ -372,6 +397,7 @@ base class PageTextElement extends PageElement {
     fontFamily,
     rich,
     valign,
+    appear,
   );
 }
 
@@ -398,6 +424,7 @@ final class PageShapeElement extends PageTextElement {
     super.fontFamily,
     super.rich,
     super.valign = PageVAlign.middle,
+    super.appear,
   });
 
   /// [t] 의 id·자리·글 칸 그대로.
@@ -422,6 +449,7 @@ final class PageShapeElement extends PageTextElement {
          fontFamily: t.fontFamily,
          rich: t.rich,
          valign: t.valign,
+         appear: t.appear,
        );
 
   final PageShapeKind kind;
@@ -488,6 +516,7 @@ final class PageShapeElement extends PageTextElement {
     String? fontFamily,
     Object? rich = PageTextElement._keep,
     PageVAlign? valign,
+    int? appear,
     PageShapeKind? kind,
     Object? fill = PageTextElement._keep,
     double? fillAlpha,
@@ -508,6 +537,7 @@ final class PageShapeElement extends PageTextElement {
       fontFamily: fontFamily,
       rich: rich,
       valign: valign,
+      appear: appear,
     ),
     kind: kind ?? this.kind,
     fill: identical(fill, PageTextElement._keep) ? this.fill : fill as Color?,
@@ -536,6 +566,7 @@ final class PageShapeElement extends PageTextElement {
     'flip_v': flipV,
     ..._textJson,
     'valign': valign.name,
+    ..._appearJson,
   };
 
   @override
@@ -581,11 +612,12 @@ final class PageUnknownElement extends PageElement {
 
   /// 고를 수 없으니 자리·id 를 바꿀 일이 없다 — 복제 같은 경로가 불러도 날 JSON 은 그대로 둔다.
   @override
-  PageUnknownElement copyWith({String? id, Rect? rect}) => PageUnknownElement(
-    id: id ?? this.id,
-    rect: rect ?? this.rect,
-    raw: {...raw, 'id': id ?? this.id},
-  );
+  PageUnknownElement copyWith({String? id, Rect? rect, int? appear}) =>
+      PageUnknownElement(
+        id: id ?? this.id,
+        rect: rect ?? this.rect,
+        raw: {...raw, 'id': id ?? this.id},
+      );
 
   @override
   Map<String, dynamic> toJson() => raw;
@@ -598,4 +630,33 @@ final class PageUnknownElement extends PageElement {
 
   @override
   int get hashCode => Object.hash(id, jsonEncode(raw));
+}
+
+/// 편집 페이지의 클릭 단계마다 보이는 요소 목록(앞 = 처음 화면, 마지막 = 전부).
+/// 쓰인 `appear` 값마다 한 장이고 0단계는 늘 있다 — {0,1,1,3} 이면 3장(0 / 0·1·1 / 전부).
+/// 애니메이션이 없으면 [elements] 그대로 한 장.
+List<List<PageElement>> pageSteps(List<PageElement> elements) => [
+  for (final k in _stepLevels(elements)) elementsAtStep(elements, k),
+];
+
+/// 구울 PNG 장 수([pageSteps] 길이).
+int pageStepCount(List<PageElement> elements) => _stepLevels(elements).length;
+
+/// [k] 번째 클릭까지 나타난 요소(appear ≤ k). 순서는 그대로.
+List<PageElement> elementsAtStep(List<PageElement> elements, int k) => [
+  for (final e in elements)
+    if (e.appear <= k) e,
+];
+
+List<int> _stepLevels(List<PageElement> elements) =>
+    {0, for (final e in elements) e.appear}.toList()..sort();
+
+/// 쓰인 단계만 1..n 으로 다시 매긴다(빈 단계 = 같은 그림 두 장이 생기지 않게). {0,1,1,3} → {0,1,1,2}.
+List<PageElement> normalizeAppear(List<PageElement> elements) {
+  final levels = _stepLevels(elements);
+  final rank = {for (var i = 0; i < levels.length; i++) levels[i]: i};
+  return [
+    for (final e in elements)
+      rank[e.appear] == e.appear ? e : e.copyWith(appear: rank[e.appear]),
+  ];
 }
