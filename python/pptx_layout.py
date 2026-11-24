@@ -45,7 +45,7 @@ _PRESET_COLORS = {
 # 앱에 늘 있는 글꼴(pubspec 3종 + assets/fonts/free). 글꼴을 더하면 여기도.
 APP_FONTS = {
     "Pretendard", "NanumGothic", "NanumMyeongjo", "Black Han Sans", "Do Hyeon", "Gothic A1",
-    "IBM Plex Sans KR", "Jua", "Nanum Pen Script",
+    "IBM Plex Sans KR", "Jua", "Nanum Pen Script", "Nanum Pen",
 }
 
 
@@ -871,13 +871,13 @@ def _font_dirs():
 
 
 def _font_names(data):
-    """TTF/OTF/TTC 바이트 → family 이름들(name ID 1·4·16, 모든 언어)."""
+    """TTF/OTF/TTC 바이트 → {family 이름(name ID 1·4·16, 모든 언어): 글꼴 번호(TTC 안 몇 번째, 아니면 0)}."""
     offsets = [0]
     if data[:4] == b"ttcf":
         count = struct.unpack(">I", data[8:12])[0]
         offsets = list(struct.unpack(f">{count}I", data[12:12 + 4 * count]))
-    names = set()
-    for base in offsets:
+    names = {}
+    for face, base in enumerate(offsets):
         num = struct.unpack(">H", data[base + 4:base + 6])[0]
         for i in range(num):
             rec = base + 12 + 16 * i
@@ -891,26 +891,29 @@ def _font_names(data):
                     continue
                 raw = data[table + strings + off:table + strings + off + length]
                 if platform in (0, 3):
-                    names.add(raw.decode("utf-16-be", "ignore"))
+                    names.setdefault(raw.decode("utf-16-be", "ignore").strip(), face)
                 elif platform == 1 and enc == 0:
-                    names.add(raw.decode("mac_roman", "ignore"))
+                    names.setdefault(raw.decode("mac_roman", "ignore").strip(), face)
+    names.pop("", None)
     return names
 
 
 def installed_fonts():
-    """이 PC 에 깔린 글꼴 이름(한글·영문 이름 모두)."""
-    names = set(APP_FONTS)
+    """이 PC 에 깔린 글꼴 {이름(한글·영문 모두): (파일 경로, TTC 안 번호)}. 처음 찾은 파일이 이긴다."""
+    found = {}
     for folder in _font_dirs():
         if not folder.is_dir():
             continue
         for root, _, files in os.walk(folder):
             for file in files:
                 if file.lower().endswith((".ttf", ".otf", ".ttc")):
+                    path = Path(root, file)
                     try:
-                        names |= _font_names(Path(root, file).read_bytes())
+                        for name, face in _font_names(path.read_bytes()).items():
+                            found.setdefault(name, (str(path), face))
                     except (OSError, struct.error, ValueError):
                         pass
-    return {n.strip() for n in names if n.strip()}
+    return found
 
 
 def _used_fonts(slides):
@@ -924,6 +927,11 @@ def _used_fonts(slides):
                 if font:
                     used.add(font)
     return used
+
+
+def _progress(stage, **counts):
+    """진행 상황 한 줄(stderr). stdout 은 결과 JSON 자리라 건드리지 않는다. 형식은 shapes-contract.md."""
+    print(json.dumps({"progress": stage, **counts}, ensure_ascii=True), file=sys.stderr, flush=True)
 
 
 # ── 두 번 굽기 ────────────────────────────────────────────────────────
@@ -977,7 +985,9 @@ def layout_presentation(pptx_path, out_dir, to_pdf=None, source_name=None):
     width, height = prs.slide_width, prs.slide_height
     frame = _Frame(width, height)
     theme_cache, slides, removals = {}, [], []
+    total = len(prs.slides)
     for index, slide in enumerate(prs.slides, start=1):
+        _progress("read", n=index, total=total)
         if slide._element.get("show") in ("0", "false"):
             slides.append({
                 "index": index, "hidden": True, "title": _slide_title(slide), "background_png": None,
@@ -988,9 +998,12 @@ def layout_presentation(pptx_path, out_dir, to_pdf=None, source_name=None):
         slides.append(info)
         removals += remove
     if to_pdf is not None:
+        _progress("render")
         _bake_backgrounds(prs, slides, removals, out_dir, to_pdf)
     used = _used_fonts(slides)
-    installed = installed_fonts() if used else set()
+    if used - APP_FONTS:
+        _progress("fonts")
+    installed = installed_fonts() if used - APP_FONTS else {}
     return {
         "source_name": source_name or Path(pptx_path).name,
         "slide_size": {"width": width, "height": height},
@@ -998,5 +1011,10 @@ def layout_presentation(pptx_path, out_dir, to_pdf=None, source_name=None):
         "letterboxed": abs(width / height - CANVAS_ASPECT) > 0.01,
         "slides": slides,
         "fonts": sorted(used),
-        "fonts_missing": sorted(used - installed),
+        "fonts_missing": sorted(used - APP_FONTS - installed.keys()),
+        # 앱 목록엔 없지만 이 PC 에 깔린 글꼴 — 앱이 이 파일을 읽어 그 이름으로 올린다(복사하지 않는다).
+        "fonts_installed": [
+            {"family": f, "path": installed[f][0], "index": installed[f][1]}
+            for f in sorted(used - APP_FONTS) if f in installed
+        ],
     }

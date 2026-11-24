@@ -12,9 +12,25 @@ ppt_tool layout <pptx|ppt 경로> <작업 폴더>
 - 이름은 plan·QA(M9)·design 수용 기준을 따라 `layout`(백엔드 문서 초안의 `shapes` 는 버림).
 - `<작업 폴더>` 는 앱이 만든 빈 임시 폴더를 준다. 꺼낸 그림·배경 PNG 가 여기 생긴다 — 앱이 `page_images/` 로 **복사한 뒤** 폴더를 지운다(경로를 그대로 저장하지 말 것).
 - `.ppt` 는 LibreOffice 로 pptx 로 바꾼 뒤 같은 길(LibreOffice 없으면 아래 `libreoffice_missing`).
-- stdout = JSON 한 개(ASCII 이스케이프), 경고는 stderr 에 `{"warning": …}` 줄. 걸린 시간: 견본 15~25장 6~10초(PowerPoint 첫 실행은 20초대).
+- stdout = JSON 한 개(ASCII 이스케이프), 경고는 stderr 에 `{"warning": …}` 줄, 진행 상황은 stderr 에 `{"progress": …}` 줄(아래). 걸린 시간: 견본 15~25장 6~10초(PowerPoint 첫 실행은 20초대).
 - 렌더 캐시(`ppt_slides/`)를 쓰지 않는다 — 지운 사본은 가져올 때마다 달라서 쌓이기만 한다. 같은 파일을 다시 가져오면 다시 굽는다.
-- 앱의 `PythonBridge` 는 기존 `render` 처럼 `Process.run` + JSON 디코드. 취소는 프로세스를 죽이고 작업 폴더를 지우면 된다(Python 은 자기 임시 폴더를 `finally` 로 지우지만 강제 종료면 OS 임시 폴더에 남을 수 있다).
+- 앱의 `PythonBridge.layout` 은 `Process.start` 로 띄워 stdout 을 모으고 stderr 를 줄 단위로 읽는다.
+- **취소**: macOS 는 앱이 SIGTERM → Python 이 `Cancelled` 로 빠져나오며 자식 프로세스 그룹(soffice → soffice.bin, osascript)을 죽이고
+  (`_run_child` 가 자식을 새 세션으로 띄워 `killpg`), PowerPoint 변환 중이었으면 **우리가 연 사본만** 닫고(`_MAC_POWERPOINT_CLOSE_SCRIPT`),
+  임시 폴더를 `finally` 로 지운 뒤 종료 코드 130. 20초 안에 안 끝나면 앱이 SIGKILL. 앱은 끝날 때까지 기다린 뒤 작업 폴더를 지운다.
+  Windows 는 SIGTERM 을 못 받으므로 앱이 `taskkill /PID <pid> /T /F` 로 트리째 끊는다 — Python `finally` 가 안 돌아 OS 임시 폴더
+  (`praise_ppt_layout_*`)가 남을 수 있고, PowerPoint(COM 서버는 우리 자식이 아니다)는 숨은 사본을 연 채 남을 수 있다. **Windows 는 실제 실행 미확인.**
+
+## 진행 줄 (stderr, 한 줄에 JSON 하나)
+
+| 줄 | 때 | 앱 진행 창 |
+|---|---|---|
+| `{"progress": "convert"}` | `.ppt` → pptx 바꾸기 전 | 'PPT 를 pptx 로 바꾸는 중…' |
+| `{"progress": "read", "n": 3, "total": 15}` | 슬라이드마다 읽기 전(n 은 1부터, 숨긴 장 포함) | '슬라이드 읽는 중… (3 / 15)' |
+| `{"progress": "render"}` | 배경 굽기(두 번 굽기) 전 | '배경 굽는 중…' |
+| `{"progress": "fonts"}` | 앱 목록 밖 글꼴이 있어 시스템 글꼴을 훑기 전 | '글꼴 확인 중…' |
+
+모르는 단계는 앱이 무시한다(문구 그대로). `progress` 도 `warning` 도 아닌 stderr 줄은 실패했을 때 오류 문구가 된다.
 
 ## 오류
 
@@ -33,7 +49,10 @@ ppt_tool layout <pptx|ppt 경로> <작업 폴더>
   "letterboxed": false,                     // 16:9 가 아님(±0.01) → 가운데에 놓고 여백(4:3 = 양옆 검정)
   "slides": [ /* 슬라이드마다 하나, 원본 순서, 숨긴 장 포함 */ ],
   "fonts": ["맑은 고딕", "배달의민족 도현"],   // 요소가 쓰는 글꼴 전부(빈 글 상자 제외)
-  "fonts_missing": ["맑은 고딕"]             // 그중 이 PC 에 없는 것
+  "fonts_missing": ["맑은 고딕"],            // 그중 앱 목록에도 이 PC 에도 없는 것
+  "fonts_installed": [                       // 앱 목록엔 없지만 이 PC 에 깔린 것 — 앱이 이 파일을 읽어 그 이름으로 올린다(복사 안 함)
+    {"family": "배달의민족 도현", "path": "/System/Library/AssetsV2/…/BMDoHyeon-Regular.otf", "index": 0}  // index = TTC 안 몇 번째
+  ]
 }
 ```
 
@@ -138,7 +157,7 @@ ppt_tool layout <pptx|ppt 경로> <작업 폴더>
 - 글꼴: 한글·한자·가나가 든 run 은 `ea`, 아니면 `latin`. `+mj-lt`·`+mn-ea` 는 테마에서, 테마 `ea` 가 비면 `<a:font script="Hang">`.
 - `fonts_missing`: Python 이 시스템 글꼴 폴더(macOS `/System/Library/Fonts`·`/Library/Fonts`·`~/Library/Fonts`·AssetsV2, Windows `%WINDIR%\Fonts`·사용자 글꼴)의
   name 테이블(ID 1·4·16, **모든 언어 이름**)과 앱 글꼴 목록(`pptx_layout.APP_FONTS` — pubspec 3종 + `assets/fonts/free` 6종)에 없는 이름.
-  Flutter 가 실제로 그 이름으로 찾는지는 **미확인** — 프론트가 FontLibrary 기준으로 한 번 더 걸러도 된다.
+  Flutter 는 시스템 글꼴을 이름으로 찾아 주지 않으므로 앱이 `fonts_installed` 파일을 `loadFontFromList` 로 올린다(`FontLibrary.loadSystemFont`, 다시 켠 뒤엔 `ensureFamilies` 가 이름으로 다시 찾는다).
 
 ## 받는 쪽(Dart)에서 주의할 것
 

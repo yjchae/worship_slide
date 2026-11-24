@@ -360,7 +360,11 @@ void main() {
     });
 
     testWidgets('화면을 PNG 로 남긴다(디자인 확인용)', (tester) async {
-      await loadFonts();
+      // 글꼴 바뀜 알림이 화면을 띄운 뒤에 오면 끝나지 않은 프레임 콜백이 남는다 → 진짜 시간으로 올리고 알림까지 흘려 보낸다.
+      await tester.runAsync(() async {
+        await loadFonts();
+        await Future<void>.delayed(Duration.zero);
+      });
       await openDialog(tester);
       await tester.tap(find.byType(TextField).at(3));
       await tester.pumpAndSettle();
@@ -503,7 +507,11 @@ void main() {
       });
 
       testWidgets('코드 모드 화면을 PNG 로 남긴다(디자인 확인용)', (tester) async {
-        await loadFonts();
+        // 글꼴 바뀜 알림이 화면을 띄운 뒤에 오면 끝나지 않은 프레임 콜백이 남는다 → 진짜 시간으로 올리고 알림까지 흘려 보낸다.
+        await tester.runAsync(() async {
+          await loadFonts();
+          await Future<void>.delayed(Duration.zero);
+        });
         await openDialog(
           tester,
           edit: song.copyWith(

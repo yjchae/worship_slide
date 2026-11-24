@@ -144,6 +144,51 @@ void main() {
     expect(pptImportGroupName(long, const []), isNot(contains('/')));
   });
 
+  test('진행 줄 → 진행 창 문구, 모르는 단계는 null', () {
+    expect(
+      pptLayoutProgressLabel({'progress': 'read', 'n': 3, 'total': 15}),
+      '슬라이드 읽는 중… (3 / 15)',
+    );
+    expect(pptLayoutProgressLabel({'progress': 'render'}), '배경 굽는 중…');
+    expect(pptLayoutProgressLabel({'progress': 'later'}), isNull);
+  });
+
+  test('빠진 것 세기: 못 옮긴 그림·배경(숨긴 장 제외) → 알림 문구', () {
+    final layout = PptLayout.fromJson(contract());
+    // 아무것도 못 옮김: 그림 2개, 배경 2장(1·3번, 2번은 숨김)
+    expect(pptLayoutLost(layout, const {}), (images: 2, backgrounds: 2));
+    final all = {for (final f in pptLayoutFiles(layout)) f: '/copy$f'};
+    expect(pptLayoutLost(layout, all), (images: 0, backgrounds: 0));
+    final oneImage = {...all}..remove('/work/s001_3.jpg');
+    expect(pptLayoutLost(layout, oneImage), (images: 1, backgrounds: 0));
+
+    expect(
+      pptImportProblems(pagesFailed: 0, imagesLost: 0, backgroundsLost: 0),
+      isNull,
+    );
+    expect(
+      pptImportProblems(pagesFailed: 2, imagesLost: 3, backgroundsLost: 1),
+      '2장은 만들지 못했습니다 · 그림 3개를 옮기지 못했습니다 · 1장은 배경 그림 없이 담았습니다. '
+      '자세한 내용은 로그 보기에서 확인해 주세요.',
+    );
+  });
+
+  test('fonts_installed: 이름·경로·TTC 번호, 모양이 틀린 줄은 버린다', () {
+    final layout = PptLayout.fromJson({
+      ...contract(),
+      'fonts_installed': [
+        {'family': '애플 고딕', 'path': '/f/a.ttc', 'index': 2},
+        {'family': 'B', 'path': '/f/b.ttf'},
+        {'family': 'C'},
+      ],
+    });
+    expect(layout.fontsInstalled, [
+      (family: '애플 고딕', path: '/f/a.ttc', index: 2),
+      (family: 'B', path: '/f/b.ttf', index: 0),
+    ]);
+    expect(PptLayout.fromJson(contract()).fontsInstalled, isEmpty);
+  });
+
   group('결과 창', () {
     Future<ValueNotifier<Object?>> open(
       WidgetTester tester,

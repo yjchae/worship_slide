@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -137,13 +138,79 @@ class PythonBridge {
 
   /// PPT/PPTX 슬라이드를 편집 페이지 요소 + 배경 PNG 로 푼다(`ppt_tool layout`).
   /// 그림·배경은 [workDir] 에 생기니 받은 쪽이 `page_images/` 로 복사한 뒤 폴더를 지운다.
-  Future<PptLayout> layout(String filePath, String workDir) async {
-    final result = await _runTool(['layout', filePath, workDir]);
-    final json = jsonDecode(result.stdout as String) as Map<String, dynamic>;
+  ///
+  /// stderr 의 진행 줄(`{"progress": …}`)은 [onProgress] 로 넘긴다. [cancel] 이 끝나면 프로세스를 끊고
+  /// (macOS: SIGTERM → Python 이 soffice·osascript 를 죽이고 임시 폴더를 지운다, Windows: `taskkill /T` 로 트리째)
+  /// 끝날 때까지 기다린 뒤 실패로 던진다 — 그 뒤에 [workDir] 을 지우면 남는 게 없다.
+  Future<PptLayout> layout(
+    String filePath,
+    String workDir, {
+    void Function(Map<String, dynamic> progress)? onProgress,
+    Future<void>? cancel,
+  }) async {
+    final binary = _compiledBinaryPath;
+    if (binary == null) throw Exception('ppt_tool 실행 파일을 찾을 수 없습니다.');
+    final process = await Process.start(binary, ['layout', filePath, workDir]);
+    final errors = <String>[];
+    final stdout = process.stdout.transform(utf8.decoder).join();
+    final stderr = process.stderr
+        .transform(utf8.decoder)
+        .transform(const LineSplitter())
+        .forEach((line) {
+          final progress = _progressLine(line);
+          if (progress != null) {
+            onProgress?.call(progress);
+          } else if (line.trim().isNotEmpty) {
+            errors.add(line);
+          }
+        });
+    var cancelled = false;
+    unawaited(
+      cancel?.then((_) {
+        cancelled = true;
+        return _killTree(process);
+      }),
+    );
+    final code = await process.exitCode;
+    final out = await stdout;
+    await stderr;
+    if (cancelled) throw Exception('취소했습니다.');
+    if (code != 0) {
+      final msg = errors.isEmpty ? 'ppt_tool 실행 실패.' : errors.join('\n');
+      await AppLogger.instance.error('ppt_tool 오류 (cmd: layout)', msg);
+      throw Exception(msg);
+    }
+    final json = jsonDecode(out) as Map<String, dynamic>;
     if (json['error'] == 'libreoffice_missing') {
       throw const LibreOfficeMissingException();
     }
     return PptLayout.fromJson(json);
+  }
+
+  static Map<String, dynamic>? _progressLine(String line) {
+    if (!line.startsWith('{"progress"')) return null;
+    try {
+      return jsonDecode(line) as Map<String, dynamic>;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // Windows 는 TerminateProcess 가 자식(soffice·powershell)을 남겨서 taskkill /T 로 트리째 끊는다(실제 실행은 미확인).
+  // macOS 는 SIGTERM 을 받은 Python 이 자식을 정리하고 나간다 — 20초 안에 안 나가면 SIGKILL.
+  static Future<void> _killTree(Process process) async {
+    if (Platform.isWindows) {
+      await Process.run('taskkill', ['/PID', '${process.pid}', '/T', '/F']);
+      return;
+    }
+    process.kill();
+    await process.exitCode.timeout(
+      const Duration(seconds: 20),
+      onTimeout: () {
+        process.kill(ProcessSignal.sigkill);
+        return -1;
+      },
+    );
   }
 
   /// 렌더 폴더 [dir] 이 애니메이션을 단계별로 펼쳐 구운 것인지(`meta.json`). 못 읽으면 false.

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:ui' show loadFontFromList;
 
 import 'package:flutter/services.dart';
@@ -96,6 +97,69 @@ class FontLibrary {
     ]..sort((a, b) => a.displayName.compareTo(b.displayName));
   }
 
+  // ── 이 PC 에 깔린 글꼴(PPT 가져오기) ─────────────────────────────────
+  //
+  // 앱 목록에 없는 PPT 글꼴이 이 PC 에 깔려 있으면 그 시스템 파일을 **읽어서** 그 이름으로 Flutter 에 올린다.
+  // 복사·재배포하지 않는다(라이선스). 실행 동안만이라 다시 켜면 [ensureFamilies] 가 이름으로 다시 찾는다.
+
+  static const bundledFamilies = {'Pretendard', 'NanumGothic', 'NanumMyeongjo'};
+
+  /// 이번 실행에서 시스템 파일로 올린 글꼴 이름.
+  static final Set<String> systemFamilies = {};
+  static final Set<String> _missing = {};
+  static Future<Map<String, ({String path, int index})>>? _systemIndex;
+
+  /// 앱 목록(내장·무료 폰트)에 있는 이름인지.
+  static bool isAppFont(String family) =>
+      bundledFamilies.contains(family) || fonts.any((f) => f.family == family);
+
+  /// 시스템 글꼴 파일 [path](TTC 면 [index] 번째)를 [family] 이름으로 올린다. 실패하면 false.
+  static Future<bool> loadSystemFont(
+    String family,
+    String path, {
+    int index = 0,
+  }) async {
+    if (isAppFont(family) || systemFamilies.contains(family)) return true;
+    try {
+      final bytes = singleFontBytes(await File(path).readAsBytes(), index);
+      if (bytes == null) return false;
+      await loadFontFromList(bytes, fontFamily: family);
+      // 글꼴 바뀜 알림('fontsChange')은 한 박자 뒤에 온다. 그 전에 화면 밖 굽기(renderWidgetToImage)가
+      // 글자 상자를 붙였다 떼면 '알림 대기 중 떼어짐' assert 에 걸려서 알림이 지나간 뒤에 돌아간다.
+      await Future<void>.delayed(Duration.zero);
+      systemFamilies.add(family);
+      _missing.remove(family);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// [families] 중 앱 목록에도 아직 안 올린 것도 아닌 이름을 시스템 글꼴 폴더에서 찾아 올린다.
+  /// 폴더 목록은 처음 한 번만 훑는다(Isolate). 못 찾은 이름은 이번 실행 동안 다시 찾지 않는다.
+  static Future<void> ensureFamilies(Iterable<String> families) async {
+    final wanted = {
+      for (final f in families)
+        if (f.isNotEmpty &&
+            !isAppFont(f) &&
+            !systemFamilies.contains(f) &&
+            !_missing.contains(f))
+          f,
+    };
+    if (wanted.isEmpty) return;
+    final dirs = systemFontDirs();
+    final index = await (_systemIndex ??= Isolate.run(
+      () => indexFontFiles(dirs),
+    ));
+    for (final family in wanted) {
+      final hit = index[family];
+      if (hit == null ||
+          !await loadSystemFont(family, hit.path, index: hit.index)) {
+        _missing.add(family);
+      }
+    }
+  }
+
   static bool _isAllowed(String path) => _extensions.contains(
     p.extension(path).toLowerCase().replaceFirst('.', ''),
   );
@@ -142,6 +206,155 @@ class FontLibrary {
     if (family == null || family.isEmpty) return null;
     final weight = os2Off == null ? 400 : d.getUint16(os2Off + 4);
     return (family: family, displayName: korean ?? family, weight: weight);
+  } catch (_) {
+    return null;
+  }
+}
+
+/// 시스템 글꼴 폴더(pptx_layout.py `_font_dirs` 와 같은 곳). macOS 는 내려받는 글꼴(배달의민족 도현 등)이 AssetsV2 에 있다.
+List<String> systemFontDirs() {
+  final env = Platform.environment;
+  if (Platform.isWindows) {
+    return [
+      p.join(env['WINDIR'] ?? r'C:\Windows', 'Fonts'),
+      if (env['LOCALAPPDATA'] case final local?)
+        p.join(local, 'Microsoft', 'Windows', 'Fonts'),
+    ];
+  }
+  if (Platform.isMacOS) {
+    return [
+      '/System/Library/Fonts',
+      '/Library/Fonts',
+      if (env['HOME'] case final home?) p.join(home, 'Library', 'Fonts'),
+      ...() {
+        try {
+          return [
+            for (final d in Directory('/System/Library/AssetsV2').listSync())
+              if (p.basename(d.path).startsWith('com_apple_MobileAsset_Font'))
+                d.path,
+          ];
+        } on FileSystemException {
+          return const <String>[];
+        }
+      }(),
+    ];
+  }
+  return const [];
+}
+
+/// [dirs] 아래 ttf·otf·ttc 를 훑어 {이름(name ID 1·4·16, 모든 언어): (파일, TTC 안 번호)}. 처음 찾은 파일이 이긴다.
+/// 파일 전체가 아니라 머리·name 테이블만 읽는다.
+Map<String, ({String path, int index})> indexFontFiles(List<String> dirs) {
+  final found = <String, ({String path, int index})>{};
+  for (final dir in dirs) {
+    final d = Directory(dir);
+    if (!d.existsSync()) continue;
+    for (final entity in d.listSync(recursive: true, followLinks: false)) {
+      if (entity is! File) continue;
+      final ext = p.extension(entity.path).toLowerCase();
+      if (ext != '.ttf' && ext != '.otf' && ext != '.ttc') continue;
+      RandomAccessFile? raf;
+      try {
+        raf = entity.openSync();
+        final file = raf;
+        Uint8List read(int offset, int length) {
+          file.setPositionSync(offset);
+          return file.readSync(length);
+        }
+
+        fontFaceNames(read).forEach((name, face) {
+          found.putIfAbsent(name, () => (path: entity.path, index: face));
+        });
+      } catch (_) {
+        // 깨진 파일·권한 없음은 건너뛴다.
+      } finally {
+        raf?.closeSync();
+      }
+    }
+  }
+  return found;
+}
+
+/// TTF/OTF/TTC 의 이름들 → {이름: TTC 안 번호(아니면 0)}. name ID 1·4·16 을 **모든 언어**로 읽는다
+/// (PPT 는 '맑은 고딕'처럼 한글 이름으로 적기도 한다). [read] = (오프셋, 길이) → 바이트.
+Map<String, int> fontFaceNames(
+  Uint8List Function(int offset, int length) read,
+) {
+  final head = ByteData.sublistView(read(0, 12));
+  var offsets = [0];
+  if (head.getUint32(0) == 0x74746366) {
+    // 'ttcf'
+    final count = head.getUint32(8);
+    final table = ByteData.sublistView(read(12, 4 * count));
+    offsets = [for (var i = 0; i < count; i++) table.getUint32(4 * i)];
+  }
+  final names = <String, int>{};
+  for (var face = 0; face < offsets.length; face++) {
+    final base = offsets[face];
+    final numTables = ByteData.sublistView(read(base + 4, 2)).getUint16(0);
+    final dir = ByteData.sublistView(read(base + 12, 16 * numTables));
+    for (var i = 0; i < numTables; i++) {
+      if (dir.getUint32(16 * i) != 0x6E616D65) continue; // 'name'
+      final bytes = read(dir.getUint32(16 * i + 8), dir.getUint32(16 * i + 12));
+      final d = ByteData.sublistView(bytes);
+      final count = d.getUint16(2);
+      final strings = d.getUint16(4);
+      for (var j = 0; j < count; j++) {
+        final r = 6 + 12 * j;
+        final platform = d.getUint16(r);
+        final id = d.getUint16(r + 6);
+        if (id != 1 && id != 4 && id != 16) continue;
+        final start = strings + d.getUint16(r + 10);
+        final end = start + d.getUint16(r + 8);
+        if (end > bytes.length) continue;
+        final raw = bytes.sublist(start, end);
+        final String name;
+        if (platform == 0 || platform == 3) {
+          name = String.fromCharCodes([
+            for (var k = 0; k + 1 < raw.length; k += 2)
+              raw[k] << 8 | raw[k + 1],
+          ]);
+        } else if (platform == 1 && d.getUint16(r + 2) == 0) {
+          name = latin1.decode(raw);
+        } else {
+          continue;
+        }
+        final trimmed = name.trim();
+        if (trimmed.isNotEmpty) names.putIfAbsent(trimmed, () => face);
+      }
+    }
+  }
+  return names;
+}
+
+/// TTC 면 [index] 번째 글꼴만 떼어 낸 TTF/OTF 바이트(메모리에서만), 아니면 그대로. 못 읽으면 null.
+/// `loadFontFromList` 는 글꼴 번호를 받지 않아 TTC 를 주면 어느 글꼴을 쓸지 보장이 없다(확인 못 함) — 그래서 직접 뗀다.
+Uint8List? singleFontBytes(Uint8List data, int index) {
+  try {
+    final d = ByteData.sublistView(data);
+    if (d.getUint32(0) != 0x74746366) return data;
+    if (index >= d.getUint32(8)) return null;
+    final base = d.getUint32(12 + 4 * index);
+    final numTables = d.getUint16(base + 4);
+    final headerSize = 12 + 16 * numTables;
+    var size = headerSize;
+    for (var i = 0; i < numTables; i++) {
+      size += (d.getUint32(base + 12 + 16 * i + 12) + 3) & ~3;
+    }
+    final out = Uint8List(size);
+    final o = ByteData.sublistView(out);
+    out.setRange(0, 12, data, base);
+    var offset = headerSize;
+    for (var i = 0; i < numTables; i++) {
+      final rec = base + 12 + 16 * i;
+      final from = d.getUint32(rec + 8);
+      final length = d.getUint32(rec + 12);
+      out.setRange(12 + 16 * i, 12 + 16 * i + 16, data, rec);
+      o.setUint32(12 + 16 * i + 8, offset);
+      out.setRange(offset, offset + length, data, from);
+      offset += (length + 3) & ~3;
+    }
+    return out;
   } catch (_) {
     return null;
   }

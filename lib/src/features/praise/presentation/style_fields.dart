@@ -301,7 +301,8 @@ class FontFamilyPicker extends StatelessWidget {
     required this.onChanged,
   });
 
-  /// null = 여러 글꼴이 섞임(빈칸). 목록에 없는 이름은 '(없는 글꼴)'을 붙여 그대로 보인다.
+  /// null = 여러 글꼴이 섞임(빈칸). 목록에 없는 이름은 '(없는 글꼴)'을 붙여 그대로 보인다
+  /// (PPT 가져오기로 이 PC 의 글꼴 파일을 읽어 올린 이름은 '(이 PC 글꼴)').
   final String? selected;
 
   /// null 이면 비활성.
@@ -323,7 +324,12 @@ class FontFamilyPicker extends StatelessWidget {
       : _fonts
             .firstWhere(
               (f) => f.$1 == selected,
-              orElse: () => (selected!, '$selected (없는 글꼴)'),
+              orElse: () => (
+                selected!,
+                FontLibrary.systemFamilies.contains(selected)
+                    ? '$selected (이 PC 글꼴)'
+                    : '$selected (없는 글꼴)',
+              ),
             )
             .$2;
 

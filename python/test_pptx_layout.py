@@ -270,6 +270,66 @@ def check_font_names():
         assert "Pretendard" in pptx_layout._font_names(font.read_bytes())
 
 
+def check_progress(sample, tmp):
+    """진행 줄: stderr 에 슬라이드마다 {"progress":"read","n","total"}, stdout 은 비어 있다(결과 JSON 자리)."""
+    import contextlib
+    err, out = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+        pptx_layout.layout_presentation(sample, tmp / "out_progress")
+    lines = [json.loads(line) for line in err.getvalue().splitlines() if line.startswith('{"progress"')]
+    reads = [line for line in lines if line["progress"] == "read"]
+    assert [(r["n"], r["total"]) for r in reads] == [(n, 5) for n in range(1, 6)], lines
+    assert out.getvalue() == ""
+
+
+_TREE_SCRIPT = """
+import signal, subprocess, sys
+sys.path.insert(0, sys.argv[1])
+import ppt_tool
+signal.signal(signal.SIGTERM, ppt_tool._cancel_on_sigterm)
+child = [sys.executable, "-c",
+         "import subprocess, sys, time; p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']);"
+         "print(p.pid, flush=True); time.sleep(60)"]
+try:
+    ppt_tool._run_child(child, timeout=30)
+except ppt_tool.Cancelled:
+    sys.exit(130)
+"""
+
+
+def check_sigterm_kills_tree(tmp):
+    """SIGTERM → Cancelled → 자식·손자(soffice → soffice.bin 흉내)까지 죽고 130 으로 나간다. POSIX 만."""
+    import signal
+    import subprocess
+    import time
+    if os.name != "posix":
+        return
+    script = tmp / "tree.py"
+    script.write_text(_TREE_SCRIPT, encoding="utf-8")
+    runner = subprocess.Popen([sys.executable, str(script), os.path.dirname(os.path.abspath(__file__))])
+    # 손자 pid 는 자식의 stdout 으로 나오는데 _run_child 가 가져가니 ps 로 찾는다.
+    grandchild = None
+    for _ in range(100):
+        time.sleep(0.1)
+        ps = subprocess.run(["ps", "-ax", "-o", "pid=,ppid=,command="], capture_output=True, text=True).stdout
+        rows = [line.split(None, 2) for line in ps.splitlines()]
+        kids = {int(r[0]) for r in rows if int(r[1]) == runner.pid}
+        grand = [int(r[0]) for r in rows if int(r[1]) in kids and "time.sleep(60)" in r[2]]
+        if grand:
+            grandchild = grand[0]
+            break
+    assert grandchild, "손자 프로세스가 안 떴다"
+    runner.send_signal(signal.SIGTERM)
+    assert runner.wait(timeout=10) == 130
+    for _ in range(50):
+        try:
+            os.kill(grandchild, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.1)
+    raise AssertionError("손자 프로세스가 남았다")
+
+
 def main():
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
@@ -285,6 +345,8 @@ def main():
         check_main(result, tmp)
         check_sizes(tmp, bake)
         check_font_names()
+        check_progress(sample, tmp)
+        check_sigterm_kills_tree(tmp)
         if bake:
             check_baked(result)
             via_command = ppt_tool.layout_presentation(sample, tmp / "out_cmd")

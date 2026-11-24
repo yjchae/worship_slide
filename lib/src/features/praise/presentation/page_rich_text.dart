@@ -475,3 +475,14 @@ PageTextElement applyBoxFormat(PageTextElement e, String key, Object? value) {
   ];
   return box.copyWith(rich: encodePageRich(lines));
 }
+
+/// 페이지 요소가 쓰는 글꼴 이름(상자 기본 글꼴 + 글자마다 지정한 글꼴). 시스템 글꼴을 올릴 때 쓴다.
+Set<String> pageFontFamilies(Iterable<PageElement> elements) => {
+  for (final e in elements.whereType<PageTextElement>())
+    if (e.text.isNotEmpty) ...[
+      e.fontFamily,
+      for (final line in pageRichLines(e))
+        for (final span in line.spans)
+          if (span.attrs['font'] case final String font) font,
+    ],
+};

@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -457,12 +458,59 @@ class LibreOfficeMissing(RuntimeError):
         super().__init__("LibreOffice 실행 파일을 찾지 못했습니다.")
 
 
+class Cancelled(BaseException):
+    """앱이 SIGTERM 으로 끊었다(`layout` 진행 창 '취소'). BaseException 이라 `except Exception` 에 안 걸리고
+    finally 로 임시 폴더를 지우며 나간다."""
+
+
+def _cancel_on_sigterm(*_):
+    raise Cancelled()
+
+
+def _run_child(command, input=None, timeout=None, check=False, **kwargs):
+    """subprocess.run(capture_output, text) 과 같되, 도중에 끊기면(Cancelled·시간 초과) 자식의 자식
+    (soffice → soffice.bin 등)까지 죽인다. POSIX 는 새 세션(프로세스 그룹)으로 띄워 그룹째, Windows 는 taskkill /T."""
+    if os.name == "posix":
+        kwargs["start_new_session"] = True
+    with subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        **kwargs,
+    ) as process:
+        try:
+            stdout, stderr = process.communicate(input, timeout=timeout)
+        except BaseException:
+            _kill_tree(process)
+            raise
+    if check and process.returncode:
+        raise subprocess.CalledProcessError(process.returncode, command, stdout, stderr)
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
+def _kill_tree(process):
+    try:
+        if os.name == "posix":
+            os.killpg(process.pid, signal.SIGKILL)
+        else:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                capture_output=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+    except OSError:
+        pass
+    process.kill()
+
+
 def convert_ppt_group_to_pptx(source_paths, output_dir):
     libreoffice = get_libreoffice_executable()
     if libreoffice is None:
         raise LibreOfficeMissing()
 
-    subprocess.run(
+    _run_child(
         [
             libreoffice,
             "--headless",
@@ -473,8 +521,6 @@ def convert_ppt_group_to_pptx(source_paths, output_dir):
             *[str(source_path) for source_path in source_paths],
         ],
         check=True,
-        capture_output=True,
-        text=True,
         env=_libreoffice_env(),
     )
 
@@ -1243,6 +1289,22 @@ on run argv
 end run
 """ % (POWERPOINT_TIMEOUT_SECONDS - 10)
 
+# 취소했을 때 우리가 연 사본(이름 = argv 1)만 닫는다. PowerPoint 가 꺼져 있으면 띄우지 않는다.
+_MAC_POWERPOINT_CLOSE_SCRIPT = """
+on run argv
+	if application "Microsoft PowerPoint" is running then
+		with timeout of 10 seconds
+			tell application "Microsoft PowerPoint"
+				set docNames to name of every presentation
+				repeat with i from (count of docNames) to 1 by -1
+					if item i of docNames is item 1 of argv then close presentation i saving no
+				end repeat
+			end tell
+		end timeout
+	end if
+end run
+"""
+
 # ReadOnly=msoTrue(-1), Untitled=msoFalse(0), WithWindow=msoFalse(0). 32 = ppSaveAsPDF.
 _WINDOWS_POWERPOINT_SCRIPT = r"""
 param([string]$InPath, [string]$OutPath)
@@ -1321,14 +1383,27 @@ def _convert_with_powerpoint(source_path, output_dir):
     try:
         try:
             # 출력은 모두 받아 둔다 — stdout 은 앱이 읽는 결과 JSON 자리다.
-            result = subprocess.run(
+            result = _run_child(
                 command,
                 input=script_input,
-                capture_output=True,
-                text=True,
                 timeout=POWERPOINT_TIMEOUT_SECONDS,
                 creationflags=flags,
             )
+        except Cancelled:
+            # osascript 는 죽었어도 PowerPoint 는 우리 사본을 연 채 남는다 → 그 문서만 닫는다(기존 규칙).
+            # ponytail: Windows 는 앱이 taskkill /T 로 끊어 여기를 못 지난다 — 숨은 사본이 PowerPoint 를 끌 때까지 남을 수 있다.
+            if sys.platform == "darwin":
+                try:
+                    subprocess.run(
+                        ["osascript", "-", doc.name],
+                        input=_MAC_POWERPOINT_CLOSE_SCRIPT,
+                        capture_output=True,
+                        text=True,
+                        timeout=15,
+                    )
+                except (OSError, subprocess.SubprocessError):
+                    pass
+            raise
         except subprocess.TimeoutExpired:
             try:
                 marker = _powerpoint_timeout_marker()
@@ -1337,7 +1412,9 @@ def _convert_with_powerpoint(source_path, output_dir):
             except OSError:
                 pass
             raise RuntimeError(
-                "PowerPoint 응답 시간 초과 — PowerPoint 창에서 폴더 접근을 허용해 주세요 (하루 동안은 LibreOffice 로 굽습니다)"
+                "PowerPoint 응답 시간 초과 — PowerPoint '파일 액세스 부여' 창에서 '선택…' → ⌘⇧G 로 "
+                "~/Library/Application Support/worship_slides 로 가서 powerpoint 폴더를 골라 허용해 주세요 "
+                "(하루 동안은 LibreOffice 로 굽습니다)"
             )
         if result.returncode != 0 or not out.is_file() or out.stat().st_size == 0:
             raise RuntimeError(f"PowerPoint 변환 실패: {(result.stderr or result.stdout).strip()[:300]}")
@@ -1374,7 +1451,7 @@ def _convert_to_pdf(source_path, output_dir, on_powerpoint_failed=None):
     if libreoffice is None:
         raise LibreOfficeMissing()
 
-    subprocess.run(
+    _run_child(
         [
             libreoffice,
             "--headless",
@@ -1385,8 +1462,6 @@ def _convert_to_pdf(source_path, output_dir, on_powerpoint_failed=None):
             str(source_path),
         ],
         check=True,
-        capture_output=True,
-        text=True,
         env=_libreoffice_env_with_fonts(
             _embedded_font_dir(source_path, output_dir / "embedded") if is_pptx else None
         ),
@@ -1577,6 +1652,7 @@ def layout_presentation(file_path, out_dir):
     try:
         pptx_path = source_path
         if source_path.suffix.lower() != ".pptx":
+            pptx_layout._progress("convert")
             pptx_path = convert_ppt_group_to_pptx([source_path], temp_dir).get(source_path)
             if pptx_path is None:
                 raise RuntimeError(f"pptx 로 바꾸지 못했습니다: {source_name}")
@@ -3415,7 +3491,13 @@ def main():
     if command == "layout":
         if len(sys.argv) < 4:
             raise SystemExit("usage: ppt_tool.py layout <pptx> <out_dir>")
-        print(json.dumps(layout_presentation(payload, sys.argv[3]), ensure_ascii=True))
+        # 진행 창 '취소' = 앱이 SIGTERM → 자식(soffice·osascript)을 죽이고 임시 폴더를 지운 뒤 나간다.
+        signal.signal(signal.SIGTERM, _cancel_on_sigterm)
+        try:
+            result = layout_presentation(payload, sys.argv[3])
+        except Cancelled:
+            raise SystemExit(130)
+        print(json.dumps(result, ensure_ascii=True))
         return
 
     if command == "sheet":

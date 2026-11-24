@@ -28,6 +28,7 @@ import '../../../features/update/update_service.dart';
 import '../data/app_logger.dart';
 import '../data/b_screen_store.dart';
 import '../data/export_style_store.dart';
+import '../data/font_library.dart';
 import '../data/offering_background_composer.dart';
 import '../data/offering_design_store.dart';
 import '../data/page_template_store.dart';
@@ -71,6 +72,7 @@ import 'page_to_free.dart';
 import 'page_editor_dialog.dart';
 import 'page_format_editor.dart';
 import 'page_template_dialog.dart';
+import 'page_rich_text.dart' show pageFontFamilies;
 import 'ppt_layout_dialog.dart';
 import 'auto_advance_box.dart';
 import 'auto_advance_timer.dart';
@@ -1079,28 +1081,11 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         _moveUndoDoneText = '성경 역본 바꾸기를 되돌렸습니다.';
       });
       _sendCurrentSlide();
-      final shortcut = Platform.isMacOS ? '⌘Z' : 'Ctrl+Z';
       final missing = switched.missing.isEmpty
           ? ''
           : ' ${ref.chapter}:${switched.missing.join(',')} 은 이 역본에 없어 뺐습니다.';
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          SnackBar(
-            content: Text(
-              "'${ref.version}'에서 '$newVersion'으로 바꿨습니다.$missing "
-              '고친 글은 사라집니다 · $shortcut 로 되돌릴 수 있습니다',
-            ),
-            duration: const Duration(seconds: 6),
-            action: SnackBarAction(
-              label: '되돌리기',
-              onPressed: () {
-                if (identical(_moveUndo, undo)) _undoMoveSlides();
-              },
-            ),
-          ),
-        );
+      if (!mounted || missing.isEmpty) return;
+      _showSnack("'$newVersion'으로 바꿨습니다.$missing");
     } finally {
       if (mounted) setState(() => _switchingBible = false);
     }
@@ -3078,19 +3063,6 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       _clampCurrentSlideIndex();
     });
     _sendCurrentSlide();
-    _showDeleteSnack(targets.length);
-  }
-
-  void _showDeleteSnack(int count) {
-    if (!mounted) return;
-    final shortcut = Platform.isMacOS ? '⌘Z' : 'Ctrl+Z';
-    final messenger = ScaffoldMessenger.of(context)..hideCurrentSnackBar();
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text('$count장 삭제함 · $shortcut 로 되돌릴 수 있습니다'),
-        action: SnackBarAction(label: '되돌리기', onPressed: _undoDeleteSlides),
-      ),
-    );
   }
 
   /// ⌘/Ctrl+Z: 끌어 옮기기·페이지 삭제 중 더 나중에 한 것을 되돌린다. 되돌릴 게 없으면 false.
@@ -3641,19 +3613,28 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   bool _isFreePage(int uid) => _itemBackgrounds[uid]?.isFreePage == true;
 
-  Future<String> _composeFreePage(SlideBackground background) =>
-      const PageComposer().compose(
-        elements: background.pageElements!,
-        background: background,
-        style: _style,
-      );
+  Future<String> _composeFreePage(SlideBackground background) async {
+    await FontLibrary.ensureFamilies(
+      pageFontFamilies(background.pageElements!),
+    );
+    return const PageComposer().compose(
+      elements: background.pageElements!,
+      background: background,
+      style: _style,
+    );
+  }
 
   Future<PageEditorResult?> _showPageEditor({
     String name = '',
     required SlideBackground background,
     bool templateMode = false,
     bool isNew = false,
-  }) {
+  }) async {
+    // PPT 에서 가져온 '이 PC 글꼴'은 실행 동안만 올라가 있어 다시 켠 뒤엔 이름으로 다시 찾아 올린다.
+    await FontLibrary.ensureFamilies(
+      pageFontFamilies(background.pageElements ?? const []),
+    );
+    if (!mounted) return null;
     return showDialog<PageEditorResult>(
       context: context,
       barrierDismissible: false,
@@ -5147,24 +5128,37 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     }
 
     final progress = ValueNotifier<String>("'$name' 을 읽는 중…");
-    // 취소하면 창만 닫고 결과를 버린다(돌고 있는 ppt_tool 은 끝까지 돌고, 작업 폴더는 그 뒤에 지운다).
+    // 취소하면 창을 닫고 ppt_tool 을 끊는다(자식 soffice·PowerPoint 변환까지). 끝나기를 기다린 뒤 작업 폴더를 지운다.
     var cancelled = false;
+    final cancel = Completer<void>();
     _showProgressDialog(
       progress,
       onCancel: () {
         if (cancelled) return;
         cancelled = true;
+        cancel.complete();
         Navigator.of(context, rootNavigator: true).pop();
       },
     );
     PptLayout? layout;
     var libreofficeMissing = false;
     try {
-      layout = await _pythonBridge.layout(path, work.path);
+      layout = await _pythonBridge.layout(
+        path,
+        work.path,
+        cancel: cancel.future,
+        onProgress: (line) {
+          if (pptLayoutProgressLabel(line) case final label?) {
+            progress.value = "'$name' — $label";
+          }
+        },
+      );
     } on LibreOfficeMissingException {
       libreofficeMissing = true;
     } catch (e, st) {
-      await AppLogger.instance.error('[page] PPT 편집 페이지 가져오기 실패', e, st);
+      if (!cancelled) {
+        await AppLogger.instance.error('[page] PPT 편집 페이지 가져오기 실패', e, st);
+      }
     }
     progress.dispose();
     if (cancelled || !mounted) {
@@ -5198,10 +5192,23 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _showProgressDialog(making);
     final made = <({String name, SlideBackground background, String png})>[];
     var failed = 0;
+    var lost = (images: 0, backgrounds: 0);
+    final copied = <String, String>{};
     try {
+      // 이 PC 에 깔린 글꼴(앱 목록 밖)은 시스템 파일을 읽어 그 이름으로 올린다 — 편집 창·굽기가 그 글꼴로 그린다.
+      for (final font in layout.fontsInstalled) {
+        if (!await FontLibrary.loadSystemFont(
+          font.family,
+          font.path,
+          index: font.index,
+        )) {
+          await AppLogger.instance.info(
+            '[page] 이 PC 글꼴을 올리지 못했습니다: ${font.family} (${font.path})',
+          );
+        }
+      }
       // 작업 폴더는 지우므로 그림·배경을 page_images/ 로 옮겨 두고 그 경로로 저장한다.
       const library = BackgroundImageLibrary.pages();
-      final copied = <String, String>{};
       for (final file in pptLayoutFiles(layout)) {
         try {
           copied[file] = await library.register(file);
@@ -5209,6 +5216,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
           await AppLogger.instance.error('[page] 가져온 그림 복사 실패', e, st);
         }
       }
+      lost = pptLayoutLost(layout, copied);
       for (final page in pptLayoutPages(layout, copied)) {
         making.value = '페이지를 만드는 중… (${made.length + failed + 1} / $total)';
         try {
@@ -5227,7 +5235,21 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       making.dispose();
       if (mounted) Navigator.of(context, rootNavigator: true).pop();
     }
+    final problems = pptImportProblems(
+      pagesFailed: failed,
+      imagesLost: lost.images,
+      backgroundsLost: lost.backgrounds,
+    );
+    if (problems != null) {
+      await AppLogger.instance.info('[page] PPT 가져오기 ($name): $problems');
+    }
     if (!mounted || made.isEmpty) {
+      // 담을 페이지가 없으면 옮겨 둔 사본도 쓸 데가 없다.
+      for (final copy in copied.values) {
+        try {
+          await File(copy).delete();
+        } catch (_) {}
+      }
       if (mounted) _showSnack('페이지를 만들지 못했습니다. 다시 시도해 주세요.');
       return;
     }
@@ -5236,8 +5258,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     // 그룹 이름은 결과 창을 보는 사이 생긴 그룹과도 겹치지 않게 다시 정한다.
     final finalGroup = pptImportGroupName(layout, _groupNames());
     _trackedEdit(
-      "'$finalGroup' 그룹으로 편집 페이지 ${made.length}장을 담았습니다."
-          '${failed > 0 ? ' ($failed장은 만들지 못했습니다)' : ''}',
+      "'$finalGroup' 그룹으로 편집 페이지 ${made.length}장을 담았습니다.",
       'PPT 가져오기를 되돌렸습니다.',
       () {
         for (final page in made) {
@@ -5260,6 +5281,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       },
       flash: uids,
     );
+    if (problems != null) _showSnack("'$finalGroup' — $problems");
   }
 
   /// PPT 항목의 원본 파일을 기본 프로그램(PowerPoint 등)으로 열고, 저장되면 다시 굽도록 지켜본다.
@@ -6425,21 +6447,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     });
     if (flash.isNotEmpty) _flashConti(flash);
     if (_isPresentationOpen) _sendCurrentSlide();
-    if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(message),
-          duration: const Duration(seconds: 4),
-          action: SnackBarAction(
-            label: '되돌리기',
-            onPressed: () {
-              if (identical(_moveUndo, undo)) _undoMoveSlides();
-            },
-          ),
-        ),
-      );
+    // 아래 '되돌리기' 띠는 띄우지 않는다(사용자 요청) — ⌘/Ctrl+Z·위 되돌리기 버튼으로 충분.
   }
 
   /// 새 배치 [l] 을 적용한다(목록 순서·그룹·여백 표시). 달라진 게 없으면 false.
