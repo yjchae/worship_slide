@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' as ui;
 import 'dart:ui' show AppExitResponse;
 
 import 'package:file_picker/file_picker.dart';
@@ -430,7 +431,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   late final TabController _mainTabController;
   final Map<String, String> _slideNotes = {};
   // 발표자 휴대폰(리모컨)에 띄운 메시지. 페이지와 무관하고 콘티에 저장하지 않는다.
+  // 알림처럼 보낸 지 60초 뒤 비운다(_messageTimer). id 는 보낼 때마다 올려 같은 글도 다시 뜨게 한다.
   String _presenterMessage = '';
+  int _presenterMessageId = 0;
+  Timer? _messageTimer;
   // 콘티 항목별 배경 오버라이드. 키는 항목 uid. 없는 항목은 전역 배경을 쓴다.
   // (헌금송만 다른 배경으로 띄우는 등 "일부만 다르게" 하기 위한 것)
   final Map<int, SlideBackground> _itemBackgrounds = {};
@@ -573,6 +577,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     );
     unawaited(SingerWebServer.killLeftoverTunnel());
     _singerWeb.onControl = _handleRemoteControl;
+    _singerWeb.thumbnailer = _phoneThumbnail;
     // 탭 전환에 애니메이션을 쓰지 않는다. TabBarView(PageView) 의 전환 애니메이션이
     // 중간에 멈추면(발표 창이 뜨면서 메인 창이 가려지는 등으로 프레임이 끊길 때)
     // 내부 카운터가 0으로 안 돌아와 탭이 영영 안 넘어간다.
@@ -675,6 +680,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _exitListener.dispose();
     _mediaPlayback.dispose();
     _remoteSyncTimer?.cancel();
+    _messageTimer?.cancel();
     _singerWeb.stop();
     _sourceWatcher.dispose();
     _repository.onSongsChanged = null;
@@ -1948,7 +1954,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _showSnack('외국어 PPT를 연결했습니다.');
   }
 
-  // ── 휴대폰 싱어 화면 ────────────────────────────────────────────────────
+  // ── 휴대폰 화면(싱어창·발표자 모드) ──────────────────────────────────────
 
   /// 켜져 있지 않으면 켜고, 휴대폰에서 열 주소를 보여 준다. 다이얼로그에서 끌 수 있다.
   bool _isMobileSingerBusy = false; // 두 번 눌러 다이얼로그가 둘 뜨지 않게
@@ -1971,7 +1977,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('휴대폰 싱어 화면 켜기 실패: $e')));
+      ).showSnackBar(SnackBar(content: Text('휴대폰 화면 켜기 실패: $e')));
       return;
     }
     if (!mounted) return;
@@ -1979,7 +1985,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     await _sendSingerView();
     final addresses = await SingerWebServer.lanAddresses();
     if (!mounted) return;
-    // 싱어 화면(보기만) / 발표자 리모컨(넘기기·확대·블랙아웃). 키가 달라 QR 도 다르다.
+    // 싱어창(보기만) / 발표자 모드(넘기기·페이지 고르기·블랙아웃, 휴대폰에서 싱어창으로도 바꿈). 키가 달라 QR 도 다르다.
     var remote = false;
     // 주소 줄과 QR 을 왼쪽에 맞춘다(주소 길이가 달라도 QR 이 같은 자리에).
     Widget qr(String url) => Column(
@@ -2032,8 +2038,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                 const Expanded(child: Text('휴대폰 화면')),
                 SegmentedButton<bool>(
                   segments: const [
-                    ButtonSegment(value: false, label: Text('싱어 화면')),
-                    ButtonSegment(value: true, label: Text('발표자 리모컨')),
+                    ButtonSegment(value: false, label: Text('싱어창')),
+                    ButtonSegment(value: true, label: Text('발표자 모드')),
                   ],
                   selected: {remote},
                   showSelectedIcon: false,
@@ -2050,7 +2056,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   if (!running)
-                    const Text('휴대폰 싱어 화면이 꺼졌습니다. 발표를 다시 시작한 뒤 켜 주세요.')
+                    const Text('휴대폰 화면이 꺼졌습니다. 발표를 다시 시작한 뒤 켜 주세요.')
                   else ...[
                     // 다른 망(LTE·다른 와이파이)용 공개 주소. 터널은 몇 초 걸려서 따로 듣는다.
                     ValueListenableBuilder<TunnelState>(
@@ -2099,14 +2105,18 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                     ),
                     if (remote) ...[
                       Text(
-                        '좌우로 밀기·화면 양쪽 끝 누르기 = 페이지 넘기기, 두 손가락 벌리기 = 확대(관객 화면도 같이),\n'
-                        '두 번 누르기 = 확대 풀기, \'화면 끄기\' 길게 누르기 = 블랙아웃. 발표자 메모와 보낸 메시지도 보입니다.\n'
+                        '맨 위 ◀ 이전 · 다음 ▶ 이나 아래 \'모든 페이지\'에서 페이지를 눌러 관객 화면을 옮깁니다.\n'
+                        '휴대폰 화면 위쪽에서 \'싱어창\'으로 바꾸면 밀어서 넘기기·두 손가락 확대·발표자 메모를 쓸 수 있습니다. '
+                        '\'화면 끄기\' 길게 누르기 = 블랙아웃.\n'
                         '이 QR 은 발표를 조작할 수 있으니 발표자만 찍으세요.',
                         style: TextStyle(
                           color: Theme.of(context).colorScheme.error,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
+                      const SizedBox(height: 12),
+                    ] else ...[
+                      const Text('가사만 보는 화면입니다. 이 QR 로 연 사람은 페이지를 넘길 수 없습니다.'),
                       const SizedBox(height: 12),
                     ],
                     const Text(
@@ -2321,13 +2331,28 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     if (!_isSingerOpen && !_singerWeb.isRunning) return;
     slides ??= _allSlides; // getter 가 매번 목록을 새로 만들므로 한 번만
     final json = _buildSingerViewData(slides).toJson();
-    _singerWeb.update({
-      ..._buildSingerViewData(slides, true).toJson(),
-      // 리모컨에만 간다(SingerWebServer.remoteOnlyKeys).
-      'note': _slideNotes[_currentNoteKey(slides)] ?? '',
-      'zoom': _zoomJson,
-      'message': _presenterMessage,
-    });
+    if (_singerWeb.isRunning) {
+      _singerWeb.update({
+        ..._buildSingerViewData(slides, true).toJson(),
+        // 리모컨에만 간다(SingerWebServer.remoteOnlyKeys).
+        'note': _slideNotes[_currentNoteKey(slides)] ?? '',
+        'zoom': _zoomJson,
+        'message': _presenterMessage,
+        'message_id': _presenterMessageId,
+        // 발표자 모드 '모든 페이지'. 서버가 판 값(pages_rev)만 JSON 에 싣고 목록은 /pages 로 준다.
+        'pages': phonePageList([
+          for (final s in slides)
+            (
+              stagingUid: s.stagingUid,
+              pageIndexInItem: s.pageIndexInItem,
+              isAutoSpacer: s.isAutoSpacer,
+              mainText: s.mainText,
+              title: s.title,
+              imagePath: s.imagePath,
+            ),
+        ]),
+      });
+    }
     if (!_isSingerOpen) return;
     final encoded = _singerDedupeKey(json);
     if (encoded == _lastSingerJson) return;
@@ -2338,15 +2363,62 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     } catch (_) {}
   }
 
+  /// 메시지 보내기('' = 지우기). 휴대폰은 알림처럼 띄우고, 60초 뒤 여기서 비워 다시 보낸다
+  /// (기준 시계는 PC 하나 — 새로 보내면 다시 센다).
   void _setPresenterMessage(String message) {
-    setState(() => _presenterMessage = message);
+    _messageTimer?.cancel();
+    _messageTimer = message.isEmpty
+        ? null
+        : Timer(const Duration(seconds: 60), () {
+            _messageTimer = null;
+            if (mounted) _setPresenterMessage('');
+          });
+    setState(() {
+      _presenterMessage = message;
+      if (message.isNotEmpty) _presenterMessageId++;
+    });
     _sendSingerView();
   }
 
   // 발표를 끝내면 서버도 꺼지므로 여기 한 곳에서 비운다. 발표 중에 서버만 꺼도 받을 곳이 없어 같이 비운다.
   void _clearMessageIfServerOff() {
-    if (!_singerWeb.running.value && _presenterMessage.isNotEmpty) {
-      setState(() => _presenterMessage = '');
+    if (_singerWeb.running.value) return;
+    _messageTimer?.cancel();
+    _messageTimer = null;
+    if (_presenterMessage.isNotEmpty) setState(() => _presenterMessage = '');
+  }
+
+  /// 발표자 모드 썸네일용으로 그림 페이지를 폭 320 PNG 로 줄인다([SingerWebServer.thumbnailer]).
+  /// 사진형 페이지는 320 이어도 100KB 를 넘을 수 있어 넘으면 240 → 160 으로 한 번씩 더 줄인다.
+  /// 서버가 하나씩 차례로 부른다. 못 읽으면 null(서버가 원본을 보낸다).
+  static Future<List<int>?> _phoneThumbnail(String path) async {
+    try {
+      final bytes = await File(path).readAsBytes();
+      Uint8List? png;
+      for (final width in const [320, 240, 160]) {
+        final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
+        final codec = await ui.instantiateImageCodecWithSize(
+          buffer,
+          getTargetSize: (w, h) => w <= width
+              ? ui.TargetImageSize(width: w, height: h)
+              : ui.TargetImageSize(
+                  width: width,
+                  height: (h * width / w).round().clamp(1, 1 << 14),
+                ),
+        );
+        final frame = await codec.getNextFrame();
+        codec.dispose();
+        final data = await frame.image.toByteData(
+          format: ui.ImageByteFormat.png,
+        );
+        frame.image.dispose();
+        png = data?.buffer.asUint8List();
+        // ponytail: 160 이 최소 — 그래도 100KB 를 넘으면 그대로 보낸다.
+        if (png == null || png.length < 100 * 1024) break;
+      }
+      return png;
+    } catch (_) {
+      return null;
     }
   }
 
@@ -2379,7 +2451,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     return _slideKey(info.stagingUid, info.pageIndexInItem);
   }
 
-  /// 휴대폰 발표자 리모컨 요청([SingerWebServer.onControl]).
+  /// 휴대폰 발표자 키 요청([SingerWebServer.onControl]) — 발표자 모드·싱어창 공통.
   Future<void> _handleRemoteControl(
     String action,
     Map<String, String> params,
@@ -2399,6 +2471,14 @@ class _PraiseHomePageState extends State<PraiseHomePage>
           return;
         }
         await (action == 'next' ? _nextSlide() : _prevSlide());
+      case 'goto':
+        // 발표자 모드 썸네일. 번호가 아니라 슬라이드 키라 그 사이 콘티가 바뀌어도 엉뚱한 쪽으로 안 간다.
+        // 없어진 페이지면 무시한다(휴대폰이 2초 뒤 목록을 다시 받는다).
+        final slides = _allSlides;
+        final index = slides.indexWhere(
+          (s) => _slideInfoKey(s) == params['id'],
+        );
+        if (index >= 0 && index != _currentSlideIndex) await _goToSlide(index);
       case 'blackout':
         if ((params['on'] == '1') != _isBlackout) await _toggleBlackout();
       case 'zoom':
@@ -15901,8 +15981,8 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
             onPressed: widget.onShowMobileSinger,
             icon: const Icon(Icons.phone_iphone_rounded),
             tooltip: widget.isMobileSingerOn
-                ? '휴대폰 싱어 화면 (켜짐 — 주소 보기·끄기)'
-                : '휴대폰에서 싱어 화면 보기 (같은 와이파이)',
+                ? '휴대폰 화면 (켜짐 — 주소 보기·끄기)'
+                : '휴대폰 화면 — 싱어창·발표자 모드 (같은 와이파이)',
             color: widget.isMobileSingerOn ? cs.primary : null,
           ),
         if (open && Platform.isMacOS)
@@ -16407,7 +16487,7 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
                 borderRadius: BorderRadius.circular(AppRadius.control),
               ),
               child: Text(
-                '휴대폰에 표시 중: $sent',
+                '보냄 · 1분 뒤 사라짐\n$sent',
                 maxLines: 3,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(fontSize: 12, color: cs.onSurface),

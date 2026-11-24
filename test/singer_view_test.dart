@@ -45,4 +45,52 @@ void main() {
     expect(current['is_blank'], isFalse);
     expect(current['title'], '');
   });
+
+  test('발표자 모드 페이지 목록: 슬라이드 키·원본만·첫 페이지·빈 페이지', () {
+    final list = phonePageList([
+      (
+        stagingUid: -1,
+        pageIndexInItem: 0,
+        isAutoSpacer: false,
+        mainText: '',
+        title: null,
+        imagePath: null,
+      ),
+      (
+        stagingUid: 5,
+        pageIndexInItem: 0,
+        isAutoSpacer: false,
+        mainText: '주의 인자',
+        title: '주의 인자',
+        imagePath: null,
+      ),
+      (
+        stagingUid: 5,
+        pageIndexInItem: 1,
+        isAutoSpacer: true,
+        mainText: '',
+        title: '주의 인자',
+        imagePath: '',
+      ),
+      (
+        stagingUid: 7,
+        pageIndexInItem: 0,
+        isAutoSpacer: false,
+        mainText: '',
+        title: 'PPT',
+        imagePath: '/tmp/0001.png',
+      ),
+    ]);
+    expect(
+      [for (final p in list) p['id']],
+      ['-1:0:false', '5:0:false', '5:1:true', '7:0:false'],
+    );
+    expect([for (final p in list) p['first']], [true, true, false, true]);
+    expect([for (final p in list) p['blank']], [true, false, true, false]);
+    expect([for (final p in list) p['spacer']], [false, false, true, false]);
+    expect(list[0]['title'], '');
+    expect(list[1]['text'], '주의 인자');
+    expect(list[2]['image'], isNull);
+    expect(list[3]['image'], '/tmp/0001.png');
+  });
 }

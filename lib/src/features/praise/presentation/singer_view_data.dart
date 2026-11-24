@@ -88,3 +88,29 @@ class SingerViewData {
     'clock': clock,
   };
 }
+
+/// 휴대폰 발표자 모드 '모든 페이지'에 쓸 한 장의 재료. 앱(`_SlideInfo`)에서 채워 넘긴다.
+typedef PhonePageSource = ({
+  int stagingUid,
+  int pageIndexInItem,
+  bool isAutoSpacer,
+  String mainText,
+  String? title,
+  String? imagePath,
+});
+
+/// 발표자 모드 페이지 목록(`SingerWebServer.update` 의 `pages`). 원본 가사만 싣는다.
+/// `id` = 앱 슬라이드 키(`uid:페이지:자동여백`) — 휴대폰은 이 값으로 `goto` 한다.
+/// `image` 는 로컬 경로 그대로다 — 서버가 밖으로 내보내기 전에 주소로 바꾼다.
+List<Map<String, Object?>> phonePageList(Iterable<PhonePageSource> slides) => [
+  for (final s in slides)
+    {
+      'id': '${s.stagingUid}:${s.pageIndexInItem}:${s.isAutoSpacer}',
+      'title': s.title ?? '',
+      'text': s.mainText,
+      'image': (s.imagePath?.isEmpty ?? true) ? null : s.imagePath,
+      'blank': (s.imagePath?.isEmpty ?? true) && s.mainText.trim().isEmpty,
+      'spacer': s.isAutoSpacer,
+      'first': s.pageIndexInItem == 0 && !s.isAutoSpacer,
+    },
+];

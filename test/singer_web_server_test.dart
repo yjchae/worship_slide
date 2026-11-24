@@ -187,6 +187,220 @@ void main() {
     expect(late.single['message'], '2절 반복');
   });
 
+  test('썸네일러가 멈춰도 시간 제한 뒤 원본을 보내고 다음 요청은 처리된다', () async {
+    final server = SingerWebServer()
+      ..thumbnailTimeout = const Duration(milliseconds: 100);
+    await server.start();
+    addTearDown(server.stop);
+    final base = 'http://127.0.0.1:${server.port}';
+    final remoteK = Uri.parse(
+      server.urlFor('127.0.0.1', remote: true),
+    ).queryParameters['k'];
+    final client = HttpClient();
+    addTearDown(() => client.close(force: true));
+    final dir = Directory.systemTemp.createTempSync('thumb_timeout');
+    final stuck = File('${dir.path}/0001.png')..writeAsBytesSync([1, 2, 3]);
+    final ok = File('${dir.path}/0002.png')..writeAsBytesSync([4, 5, 6]);
+    final never = Completer<List<int>?>();
+    server.thumbnailer = (path) =>
+        path == stuck.path ? never.future : Future.value([9]);
+    server.update({
+      'current': {'main_text': ''},
+      'pages': [
+        {'id': 'a', 'text': '', 'image': stuck.path},
+        {'id': 'b', 'text': '', 'image': ok.path},
+      ],
+    });
+    final list =
+        jsonDecode(
+              await (await (await client.getUrl(
+                Uri.parse('$base/pages?k=$remoteK'),
+              )).close()).transform(utf8.decoder).join(),
+            )
+            as Map;
+    Future<List<int>> img(int i) async {
+      final url = (list['pages'] as List)[i]['image'] as String;
+      final res = await (await client.getUrl(Uri.parse('$base$url'))).close();
+      expect(res.statusCode, 200);
+      return res.expand((b) => b).toList();
+    }
+
+    final both = await Future.wait([img(0), img(1)]);
+    expect(both[0], [1, 2, 3]); // 멈춘 쪽은 원본
+    expect(both[1], [9]); // 뒤 요청은 막히지 않는다
+  });
+
+  test('발표자 모드 페이지 목록·썸네일은 리모컨 키만, 로컬 경로 없이', () async {
+    final server = SingerWebServer();
+    await server.start();
+    addTearDown(server.stop);
+    final base = 'http://127.0.0.1:${server.port}';
+    final singerK = Uri.parse(server.urlFor('127.0.0.1')).queryParameters['k'];
+    final remoteK = Uri.parse(
+      server.urlFor('127.0.0.1', remote: true),
+    ).queryParameters['k'];
+    final client = HttpClient();
+    addTearDown(() => client.close(force: true));
+    Future<HttpClientResponse> get(String path) async =>
+        (await client.getUrl(Uri.parse('$base$path'))).close();
+    Future<String> body(String path) async =>
+        (await get(path)).transform(utf8.decoder).join();
+
+    final dir = Directory.systemTemp.createTempSync('Application Support');
+    final img = File('${dir.path}/0001.png')..writeAsBytesSync([1, 2, 3]);
+    final pages = [
+      {'id': '-1:0:false', 'text': '', 'image': null, 'blank': true},
+      {'id': '5:0:false', 'text': '주의 인자', 'image': null},
+      {'id': '7:0:false', 'text': '', 'image': img.path},
+    ];
+    var thumbCalls = 0;
+    var inFlight = 0;
+    server.thumbnailer = (path) async {
+      thumbCalls++;
+      inFlight++;
+      expect(inFlight, 1); // 줄이기는 하나씩 차례로
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      inFlight--;
+      return [9, 9];
+    };
+    final base0 = {
+      'current': {'main_text': '주의 인자'},
+      'page_number': 2,
+      'message': '2절 반복',
+      'message_id': 3,
+    };
+    server.update({...base0, 'pages': pages});
+
+    // 싱어 키: 목록·썸네일 403, JSON 에 목록·메시지 없음.
+    final pageUrl = '/img/page/2';
+    expect((await get('/pages?k=$singerK')).statusCode, 403);
+    expect((await get('$pageUrl?v=x&k=$singerK')).statusCode, 403);
+    final singer = jsonDecode(await body('/state?k=$singerK')) as Map;
+    for (final key in ['pages', 'pages_rev', 'message', 'message_id']) {
+      expect(singer.containsKey(key), isFalse, reason: key);
+    }
+
+    // 리모컨 키: JSON 엔 판 값만, 목록엔 로컬 경로 없음.
+    final remote = jsonDecode(await body('/state?k=$remoteK')) as Map;
+    expect(remote.containsKey('pages'), isFalse);
+    expect(remote['message_id'], 3);
+    final rev = remote['pages_rev'] as String;
+    expect(rev, isNotEmpty);
+    final listText = await body('/pages?k=$remoteK');
+    expect(listText, isNot(contains(dir.path)));
+    for (final bad in ['/Users/', r'C:\\', 'Application Support']) {
+      expect(listText, isNot(contains(bad)));
+    }
+    final list = jsonDecode(listText) as Map;
+    expect(list['rev'], rev);
+    final got = (list['pages'] as List).cast<Map>();
+    expect(got[1]['text'], '주의 인자');
+    expect(got[1]['image'], isNull);
+    final imgUrl = got[2]['image'] as String;
+    expect(imgUrl, matches(RegExp(r'^/img/page/2\?v=[0-9a-f]+&k=' + remoteK!)));
+
+    // 지금 목록 번호 + 맞는 v 일 때만. 동시에 와도 한 번만 줄인다.
+    final res = await Future.wait([get(imgUrl), get(imgUrl)]);
+    for (final r in res) {
+      expect(r.statusCode, 200);
+      expect(r.headers.value('cache-control'), 'private, max-age=3600');
+      expect(await r.expand((b) => b).toList(), [9, 9]);
+    }
+    expect(thumbCalls, 1);
+    final v = Uri.parse(imgUrl).queryParameters['v'];
+    expect((await get('$pageUrl?v=old&k=$remoteK')).statusCode, 404);
+    expect((await get('/img/page/1?v=$v&k=$remoteK')).statusCode, 404);
+    expect((await get('/img/page/3?v=$v&k=$remoteK')).statusCode, 404);
+    expect((await get('/img/page/x?v=$v&k=$remoteK')).statusCode, 404);
+
+    // 썸네일러가 없으면 원본 그대로.
+    server.thumbnailer = null;
+    server.update({
+      ...base0,
+      'pages': [...pages],
+    });
+    final orig = await get(imgUrl);
+    expect(orig.statusCode, 200);
+    expect(await orig.expand((b) => b).toList(), [9, 9]); // 기억한 썸네일
+    await server.stop();
+    await server.start();
+    final k2 = Uri.parse(
+      server.urlFor('127.0.0.1', remote: true),
+    ).queryParameters['k'];
+    final b2 = 'http://127.0.0.1:${server.port}';
+    server.update({...base0, 'pages': pages});
+    final raw = await (await client.getUrl(
+      Uri.parse('$b2/img/page/2?v=$v&k=$k2'),
+    )).close();
+    expect(await raw.expand((b) => b).toList(), [1, 2, 3]); // 끌 때 캐시도 비웠다
+
+    // 목록이 같으면 판 값 그대로, 페이지를 빼거나 넣으면 바뀐다.
+    Future<String> revNow() async =>
+        (jsonDecode(
+                  await (await (await client.getUrl(
+                    Uri.parse('$b2/state?k=$k2'),
+                  )).close()).transform(utf8.decoder).join(),
+                )
+                as Map)['pages_rev']
+            as String;
+    final rev2 = await revNow();
+    server.update({
+      ...base0,
+      'page_number': 3,
+      'pages': [...pages],
+    });
+    expect(await revNow(), rev2);
+    server.update({...base0, 'pages': pages.sublist(1)});
+    expect(await revNow(), isNot(rev2));
+    server.update({
+      ...base0,
+      'pages': [...pages, pages[1]],
+    });
+    expect(await revNow(), isNot(rev2));
+  });
+
+  test('goto 는 리모컨 키 POST 로만 id 를 넘긴다', () async {
+    final server = SingerWebServer();
+    await server.start();
+    addTearDown(server.stop);
+    final base = 'http://127.0.0.1:${server.port}';
+    final singerK = Uri.parse(server.urlFor('127.0.0.1')).queryParameters['k'];
+    final remoteK = Uri.parse(
+      server.urlFor('127.0.0.1', remote: true),
+    ).queryParameters['k'];
+    final ids = ['-1:0:false', '5:0:false', '5:1:false'];
+    var current = 0;
+    server.onControl = (action, params) async {
+      if (action != 'goto') return;
+      final i = ids.indexOf(params['id'] ?? '');
+      if (i < 0) return; // 없는 키는 그대로
+      current = i;
+      server.update({'page_number': current + 1});
+    };
+    server.update({'page_number': 1});
+    final client = HttpClient();
+    addTearDown(() => client.close(force: true));
+    Future<(int, Map)> send(String method, String k, String id) async {
+      final res = await (await client.openUrl(
+        method,
+        Uri.parse('$base/control?k=$k&action=goto&id=$id'),
+      )).close();
+      final text = await res.transform(utf8.decoder).join();
+      return (
+        res.statusCode,
+        res.statusCode == 200 ? jsonDecode(text) as Map : {},
+      );
+    }
+
+    expect((await send('POST', singerK!, '5:1:false')).$1, 403);
+    expect((await send('GET', remoteK!, '5:1:false')).$1, 403);
+    expect(current, 0);
+    final (code, state) = await send('POST', remoteK, '5:1:false');
+    expect(code, 200);
+    expect(state['page_number'], 3);
+    expect((await send('POST', remoteK, '9:9:false')).$2['page_number'], 3);
+  });
+
   test('다른 프로그램이 127.0.0.1:8765 만 잡고 있으면 다른 포트로 켠다 (터널이 그쪽으로 새지 않게)', () async {
     ServerSocket? holder;
     try {

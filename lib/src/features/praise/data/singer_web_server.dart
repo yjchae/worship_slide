@@ -5,6 +5,8 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
+import 'fnv_hash.dart';
+
 /// 같은 망의 휴대폰 브라우저에서 싱어 화면(현재 + 다음 페이지)을 보게 하는 작은 HTTP 서버.
 ///
 /// - `GET /`        싱어 페이지(HTML 하나, 외부 파일 없음)
@@ -16,11 +18,16 @@ import 'package:flutter/foundation.dart';
 /// 모든 요청은 켤 때마다 새로 만드는 토큰(`?k=`)이 맞아야 한다. 주소·QR 에 들어 있어서 찍은 사람만 본다
 /// (게스트 와이파이처럼 모르는 사람이 같은 망에 있어도 포트만으로는 못 본다).
 ///
-/// **발표자 리모컨**: 같은 페이지를 리모컨 키(`?k=` 가 [remoteToken])로 열면 넘기기·확대·블랙아웃 제스처가 켜진다.
+/// **발표자 키(발표자 모드·싱어창)**: 같은 페이지를 리모컨 키(`?k=` 가 [remoteToken])로 열면 넘기기·확대·블랙아웃 제스처가 켜진다.
 /// - `POST /control?action=next|prev&from=<보던 쪽>` / `action=blackout&on=0|1` / `action=zoom&on&x&y&size`
 ///   → [onControl] 을 부르고 바뀐 상태 JSON 을 돌려준다
 /// - 리모컨에만 가는 값(`note`·`zoom`·`message`, [remoteOnlyKeys])은 싱어 키로 받는 쪽에서 뺀다.
 ///   싱어 QR 을 단체방에 돌려도 그 키로는 넘기지도, 발표자 메모를 보지도 못한다
+///
+/// **발표자 모드 페이지 목록**(리모컨 키만, 싱어 키는 403):
+/// - [update] 의 `pages`(`phonePageList`) 는 JSON 에 싣지 않고 따로 둔다. JSON 엔 판 값 `pages_rev` 만 —
+///   휴대폰은 이 값이 바뀔 때만 `GET /pages` 로 목록(`{rev, pages}`)을 다시 받는다
+/// - `GET /img/page/<n>?v=` 목록 n번 그림 페이지의 썸네일([thumbnailer]). 로컬 경로는 목록에도 주소에도 없다
 ///
 /// **바깥 망 주소**: cloudflared 가 깔려 있으면 Cloudflare 임시 터널(`*.trycloudflare.com`, 계정 불필요)을
 /// 같이 띄워 https 공개 주소를 만든다. 다른 망의 휴대폰도 그 주소로 본다. 토큰은 그대로 필요하다.
@@ -39,7 +46,30 @@ class SingerWebServer {
   String? _lastRemoteJson; // 리모컨용(메모·확대 포함)
   final _remoteClients = <HttpResponse>{};
 
-  static const remoteOnlyKeys = ['note', 'zoom', 'message'];
+  static const remoteOnlyKeys = [
+    'note',
+    'zoom',
+    'message',
+    'message_id',
+    'pages_rev',
+  ];
+
+  // 발표자 모드 페이지 목록. 받은 그대로의 JSON 이 같으면 다시 만들지 않는다.
+  String? _pagesSource;
+  String _pagesRev = '';
+  String _pagesJson = '{"rev":"","pages":[]}'; // GET /pages 본문(로컬 경로 없음)
+  List<String?> _pageImages = const []; // 목록 번호 → 로컬 그림 경로
+
+  /// 그림 페이지 썸네일(PNG 바이트). 없거나 null 을 돌려주면 원본 파일을 그대로 보낸다.
+  /// 한 번에 하나씩만 부른다(메인 isolate 에서 줄여도 UI 가 덜 끊기게). 결과는 서버를 끌 때까지 기억한다.
+  Future<List<int>?> Function(String path)? thumbnailer;
+
+  /// 썸네일 하나를 기다리는 한도. 넘으면 그 요청은 원본을 보내고 다음 요청으로 넘어간다.
+  // ponytail: 넘긴 줄이기는 취소하지 못하고 뒤에서 끝까지 돈다(다음 줄이기와 잠깐 겹칠 수 있다).
+  @visibleForTesting
+  Duration thumbnailTimeout = const Duration(seconds: 10);
+  final _thumbs = <String, List<int>>{}; // 로컬 경로 → 썸네일
+  Future<void> _thumbQueue = Future.value();
 
   // 경과 시간(clock.elapsed_ms)은 흐르는 동안 매번 달라서 저장한 JSON 에서 빼 두고, 보낼 때
   // 그 순간 값으로 맨 앞에 붙인다(`{"clock_ms":N,...`). 늦게 연 휴대폰도 맞는 시간을 받는다.
@@ -146,6 +176,12 @@ class SingerWebServer {
     _clockRunning = false;
     _hasClock = false;
     _images.clear();
+    _pagesSource = null;
+    _pagesRev = '';
+    _pagesJson = '{"rev":"","pages":[]}';
+    _pageImages = const [];
+    _thumbs.clear();
+    _thumbQueue = Future.value();
     running.value = false;
   }
 
@@ -329,7 +365,9 @@ class SingerWebServer {
   /// [SingerViewData.toJson] 에 리모컨용 값([remoteOnlyKeys])을 얹어 받는다. 내용이 같으면 보내지 않는다.
   void update(Map<String, dynamic> data) {
     if (_server == null) return;
-    final public = <String, dynamic>{...data};
+    final public = <String, dynamic>{...data}..remove('pages');
+    _setPages(data['pages']);
+    if (_pagesRev.isNotEmpty) public['pages_rev'] = _pagesRev;
     for (final key in const ['current', 'next']) {
       final page = data[key];
       if (page is! Map) continue;
@@ -368,6 +406,51 @@ class SingerWebServer {
       singerChanged ? 'data: ${_live(json)}\n\n' : null,
       'data: ${_live(remoteJson)}\n\n',
     );
+  }
+
+  void _setPages(Object? pages) {
+    final source = pages is List ? jsonEncode(pages) : null;
+    if (source == _pagesSource) return;
+    _pagesSource = source;
+    final images = <String?>[];
+    final list = <Map<String, Object?>>[];
+    for (final p in pages is List ? pages : const []) {
+      final page = p is Map ? p : const {};
+      final path =
+          page['image'] is String && (page['image'] as String).isNotEmpty
+          ? page['image'] as String
+          : null;
+      images.add(path);
+      list.add({
+        ...page.cast<String, Object?>(),
+        'image': path == null
+            ? null
+            : '/img/page/${images.length - 1}?v=${_pathVersion(path)}&k=$_remoteToken',
+      });
+    }
+    _pageImages = images;
+    _pagesRev = source == null ? '' : fnvHex(utf8.encode(source));
+    _pagesJson = jsonEncode({'rev': _pagesRev, 'pages': list});
+    // 목록에서 빠진 그림의 썸네일은 버린다(콘티를 고칠수록 쌓이지 않게).
+    final kept = images.toSet();
+    _thumbs.removeWhere((path, _) => !kept.contains(path));
+  }
+
+  // 썸네일 판 값. 넘길 때마다 목록 전체를 stat 하지 않으려고 경로만 본다
+  // (다시 구운 PPT 는 새 폴더에 구워져 경로가 바뀐다).
+  static String _pathVersion(String path) => fnvHex(utf8.encode(path));
+
+  Future<List<int>?> _thumbnail(String path) {
+    final job = _thumbQueue.catchError((_) {}).then((_) async {
+      final cached = _thumbs[path];
+      if (cached != null) return cached;
+      // 멈춘 줄이기가 큐를 막지 않게 — 넘으면 던지고, 요청은 원본을 보낸다.
+      final made = await thumbnailer?.call(path).timeout(thumbnailTimeout);
+      if (made != null && _server != null) _thumbs[path] = made;
+      return made;
+    });
+    _thumbQueue = job;
+    return job;
   }
 
   /// 저장한 JSON 앞에 지금 경과 시간을 붙인다. 페이지는 이 값을 떼어 내고 나머지로 바뀐 걸 가린다.
@@ -472,6 +555,49 @@ class SingerWebServer {
             ..set(HttpHeaders.cacheControlHeader, 'no-store');
           res.write(_live(_lastRemoteJson ?? '{}'));
           await res.close();
+        case '/pages':
+          if (!remote) {
+            res.statusCode = HttpStatus.forbidden;
+            await res.close();
+            return;
+          }
+          res.headers
+            ..contentType = ContentType.json
+            ..set(HttpHeaders.cacheControlHeader, 'no-store');
+          res.write(_pagesJson);
+          await res.close();
+        case final p when p.startsWith('/img/page/'):
+          if (!remote) {
+            res.statusCode = HttpStatus.forbidden;
+            await res.close();
+            return;
+          }
+          final n = int.tryParse(p.substring('/img/page/'.length));
+          final path = n != null && n >= 0 && n < _pageImages.length
+              ? _pageImages[n]
+              : null;
+          if (path == null ||
+              req.uri.queryParameters['v'] != _pathVersion(path) ||
+              !File(path).existsSync()) {
+            res.statusCode = HttpStatus.notFound;
+            await res.close();
+            return;
+          }
+          List<int>? thumb;
+          try {
+            thumb = await _thumbnail(path);
+          } catch (_) {}
+          res.headers
+            ..set(HttpHeaders.cacheControlHeader, 'private, max-age=3600')
+            ..contentType = thumb != null
+                ? ContentType('image', 'png')
+                : _imageType(path);
+          if (thumb != null) {
+            res.add(thumb);
+          } else {
+            await res.addStream(File(path).openRead());
+          }
+          await res.close();
         case '/img/current' || '/img/next':
           final path = _images[req.uri.path.substring(5)];
           final file = path == null ? null : File(path);
@@ -484,12 +610,9 @@ class SingerWebServer {
             await res.close();
             return;
           }
-          res.headers.set(HttpHeaders.cacheControlHeader, 'no-store');
-          final lower = path.toLowerCase();
-          res.headers.contentType =
-              lower.endsWith('.jpg') || lower.endsWith('.jpeg')
-              ? ContentType('image', 'jpeg')
-              : ContentType('image', 'png');
+          res.headers
+            ..set(HttpHeaders.cacheControlHeader, 'no-store')
+            ..contentType = _imageType(path);
           await res.addStream(file.openRead());
           await res.close();
         default:
@@ -500,6 +623,13 @@ class SingerWebServer {
       _clients.remove(res);
       _remoteClients.remove(res);
     }
+  }
+
+  static ContentType _imageType(String path) {
+    final lower = path.toLowerCase();
+    return lower.endsWith('.jpg') || lower.endsWith('.jpeg')
+        ? ContentType('image', 'jpeg')
+        : ContentType('image', 'png');
   }
 
   /// 휴대폰에서 열 주소 후보. 사설망 IPv4 만, 와이파이·유선을 앞에 둔다.
@@ -565,14 +695,16 @@ class SingerWebServer {
 /// 싱어 페이지. 네이티브 싱어 창(MainFlutterWindow.swift)과 같은 모양·같은 글자 맞춤 규칙
 /// (원본 줄 그대로, 너무 작아지면 그때만 줄바꿈). 글자는 textContent 로만 넣는다(HTML 주입 없음).
 ///
-/// `<body class="remote">`(리모컨 키로 연 경우)면 발표자 리모컨이 된다: 현재 페이지는 관객 화면과 같은 16:9 틀
-/// (그래야 핀치로 고른 영역이 관객 화면 좌표와 맞는다), 메모·블랙아웃 버튼, 제스처.
+/// `<body class="remote">`(발표자 키로 연 경우)면 머리줄 [발표자 모드 | 싱어창] 으로 두 화면을 오간다(`presenter_view`).
+/// 발표자 모드 = 이전·다음 버튼 + 현재·다음 + '모든 페이지' 한 줄(`/pages`, 눌러 `goto`). 싱어창 = 현재 페이지가
+/// 관객 화면과 같은 16:9 틀(그래야 핀치로 고른 영역이 관객 화면 좌표와 맞는다), 메모·블랙아웃 버튼, 제스처.
+/// 메시지 띠는 두 모드 공통 알림(`message_id` 가 바뀌면 뜨고 60초 뒤 사라짐).
 /// 확대 영역은 발표 보기 '영역 확대'와 같은 값(x·y = 왼쪽 위, size = 폭 비율, 0~1)이다.
 const singerPageHtml =
     r'''<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<title>싱어 화면</title>
+<title>싱어창</title>
 <style>
   *{margin:0;padding:0;box-sizing:border-box;}
   html,body{width:100%;height:100%;overflow:hidden;background:#0d0f12;color:#fff;
@@ -650,42 +782,142 @@ const singerPageHtml =
     font-size:2.3vh;line-height:1.4;color:#e6e9ee;background:#1a1f26;border-left:3px solid #ffd54f;
     border-radius:.8vh;padding:1vh 3vw;}
   .remote #note:empty{display:none;}
-  .remote #message{display:block;flex:none;max-height:30vh;overflow:auto;touch-action:pan-y;white-space:pre-wrap;
-    overflow-wrap:anywhere;font-size:3.4vh;font-weight:700;line-height:1.35;color:#000;background:#fff;
-    border-radius:.8vh;padding:1.2vh 3vw;}
-  .remote #message:empty{display:none;}
+  /* 메시지 = 알림: 받으면 내려오며 뜨고 60초 뒤(또는 누르면) 사라진다. 아래 막대 = 남은 시간. */
+  .remote #message{position:relative;flex:none;color:#000;background:#fff;border-radius:.8vh;overflow:hidden;
+    opacity:0;transform:translateY(-12px);transition:opacity .3s,transform .3s;}
+  .remote #message.show{display:block;}
+  .remote #message.in{opacity:1;transform:none;transition:opacity .2s,transform .2s;}
+  #mtext{max-height:22vh;overflow:auto;touch-action:pan-y;white-space:pre-wrap;overflow-wrap:anywhere;
+    font-size:3.4vh;font-weight:700;line-height:1.35;padding:1.2vh 3vw calc(1.2vh + 3px);}
+  #mbar{position:absolute;left:0;right:0;bottom:0;height:3px;background:rgba(13,15,18,.3);transform-origin:0 50%;}
   .remote #bar{display:flex;flex:none;}
-  #black{flex:1;position:relative;overflow:hidden;border:1px solid #3a424d;border-radius:1vh;background:#1b2028;
-    color:#e6e9ee;font:inherit;font-size:2.2vh;font-weight:700;padding:1.6vh 0;}
-  #black::before{content:'';position:absolute;inset:0;background:#e5484d;transform:scaleX(0);transform-origin:0 50%;}
-  #black.hold::before{transform:scaleX(1);transition:transform .6s linear;}
-  #black span{position:relative;}
-  #black.on{background:#e5484d;border-color:#e5484d;}
+  #black,#pblack{position:relative;overflow:hidden;border:1px solid #3a424d;background:#1b2028;color:#e6e9ee;
+    font:inherit;font-weight:700;}
+  #black{flex:1;border-radius:1vh;font-size:2.2vh;padding:1.6vh 0;}
+  #black::before,#pblack::before{content:'';position:absolute;inset:0;background:#e5484d;transform:scaleX(0);
+    transform-origin:0 50%;}
+  #black.hold::before,#pblack.hold::before{transform:scaleX(1);transition:transform .6s linear;}
+  #black span,#pblack span{position:relative;}
+  #black.on,#pblack.on{background:#e5484d;border-color:#e5484d;}
+  .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;}
+  button:focus-visible{outline:2px solid #ffd54f;outline-offset:2px;}
+  /* ── 발표자 모드(발표자 키 + presenter_view) ── 이동 줄 · 제목 줄 · 무대(현재 70% · 다음, 16:9) ·
+     모든 페이지 한 줄 가로 스크롤 · 화면 끄기. 가로 화면(body.land)은 위 두 줄이 한 줄이 된다. */
+  #top{display:flex;flex-direction:column;gap:8px;flex:none;}
+  #pnav,#mode,#plist,#pblack{display:none;}
+  .remote #mode{display:flex;flex:none;border:1px solid #3a424d;border-radius:10px;overflow:hidden;}
+  /* 싱어창 머리줄에 전환이 붙으면 좁은 세로 화면에서 넘치므로 줄을 넘긴다. */
+  .remote header{flex-wrap:wrap;row-gap:.8vh;}
+  #mode button{height:44px;padding:0 12px;background:transparent;color:#9aa4b1;border:0;font:inherit;
+    font-size:14px;font-weight:700;white-space:nowrap;}
+  #mode button[aria-pressed=true]{background:#e6e9ee;color:#0d0f12;}
+  body.presenter{touch-action:manipulation;gap:8px;padding:max(12px,env(safe-area-inset-top))
+    max(12px,env(safe-area-inset-right)) max(12px,env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left));}
+  .presenter #pnav{display:flex;align-items:center;gap:8px;height:56px;flex:none;}
+  .pbtn{flex:none;min-width:96px;height:52px;background:#1b2028;color:#e6e9ee;border:1px solid #3a424d;
+    border-radius:12px;font:inherit;font-size:18px;font-weight:700;padding:0 12px;white-space:nowrap;}
+  .pbtn:active{background:#2a313b;}
+  .pbtn:disabled{opacity:.35;}
+  #pmid{flex:1;min-width:88px;height:52px;background:none;border:0;color:#e6e9ee;font:inherit;display:flex;
+    flex-direction:column;align-items:center;justify-content:center;}
+  #pnum{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap;}
+  #pclock{font-size:14px;font-weight:700;color:#c3cad4;font-variant-numeric:tabular-nums;white-space:nowrap;}
+  #pclock:empty{display:none;}
+  #pclock .warn{color:#ffb547;} #pclock .over{color:#ff6b6b;}
+  .presenter header{height:44px;font-size:16px;}
+  .presenter #key,.presenter #clock,.presenter #page,.presenter #chords,.presenter #layout,
+  .presenter #split,.presenter #note,.presenter #flash{display:none;}
+  .presenter #panes{flex:1 1 0;flex-direction:row;align-items:flex-start;gap:8px;}
+  .presenter #current,.presenter #side{flex:none!important;}
+  .presenter #side{gap:4px;}
+  .presenter #label{font-size:12px;}
+  .presenter #next{flex:none;}
+  .presenter.bo #current{border-color:#e5484d;}
+  .presenter.pending #current{opacity:.6;}
+  .presenter.dead #panes,.presenter.dead #plist{opacity:.5;}
+  .presenter #plist{display:block;position:relative;flex:none;}
+  #phead{height:28px;line-height:28px;font-size:13px;color:#8b95a2;}
+  #strip{position:relative;display:flex;gap:8px;height:100px;padding:2px 0 8px;overflow-x:auto;overflow-y:hidden;
+    touch-action:pan-x;overscroll-behavior:contain;}
+  #pstat{position:absolute;left:0;right:0;top:28px;bottom:0;display:flex;align-items:center;justify-content:center;
+    gap:12px;font-size:14px;color:#9aa4b1;text-align:center;}
+  #pstat:empty{display:none;}
+  #pstat .retry{height:44px;padding:0 16px;background:#1b2028;color:#e6e9ee;border:1px solid #3a424d;
+    border-radius:10px;font:inherit;font-weight:700;}
+  #pstat.gone{font-size:16px;font-weight:700;color:#e6e9ee;}
+  .th{flex:none;position:relative;width:160px;height:90px;padding:0;border:1px solid #232930;border-radius:6px;
+    overflow:hidden;background:#1b2028;color:#c3cad4;font:inherit;display:flex;align-items:center;justify-content:center;}
+  .th.pic.ok{background:#000;}
+  .th img{width:100%;height:100%;max-width:none;max-height:none;object-fit:contain;}
+  .th .tx{white-space:pre;overflow:hidden;max-width:100%;max-height:100%;padding:0 6px;font-size:9px;line-height:1.25;
+    font-weight:600;text-align:center;}
+  .th.blank{background:#0f1215;border:1px dashed #3a424d;}
+  .th.spacer{opacity:.6;}
+  .th .ph{font-size:10px;color:#8b95a2;}
+  .th .no{position:absolute;left:0;top:0;font-size:11px;font-weight:700;line-height:1.2;background:rgba(0,0,0,.7);
+    color:#e6e9ee;padding:2px 5px;border-bottom-right-radius:6px;font-variant-numeric:tabular-nums;}
+  .th .tt{position:absolute;left:0;right:0;bottom:0;height:16px;line-height:16px;padding:0 4px;background:rgba(0,0,0,.72);
+    font-size:10px;font-weight:700;color:#e6e9ee;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .th.cur::after,.th.pend::after{content:'';position:absolute;inset:0;border-radius:6px;pointer-events:none;}
+  .th.cur::after{border:3px solid #ffd54f;}
+  .th.pend::after{border:2px dashed #ffd54f;}
+  .th.cur .no{background:#ffd54f;color:#0d0f12;}
+  /* 가로 화면: 한 줄 머리 [◀ 이전 · 제목 · n/N·시계 · 배지 · 전환 · ⏻ · 다음 ▶], 목록 머리줄 없음. */
+  .presenter.land #top{flex-direction:row;align-items:center;height:52px;}
+  .presenter.land #pnav,.presenter.land header{display:contents;}
+  .presenter.land .pbtn{min-width:88px;height:48px;}
+  .presenter.land #pmid{flex:none;}
+  .presenter.land #pblack{display:block;flex:none;width:48px;height:48px;border-radius:12px;font-size:20px;}
+  .presenter.land #bar,.presenter.land #phead{display:none;}
+  .presenter.land #strip{height:82px;}
+  .presenter.land #pstat{top:0;}
+  .presenter.land .th{width:128px;height:72px;}
+  .presenter.land .th .tx{font-size:10px;}
+  .presenter.land #pprev{order:1;} .presenter.land #title{order:2;} .presenter.land header .grow{order:3;}
+  .presenter.land #pmid{order:4;} .presenter.land #badge{order:5;} .presenter.land #mode{order:6;}
+  .presenter.land #pblack{order:7;} .presenter.land #pnext{order:8;}
+  @media (max-height:339px){ #pclock{display:none;} }
   .remote #flash{display:block;position:fixed;top:0;bottom:0;width:16vw;pointer-events:none;opacity:0;
     transition:opacity .35s;background:linear-gradient(to right,rgba(255,213,79,.45),transparent);}
   #flash.r{right:0;background:linear-gradient(to left,rgba(255,213,79,.45),transparent);}
   #flash.show{opacity:1;transition:none;}
 </style></head><body>
-  <div id="message"></div>
-  <header><span id="title"></span><span id="key"></span><span class="grow"></span><span id="badge"></span>
-    <span id="clock"></span><span id="page"></span>
-    <button id="chords">코드</button><button id="layout"></button></header>
-  <div id="panes">
-    <div class="box" id="current"></div>
-    <div id="split"></div>
-    <div id="side"><div id="label">다음</div><div class="box" id="next"></div></div>
+  <div id="message" aria-live="assertive"><div id="mtext"></div><div id="mbar"></div></div>
+  <div id="top">
+    <div id="pnav">
+      <button class="pbtn" id="pprev" aria-label="이전 페이지" disabled>◀ 이전</button>
+      <button id="pmid"><span id="pnum">– / –</span><span id="pclock"></span></button>
+      <button id="pblack" aria-label="관객 화면 끄기, 길게 누르기"><span>⏻</span></button>
+      <button class="pbtn" id="pnext" aria-label="다음 페이지" disabled>다음 ▶</button>
+    </div>
+    <header><span id="title"></span><span id="key"></span><span class="grow"></span><span id="badge"></span>
+      <span id="clock"></span><span id="page"></span>
+      <button id="chords">코드</button><button id="layout"></button>
+      <span id="mode" role="group" aria-label="화면 보기"><button data-v="presenter">발표자 모드</button><button
+        data-v="singer">싱어창</button></span></header>
   </div>
+  <div id="panes">
+    <div class="box" id="current" role="img" aria-label="현재 페이지"></div>
+    <div id="split"></div>
+    <div id="side"><div id="label">다음</div><div class="box" id="next" role="img" aria-label="다음 페이지"></div></div>
+  </div>
+  <div id="plist"><div id="phead"></div><div id="strip"></div><div id="pstat"></div></div>
   <div id="note"></div>
-  <div id="bar"><button id="black"><span>화면 끄기 (길게 누르기)</span></button></div>
+  <div id="bar"><button id="black" aria-label="관객 화면 끄기, 길게 누르기"><span>화면 끄기 (길게 누르기)</span></button></div>
   <div id="flash"></div>
   <div id="hint"></div>
+  <div id="live" class="sr" aria-live="polite"></div>
 <script>
 function el(tag, cls, text){ var e=document.createElement(tag); if(cls) e.className=cls;
   if(text!=null) e.textContent=text; return e; }
+function $(id){ return document.getElementById(id); }
 var REMOTE=document.body.classList.contains('remote');
-if(REMOTE) document.title='발표자 리모컨';
+// 발표자 키로 열었을 때만: 발표자 모드(true) / 싱어창(false). setView 가 정한다.
+var PRESENTER=false;
 // ── 코드 ── 휴대폰마다 켜고 끈다(기본 끔). 앱은 chord_lines 를 늘 싣고 이 버튼이 정한다.
+// 발표자 모드에선 늘 끈다(관객 화면 모양 확인용).
 var CHORDS=false; try{ CHORDS=localStorage.getItem('singer_chords')==='1'; }catch(_){}
+function chordsOn(){ return CHORDS && !PRESENTER; }
 function hasChords(page){ return !!(page && page.chord_lines && page.chord_lines.length); }
 // 코드 줄 하나 {t, c:[[오프셋, 이름]...]}. 오프셋은 t 안 UTF-16 위치라 JS 문자열 그대로 자른다.
 // 낱말(.w)은 줄바꿈하지 않고, 코드가 붙은 자리부터는 조각(.seg: 위 코드 + 아래 가사)이다.
@@ -723,7 +955,7 @@ function fill(box, page, empty){
   }
   if(page.image_path){ var img=el('img'); img.src=page.image_path; st.appendChild(img); return; }
   // 코드만 있는 페이지는 관객 화면엔 빈 페이지지만 여기선 코드가 보인다.
-  if(CHORDS && hasChords(page)){
+  if(chordsOn() && hasChords(page)){
     var f=el('div','fit'), m=el('div','main');
     page.chord_lines.forEach(function(l){ m.appendChild(chordLine(l)); });
     f.appendChild(m);
@@ -761,7 +993,24 @@ function setLayout(row){
   document.body.classList.toggle('row',row);
   document.getElementById('layout').textContent=row?'⇅ 위아래':'⇆ 좌우';
   try{ localStorage.setItem('singer_layout',row?'row':'col'); }catch(_){}
-  fitAll(); if(REMOTE) showZoom();
+  relayout();
+}
+// 크기·배치가 바뀌면: 가로/세로 판정 → 발표자 모드 칸 크기 → 글자 맞춤 → 확대.
+function relayout(){
+  document.body.classList.toggle('land',window.innerWidth>window.innerHeight);
+  layoutPresenter(); fitAll(); if(REMOTE) showZoom();
+}
+// 발표자 모드 무대: 현재 칸 = 폭 70%(높이가 모자라면 높이에 맞춤), 다음 칸 = 나머지 폭
+// (가로 화면은 현재 칸의 55% 까지), 둘 다 16:9. 싱어창으로 돌아가면 손으로 넣은 크기를 지운다.
+function layoutPresenter(){
+  var cur=$('current'), side=$('side'), nx=$('next');
+  if(!PRESENTER){ cur.style.width=cur.style.height=side.style.width=nx.style.height=''; return; }
+  var p=$('panes'), w=p.clientWidth, h=p.clientHeight;
+  var cw=Math.max(0,Math.min((w-8)*0.7,h*16/9));
+  var nw=Math.max(0,w-cw-8);
+  if(document.body.classList.contains('land')) nw=Math.min(nw,cw*0.55);
+  cur.style.width=cw+'px'; cur.style.height=cw*9/16+'px';
+  side.style.width=nw+'px'; nx.style.height=nw*9/16+'px';
 }
 document.getElementById('layout').addEventListener('click',function(){
   setLayout(!document.body.classList.contains('row'));
@@ -832,17 +1081,19 @@ function renderClock(c){
   drawClock();
 }
 function two(n){ return (n<10?'0':'')+n; }
+// 싱어창 머리줄(#clock)과 발표자 모드 이동 줄(#pclock) 두 곳에 같은 값을 그린다.
 function drawClock(){
-  var box=document.getElementById('clock');
-  if(!clk.show){ box.textContent=''; return; }
-  var ms=clk.ms+(clk.run?Date.now()-clk.at:0), sec=Math.floor(ms/1000);
-  var now=new Date(), h=now.getHours();
-  var time=(h<12?'오전 ':'오후 ')+((h%12)||12)+':'+two(now.getMinutes());
-  var cls=clk.target>0 && ms>clk.target ? 'over' : (clk.target>0 && ms>=clk.target*0.8 ? 'warn' : '');
-  box.textContent=time+' · ';
-  var e=el('span',cls,two(Math.floor(sec/60))+':'+two(sec%60));
-  box.appendChild(e);
-  if(clk.target>0) box.appendChild(document.createTextNode(' / '+two(Math.floor(clk.target/60000))+':00'));
+  ['clock','pclock'].forEach(function(id){
+    var box=$(id);
+    if(!clk.show){ box.textContent=''; return; }
+    var ms=clk.ms+(clk.run?Date.now()-clk.at:0), sec=Math.floor(ms/1000);
+    var now=new Date(), h=now.getHours();
+    var time=(h<12?'오전 ':'오후 ')+((h%12)||12)+':'+two(now.getMinutes());
+    var cls=clk.target>0 && ms>clk.target ? 'over' : (clk.target>0 && ms>=clk.target*0.8 ? 'warn' : '');
+    box.textContent=time+' · ';
+    box.appendChild(el('span',cls,two(Math.floor(sec/60))+':'+two(sec%60)));
+    if(clk.target>0) box.appendChild(document.createTextNode(' / '+two(Math.floor(clk.target/60000))+':00'));
+  });
 }
 setInterval(drawClock,500);
 var lastData=null;
@@ -851,7 +1102,7 @@ function render(d){
   renderClock(d.clock);
   var cur=d.current||{}, next=d.next;
   document.getElementById('title').textContent=cur.title||'';
-  document.getElementById('key').textContent=CHORDS?(cur.key_label||''):'';
+  document.getElementById('key').textContent=chordsOn()?(cur.key_label||''):'';
   // 현재·다음 둘 다 코드가 없으면 흐리게(누를 수는 있다).
   document.getElementById('chords').classList.toggle('dim',!hasChords(cur) && !hasChords(next));
   document.getElementById('page').textContent=d.page_number+' / '+d.total_pages;
@@ -860,27 +1111,47 @@ function render(d){
   var nt=next&&next.title; document.getElementById('label').textContent=
     (nt && nt!==cur.title) ? '다음 · '+nt : '다음';
   // 메모·확대·메시지만 바뀌었으면 다시 채우지 않는다(이미지를 다시 받느라 깜빡이지 않게).
-  var pages=JSON.stringify([d.current,next,CHORDS]);
+  var pages=JSON.stringify([d.current,next,chordsOn()]);
   if(pages!==lastPages){
     lastPages=pages;
     fill(document.getElementById('current'), d.current, '빈 화면');
     fill(document.getElementById('next'), next, '마지막 페이지');
     fitAll();
   }
-  if(REMOTE) renderRemote(d);
+  if(REMOTE){ renderRemote(d); renderPresenter(d); }
 }
 var lastPages='';
 function setBadge(text, cls){
   var b=document.getElementById('badge'); b.textContent=text; b.className=cls;
 }
 var last='';
-function offline(){ last=''; lastPages=''; setBadge('연결 끊김','badge off'); }
+// 연결 상태. null = 아직 모름(처음 연결 중). 끊긴 지 10초가 넘으면 발표자에게 까닭을 짐작해 알린다.
+var alive=null, gone=false, deadTimer=null;
+function setAlive(v){
+  if(alive===v) return;
+  alive=v;
+  document.body.classList.toggle('dead',!v);
+  clearTimeout(deadTimer);
+  if(!v){
+    live('연결 끊김');
+    if(REMOTE) deadTimer=setTimeout(function(){
+      if(!gone) hint('발표가 끝났거나 PC 인터넷이 끊겼습니다. 계속 안 되면 PC 에서 새 QR 로 여세요');
+    },10000);
+  }else pagesAsked=''; // 다시 붙으면 목록을 한 번 다시 받는다
+}
+function offline(){ last=''; lastPages=''; setBadge('연결 끊김','badge off'); setAlive(false); }
+// 키가 바뀜(403, 앱에서 껐다 켬): 다시 묻지 않는다.
+function keyGone(){
+  gone=true; setBadge('주소가 바뀌었습니다 · 새 QR 로 여세요','badge off'); setAlive(false);
+  var s=$('pstat'); s.textContent='주소가 바뀌었습니다 · 새 QR 로 여세요'; s.className='gone';
+}
 function apply(text){
+  setAlive(true);
   text=takeClock(text);
   if(text===last) return;
   last=text;
   // 아직 보낸 페이지가 없어도({}) 연결은 된 것이니 "연결 끊김" 은 지운다.
-  if(text==='{}'){ setBadge('',''); return; }
+  if(text==='{}'){ setBadge('',''); if(PRESENTER && !lastData) fill($('current'),null,'빈 화면'); return; }
   try{ render(JSON.parse(text)); }catch(_){}
 }
 if(location.protocol==='https:'){
@@ -894,7 +1165,7 @@ if(location.protocol==='https:'){
     if(document.hidden) return;
     fetch('/state'+location.search,{cache:'no-store'})
       .then(function(r){
-        if(r.status===403){ setBadge('주소가 바뀌었습니다 · 새 QR 로 여세요','badge off'); return 'stop'; }
+        if(r.status===403){ keyGone(); return 'stop'; }
         if(!r.ok) throw 0;
         return r.text().then(function(t){ apply(t); delay=500; });
       })
@@ -911,9 +1182,9 @@ if(location.protocol==='https:'){
   es.onmessage=function(ev){ apply(ev.data); };
   es.onerror=offline;
 }
-window.addEventListener('resize', function(){ fitAll(); if(REMOTE) showZoom(); });
+window.addEventListener('resize', relayout);
 
-// ── 발표자 리모컨 ──
+// ── 발표자 키: 싱어창 제스처 ──
 // 좌우로 밀기·양쪽 끝 누르기 = 넘기기, 두 손가락 = 확대(확대 중엔 한 손가락 = 옮기기),
 // 가운데 두 번 누르기 = 확대 풀기, '화면 끄기' 길게 = 블랙아웃.
 var state=null, zoom={on:false,x:0,y:0,size:1}, zoomLocalUntil=0, zoomSyncTimer=null;
@@ -923,11 +1194,13 @@ function renderRemote(d){
   var note=document.getElementById('note');
   // 메모가 생기거나 없어지면 다음 페이지 칸 높이가 바뀌므로 글자 크기를 다시 맞춘다.
   if(note.textContent!==(d.note||'')){ note.textContent=d.note||''; fitAll(); }
-  var message=document.getElementById('message');
-  if(message.textContent!==(d.message||'')){ message.textContent=d.message||''; message.scrollTop=0; fitAll(); }
-  var b=document.getElementById('black');
-  b.classList.toggle('on',!!d.blackout); // 길게 누르는 중(hold)은 그대로 둔다
-  b.firstChild.textContent=d.blackout?'화면 켜기 (길게 누르기)':'화면 끄기 (길게 누르기)';
+  showMessage(d);
+  ['black','pblack'].forEach(function(id){
+    var b=$(id);
+    b.classList.toggle('on',!!d.blackout); // 길게 누르는 중(hold)은 그대로 둔다
+    b.setAttribute('aria-label',d.blackout?'관객 화면 켜기, 길게 누르기':'관객 화면 끄기, 길게 누르기');
+  });
+  $('black').firstChild.textContent=d.blackout?'화면 켜기 (길게 누르기)':'화면 끄기 (길게 누르기)';
   // 손으로 확대하는 중·직후엔 서버 값(조금 전 상태)으로 되돌리지 않는다. 그 사이 온 값은
   // 다시 오지 않으므로(같은 글은 apply 가 거른다) 끝나면 마지막으로 받은 값을 입힌다.
   var wait=zoomLocalUntil-Date.now();
@@ -947,7 +1220,7 @@ function slideFrame(box){
 }
 function showZoom(){
   var box=document.getElementById('current'), st=box.querySelector('.stage'); if(!st) return;
-  if(!zoom.on){ st.style.transform=''; return; }
+  if(!zoom.on || PRESENTER){ st.style.transform=''; return; } // 발표자 모드는 확대 없이 관객 화면 전체를 본다
   var f=slideFrame(box);
   st.style.transform='translate('+f.x+'px,'+f.y+'px) scale('+(1/zoom.size)+') translate('
     +(-f.x-zoom.x*f.w)+'px,'+(-f.y-zoom.y*f.h)+'px)';
@@ -969,9 +1242,11 @@ function go(dir){
   if(!state) return;
   // 마지막·첫 페이지면 넘길 곳이 없다.
   if(dir>0 ? state.page_number>=state.total_pages : state.page_number<=1) return;
-  var f=document.getElementById('flash');
-  f.className=dir>0?'r show':'show';
-  clearTimeout(flashTimer); flashTimer=setTimeout(function(){ f.className=dir>0?'r':''; },120);
+  if(!PRESENTER){
+    var f=document.getElementById('flash');
+    f.className=dir>0?'r show':'show';
+    clearTimeout(flashTimer); flashTimer=setTimeout(function(){ f.className=dir>0?'r':''; },120);
+  }
   buzz();
   // from = 보던 쪽. 앱은 지금 쪽과 다르면 무시한다(두 장씩 넘어가지 않게).
   control((dir>0?'next':'prev')+'&from='+state.page_number);
@@ -1008,7 +1283,8 @@ if(REMOTE){
   // 메시지 칸도 같고, 스크롤하다 넘어가지 않게 좌우 밀기까지 막는다.
   function own(e){ if(!e.target.closest('#note,#message')) e.preventDefault(); }
   document.addEventListener('touchstart',function(e){
-    if(e.target.closest('#bar,#layout,#chords,#split')) return;
+    // 발표자 모드는 버튼·썸네일로만 옮긴다(밀기·확대·끝 누르기 없음, 목록은 브라우저가 스크롤).
+    if(PRESENTER || e.target.closest('#bar,#layout,#chords,#split,#mode')) return;
     own(e);
     begin(e,g);
   },{passive:false});
@@ -1051,21 +1327,170 @@ if(REMOTE){
   }
   document.addEventListener('touchend',end);
   document.addEventListener('touchcancel',function(){ g=null; });
-  // 블랙아웃은 잘못 눌러 꺼지지 않게 0.6초 길게 눌러야 한다.
-  var black=document.getElementById('black'), holdTimer=null;
-  function release(){ clearTimeout(holdTimer); holdTimer=null; black.classList.remove('hold'); }
-  black.addEventListener('touchstart',function(e){
-    e.preventDefault();
-    if(!state) return;
-    black.classList.add('hold');
-    holdTimer=setTimeout(function(){
-      release(); buzz();
-      control('blackout&on='+(state.blackout?0:1));
-    },600);
-  },{passive:false});
-  black.addEventListener('touchend',release);
-  black.addEventListener('touchcancel',release);
+  // 블랙아웃은 잘못 눌러 꺼지지 않게 0.6초 길게 눌러야 한다. 세로 막대(#black)·가로 ⏻(#pblack) 공통.
+  ['black','pblack'].forEach(function(id){
+    var black=$(id), holdTimer=null;
+    function release(){ clearTimeout(holdTimer); holdTimer=null; black.classList.remove('hold'); }
+    black.addEventListener('touchstart',function(e){
+      e.preventDefault();
+      if(!state) return;
+      black.classList.add('hold');
+      holdTimer=setTimeout(function(){
+        release(); buzz();
+        control('blackout&on='+(state.blackout?0:1));
+      },600);
+    },{passive:false});
+    black.addEventListener('touchend',release);
+    black.addEventListener('touchcancel',release);
+  });
 }
+
+// ── 메시지 알림(발표자 키 두 모드 공통) ──
+// message_id 가 바뀌면 띄우고 60초 뒤(PC 가 비우면 그 전에, 띠를 누르면 바로) 감춘다.
+// 같은 글을 다시 보내도 id 가 바뀌어 다시 뜬다. 닫은 알림은 같은 id 로 다시 와도 안 띄운다.
+var msgId, msgTimer=null, msgOut=null;
+function showMessage(d){
+  var text=d.message||'', m=$('message');
+  if(!text){ hideMessage(); return; }
+  if(d.message_id===msgId) return;
+  msgId=d.message_id;
+  var t=$('mtext'); t.textContent=text; t.scrollTop=0;
+  clearTimeout(msgOut);
+  m.classList.add('show'); void m.offsetWidth; m.classList.add('in');
+  var bar=$('mbar');
+  bar.style.transition='none'; bar.style.transform='scaleX(1)'; void bar.offsetWidth;
+  bar.style.transition='transform 60s linear'; bar.style.transform='scaleX(0)';
+  if(navigator.vibrate) navigator.vibrate(30);
+  clearTimeout(msgTimer); msgTimer=setTimeout(hideMessage,60000);
+  relayout();
+}
+function hideMessage(){
+  var m=$('message');
+  clearTimeout(msgTimer);
+  if(!m.classList.contains('in')) return;
+  m.classList.remove('in');
+  clearTimeout(msgOut);
+  msgOut=setTimeout(function(){ m.classList.remove('show'); relayout(); },300);
+}
+$('message').addEventListener('click',hideMessage);
+
+// ── 발표자 모드 ──
+// 이전·다음 = go(±1)(from 검사), 썸네일 = goto&id=<슬라이드 키>. 목록은 pages_rev 가 바뀔 때만 /pages 로 받는다.
+var pages=null, pagesAsked='', pagesSeq=0, curIdx=-1, lastBo=null;
+var pend=-1, pendTimer=null, stripTouched=0;
+function live(text){ $('live').textContent=text; }
+function stat(text, retry){
+  var s=$('pstat'); s.className=''; s.textContent=text;
+  if(retry){ var b=el('button','retry','다시 시도'); b.addEventListener('click',function(){ syncPages(true); }); s.appendChild(b); }
+}
+function syncPages(force){
+  if(!PRESENTER || !lastData || gone) return;
+  var rev=lastData.pages_rev||'';
+  if(!force && rev===pagesAsked) return;
+  pagesAsked=rev;
+  if(!pages) stat('페이지 목록을 받는 중…');
+  var seq=++pagesSeq;
+  fetch('/pages'+location.search,{cache:'no-store'})
+    .then(function(r){ if(r.status===403){ keyGone(); throw 0; } if(!r.ok) throw 0; return r.json(); })
+    .then(function(j){ if(seq!==pagesSeq) return; pages=j.pages||[]; buildStrip(); })
+    // 받는 동안·실패해도 옛 목록은 그대로 둔다. 목록이 없을 때만 알린다(다음 pages_rev 에 다시 받는다).
+    .catch(function(){ if(seq===pagesSeq && !pages && !gone) stat('페이지 목록을 받지 못했습니다',true); });
+}
+function buildStrip(){
+  var s=$('strip'); s.textContent='';
+  pages.forEach(function(p,i){
+    var b=el('button','th'), kind;
+    if(p.image){
+      b.classList.add('pic'); kind='그림';
+      var im=el('img'); im.alt=''; im.loading='lazy'; im.decoding='async'; im.draggable=false;
+      im.onload=function(){ b.classList.add('ok'); };
+      im.onerror=function(){ im.remove(); b.classList.remove('pic'); b.insertBefore(el('span','ph','그림 없음'),b.firstChild); };
+      im.src=p.image; b.appendChild(im);
+    }else if(p.spacer){ b.classList.add('blank','spacer'); b.appendChild(el('span','ph','여백')); kind='여백'; }
+    else if(p.blank){ b.classList.add('blank'); b.appendChild(el('span','ph','빈 화면')); kind='빈 화면'; }
+    else { b.appendChild(el('span','tx',(p.text||'').split('\n').slice(0,3).join('\n'))); kind='가사'; }
+    b.appendChild(el('span','no',String(i+1)));
+    if(p.first && p.title) b.appendChild(el('span','tt',p.title));
+    b.setAttribute('aria-label',(i+1)+'쪽, '+(kind==='가사' && p.title ? p.title+', ' : '')+kind);
+    b.addEventListener('click',function(){ gotoPage(i); });
+    s.appendChild(b);
+  });
+  $('phead').textContent='모든 페이지 · '+pages.length+'장';
+  stat('');
+  markCurrent(true);
+}
+function centerThumb(smooth){
+  var s=$('strip'), t=s.children[curIdx]; if(!t) return;
+  s.scrollTo({left:t.offsetLeft-(s.clientWidth-t.offsetWidth)/2, behavior:smooth?'smooth':'auto'});
+}
+// 지금 페이지 강조. 손으로 목록을 민 지 3초 안이면 스크롤은 하지 않는다.
+function markCurrent(instant){
+  var ths=$('strip').children;
+  for(var i=0;i<ths.length;i++){
+    var on=i===curIdx; ths[i].classList.toggle('cur',on);
+    if(on) ths[i].setAttribute('aria-current','page'); else ths[i].removeAttribute('aria-current');
+  }
+  if(Date.now()-stripTouched>3000) centerThumb(!instant);
+}
+function clearPending(){
+  clearTimeout(pendTimer); pend=-1; document.body.classList.remove('pending');
+  Array.prototype.forEach.call(document.querySelectorAll('.th.pend'),function(t){ t.classList.remove('pend'); });
+}
+function canAct(){
+  if(alive) return true;
+  hint(gone?'주소가 바뀌었습니다 · 새 QR 로 여세요':'연결이 끊겨 넘길 수 없습니다');
+  return false;
+}
+function gotoPage(i){
+  if(!canAct() || !state || !pages[i]) return;
+  clearPending();
+  if(i===curIdx) return;
+  pend=i; $('strip').children[i].classList.add('pend'); document.body.classList.add('pending');
+  buzz();
+  control('goto&id='+encodeURIComponent(pages[i].id));
+  // 2초 안에 안 바뀌면 그 사이 콘티가 바뀐 것 — 목록을 다시 받고 다시 누르게 한다.
+  pendTimer=setTimeout(function(){
+    if(pend!==i) return;
+    clearPending(); hint('페이지 목록이 바뀌었습니다. 다시 눌러 주세요'); syncPages(true);
+  },2000);
+}
+function renderPresenter(d){
+  var n=d.page_number||0, t=d.total_pages||0;
+  $('pnum').textContent=t?n+' / '+t:'– / –';
+  $('pmid').setAttribute('aria-label','지금 '+n+'쪽, 전체 '+t+'쪽. 누르면 목록을 지금 페이지로 옮깁니다');
+  $('pprev').disabled=n<=1; $('pnext').disabled=n>=t;
+  document.body.classList.toggle('bo',!!d.blackout);
+  var first=lastBo===null; // 처음 받은 값은 읽어 주지 않는다
+  if(PRESENTER && !first && lastBo!==!!d.blackout && d.blackout) live('관객 화면 꺼짐');
+  lastBo=!!d.blackout;
+  if(n-1===pend) clearPending();
+  if(n-1!==curIdx){ curIdx=n-1; if(PRESENTER && !first && n) live(n+'쪽으로 이동'); markCurrent(false); }
+  syncPages();
+}
+$('pprev').addEventListener('click',function(){ if(canAct()) go(-1); });
+$('pnext').addEventListener('click',function(){ if(canAct()) go(1); });
+$('pmid').addEventListener('click',function(){ centerThumb(true); });
+['touchmove','wheel'].forEach(function(ev){
+  $('strip').addEventListener(ev,function(){ stripTouched=Date.now(); },{passive:true});
+});
+// 발표자 키 화면의 [발표자 모드 | 싱어창]. 휴대폰마다 기억한다(기본 발표자 모드).
+function setView(v){
+  PRESENTER=REMOTE && v==='presenter';
+  document.body.classList.toggle('presenter',PRESENTER);
+  document.title=PRESENTER?'발표자 모드':'싱어창';
+  Array.prototype.forEach.call(document.querySelectorAll('#mode button'),function(b){
+    b.setAttribute('aria-pressed',String(b.getAttribute('data-v')===(PRESENTER?'presenter':'singer')));
+  });
+  if(REMOTE) try{ localStorage.setItem('presenter_view',PRESENTER?'presenter':'singer'); }catch(_){}
+  if(lastData){ lastPages=''; render(lastData); }
+  else if(PRESENTER) fill($('current'),null,'연결 중…');
+  if(PRESENTER && !pages && !gone) stat('페이지 목록을 받는 중…');
+  relayout();
+  if(PRESENTER) markCurrent(true);
+}
+Array.prototype.forEach.call(document.querySelectorAll('#mode button'),function(b){
+  b.addEventListener('click',function(){ setView(b.getAttribute('data-v')); });
+});
 // 화면 꺼짐 방지. https(바깥 망 터널 주소)에서만 된다 — 같은 망 http 주소면 조용히 건너뛰고,
 // 앱 다이얼로그가 "휴대폰 자동 잠금을 꺼 두라"고 안내한다. 탭이 가려지면 풀리므로 돌아올 때 다시 건다.
 function keepAwake(){
@@ -1079,5 +1504,7 @@ var savedLayout=null; try{ savedLayout=localStorage.getItem('singer_layout'); }c
 var savedSplit=NaN; try{ savedSplit=parseFloat(localStorage.getItem('singer_split')); }catch(_){}
 setSplit(isNaN(savedSplit)?0.65:savedSplit);
 setLayout(savedLayout==='row');
+var savedView=null; try{ savedView=localStorage.getItem('presenter_view'); }catch(_){}
+setView(savedView==='singer'?'singer':'presenter');
 </script></body></html>
 ''';
