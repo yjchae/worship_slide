@@ -958,26 +958,36 @@ def _font_dirs():
     return [Path("/usr/share/fonts"), Path("/usr/local/share/fonts"), home / ".fonts", home / ".local/share/fonts"]
 
 
-def _font_names(data):
-    """TTF/OTF/TTC 바이트 → {family 이름(name ID 1·4·16, 모든 언어): 글꼴 번호(TTC 안 몇 번째, 아니면 0)}."""
+def _font_names(f):
+    """TTF/OTF/TTC 파일(바이너리 열기) → {family 이름(name ID 1·4·16, 모든 언어): 글꼴 번호(TTC 안 몇 번째, 아니면 0)}.
+    파일 전체가 아니라 머리·표 목록·name 표만 읽는다(Windows 는 글꼴 폴더가 수백 MB 이고 읽는 파일마다 백신이 검사한다)."""
+    def read(offset, length):
+        f.seek(offset)
+        data = f.read(length)
+        if len(data) < length:
+            raise ValueError("짧은 글꼴 파일")
+        return data
+
     offsets = [0]
-    if data[:4] == b"ttcf":
-        count = struct.unpack(">I", data[8:12])[0]
-        offsets = list(struct.unpack(f">{count}I", data[12:12 + 4 * count]))
+    if read(0, 4) == b"ttcf":
+        count = struct.unpack(">I", read(8, 4))[0]
+        offsets = list(struct.unpack(f">{count}I", read(12, 4 * count)))
     names = {}
     for face, base in enumerate(offsets):
-        num = struct.unpack(">H", data[base + 4:base + 6])[0]
+        num = struct.unpack(">H", read(base + 4, 2))[0]
+        directory = read(base + 12, 16 * num)
         for i in range(num):
-            rec = base + 12 + 16 * i
-            if data[rec:rec + 4] != b"name":
+            rec = 16 * i
+            if directory[rec:rec + 4] != b"name":
                 continue
-            table = struct.unpack(">I", data[rec + 8:rec + 12])[0]
-            _, count, strings = struct.unpack(">HHH", data[table:table + 6])
+            table, size = struct.unpack(">II", directory[rec + 8:rec + 16])
+            data = read(table, size)
+            _, count, strings = struct.unpack(">HHH", data[:6])
             for j in range(count):
-                platform, enc, _, name_id, length, off = struct.unpack(">6H", data[table + 6 + 12 * j:table + 18 + 12 * j])
+                platform, enc, _, name_id, length, off = struct.unpack(">6H", data[6 + 12 * j:18 + 12 * j])
                 if name_id not in (1, 4, 16):
                     continue
-                raw = data[table + strings + off:table + strings + off + length]
+                raw = data[strings + off:strings + off + length]
                 if platform in (0, 3):
                     names.setdefault(raw.decode("utf-16-be", "ignore").strip(), face)
                 elif platform == 1 and enc == 0:
@@ -997,7 +1007,9 @@ def installed_fonts():
                 if file.lower().endswith((".ttf", ".otf", ".ttc")):
                     path = Path(root, file)
                     try:
-                        for name, face in _font_names(path.read_bytes()).items():
+                        with open(path, "rb") as f:
+                            names = _font_names(f)
+                        for name, face in names.items():
                             found.setdefault(name, (str(path), face))
                     except (OSError, struct.error, ValueError):
                         pass
