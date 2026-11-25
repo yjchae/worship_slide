@@ -687,7 +687,7 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   - 2차 '이미지 페이지'(`image_rect`·제목 키, 렌더러 네 곳 변경)는 되돌렸다(`SlideBackground.imageRect` 등도 지웠다)
   - **PPT 를 편집 페이지로 가져오기** (기획 `planning/ppt-style-editor/` 3단계, 가져오기 메뉴): 파일 → `PythonBridge.layout`(`Process.start`, 임시 작업 폴더, 진행 창 문구는 stderr 진행 줄 → `pptLayoutProgressLabel`.
     '취소' = macOS SIGTERM(Python 이 soffice·osascript 를 죽이고 PowerPoint 는 우리 사본만 닫는다)·Windows `taskkill /T`(실행 미확인) → 끝나기를 기다려 작업 폴더를 지운다) →
-    결과 창 `PptLayoutResultDialog`(s6: 슬라이드 N장 중 M장·그림으로 둔 요소·빠진 꾸밈·없는 글꼴·16:9 아님·숨긴 슬라이드·'애니메이션 N장 → 클릭 단계 M장'·'처음부터 보이게 둔 애니메이션'(`anim_lost` 까닭), 0 인 줄 숨김) → '콘티에 담기'면
+    결과 창 `PptLayoutResultDialog`(s6: 슬라이드 N장 중 M장·그림으로 둔 요소·빠진 꾸밈·없는 글꼴·16:9 아님·숨긴 슬라이드·'애니메이션 N장 → 클릭 단계 M장'·'처음부터 보이게 둔 애니메이션'(`anim_lost` 까닭, exit 빼고)·'다시 나타나지 않는 애니메이션'(`anim_lost.exit`, 사라진 채로 둠), 0 인 줄 숨김) → '콘티에 담기'면
     배경 PNG·그림을 `page_images/` 로 복사(`register`)하고 작업 폴더를 지운 뒤 슬라이드마다 편집 페이지(검정 + 배경 PNG + 요소, 이름 = 슬라이드 제목 또는 '파일 이름 N')를 구워
     콘티 끝에 파일 이름 그룹(`pptImportGroupName`)으로 넣는다(`_importPptAsPages`, `_trackedEdit` 라 되돌리기 됨). 숨긴 슬라이드는 건너뛰고, 4:3 은 여백을 둔 16:9 로 만든다.
     애니메이션: 요소의 `appear`·`disappear`·슬라이드 `steps`(없으면 1)·`anim_lost`(`PptLayoutSlide.steps`·`animLost`)를 읽어 위 클릭 단계 편집 페이지로 넣는다(장 수 = steps). 배경에 굽히는 도형의 애니메이션은 그 영역을 잘라 낸 그림 요소 + appear 로 온다(진행 줄 `render` n=2 = '애니메이션 배경 굽는 중…').

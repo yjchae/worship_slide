@@ -414,7 +414,8 @@ def check_font_names():
     """name 테이블 읽기: 앱 내장 글꼴 파일에서 family 이름이 나온다."""
     font = Path(__file__).resolve().parent.parent / "assets" / "fonts" / "Pretendard-Regular.ttf"
     if font.exists():
-        assert "Pretendard" in pptx_layout._font_names(font.read_bytes())
+        with open(font, "rb") as f:
+            assert "Pretendard" in pptx_layout._font_names(f)
 
 
 def check_progress(sample, tmp):

@@ -25,9 +25,9 @@ class PptLayoutResultDialog extends StatelessWidget {
     builder: (_) => PptLayoutResultDialog(layout: layout, groupName: groupName),
   );
 
-  /// 처음부터 보이게 둔 애니메이션의 까닭 이름(`anim_lost` 키).
+  /// 처음부터 보이게 둔 애니메이션의 까닭 이름(`anim_lost` 키). exit(사라진 뒤 다시 나타남)는
+  /// 사라진 채로 두므로 이 줄에 넣지 않고 따로 보인다.
   static const _animLostLabels = {
-    'exit': '다시 나타남',
     'paragraph': '문단 단위',
     'group_child': '그룹 안 도형',
     'overlap': '겹침',
@@ -52,6 +52,7 @@ class PptLayoutResultDialog extends StatelessWidget {
     for (final s in editable) {
       s.animLost.forEach((k, v) => animLost[k] = (animLost[k] ?? 0) + v);
     }
+    final reappear = animLost.remove('exit') ?? 0;
     final animLostCount = animLost.values.fold(0, (a, b) => a + b);
     final muted = TextStyle(fontSize: 13, color: cs.onSurfaceVariant);
 
@@ -140,8 +141,16 @@ class PptLayoutResultDialog extends StatelessWidget {
                   context,
                   Icons.info_outline_rounded,
                   '처음부터 보이게 둔 애니메이션',
-                  '${[for (final MapEntry(:key) in animLost.entries) _animLostLabels[key] ?? key].join('·')} — 클릭 단계로 옮기지 못해 처음부터 보입니다(사라진 뒤 다시 나타나는 것은 사라진 채로 둡니다).',
+                  '${[for (final MapEntry(:key) in animLost.entries) _animLostLabels[key] ?? key].join('·')} — 클릭 단계로 옮기지 못해 처음부터 보입니다.',
                   '$animLostCount곳',
+                ),
+              if (reappear > 0)
+                _row(
+                  context,
+                  Icons.info_outline_rounded,
+                  '다시 나타나지 않는 애니메이션',
+                  '사라진 뒤 다시 나타나는 것은 사라진 채로 둡니다.',
+                  '$reappear곳',
                 ),
               if (layout.fontsMissing.isNotEmpty)
                 _row(

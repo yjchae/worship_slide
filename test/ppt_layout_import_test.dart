@@ -168,6 +168,56 @@ void main() {
     expect(pageStepCount(elements), layout.slides[0].steps);
   });
 
+  test('못 옮긴 그림을 빼면 그 그림만 쓰던 클릭 단계를 당긴다', () {
+    final json = contract();
+    final slides = json['slides'] as List;
+    slides[0]['steps'] = 4;
+    final elements0 = slides[0]['elements'] as List;
+    elements0[0]['appear'] = 1;
+    elements0[1]['appear'] = 2; // 그림 — 복사 실패로 빠진다
+    elements0[2]['appear'] = 3;
+    final layout = PptLayout.fromJson(json);
+    final copied = {
+      for (final f in pptLayoutFiles(layout))
+        if (f != elements0[1]['path']) f: '/copy$f',
+    };
+    final elements = pptLayoutPages(
+      layout,
+      copied,
+    ).first.background.pageElements!;
+    expect(elements.whereType<PageImageElement>().map((e) => e.path), [
+      '/copy/work/s001_3.jpg',
+    ]);
+    expect(elements.map((e) => e.appear), [1, 2, 0]);
+    expect(pageStepCount(elements), 3);
+  });
+
+  test('못 옮긴 그림을 빼면 disappear 도 당긴다', () {
+    final json = contract();
+    final slides = json['slides'] as List;
+    final elements0 = slides[0]['elements'] as List;
+    elements0[0]['appear'] = 1; // a: 글 상자
+    elements0[0]['disappear'] = 4;
+    elements0[1]['appear'] = 2; // b: 그림 — 복사 실패로 빠진다
+    elements0[1]['disappear'] = 3;
+    elements0[2]['appear'] = 4; // c
+    final layout = PptLayout.fromJson(json);
+    final copied = {
+      for (final f in pptLayoutFiles(layout))
+        if (f != elements0[1]['path']) f: '/copy$f',
+    };
+    final elements = pptLayoutPages(
+      layout,
+      copied,
+    ).first.background.pageElements!;
+    expect(elements.map((e) => (e.appear, e.disappear)), [
+      (1, 2),
+      (2, 0),
+      (0, 0),
+    ]);
+    expect(pageStepCount(elements), 3);
+  });
+
   test('그룹 이름 = 파일 이름(12자), 겹치면 (2)', () {
     final layout = PptLayout.fromJson(contract());
     expect(pptImportGroupName(layout, const []), '2026 성탄 예배');
@@ -284,6 +334,7 @@ void main() {
         '숨긴 슬라이드',
         '애니메이션',
         '처음부터 보이게 둔 애니메이션',
+        '다시 나타나지 않는 애니메이션',
       ]) {
         expect(find.text(label), findsNothing);
       }
@@ -297,7 +348,7 @@ void main() {
       final json = contract();
       final slides = json['slides'] as List;
       slides[0]['steps'] = 3;
-      slides[0]['anim_lost'] = {'exit': 1, 'paragraph': 2};
+      slides[0]['anim_lost'] = {'exit': 1, 'paragraph': 3};
       slides[2]['steps'] = 2;
       slides[2]['anim_lost'] = {'overlap': 1};
       await open(tester, PptLayout.fromJson(json));
@@ -306,7 +357,19 @@ void main() {
       expect(find.text('5장'), findsOneWidget);
       expect(find.text('처음부터 보이게 둔 애니메이션'), findsOneWidget);
       expect(find.text('4곳'), findsOneWidget);
-      expect(find.textContaining('다시 나타남·문단 단위·겹침'), findsOneWidget);
+      expect(find.textContaining('문단 단위·겹침 — '), findsOneWidget);
+      expect(find.textContaining('다시 나타남'), findsNothing);
+      expect(find.text('다시 나타나지 않는 애니메이션'), findsOneWidget);
+      expect(find.text('1곳'), findsOneWidget);
+    });
+
+    testWidgets('exit 만 있으면 처음부터 보이게 둔 줄은 숨긴다', (tester) async {
+      final json = contract();
+      (json['slides'] as List)[0]['anim_lost'] = {'exit': 2};
+      await open(tester, PptLayout.fromJson(json));
+      expect(find.text('처음부터 보이게 둔 애니메이션'), findsNothing);
+      expect(find.text('다시 나타나지 않는 애니메이션'), findsOneWidget);
+      expect(find.text('2곳'), findsOneWidget);
     });
 
     testWidgets('편집 가능 0장이면 닫기만', (tester) async {
