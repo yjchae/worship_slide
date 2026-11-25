@@ -689,6 +689,8 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate, WKNavi
       </head><body></body></html>
       """
     }
+    // decoding=sync: 다른 페이지에서 첫 이미지 장으로 넘어갈 때(문서를 새로 읽음) 큰 그림을 WebKit 이 따로 풀어
+    // 한두 프레임 배경만 보이지 않게 그리는 순간 푼다. 같은 바탕끼리는 swapImage 가 decode() 뒤에 바꾼다.
     return """
     <!DOCTYPE html><html><head><meta charset="utf-8">
     <style>
@@ -698,7 +700,7 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate, WKNavi
       img{width:100%;height:100%;object-fit:contain;display:block;}
       \(Self.pointerCSS)
     </style></head><body>
-      <div id="stage"><img src="\(src)"></div>
+      <div id="stage"><img decoding="sync" src="\(src)"></div>
       \(Self.pointerHTML)
       <script>\(pointerScript())</script>
     </body></html>
@@ -1062,7 +1064,8 @@ class SingerWindowController: NSWindowController, NSWindowDelegate {
        let data = try? Data(contentsOf: URL(fileURLWithPath: path)) {
       let ext = (path as NSString).pathExtension.lowercased()
       let mime = ext == "jpg" || ext == "jpeg" ? "image/jpeg" : "image/png"
-      return "<img src=\"data:\(mime);base64,\(data.base64EncodedString())\">"
+      // decoding=sync: 큰 그림은 WebKit 이 따로 풀어 문서를 다시 읽을 때 한두 프레임 빈 칸이 보인다 — 그리는 순간 풀게 한다.
+      return "<img decoding=\"sync\" src=\"data:\(mime);base64,\(data.base64EncodedString())\">"
     }
     let sub = htmlEscape((page["english_text"] as? String) ?? "")
     let subHTML = sub.isEmpty ? "" : "<div class=\"sub\">\(sub)</div>"

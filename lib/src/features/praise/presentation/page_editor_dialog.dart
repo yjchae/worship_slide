@@ -26,7 +26,7 @@ import 'page_text_editor.dart';
 import 'style_fields.dart';
 
 /// 편집 창 결과: 페이지 이름(빈칸이면 자동 이름) + 요소 + 구운 PNG + 페이지 배경.
-/// [imagePaths] = 클릭 단계마다 한 장([pageSteps], 애니메이션이 없으면 한 장). 틀 모드는 마지막 단계 한 장(썸네일).
+/// [imagePaths] = 클릭 단계마다 한 장([pageSteps], 애니메이션이 없으면 한 장). 틀 모드는 단계를 무시한 한 장(모든 요소, 썸네일).
 typedef PageEditorResult = ({
   String name,
   List<PageElement> elements,

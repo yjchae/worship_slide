@@ -135,7 +135,8 @@ Set<String> pptLayoutFiles(PptLayout layout) => {
 };
 
 /// 숨기지 않은 슬라이드마다 편집 페이지 이름 + 배경(요소 포함). 경로는 [copied](작업 폴더 → 복사본)로 바꾸고,
-/// 복사하지 못한 그림 요소는 뺀다(작업 폴더는 지워지므로). 배경 PNG 를 못 옮겼으면 검정 배경만.
+/// 복사하지 못한 그림 요소는 뺀다(작업 폴더는 지워지므로) — 빠진 그림만 쓰던 클릭 단계는 [normalizeAppear] 로 당긴다
+/// (같은 그림이 두 장 구워지지 않게). 배경 PNG 를 못 옮겼으면 검정 배경만.
 List<({String name, SlideBackground background})> pptLayoutPages(
   PptLayout layout,
   Map<String, String> copied,
@@ -147,13 +148,15 @@ List<({String name, SlideBackground background})> pptLayoutPages(
         // 배경 PNG 가 검정 여백까지 그린 1920x1080 이라 색은 PNG 가 없을 때만 보인다.
         color: const Color(0xFF000000),
         imagePath: copied[s.backgroundPng],
-        pageElements: PageElement.listFromJson([
-          for (final e in s.elements)
-            if (e is! Map || e['type'] != 'image')
-              e
-            else if (copied[e['path']] case final path?)
-              {...e, 'path': path},
-        ]),
+        pageElements: normalizeAppear(
+          PageElement.listFromJson([
+            for (final e in s.elements)
+              if (e is! Map || e['type'] != 'image')
+                e
+              else if (copied[e['path']] case final path?)
+                {...e, 'path': path},
+          ]),
+        ),
       ),
     ),
 ];
