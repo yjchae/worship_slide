@@ -73,6 +73,7 @@ import 'page_to_free.dart';
 import 'page_editor_dialog.dart';
 import 'page_format_editor.dart';
 import 'page_template_dialog.dart';
+import 'presenter_pin_dialog.dart';
 import 'page_rich_text.dart' show pageFontFamilies;
 import 'ppt_layout_dialog.dart';
 import 'auto_advance_box.dart';
@@ -2128,19 +2129,22 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                       },
                     ),
                     if (remote) ...[
-                      _PresenterPinRow(
+                      PresenterPinRow(
                         pin: _singerWeb.presenterPin,
                         onChange: () async {
                           final pin = await _askPresenterPin();
                           if (pin == null) return;
-                          await _presenterPinStore.save(pin);
+                          // 서버에는 바로 넣는다(저장에 실패해도 이번 실행 동안은 새 PIN).
                           _singerWeb.presenterPin = pin;
-                          setDialogState(() {});
+                          await _presenterPinStore.save(pin);
+                          if (context.mounted) setDialogState(() {});
                         },
                       ),
                       const SizedBox(height: 12),
                       Text(
-                        '발표자 휴대폰에서 이 주소를 열고 PIN 을 넣으면 들어옵니다. 한 번 넣은 휴대폰은 다음부터 묻지 않습니다.\n'
+                        '발표자 휴대폰에서 이 주소를 열고 PIN 을 넣으면 들어옵니다. 한 번 넣은 휴대폰은 같은 와이파이 주소로 열 때 다음부터 묻지 않습니다'
+                        '(바깥 망 주소는 발표마다 바뀌어 그때마다 PIN 을 넣습니다).\n'
+                        '관객 화면이 PC 화면을 복제하고 있으면 PIN 이 관객에게 보일 수 있으니 이 창은 발표 전에 여세요.\n'
                         'PIN 을 바꾸면 들어와 있던 휴대폰도 다시 PIN 을 물어봅니다.\n'
                         '맨 위 ◀ 이전 · 다음 ▶ 이나 아래 \'모든 페이지\'에서 페이지를 눌러 관객 화면을 옮깁니다. '
                         '\'싱어창\'으로 바꾸면 밀어서 넘기기·두 손가락 확대·발표자 메모를 쓸 수 있고, '
@@ -2204,71 +2208,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   }
 
   /// 새 발표자 PIN(숫자 4자리)을 묻는다. 취소하면 null.
-  Future<String?> _askPresenterPin() async {
-    final controller = TextEditingController(text: _singerWeb.presenterPin);
-    String? error;
-    final pin = await showDialog<String>(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setState) {
-          void submit() {
-            final v = controller.text.trim();
-            if (PresenterPinStore.isValid(v)) {
-              Navigator.pop(context, v);
-            } else {
-              setState(() => error = '숫자 4자리를 넣어 주세요.');
-            }
-          }
-
-          return AlertDialog(
-            title: const Text('발표자 PIN 바꾸기'),
-            content: SizedBox(
-              width: 280,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  TextField(
-                    controller: controller,
-                    autofocus: true,
-                    maxLength: 4,
-                    keyboardType: TextInputType.number,
-                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                    style: const TextStyle(fontSize: 28, letterSpacing: 8),
-                    decoration: InputDecoration(
-                      errorText: error,
-                      counterText: '',
-                    ),
-                    onSubmitted: (_) => submit(),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text('바꾸면 들어와 있던 발표자 휴대폰도 새 PIN 을 다시 넣어야 합니다.'),
-                  const SizedBox(height: 8),
-                  TextButton.icon(
-                    icon: const Icon(Icons.casino_outlined, size: 18),
-                    label: const Text('무작위로 정하기'),
-                    onPressed: () => setState(() {
-                      controller.text = PresenterPinStore.random();
-                      error = null;
-                    }),
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('취소'),
-              ),
-              FilledButton(onPressed: submit, child: const Text('바꾸기')),
-            ],
-          );
-        },
-      ),
-    );
-    controller.dispose();
-    return pin;
-  }
+  Future<String?> _askPresenterPin() => showDialog<String>(
+    context: context,
+    builder: (_) => PresenterPinDialog(initial: _singerWeb.presenterPin),
+  );
 
   // ── 모니터 선택 ─────────────────────────────────────────────────────────
 
@@ -18029,50 +17972,6 @@ class _ZoomDimPainter extends CustomPainter {
 }
 
 /// 누르면 [text] 를 클립보드에 넣고 2초 동안 체크 표시로 바뀌는 작은 버튼.
-/// 휴대폰 화면 창 '발표자 모드' 탭의 PIN 표시 + 바꾸기 버튼.
-class _PresenterPinRow extends StatelessWidget {
-  const _PresenterPinRow({required this.pin, required this.onChange});
-
-  final String pin;
-  final VoidCallback onChange;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: scheme.secondaryContainer,
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            Icons.lock_outline,
-            size: 20,
-            color: scheme.onSecondaryContainer,
-          ),
-          const SizedBox(width: 8),
-          Text('발표자 PIN', style: TextStyle(color: scheme.onSecondaryContainer)),
-          const SizedBox(width: 12),
-          SelectableText(
-            pin,
-            style: TextStyle(
-              fontSize: 26,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 6,
-              color: scheme.onSecondaryContainer,
-            ),
-          ),
-          const SizedBox(width: 12),
-          OutlinedButton(onPressed: onChange, child: const Text('바꾸기')),
-        ],
-      ),
-    );
-  }
-}
-
 class _CopyTextButton extends StatefulWidget {
   const _CopyTextButton({required this.text});
 

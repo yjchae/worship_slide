@@ -44,7 +44,7 @@ flutter test test/chord_lyrics_test.dart # 코드 가사 순수 함수: 문법·
 flutter test test/chord_repository_test.dart test/chord_conti_test.dart test/chord_leak_test.dart # 코드 저장 길(saveChords)·콘티 스냅샷·관객/PPTX 누출 없음
 flutter test test/chord_sheet_test.dart  # 코드 악보 조각·ChordSheetView 배치·싱어 chord_lines/key_label·조 배지
 flutter test test/auto_advance_timer_test.dart # 발표 자동 넘기기 타이머: 반복·한 번·멈춤·간격 칸
-flutter test test/singer_web_server_test.dart test/presenter_pin_store_test.dart # 휴대폰 서버: 고정 주소·발표자 PIN·잠금·Origin
+flutter test test/singer_web_server_test.dart test/presenter_pin_store_test.dart test/presenter_pin_dialog_test.dart # 휴대폰 서버: 고정 주소·발표자 PIN·잠금·Origin·깨진 /login 본문 + PIN 창
 flutter test test/lyrics_page_grid_test.dart # 가사 수정 창 페이지 표·넘침 측정 (LYRICS_EDITOR_SHOT=경로 면 창을 PNG 로)
 python3 python/test_render.py    # render 명령 self-check (LibreOffice 없으면 skip)
 python3 python/test_animation.py # 애니메이션 단계 펼치기 self-check (LibreOffice 불필요)
@@ -147,6 +147,7 @@ lib/
       auto_advance_timer.dart        -- 발표 자동 넘기기 타이머(정한 간격마다 onElapsed, 반복/한 번). auto_advance_box.dart = 발표 보기 오른쪽 칸 UI
       presentation_timer.dart        -- 발표 경과 시간(기준 시각 방식). 발표 보기 시계·싱어 화면이 같이 본다
       offering_dialog.dart           -- 헌금송 디자인 등록 / 항목에 적용(높낮이) 다이얼로그
+      presenter_pin_dialog.dart      -- 휴대폰 화면 창의 발표자 PIN 줄(PresenterPinRow)·바꾸기 창(PresenterPinDialog)
       media_player_html.dart         -- 발표 창 미디어 레이어 페이지 HTML·페이드 JS (mediaPlayerHtml)
       background_image_gallery.dart  -- 배경 이미지·영상 모음 격자 UI
       libreoffice_install_dialog.dart -- LibreOffice·cloudflared 자동 설치 안내창
@@ -226,7 +227,7 @@ macOS `didChangeScreenParametersNotification` + `NSScreen.displayID`, Windows `W
   **발표자 쪽만 PIN 4자리**(`PresenterPinStore` → `Application Support/presenter_pin.txt`, 처음 무작위, 휴대폰 화면 창 '발표자 모드' 탭에서 보고 바꾼다):
   쿠키 `ws_pin`(HttpOnly·SameSite=Lax·1년)이 맞아야 하고 없으면 `/presenter` 는 PIN 입력 페이지(`pinPageHtml`, `POST /login`), `p=1` 요청은 401 → 휴대폰 페이지가 다시 읽혀 PIN 을 묻는다.
   PIN 을 바꾸면(`presenterPin` setter) 발표자 SSE 를 끊어 들어와 있던 휴대폰도 다시 묻는다. 5번 틀리면 30초 잠금(접속 주소마다 — 터널로 온 요청은 한 묶음).
-  POST 는 Origin 이 Host 와 다르면 403(같은 망의 다른 웹 페이지가 조작 못 하게). 싱어창은 PIN 없이 열린다. 이미지는 `v`(경로+수정 시각)가
+  POST 는 Origin 이 Host(또는 터널 주소)와 다르면 403(같은 망의 다른 웹 페이지가 조작 못 하게). `/login` 본문은 256바이트까지, 깨진 본문은 틀린 PIN. 싱어창은 PIN 없이 열린다. 이미지는 `v`(경로+수정 시각)가
   지금 것과 다르면 404 + `no-store`(빠르게 넘길 때 브라우저가 엉뚱한 이미지를 기억하지 않게). start/stop 은 큐로 차례만 돈다.
   주소 후보는 사설망 IPv4 만, VPN·가상 머신 인터페이스는 빼고 와이파이·유선을 앞에 둔다(`lanAddresses`).
   화면 꺼짐 방지(`navigator.wakeLock`)는 https 에서만 되므로 같은 망(http) 주소에선 안 걸린다 — 휴대폰 자동 잠금을 끄라고 안내한다.

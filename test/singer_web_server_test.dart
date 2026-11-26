@@ -561,7 +561,25 @@ void main() {
       return res.statusCode;
     }
 
-    for (var i = 0; i < SingerWebServer.maxPinFailures; i++) {
+    // 깨진 본문·너무 긴 본문은 틀린 PIN 으로 보고 응답한다(멈추지 않는다).
+    Future<int> raw(List<int> body) async {
+      final req = await client.postUrl(Uri.parse('$base/login'))
+        ..followRedirects = false
+        ..headers.contentType = ContentType(
+          'application',
+          'x-www-form-urlencoded',
+        )
+        ..add(body);
+      final res = await req.close().timeout(const Duration(seconds: 3));
+      await res.drain<void>();
+      return res.statusCode;
+    }
+
+    expect(await raw(utf8.encode('pin=%ZZ')), 401);
+    expect(await raw([0x70, 0x69, 0x6e, 0x3d, 0xff, 0xfe]), 401);
+    expect(await raw(List.filled(100000, 0x31)), 401);
+    // 위 3번도 틀린 횟수로 센다.
+    for (var i = 0; i < SingerWebServer.maxPinFailures - 3; i++) {
       expect(await login('0000'), 401);
     }
     // 잠긴 동안은 맞는 PIN 도 안 된다.

@@ -671,9 +671,11 @@ class SingerWebServer {
   }
 
   // POST 의 Origin 이 이 서버 주소(Host)와 같은가. Origin 이 없으면(앱 밖 도구·옛 브라우저) 받는다.
-  static bool _sameOrigin(HttpRequest req) {
+  // 터널 주소(https://*.trycloudflare.com)도 받는다 — cloudflared 가 Host 를 원래대로 넘기는지 확인 못 해서.
+  bool _sameOrigin(HttpRequest req) {
     final origin = req.headers.value('origin');
     if (origin == null || origin.isEmpty) return true;
+    if (_publicBase != null && origin == _publicBase) return true;
     final host = req.headers.value(HttpHeaders.hostHeader);
     final o = Uri.tryParse(origin);
     return o != null && host != null && o.hasAuthority && o.authority == host;
@@ -691,8 +693,16 @@ class SingerWebServer {
     final now = DateTime.now();
     final (fails, at) = _pinFailures[who] ?? (0, now);
     final locked = fails >= maxPinFailures && now.difference(at) < pinLockout;
-    final body = await utf8.decoder.bind(req).join();
-    final pin = Uri.splitQueryString(body)['pin']?.trim() ?? '';
+    // 폼은 `pin=1234` 하나라 짧다. 길거나 깨진 본문(잘못된 % 인코딩·UTF-8)은 틀린 PIN 으로 본다.
+    var pin = '';
+    try {
+      final bytes = <int>[];
+      await for (final chunk in req) {
+        bytes.addAll(chunk);
+        if (bytes.length > 256) throw const FormatException('too long');
+      }
+      pin = Uri.splitQueryString(utf8.decode(bytes))['pin']?.trim() ?? '';
+    } catch (_) {}
     res.headers.set(HttpHeaders.cacheControlHeader, 'no-store');
     if (!locked && presenterPin.isNotEmpty && pin == presenterPin) {
       _pinFailures.remove(who);
@@ -817,7 +827,7 @@ String pinPageHtml({String error = ''}) {
 <body><form method="post" action="/login">
   <h1>발표자 모드</h1>
   <p>PC 의 휴대폰 화면 창(발표자 모드)에 나온<br>PIN 4자리를 넣어 주세요.</p>
-  <input name="pin" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" autofocus required>
+  <input name="pin" aria-label="PIN 4자리" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" autofocus required>
   <div class="err">${esc.convert(error)}</div>
   <button type="submit">들어가기</button>
   <p>한 번 들어오면 이 휴대폰은 다음부터 묻지 않습니다.</p>
