@@ -35,6 +35,8 @@ import '../data/page_template_store.dart';
 import '../data/sermon_design_store.dart';
 import '../data/background_image_library.dart';
 import '../data/libreoffice_installer.dart';
+import '../data/obs_overlay_server.dart';
+import '../data/obs_overlay_store.dart';
 import '../data/praise_repository.dart';
 import '../data/python_bridge.dart';
 import '../data/screen_choice_store.dart';
@@ -48,6 +50,7 @@ import '../domain/chord_lyrics.dart';
 import '../domain/conti_tree.dart';
 import '../domain/worship_conti.dart';
 import '../domain/export_style.dart';
+import '../domain/obs_caption.dart';
 import '../domain/offering_design.dart';
 import '../domain/page_element.dart';
 import '../domain/page_format.dart';
@@ -65,6 +68,7 @@ import 'libreoffice_install_dialog.dart';
 import 'lyrics_editor_dialog.dart';
 import 'lyrics_overlay_renderer.dart';
 import 'lyrics_page_grid.dart';
+import 'obs_overlay_dialog.dart';
 import 'offering_dialog.dart';
 import 'offering_overlay_painter.dart';
 import 'page_canvas.dart';
@@ -509,6 +513,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   bool _isSingerOpen = false;
   // 같은 망 휴대폰용 싱어 화면(웹). 발표를 끝내면 같이 끈다.
   final SingerWebServer _singerWeb = SingerWebServer();
+  // OBS '브라우저' 소스용 자막 서버. 싱어 서버와 달리 포트·키가 고정이고 앱이 켜져 있는 동안 상시.
+  final ObsOverlayServer _obs = ObsOverlayServer();
+  final ObsOverlayStore _obsStore = ObsOverlayStore();
+  ObsOverlayConfig _obsConfig = const ObsOverlayConfig();
+  // 'OBS 자막 잠시 숨기기'(실행 동안만, 저장 안 함).
+  final ValueNotifier<bool> _obsHidden = ValueNotifier(false);
+  bool _obsSyncScheduled = false;
   // 창을 닫아 앱이 끝날 때는 dispose 가 불리지 않는다. 그대로 두면 cloudflared 터널 프로세스가
   // 앱 밖에 남으므로 종료 요청 때 끈다. 이 신호가 안 오는 경우(강제 종료, Windows 에서 발표 창이
   // 열린 채 닫기 등)는 다음 시작 때 [SingerWebServer.killLeftoverTunnel] 이 치운다.
@@ -572,16 +583,18 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _exitListener = AppLifecycleListener(
       onExitRequested: () async {
         // 무슨 일이 있어도 앱은 닫혀야 한다.
-        await _singerWeb
-            .stop()
-            .timeout(const Duration(seconds: 3))
-            .catchError((_) {});
+        await Future.wait([
+          _singerWeb.stop(),
+          _obs.stop(),
+        ]).timeout(const Duration(seconds: 3)).catchError((_) => <void>[]);
         return AppExitResponse.exit;
       },
     );
     unawaited(SingerWebServer.killLeftoverTunnel());
     _singerWeb.onControl = _handleRemoteControl;
     _singerWeb.thumbnailer = _phoneThumbnail;
+    _obsHidden.addListener(_syncObs);
+    unawaited(_initObs());
     // 탭 전환에 애니메이션을 쓰지 않는다. TabBarView(PageView) 의 전환 애니메이션이
     // 중간에 멈추면(발표 창이 뜨면서 메인 창이 가려지는 등으로 프레임이 끊길 때)
     // 내부 카운터가 0으로 안 돌아와 탭이 영영 안 넘어간다.
@@ -686,6 +699,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _remoteSyncTimer?.cancel();
     _messageTimer?.cancel();
     _singerWeb.stop();
+    _obs.stop();
+    _obsHidden.removeListener(_syncObs);
     _sourceWatcher.dispose();
     _repository.onSongsChanged = null;
     _sync.dispose();
@@ -2236,10 +2251,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         ...group('관객 화면', false, audienceIndex, singerIndex),
         const PopupMenuDivider(),
         ...group('싱어 화면', true, singerIndex, audienceIndex),
-        if (Platform.isMacOS) ...[
-          const PopupMenuDivider(),
+        const PopupMenuDivider(),
+        if (Platform.isMacOS)
           PopupMenuItem(onTap: _openBSettings, child: const Text('통역 화면 설정…')),
-        ],
+        PopupMenuItem(
+          onTap: _openObsDialog,
+          child: const Text('OBS 자막 (방송 브라우저 소스)…'),
+        ),
       ],
     );
     if (picked == null || !mounted) return;
@@ -2489,6 +2507,106 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     }
   }
 
+  // ── OBS 자막 ────────────────────────────────────────────────────────
+
+  Future<void> _initObs() async {
+    final config = await _obsStore.load();
+    if (!mounted) return;
+    setState(() => _obsConfig = config);
+    if (config.enabled) await _startObs();
+  }
+
+  Future<void> _startObs() async {
+    await _obs.start(
+      port: _obsConfig.port,
+      key: _obsConfig.key,
+      allowLan: _obsConfig.allowLan,
+    );
+    _syncObs();
+  }
+
+  String get _obsFamily =>
+      _obsConfig.fontFamily.isEmpty ? _style.fontFamily : _obsConfig.fontFamily;
+
+  /// 설정 창에서 값이 바뀔 때마다. 연결 칸(켜기·포트·키·망)이 바뀌었을 때만 서버를 다시 켠다.
+  Future<void> _applyObsConfig(ObsOverlayConfig next) async {
+    final old = _obsConfig;
+    setState(() => _obsConfig = next);
+    unawaited(_obsStore.save(next));
+    final restart =
+        old.enabled != next.enabled ||
+        old.port != next.port ||
+        old.key != next.key ||
+        old.allowLan != next.allowLan;
+    if (!restart) {
+      _syncObs();
+      return;
+    }
+    if (next.enabled) {
+      await _startObs();
+    } else {
+      await _obs.stop();
+    }
+  }
+
+  void _scheduleObsSync() {
+    if (!_obs.isRunning || _obsSyncScheduled) return;
+    _obsSyncScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _obsSyncScheduled = false;
+      if (mounted) _syncObs();
+    });
+  }
+
+  /// 발표 화면 쪽 슬라이드 → OBS 자막에 필요한 칸만.
+  ObsSlide? _obsSlideAt(List<_SlideInfo> slides, int index) {
+    if (slides.isEmpty) return null;
+    final s = slides[index.clamp(0, slides.length - 1)];
+    return ObsSlide(
+      mainText: s.mainText,
+      subText: s.englishText,
+      extraText: s.extraText,
+      title: s.title,
+      isBible: s.isBible,
+      isSermon: s.background?.isSermon ?? false,
+      hasImage: s.imagePath != null,
+      hasMedia: s.media != null,
+    );
+  }
+
+  /// 지금 페이지를 OBS 자막으로 보낸다(관객 화면 따라가기: 발표 중에만, 블랙아웃이면 투명).
+  void _syncObs([List<_SlideInfo>? slides]) {
+    if (!_obs.isRunning) return;
+    final family = _obsFamily;
+    _obs.setFonts(obsFontSources(family));
+    _obs.update(
+      obsCaptionFor(
+        slide: _obsSlideAt(slides ?? _allSlides, _currentSlideIndex),
+        presenting: _isPresentationOpen,
+        blackout: _isBlackout,
+        hidden: _obsHidden.value,
+        config: _obsConfig,
+      ),
+      _obsConfig,
+      family,
+    );
+  }
+
+  Future<void> _openObsDialog() async {
+    final slides = _allSlides;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => ObsOverlayDialog(
+        config: _obsConfig,
+        server: _obs,
+        hidden: _obsHidden,
+        audienceFont: _style.fontFamily,
+        currentSlide: _obsSlideAt(slides, _currentSlideIndex),
+        onChanged: _applyObsConfig,
+      ),
+    );
+  }
+
   int _pageSendSeq = 0;
 
   Future<void> _sendCurrentSlide() async {
@@ -2496,6 +2614,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     // 싱어 화면도 여기서 함께 갱신한다. 관객 화면을 먼저 보내 싱어 갱신을 기다리지 않게 한다.
     final slides = _allSlides;
     final seq = ++_pageSendSeq;
+    // OBS 자막은 관객 창 응답·가사 PNG 굽기를 기다리지 않고 먼저(글자뿐이라 바로).
+    _syncObs(slides);
     if (_isPresentationOpen) {
       try {
         final pageData = await _presentablePage(
@@ -7762,6 +7882,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         : _itemBackgrounds[previewEntry.uid];
 
     final slides = _allSlides;
+    // 화면이 바뀌는 모든 길(삭제·불러오기·블랙아웃·발표 종료 등)이 다시 그리기를 지나므로
+    // 그린 뒤에 OBS 자막을 맞춘다. 같은 내용이면 서버가 다시 보내지 않는다.
+    _scheduleObsSync();
     return FocusScope(
       node: _presentationFocusNode,
       onKeyEvent: _handleKeyEvent,
@@ -8207,11 +8330,20 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         label: Text(_isExporting ? '생성 중' : 'PPTX 저장'),
       ),
       const SizedBox(width: 8),
+      // 켜 두었을 때만 상태 점 버튼을 보인다(앱 바 폭이 빠듯하다). 처음 설정은 모니터 메뉴의 'OBS 자막…'.
+      if (_obsConfig.enabled)
+        ObsAppBarButton(
+          enabled: _obsConfig.enabled,
+          port: _obsConfig.port,
+          server: _obs,
+          hidden: _obsHidden,
+          onPressed: _openObsDialog,
+        ),
       Builder(
         builder: (anchor) => IconButton(
           tooltip: Platform.isMacOS
-              ? '화면 모니터 선택 (관객·싱어·통역)'
-              : '화면 모니터 선택 (관객·싱어)',
+              ? '화면 모니터 선택 (관객·싱어·통역) · OBS 자막'
+              : '화면 모니터 선택 (관객·싱어) · OBS 자막',
           icon: const Icon(Icons.desktop_windows_outlined, size: 19),
           onPressed: () => _showScreenMenu(anchor),
         ),
