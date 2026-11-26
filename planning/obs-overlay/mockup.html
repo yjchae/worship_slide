@@ -1,0 +1,655 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OBS 자막 화면 목업</title>
+<style>
+/* 글꼴: 저장소 안 Pretendard 가 있으면 쓰고, 없으면 시스템 sans-serif */
+@font-face { font-family: Pretendard; font-weight: 400; src: local("Pretendard"), url("../../assets/fonts/Pretendard-Regular.ttf"); }
+@font-face { font-family: Pretendard; font-weight: 500; src: local("Pretendard Medium"), url("../../assets/fonts/Pretendard-Medium.ttf"); }
+@font-face { font-family: Pretendard; font-weight: 600; src: local("Pretendard SemiBold"), url("../../assets/fonts/Pretendard-SemiBold.ttf"); }
+@font-face { font-family: Pretendard; font-weight: 700; src: local("Pretendard Bold"), url("../../assets/fonts/Pretendard-Bold.ttf"); }
+
+/* 앱 화면 색 (lib/src/app_colors.dart 밝은 테마와 같은 값) */
+:root {
+  --canvas: #F4F5F8; --surface: #FFFFFF; --line: #D6DBE6; --outline: #B4BCCC;
+  --point: #4D5E82; --ink: #1C1C21; --muted: #6E6E7A; --subtle: #EDEDF1;
+  --graphite: #2C2E35; --live: #E5484D; --warn: #B7791F; --warn-bg: #FFF6E5;
+  --ok: #2F9E5B; --ok-bg: #E9F4EC; --err: #B4232A; --err-bg: #FDECEC;
+  --r-control: 6px; --r-panel: 10px; --r-dialog: 14px;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--canvas); color: var(--ink);
+  font-family: Pretendard, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans CJK KR", sans-serif; font-size: 13px; }
+.page { max-width: 1320px; margin: 0 auto; padding: 32px 16px 64px; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+.lead { color: var(--muted); margin: 0 0 32px; line-height: 1.6; }
+section { margin-bottom: 48px; padding: 8px; }
+section > h2 { font-size: 16px; margin: 0 0 4px; }
+section > p.cap { color: var(--muted); margin: 0 0 14px; line-height: 1.6; }
+.frame { display: inline-block; padding: 28px; background: #E3E6EE; border-radius: 16px; position: relative; }
+.row { display: flex; gap: 22px; align-items: flex-start; flex-wrap: wrap; }
+
+/* 공통 컨트롤 */
+.dialog { background: var(--surface); border-radius: var(--r-dialog);
+  box-shadow: 0 18px 50px rgba(28,28,33,.18), 0 2px 6px rgba(28,28,33,.08); }
+.btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px; white-space: nowrap;
+  border-radius: var(--r-control); font-weight: 600; font-size: 13px; border: 1px solid transparent; }
+.btn.sm { height: 28px; padding: 0 10px; font-size: 12px; }
+.btn.text { color: var(--point); }
+.btn.filled { background: var(--graphite); color: #fff; }
+.btn.outline { border-color: var(--line); color: var(--ink); background: var(--surface); }
+.btn.danger { border-color: #F0C9CB; color: var(--err); background: var(--surface); }
+.dd { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px 0 10px; white-space: nowrap;
+  border: 1px solid var(--line); border-radius: var(--r-control); background: var(--surface); font-weight: 500; }
+.dd::after { content: "▾"; color: var(--muted); font-size: 11px; margin-left: auto; }
+.field { border: 1px solid var(--line); border-radius: var(--r-control); background: var(--surface);
+  padding: 7px 10px; min-height: 32px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--r-control); overflow: hidden; background: var(--surface); }
+.seg span { padding: 5px 11px; font-weight: 600; color: var(--muted); white-space: nowrap; }
+.seg span + span { border-left: 1px solid var(--line); }
+.seg span.on { background: var(--graphite); color: #fff; border-color: var(--graphite); }
+.sw { width: 30px; height: 18px; border-radius: 9px; background: var(--outline); position: relative; display: inline-block; vertical-align: middle; flex: 0 0 auto; }
+.sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; }
+.sw.on { background: var(--point); }
+.sw.on::after { left: 14px; }
+.cb { width: 16px; height: 16px; border-radius: 4px; border: 1.5px solid var(--outline); display: inline-grid; place-items: center; flex: 0 0 auto; font-size: 11px; color: #fff; }
+.cb.on { background: var(--point); border-color: var(--point); }
+.cb.on::after { content: "✓"; font-weight: 800; }
+.chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.chip.warn { background: var(--warn-bg); color: var(--warn); }
+.chip.err { background: var(--err-bg); color: var(--err); }
+.chip.ok { background: var(--ok-bg); color: #2F7A45; }
+.chip.muted { background: var(--subtle); color: var(--muted); }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
+.swatch { width: 18px; height: 18px; border-radius: 4px; border: 1px solid rgba(0,0,0,.18); display: inline-block; vertical-align: middle; flex: 0 0 auto; }
+.mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px; }
+.hint { color: var(--muted); font-size: 11.5px; line-height: 1.5; }
+.note { position: absolute; background: #2C2E35; color: #fff; font-size: 11.5px; padding: 5px 9px; z-index: 9;
+  border-radius: 6px; line-height: 1.45; white-space: nowrap; box-shadow: 0 4px 12px rgba(0,0,0,.2); }
+.note b { color: #FFD66B; }
+.newtag { font-size: 10px; font-weight: 800; color: #9A6510; background: #FFE9BF; padding: 1px 6px; border-radius: 999px; }
+.new { outline: 2px solid #F2B84B; outline-offset: 3px; border-radius: 8px; }
+.num { min-width: 54px; height: 28px; border: 1px solid var(--line); border-radius: var(--r-control); display: inline-flex;
+  align-items: center; justify-content: flex-end; padding: 0 8px; font-weight: 600; background: var(--surface); gap: 3px; }
+.num small { color: var(--muted); font-weight: 500; }
+.cfield { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border: 1px solid var(--line);
+  border-radius: var(--r-control); background: var(--surface); font-size: 12px; font-weight: 600; }
+.slider { display: inline-flex; align-items: center; gap: 8px; }
+.slider .track { width: 96px; height: 4px; background: var(--line); border-radius: 2px; position: relative; }
+.slider .track i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--point); border-radius: 2px; }
+.slider .track b { position: absolute; top: -5px; width: 14px; height: 14px; border-radius: 50%; background: #fff; border: 2px solid var(--point); margin-left: -7px; }
+.ic { width: 18px; height: 18px; display: inline-block; flex: 0 0 auto; }
+
+/* ── S1 앱 바 ─────────────────────────────────────────── */
+.appbar { width: 1220px; height: 52px; background: var(--surface); border-bottom: 1px solid var(--line); border-radius: 12px 12px 0 0;
+  display: flex; align-items: center; gap: 8px; padding: 0 14px; }
+.appbar .tabs { display: flex; gap: 2px; height: 52px; align-items: stretch; }
+.appbar .tabs span { display: flex; align-items: center; padding: 0 14px; font-weight: 600; color: var(--muted); border-bottom: 2px solid transparent; }
+.appbar .tabs span.on { color: var(--ink); border-bottom-color: var(--point); }
+.appbar .sp { flex: 1; }
+.iconbtn { width: 34px; height: 34px; border-radius: 8px; display: inline-grid; place-items: center; color: #3C3F48; position: relative; }
+.iconbtn.hover { background: var(--subtle); }
+.obsbtn { height: 34px; padding: 0 10px 0 8px; border-radius: 8px; display: inline-flex; align-items: center; gap: 6px; font-weight: 700;
+  color: #3C3F48; position: relative; letter-spacing: .02em; }
+.obsbtn.hover { background: var(--subtle); }
+.obsbtn .st { position: absolute; top: 5px; left: 22px; width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--surface); }
+.below { width: 1220px; height: 70px; background: linear-gradient(#FAFBFC, #F4F5F8); border-radius: 0 0 12px 12px; position: relative; }
+.states { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; width: 1220px; margin-top: 18px; }
+.stcard { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.stcard .top { display: flex; align-items: center; gap: 10px; }
+.stcard .tip { background: #2C2E35; color: #fff; border-radius: 6px; padding: 6px 9px; font-size: 11.5px; line-height: 1.45; align-self: flex-start; }
+.stcard h5 { margin: 0; font-size: 12.5px; }
+
+/* ── S2/S3 설정 창 ─────────────────────────────────────── */
+.dlg-head { display: flex; align-items: center; gap: 12px; padding: 18px 22px 0; }
+.dlg-head h3 { margin: 0; font-size: 18px; }
+.dlg-tabs { display: flex; gap: 2px; padding: 0 22px; border-bottom: 1px solid var(--line); margin-top: 12px; }
+.dlg-tabs span { padding: 10px 14px; font-weight: 600; color: var(--muted); border-bottom: 2px solid transparent; }
+.dlg-tabs span.on { color: var(--ink); border-bottom-color: var(--point); }
+.dlg-body { padding: 18px 22px; }
+.dlg-foot { display: flex; align-items: center; gap: 10px; padding: 12px 22px 16px; border-top: 1px solid var(--line); }
+.dlg-foot .grow { flex: 1; }
+.conn { width: 780px; position: relative; }
+.power { display: flex; align-items: center; gap: 14px; padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--r-panel); background: #FAFBFD; }
+.power .sw { width: 40px; height: 24px; border-radius: 12px; }
+.power .sw::after { width: 20px; height: 20px; }
+.power .sw.on::after { left: 18px; }
+.power b { font-size: 14.5px; }
+.power .status { margin-left: auto; }
+.blk { margin-top: 18px; }
+.blk > h4 { margin: 0 0 8px; font-size: 12px; color: var(--muted); font-weight: 700; display: flex; align-items: center; gap: 6px; }
+.url { display: flex; gap: 8px; align-items: center; }
+.url .field { flex: 1; display: flex; align-items: center; gap: 8px; background: #F7F8FA; }
+.url .field .k { color: var(--muted); }
+.swrow { display: flex; align-items: center; gap: 10px; padding: 9px 2px; border-bottom: 1px solid var(--subtle); }
+.swrow:last-child { border-bottom: 0; }
+.swrow .t { flex: 1; }
+.swrow .t small { display: block; color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+.fold { border: 1px solid var(--line); border-radius: var(--r-panel); }
+.fold > .fh { display: flex; align-items: center; gap: 8px; padding: 10px 12px; font-weight: 700; }
+.fold > .fh .ar { color: var(--muted); width: 12px; }
+.fold > .fb { padding: 4px 14px 14px 32px; border-top: 1px solid var(--subtle); }
+.kv { display: grid; grid-template-columns: 120px 1fr; gap: 10px; align-items: center; padding: 6px 0; }
+.kv > label { color: var(--muted); font-weight: 600; font-size: 12px; }
+.lanlist { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+.lanlist div { display: flex; align-items: center; gap: 8px; }
+.steps { margin: 6px 0 0; padding-left: 18px; line-height: 1.75; color: #3C3F48; }
+.steps b { color: var(--ink); }
+
+/* 디자인 탭 */
+.design { width: 1200px; position: relative; }
+.design .dlg-body { display: grid; grid-template-columns: 600px 1fr; gap: 22px; }
+.pv-tools { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.pv-tools .sp { flex: 1; }
+.pv-foot { margin-top: 10px; display: flex; gap: 10px; align-items: center; }
+.form { display: grid; grid-template-columns: 1fr 1fr; gap: 0 22px; align-content: start; }
+.grp { padding: 10px 0; border-bottom: 1px solid var(--subtle); display: flex; flex-direction: column; gap: 8px; }
+.grp.full { grid-column: 1 / -1; }
+.grp h4 { margin: 0; font-size: 11.5px; color: var(--muted); font-weight: 700; letter-spacing: .02em; display: flex; align-items: center; gap: 6px; }
+.prow { display: grid; grid-template-columns: 64px 1fr; align-items: center; gap: 8px; }
+.prow > label { color: var(--muted); font-weight: 600; font-size: 12px; }
+.prow .ctl { display: flex; align-items: center; gap: 7px; flex-wrap: nowrap; }
+.checks { display: flex; gap: 14px; flex-wrap: wrap; }
+.checks span { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; }
+.preset { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.preset div { border: 1px solid var(--line); border-radius: 8px; padding: 6px; text-align: center; font-weight: 600; font-size: 12px; color: var(--muted); }
+.preset div.on { border-color: var(--point); box-shadow: 0 0 0 2px rgba(77,94,130,.15); color: var(--ink); }
+.preset .mini { height: 34px; border-radius: 5px; margin-bottom: 5px; display: grid; place-items: center; font-size: 13px; font-weight: 800; color: #fff;
+  background: linear-gradient(135deg, #6c7a93, #b6a58b); }
+
+/* ── 바둑판(투명 표시) ─────────────────────────────────── */
+.checker { background-color: #fff;
+  background-image: linear-gradient(45deg, #D9DCE3 25%, transparent 25%), linear-gradient(-45deg, #D9DCE3 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #D9DCE3 75%), linear-gradient(-45deg, transparent 75%, #D9DCE3 75%);
+  background-size: 18px 18px; background-position: 0 0, 0 9px, 9px -9px, -9px 0; }
+
+/* ── OBS 캔버스 (1920x1080 기준, 1u = 1/1080 높이) ───────── */
+.canvas { position: relative; aspect-ratio: 16 / 9; overflow: hidden; container-type: size; border-radius: 6px; }
+.canvas .layer { position: absolute; inset: 0; }
+/* 카메라 화면 흉내 */
+.cam { background:
+    radial-gradient(28% 55% at 50% 0%, rgba(255,226,170,.55), transparent 70%),
+    radial-gradient(22% 45% at 18% 0%, rgba(110,140,255,.45), transparent 70%),
+    radial-gradient(22% 45% at 82% 0%, rgba(240,110,190,.38), transparent 70%),
+    radial-gradient(60% 40% at 50% 62%, rgba(255,190,120,.20), transparent 70%),
+    linear-gradient(180deg, #1A1E2E 0%, #2A2333 52%, #17131A 74%, #0D0B0F 100%); }
+.cam .floor { position: absolute; left: 0; right: 0; top: 66%; bottom: 0; background: linear-gradient(180deg, #2B2230, #0E0B10); }
+.cam .screen { position: absolute; left: 34%; width: 32%; top: 14%; height: 30%; border-radius: .6cqh;
+  background: linear-gradient(160deg, #2E3A58, #1C2234); box-shadow: 0 0 6cqh rgba(130,160,255,.25); }
+.cam .p { position: absolute; bottom: 30%; background: #0B0A0E; border-radius: 45% 45% 10% 10%; }
+.cam .p::before { content: ""; position: absolute; left: 50%; transform: translateX(-50%); bottom: 100%; margin-bottom: .6cqh;
+  width: 62%; aspect-ratio: 1; border-radius: 50%; background: #0B0A0E; }
+.cam .crowd { position: absolute; left: 0; right: 0; bottom: 0; height: 22%;
+  background: radial-gradient(6% 60% at 6% 100%, #050407 60%, transparent 62%), radial-gradient(6% 70% at 18% 100%, #050407 60%, transparent 62%),
+    radial-gradient(6% 55% at 30% 100%, #050407 60%, transparent 62%), radial-gradient(6% 68% at 43% 100%, #050407 60%, transparent 62%),
+    radial-gradient(6% 58% at 57% 100%, #050407 60%, transparent 62%), radial-gradient(6% 72% at 70% 100%, #050407 60%, transparent 62%),
+    radial-gradient(6% 56% at 83% 100%, #050407 60%, transparent 62%), radial-gradient(6% 66% at 95% 100%, #050407 60%, transparent 62%); }
+.cam.bright { background:
+    radial-gradient(40% 60% at 70% 20%, rgba(255,255,255,.9), transparent 70%),
+    linear-gradient(180deg, #CFE3F4 0%, #E9E2D2 55%, #B9A88C 100%); }
+.cam.bright .floor { background: linear-gradient(180deg, #C9B89A, #8E7C62); }
+.cam.bright .p, .cam.bright .p::before { background: #4B3E33; }
+
+/* 자막 덩어리 */
+.sub-wrap { position: absolute; left: calc(80 * 100cqh / 1080); right: calc(80 * 100cqh / 1080); bottom: calc(64 * 100cqh / 1080);
+  display: flex; justify-content: center; }
+.sub-wrap.top { bottom: auto; top: calc(64 * 100cqh / 1080); }
+.blockx { text-align: center; font-weight: 700; color: #fff; line-height: 1.28; }
+.blockx .ref { font-size: calc(30 * 100cqh / 1080); color: #FFD66B; font-weight: 700; margin-bottom: calc(8 * 100cqh / 1080); letter-spacing: .02em; }
+.blockx .m { font-size: calc(56 * 100cqh / 1080); }
+.blockx .s { font-size: calc(39 * 100cqh / 1080); color: #FFF3A6; font-weight: 600; margin-top: calc(6 * 100cqh / 1080); }
+.blockx .e { font-size: calc(34 * 100cqh / 1080); color: #9FE6F0; font-weight: 600; }
+.blockx.bible { text-align: left; max-width: calc(1500 * 100cqh / 1080); }
+.blockx.bible .m { font-size: calc(46 * 100cqh / 1080); line-height: 1.38; }
+.blockx.bible .s { font-size: calc(34 * 100cqh / 1080); line-height: 1.35; }
+/* 스타일 A: 외곽선 + 그림자 (text-shadow 8방향 — 기술 설계의 기본 안) */
+.st-outline { --o: calc(3.2 * 100cqh / 1080); --oc: rgba(0,0,0,.92);
+  text-shadow: var(--o) 0 0 var(--oc), calc(-1 * var(--o)) 0 0 var(--oc), 0 var(--o) 0 var(--oc), 0 calc(-1 * var(--o)) 0 var(--oc),
+    calc(.7 * var(--o)) calc(.7 * var(--o)) 0 var(--oc), calc(-.7 * var(--o)) calc(.7 * var(--o)) 0 var(--oc),
+    calc(.7 * var(--o)) calc(-.7 * var(--o)) 0 var(--oc), calc(-.7 * var(--o)) calc(-.7 * var(--o)) 0 var(--oc),
+    0 calc(4 * 100cqh / 1080) calc(14 * 100cqh / 1080) rgba(0,0,0,.65); }
+/* 스타일 B: 반투명 띠 (글 폭에 맞춤) */
+.st-band { background: rgba(12,14,20,.62); border-radius: calc(14 * 100cqh / 1080);
+  padding: calc(20 * 100cqh / 1080) calc(44 * 100cqh / 1080); text-shadow: 0 calc(2 * 100cqh / 1080) calc(6 * 100cqh / 1080) rgba(0,0,0,.5); }
+.st-band.full { border-radius: 0; }
+.sub-wrap.fullband { left: 0; right: 0; }
+.sub-wrap.fullband .blockx { width: 100%; }
+.guide { position: absolute; inset: 0; border: 1.5px dashed rgba(255,214,107,.75); border-radius: 6px; pointer-events: none; }
+.basel { position: absolute; left: 0; right: 0; bottom: calc(64 * 100cqh / 1080); border-top: 1.5px dashed rgba(255,214,107,.9); }
+.tagc { position: absolute; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
+
+/* OBS 창 흉내 */
+.obswin { background: #1E1F24; border-radius: 10px; padding: 0 0 12px; box-shadow: 0 14px 40px rgba(0,0,0,.25); }
+.obswin .tb { height: 30px; display: flex; align-items: center; gap: 7px; padding: 0 12px; color: #A7AAB4; font-size: 11.5px; }
+.obswin .tb i { width: 10px; height: 10px; border-radius: 50%; background: #3A3C44; display: inline-block; }
+.obswin .tb span { margin-left: 8px; }
+.obswin .cv { margin: 0 12px; }
+.obswin .srcs { margin: 10px 12px 0; display: flex; gap: 10px; font-size: 11.5px; color: #C9CBD3; }
+.obswin .srcs div { background: #2A2C33; border-radius: 6px; padding: 5px 10px; display: flex; align-items: center; gap: 6px; }
+.obswin .srcs div.hl { outline: 1.5px solid #6A7FD0; }
+.cmpgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; width: 1240px; }
+.cmpgrid figure { margin: 0; }
+.cmpgrid figcaption { margin-top: 8px; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.cmpgrid figcaption b { color: var(--ink); }
+.label-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-weight: 700; }
+
+/* ── S6 발표 보기 머리줄 ───────────────────────────────── */
+.pvhead { width: 1100px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+.pvhead .bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; }
+.pvhead .bar .title { font-weight: 700; font-size: 14px; }
+.pvhead .bar .sp { flex: 1; }
+.pvhead .bar .tool { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 7px; color: #3C3F48; }
+.pvhead .bar .sep { width: 1px; height: 20px; background: var(--line); }
+.obschip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 999px; font-weight: 700; font-size: 12px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+.obschip.hidden { background: var(--warn-bg); border-color: #F1D7A6; color: var(--warn); }
+.obschip.off { color: var(--muted); }
+.pvbody { display: grid; grid-template-columns: 1fr 260px; gap: 14px; padding: 0 14px 14px; }
+.slideprev { aspect-ratio: 16/9; border-radius: 6px; background: radial-gradient(120% 90% at 50% 20%, #1D2433 0%, #10131A 70%);
+  display: grid; place-items: center; color: #fff; font-weight: 700; text-align: center; line-height: 1.35; font-size: 22px; }
+.slideprev small { display: block; color: #FFF176; font-size: 16px; font-weight: 600; margin-top: 4px; }
+.popmenu { position: absolute; width: 250px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(0,0,0,.14); padding: 6px; z-index: 5; }
+.popmenu div { padding: 8px 10px; border-radius: 6px; display: flex; align-items: center; gap: 8px; }
+.popmenu div.hl { background: var(--subtle); }
+.popmenu div kbd { margin-left: auto; color: var(--muted); font-family: inherit; font-size: 11px; }
+.popmenu hr { border: 0; border-top: 1px solid var(--subtle); margin: 4px 0; }
+.popmenu .cap { color: var(--muted); font-size: 11.5px; padding: 6px 10px 4px; display: block; }
+
+/* ── S7 투명 상태 ─────────────────────────────────────── */
+.tgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; width: 1240px; }
+.tgrid figure { margin: 0; }
+.tgrid figcaption { margin-top: 7px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+.tgrid figcaption b { color: var(--ink); }
+.pvstat { position: absolute; top: calc(24 * 100cqh / 1080); right: calc(24 * 100cqh / 1080); background: rgba(28,28,33,.82); color: #fff;
+  font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 6px; }
+.pvbadge { position: absolute; top: calc(24 * 100cqh / 1080); left: calc(24 * 100cqh / 1080); background: #FFE9BF; color: #9A6510;
+  font-size: 11px; font-weight: 800; padding: 3px 8px; border-radius: 6px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>OBS 브라우저 소스 자막 — 화면 목업</h1>
+  <p class="lead">앱에서 페이지를 넘기면 OBS 자막이 같이 넘어간다. 바탕은 투명(크로마키 없음). 노란 테두리(<span class="newtag">NEW</span>)는 새로 생기는 컨트롤이다.<br>
+    예시 가사는 목업용으로 지어낸 글, 성경은 시편 23:1(개역개정 · KJV) 예시. 주소·포트(8766)는 기술 설계의 제안값이다.</p>
+
+  <!-- ─────────── S1 ─────────── -->
+  <section id="s1">
+    <h2>s1. 앱 바 — 'OBS' 버튼</h2>
+    <p class="cap">'PPTX 저장' · 모니터 선택 · <b>OBS</b> · 발표 시작 — 화면을 내보내는 '출력' 묶음에 둔다. 아이콘(방송 탑) + 짧은 글 <b>OBS</b>.
+      상태 점은 아이콘 오른쪽 위: 꺼짐 = 없음 · 켜짐·연결 없음 = 회색 · 연결됨 = 초록 · 오류 = 빨강. 툴팁에 상태 문장.</p>
+    <div class="frame">
+      <div class="appbar">
+        <div class="tabs"><span class="on">편집</span><span>발표 보기</span></div>
+        <span class="btn text">가져오기 ▾</span>
+        <div class="sp"></div>
+        <span class="btn outline"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 4v10m0 0-4-4m4 4 4-4M5 19h14"/></svg>PPTX 저장</span>
+        <span class="iconbtn"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M9 20h6M12 16v4"/></svg></span>
+        <span class="obsbtn hover new">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="11" r="2"/><path d="M8.5 7.5a5 5 0 0 0 0 7M15.5 7.5a5 5 0 0 1 0 7M6 5a8.5 8.5 0 0 0 0 12M18 5a8.5 8.5 0 0 1 0 12M12 13v8"/></svg>
+          OBS<i class="st" style="background:var(--ok)"></i>
+        </span>
+        <span class="btn filled" style="background:var(--graphite)">▶ 발표 시작</span>
+      </div>
+      <div class="below">
+        <div class="note" style="left:890px; top:10px">OBS 자막 — 켜짐, <b>OBS 1곳 연결됨</b><br>누르면 설정 창(s2)</div>
+      </div>
+    </div>
+    <div class="states">
+      <div class="stcard"><div class="top"><span class="obsbtn" style="background:var(--subtle)"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="11" r="2"/><path d="M8.5 7.5a5 5 0 0 0 0 7M15.5 7.5a5 5 0 0 1 0 7M6 5a8.5 8.5 0 0 0 0 12M18 5a8.5 8.5 0 0 1 0 12M12 13v8"/></svg>OBS</span><h5>꺼짐</h5></div>
+        <div class="tip">OBS 자막 — 꺼짐</div><span class="hint">점 없음. 글·아이콘은 흐린 색(muted)</span></div>
+      <div class="stcard"><div class="top"><span class="obsbtn" style="background:var(--subtle)"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="11" r="2"/><path d="M8.5 7.5a5 5 0 0 0 0 7M15.5 7.5a5 5 0 0 1 0 7M6 5a8.5 8.5 0 0 0 0 12M18 5a8.5 8.5 0 0 1 0 12M12 13v8"/></svg>OBS<i class="st" style="background:#9AA0AE"></i></span><h5>켜짐 · 연결 없음</h5></div>
+        <div class="tip">OBS 자막 — 켜짐, 연결된 OBS 없음</div><span class="hint">회색 점. OBS 를 아직 안 켰거나 주소를 안 넣음</span></div>
+      <div class="stcard"><div class="top"><span class="obsbtn" style="background:var(--subtle)"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="11" r="2"/><path d="M8.5 7.5a5 5 0 0 0 0 7M15.5 7.5a5 5 0 0 1 0 7M6 5a8.5 8.5 0 0 0 0 12M18 5a8.5 8.5 0 0 1 0 12M12 13v8"/></svg>OBS<i class="st" style="background:var(--ok)"></i></span><h5>켜짐 · 연결됨</h5></div>
+        <div class="tip">OBS 자막 — 켜짐, OBS 2곳 연결됨</div><span class="hint">초록 점. 숨김 중이면 점이 주황(s6 과 같은 색)</span></div>
+      <div class="stcard"><div class="top"><span class="obsbtn" style="background:var(--subtle)"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="11" r="2"/><path d="M8.5 7.5a5 5 0 0 0 0 7M15.5 7.5a5 5 0 0 1 0 7M6 5a8.5 8.5 0 0 0 0 12M18 5a8.5 8.5 0 0 1 0 12M12 13v8"/></svg>OBS<i class="st" style="background:var(--live)"></i></span><h5>오류</h5></div>
+        <div class="tip">OBS 자막 — 포트 8766 을 다른 프로그램이 쓰고 있습니다</div><span class="hint">빨간 점. 누르면 설정 창 '고급'이 펼쳐진 채 열림</span></div>
+    </div>
+  </section>
+
+  <!-- ─────────── S2 ─────────── -->
+  <section id="s2">
+    <h2>s2. 'OBS 자막' 설정 창 — 연결 탭</h2>
+    <p class="cap">바꾸는 즉시 저장(확인 버튼 없음). 맨 위 큰 스위치 + 상태, 그 아래 주소 한 줄이 이 탭의 전부다 — 나머지(고급·안내)는 접어 둔다.
+      오른쪽은 포트 충돌 오류 상태와 '고급'을 펼친 모습.</p>
+    <div class="row">
+      <div class="frame">
+        <div class="dialog conn">
+          <div class="dlg-head"><h3>OBS 자막</h3><span class="chip muted">방송 화면 위 투명 자막</span></div>
+          <div class="dlg-tabs"><span class="on">연결</span><span>디자인</span></div>
+          <div class="dlg-body">
+            <div class="power">
+              <span class="sw on"></span><b>OBS 자막 켜기</b>
+              <span class="status chip ok"><span class="dot" style="background:var(--ok)"></span>켜짐 · OBS 1곳 연결됨</span>
+            </div>
+
+            <div class="blk">
+              <h4>OBS 브라우저 소스에 넣을 주소</h4>
+              <div class="url">
+                <div class="field mono">http://127.0.0.1:8766/obs?k=<span class="k">Hq7tP2xZ9mLw4cRb</span></div>
+                <span class="btn filled sm">주소 복사</span>
+                <span class="btn outline sm">브라우저에서 열어 보기</span>
+              </div>
+              <div class="hint" style="margin-top:6px">OBS 에서 너비 <b>1920</b> · 높이 <b>1080</b> 으로 넣으세요. 주소는 바꾸지 않는 한 계속 같습니다.</div>
+            </div>
+
+            <div class="blk">
+              <h4>내보내기</h4>
+              <div class="swrow"><span class="sw on"></span><div class="t">블랙아웃하면 자막도 감추기</div></div>
+              <div class="swrow"><span class="sw"></span><div class="t">발표 창 없이도 내보내기<small>발표 보기에서 고른 페이지를 그대로 보냅니다 — 프로젝터 없는 방송 예배용</small></div></div>
+              <div class="swrow"><span class="sw on"></span><div class="t">설교 제목 페이지 내보내기</div></div>
+              <div class="swrow"><span class="sw on"></span><div class="t">페이지 바뀔 때 페이드</div><span class="num">0.3<small>초</small></span></div>
+            </div>
+
+            <div class="blk" style="display:flex; flex-direction:column; gap:8px">
+              <div class="fold"><div class="fh"><span class="ar">▸</span>고급 <span class="hint" style="font-weight:500">— 포트 · 키 · 다른 PC 의 OBS</span></div></div>
+              <div class="fold"><div class="fh"><span class="ar">▸</span>OBS 에 넣는 법</div></div>
+            </div>
+          </div>
+          <div class="dlg-foot"><span class="hint grow">미리보기·디자인은 '디자인' 탭에서. 바꾸면 OBS 에도 바로 반영됩니다.</span><span class="btn text">닫기</span></div>
+        </div>
+      </div>
+
+      <div class="frame" style="padding:20px">
+        <div class="dialog" style="width:400px; padding:16px 16px 14px">
+          <div class="power" style="padding:10px 12px">
+            <span class="sw on"></span><b>OBS 자막 켜기</b>
+          </div>
+          <div style="margin-top:8px; padding:9px 11px; border-radius:8px; background:var(--err-bg); color:var(--err); font-weight:600; line-height:1.5">
+            포트 8766 을 다른 프로그램이 쓰고 있습니다.<br><span style="font-weight:500">아래에서 포트를 바꾸면 OBS 에 넣은 주소도 다시 넣어야 합니다.</span>
+          </div>
+          <div class="fold" style="margin-top:12px">
+            <div class="fh"><span class="ar">▾</span>고급</div>
+            <div class="fb" style="padding-left:14px">
+              <div class="kv"><label>포트</label><div style="display:flex; gap:6px"><span class="num" style="border-color:var(--err)">8766</span><span class="btn outline sm">적용</span></div></div>
+              <div class="kv"><label>주소 키</label><div><span class="btn outline sm">키 새로 만들기…</span></div></div>
+              <div class="kv" style="align-items:start"><label style="padding-top:2px">다른 PC</label>
+                <div>
+                  <div style="display:flex; align-items:center; gap:8px"><span class="sw on"></span><span>같은 망의 다른 PC 에서 받기</span></div>
+                  <div class="lanlist">
+                    <div><span class="mono" style="font-size:11.5px">http://192.168.0.21:8766/obs?k=…</span><span class="chip muted">Wi-Fi</span></div>
+                    <div><span class="mono" style="font-size:11.5px">http://10.0.1.5:8766/obs?k=…</span><span class="chip muted">유선</span></div>
+                  </div>
+                  <div class="hint" style="margin-top:6px">처음에 방화벽이 연결을 물으면 허용하세요. 이 PC 의 IP 가 바뀌면 주소도 바뀝니다(고정 IP 권장).</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="fold" style="margin-top:8px">
+            <div class="fh"><span class="ar">▾</span>OBS 에 넣는 법</div>
+            <div class="fb" style="padding-left:14px">
+              <ol class="steps">
+                <li>자막을 얹을 <b>장면</b>을 고른다</li>
+                <li>소스 <b>+</b> → <b>브라우저</b> → 이름(예: 찬양 자막)</li>
+                <li><b>URL</b> 에 복사한 주소 · '로컬 파일' 끔</li>
+                <li>너비 <b>1920</b> · 높이 <b>1080</b> → 확인</li>
+                <li>소스 목록 맨 위로 올린다</li>
+              </ol>
+              <div class="hint">메뉴 이름은 OBS 판·언어에 따라 다를 수 있습니다.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────── S3 ─────────── -->
+  <section id="s3">
+    <h2>s3. 'OBS 자막' 설정 창 — 디자인 탭</h2>
+    <p class="cap">왼쪽 미리보기(바탕 바꿔 보기 · 찬양/성경 예시), 오른쪽 폼. 맨 위 <b>빠른 스타일</b> 3개(외곽선 / 반투명 띠 / 화면 폭 띠)로 한 번에 고르고 아래 칸에서 세부를 다듬는다.
+      관객 화면 디자인(리본)과는 따로다 — 리본을 바꿔도 방송 자막은 안 움직인다.</p>
+    <div class="frame">
+      <div class="dialog design">
+        <div class="dlg-head"><h3>OBS 자막</h3><span class="chip ok"><span class="dot" style="background:var(--ok)"></span>OBS 1곳 연결됨</span></div>
+        <div class="dlg-tabs"><span>연결</span><span class="on">디자인</span></div>
+        <div class="dlg-body">
+          <div>
+            <div class="pv-tools">
+              <span class="seg"><span class="on">찬양 예시</span><span>성경 예시</span><span>지금 페이지</span></span>
+              <span class="sp"></span>
+              <span class="hint">바탕</span>
+              <span class="seg"><span>바둑판</span><span class="on">카메라</span><span>밝은 사진</span><span>검정</span></span>
+            </div>
+            <div class="canvas cam">
+              <div class="floor"></div><div class="screen"></div>
+              <div class="p" style="left:24%; width:5%; height:20%"></div><div class="p" style="left:46.5%; width:5.5%; height:24%"></div><div class="p" style="left:70%; width:5%; height:21%"></div>
+              <div class="crowd"></div>
+              <div class="sub-wrap"><div class="blockx st-outline">
+                <div class="m">나의 모든 날 주를 노래해<br>주의 사랑 안에 살아가리</div>
+                <div class="s">I will sing of You all my days<br>I will live within Your love</div>
+              </div></div>
+              <div class="basel"></div>
+              <span class="tagc" style="right:10px; bottom:calc(64 * 100cqh / 1080 + 4px); background:#FFD66B; color:#5A4200">아래 기준선 64px</span>
+            </div>
+            <div class="pv-foot">
+              <span class="hint" style="flex:1">앱 미리보기는 근사치입니다. 정확한 모습은 '브라우저에서 열어 보기' 또는 OBS 에서 확인하세요.</span>
+              <span class="btn outline sm">브라우저에서 열어 보기</span>
+            </div>
+          </div>
+
+          <div class="form">
+            <div class="grp full">
+              <h4>빠른 스타일</h4>
+              <div class="preset">
+                <div class="on"><div class="mini st-outline" style="container-type:size">가사</div>외곽선</div>
+                <div><div class="mini"><span style="background:rgba(12,14,20,.62); padding:2px 10px; border-radius:4px">가사</span></div>반투명 띠</div>
+                <div><div class="mini" style="background:linear-gradient(135deg,#6c7a93,#b6a58b)"><span style="background:rgba(0,0,0,1); width:100%; padding:3px 0">가사</span></div>화면 폭 띠</div>
+              </div>
+            </div>
+            <div class="grp">
+              <h4>글꼴</h4>
+              <div class="checks"><span><i class="cb on"></i>관객 화면 글꼴 따라가기</span></div>
+              <span class="dd" style="opacity:.55">Pretendard</span>
+            </div>
+            <div class="grp">
+              <h4>보일 줄</h4>
+              <div class="checks"><span><i class="cb on"></i>원본</span><span><i class="cb on"></i>보조</span><span><i class="cb"></i>추가 보조</span></div>
+              <div class="checks"><span><i class="cb on"></i>성경 참조</span><span><i class="cb"></i>곡 제목</span></div>
+            </div>
+            <div class="grp">
+              <h4>크기 <span class="hint" style="font-weight:500">(1080 높이 기준)</span></h4>
+              <div class="prow"><label>원본</label><div class="ctl"><span class="num">56<small>px</small></span></div></div>
+              <div class="prow"><label>보조</label><div class="ctl"><span class="num">70<small>%</small></span><label class="hint">추가</label><span class="num">60<small>%</small></span></div></div>
+              <div class="prow"><label>최대 높이</label><div class="ctl"><span class="num">30<small>%</small></span><span class="hint">넘으면 축소</span></div></div>
+            </div>
+            <div class="grp">
+              <h4>색</h4>
+              <div class="prow"><label>원본</label><div class="ctl"><span class="cfield"><i class="swatch" style="background:#FFFFFF"></i>#FFFFFF</span></div></div>
+              <div class="prow"><label>보조</label><div class="ctl"><span class="cfield"><i class="swatch" style="background:#FFF3A6"></i>#FFF3A6</span></div></div>
+              <div class="prow"><label>참조</label><div class="ctl"><span class="cfield"><i class="swatch" style="background:#FFD66B"></i>#FFD66B</span></div></div>
+            </div>
+            <div class="grp">
+              <h4>외곽선 · 그림자</h4>
+              <div class="prow"><label>외곽선</label><div class="ctl"><i class="swatch" style="background:#000"></i><span class="slider"><span class="track"><i style="width:40%"></i><b style="left:40%"></b></span><span class="mono">3</span></span></div></div>
+              <div class="prow"><label>그림자</label><div class="ctl"><span class="sw on"></span><i class="swatch" style="background:#000"></i><span class="slider"><span class="track" style="width:70px"><i style="width:45%"></i><b style="left:45%"></b></span></span></div></div>
+            </div>
+            <div class="grp">
+              <h4>띠</h4>
+              <div class="prow"><label>띠</label><div class="ctl"><span class="sw"></span><i class="swatch" style="background:#0C0E14"></i><span class="seg" style="font-size:11.5px; opacity:.5"><span class="on">글 폭</span><span>화면 폭</span></span></div></div>
+              <div class="prow" style="opacity:.5"><label>불투명도</label><div class="ctl"><span class="slider"><span class="track"><i style="width:62%"></i><b style="left:62%"></b></span><span class="mono">62%</span></span></div></div>
+            </div>
+            <div class="grp full">
+              <h4>위치</h4>
+              <div style="display:flex; gap:16px; align-items:center; flex-wrap:wrap">
+                <span class="seg"><span>왼쪽</span><span class="on">가운데</span><span>오른쪽</span></span>
+                <span class="seg"><span class="on">아래</span><span>위</span></span>
+                <span><span class="hint">기준선에서</span> <span class="num">64<small>px</small></span></span>
+                <span><span class="hint">좌우 여백</span> <span class="num">80<small>px</small></span></span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="dlg-foot"><span class="btn outline sm">기본값으로</span><span class="grow"></span><span class="btn text">닫기</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────── S4 ─────────── -->
+  <section id="s4">
+    <h2>s4. OBS 합성 예시 — 찬양 (원본 + 보조 2줄씩), 외곽선 vs 반투명 띠</h2>
+    <p class="cap">예배 카메라 화면(흉내) 위에 1920×1080 투명 페이지를 통째로 얹은 모습. 자막 덩어리는 <b>아래 기준선에서 위로 자란다</b> — 줄 수가 달라도 아래 선이 고정이라 방송 화면이 덜 흔들린다.</p>
+    <div class="cmpgrid">
+      <figure>
+        <div class="label-row"><span class="chip muted">A</span>외곽선 + 그림자 <span class="hint" style="font-weight:500">— 기본 추천</span></div>
+        <div class="obswin">
+          <div class="tb"><i></i><i></i><i></i><span>OBS — 미리보기 (예시)</span></div>
+          <div class="cv"><div class="canvas cam">
+            <div class="floor"></div><div class="screen"></div>
+            <div class="p" style="left:24%; width:5%; height:20%"></div><div class="p" style="left:46.5%; width:5.5%; height:24%"></div><div class="p" style="left:70%; width:5%; height:21%"></div>
+            <div class="crowd"></div>
+            <div class="sub-wrap"><div class="blockx st-outline">
+              <div class="m">나의 모든 날 주를 노래해<br>주의 사랑 안에 살아가리</div>
+              <div class="s">I will sing of You all my days<br>I will live within Your love</div>
+            </div></div>
+          </div></div>
+          <div class="srcs"><div class="hl">🌐 찬양 자막 <span style="color:#8D90A0">브라우저</span></div><div>📷 카메라 1</div></div>
+        </div>
+        <figcaption><b>배경을 가리지 않는다.</b> 화면이 밝든 어둡든 검은 외곽선이 글자 가장자리를 잡아 준다. 가는 한글 획을 지키려고 외곽선은 글자 바깥에만(text-shadow 8방향).</figcaption>
+      </figure>
+      <figure>
+        <div class="label-row"><span class="chip muted">B</span>반투명 띠 (글 폭에 맞춤, 62%)</div>
+        <div class="obswin">
+          <div class="tb"><i></i><i></i><i></i><span>OBS — 미리보기 (예시)</span></div>
+          <div class="cv"><div class="canvas cam">
+            <div class="floor"></div><div class="screen"></div>
+            <div class="p" style="left:24%; width:5%; height:20%"></div><div class="p" style="left:46.5%; width:5.5%; height:24%"></div><div class="p" style="left:70%; width:5%; height:21%"></div>
+            <div class="crowd"></div>
+            <div class="sub-wrap"><div class="blockx st-band">
+              <div class="m">나의 모든 날 주를 노래해<br>주의 사랑 안에 살아가리</div>
+              <div class="s">I will sing of You all my days<br>I will live within Your love</div>
+            </div></div>
+          </div></div>
+          <div class="srcs"><div class="hl">🌐 찬양 자막 <span style="color:#8D90A0">브라우저</span></div><div>📷 카메라 1</div></div>
+        </div>
+        <figcaption><b>가장 잘 읽힌다</b>(밝은 조명·흰 옷 앞에서도). 대신 화면 아래를 덮는다. 띠 크기는 글에 맞춰 페이지마다 달라진다 — 그게 거슬리면 '화면 폭 띠'.</figcaption>
+      </figure>
+      <figure>
+        <div class="label-row"><span class="chip muted">A</span>외곽선 — 밝은 화면</div>
+        <div class="canvas cam bright">
+          <div class="floor"></div>
+          <div class="p" style="left:30%; width:6%; height:26%"></div><div class="p" style="left:62%; width:6%; height:24%"></div>
+          <div class="sub-wrap"><div class="blockx st-outline">
+            <div class="m">나의 모든 날 주를 노래해<br>주의 사랑 안에 살아가리</div>
+            <div class="s">I will sing of You all my days<br>I will live within Your love</div>
+          </div></div>
+        </div>
+        <figcaption>밝은 바탕에서도 읽히지만 노란 보조 줄은 약해진다 → 설정 창 미리보기 '밝은 사진' 바탕으로 미리 확인하게 했다.</figcaption>
+      </figure>
+      <figure>
+        <div class="label-row"><span class="chip muted">B′</span>화면 폭 띠 — 밝은 화면</div>
+        <div class="canvas cam bright">
+          <div class="floor"></div>
+          <div class="p" style="left:30%; width:6%; height:26%"></div><div class="p" style="left:62%; width:6%; height:24%"></div>
+          <div class="sub-wrap fullband"><div class="blockx st-band full">
+            <div class="m">나의 모든 날 주를 노래해<br>주의 사랑 안에 살아가리</div>
+            <div class="s">I will sing of You all my days<br>I will live within Your love</div>
+          </div></div>
+        </div>
+        <figcaption>뉴스 하단 자막처럼 가로 전체. 띠 폭이 페이지마다 안 바뀌어 가장 차분하다. 띠 높이는 줄 수에 따라 바뀐다.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ─────────── S5 ─────────── -->
+  <section id="s5">
+    <h2>s5. OBS 합성 예시 — 성경 (참조 + 본문 + 보조 역본)</h2>
+    <p class="cap">참조(<b>시편 23:1</b>)는 덩어리 <b>맨 위에 작게</b>, 참조 색(기본 금색). 본문은 관객 화면 성경과 같게 왼쪽 정렬, 덩어리 자체는 가운데. 성경은 줄이 길어 폭(좌우 여백 안)에서 자동 줄바꿈되고,
+      덩어리가 '최대 높이'(30%)를 넘으면 글자를 같은 비율로 줄인다.</p>
+    <div class="cmpgrid">
+      <figure>
+        <div class="label-row"><span class="chip muted">A</span>외곽선</div>
+        <div class="canvas cam">
+          <div class="floor"></div><div class="screen"></div>
+          <div class="p" style="left:47%; width:5.5%; height:24%"></div>
+          <div class="crowd"></div>
+          <div class="sub-wrap"><div class="blockx bible st-outline">
+            <div class="ref">시편 23:1</div>
+            <div class="m">1 여호와는 나의 목자시니 내게 부족함이 없으리로다</div>
+            <div class="s">1 The LORD is my shepherd; I shall not want.</div>
+          </div></div>
+        </div>
+        <figcaption>참조가 위에 있어야 '무슨 말씀인지' 먼저 읽힌다. 아래에 두면 본문 길이에 따라 참조 위치가 위아래로 튄다.</figcaption>
+      </figure>
+      <figure>
+        <div class="label-row"><span class="chip muted">B</span>반투명 띠 · 긴 구절(자동 줄바꿈)</div>
+        <div class="canvas cam">
+          <div class="floor"></div><div class="screen"></div>
+          <div class="p" style="left:47%; width:5.5%; height:24%"></div>
+          <div class="crowd"></div>
+          <div class="sub-wrap"><div class="blockx bible st-band">
+            <div class="ref">시편 23:1–2</div>
+            <div class="m">1 여호와는 나의 목자시니 내게 부족함이 없으리로다<br>2 그가 나를 푸른 풀밭에 누이시며 쉴 만한 물 가로 인도하시는도다</div>
+            <div class="s">1 The LORD is my shepherd; I shall not want.</div>
+          </div></div>
+        </div>
+        <figcaption>두 절이 들어가도 기준선은 그대로이고 위로 자란다. 보조 역본 줄은 2절 원문이 길어 보조 1절만 보이게 '보일 줄'에서 끄는 것도 방법(예시).</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ─────────── S6 ─────────── -->
+  <section id="s6">
+    <h2>s6. 발표 보기 머리줄 — 'OBS' 칩</h2>
+    <p class="cap">OBS 자막이 켜져 있을 때만 머리줄 오른쪽 끝(툴바 뒤)에 나온다. 누르면 작은 메뉴: 잠시 숨기기 / 설정 열기. 숨긴 동안은 주황 <b>OBS 숨김</b> — 예배 중 설정 창을 안 열고 자막만 빨리 끈다.</p>
+    <div class="frame">
+      <div class="pvhead">
+        <div class="bar">
+          <span class="dot" style="background:var(--live)"></span><span class="title">발표 중 7 / 32</span>
+          <span class="chip muted">나의 모든 날 · 2/4</span>
+          <span class="sp"></span>
+          <span class="tool">🎤</span><span class="tool">📱</span><span class="tool">🗣</span><span class="tool">＋</span>
+          <span class="sep"></span>
+          <span class="obschip new"><span class="dot" style="background:var(--ok)"></span>OBS</span>
+        </div>
+        <div class="pvbody">
+          <div class="slideprev">나의 모든 날 주를 노래해<br>주의 사랑 안에 살아가리<small>I will sing of You all my days</small></div>
+          <div style="display:flex; flex-direction:column; gap:8px"><div class="hint" style="font-weight:700">다음</div><div class="slideprev" style="font-size:12px; opacity:.7">주의 사랑 안에<br>살아가리</div></div>
+        </div>
+      </div>
+          <div style="display:flex; flex-direction:row; flex-wrap:wrap; align-items:center; gap:10px 22px; width:1100px; margin-top:16px">
+            <div class="hint" style="font-weight:700">칩의 세 모양</div>
+            <div><span class="obschip"><span class="dot" style="background:var(--ok)"></span>OBS</span> <span class="hint">연결됨 · 내보내는 중</span></div>
+            <div><span class="obschip"><span class="dot" style="background:#9AA0AE"></span>OBS</span> <span class="hint">켜짐 · 연결 없음</span></div>
+            <div><span class="obschip hidden"><span class="dot" style="background:var(--warn)"></span>OBS 숨김</span> <span class="hint">눌러서 다시 보이기</span></div>
+            <div class="hint" style="flex-basis:100%; line-height:1.6">블랙아웃(B) 중에는 칩 옆에 회색 '블랙아웃' 표시만 — 숨김과 따로 센다(블랙아웃을 풀면 자막도 돌아온다).</div>
+          </div>
+      <div class="popmenu" style="left:860px; top:84px">
+        <span class="cap">OBS 1곳 연결됨 · 지금 자막 보이는 중</span>
+        <div class="hl">👁 OBS 자막 잠시 숨기기</div>
+        <hr>
+        <div>⚙ OBS 자막 설정…</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────── S7 ─────────── -->
+  <section id="s7">
+    <h2>s7. 투명 상태 — 아무것도 안 그릴 때</h2>
+    <p class="cap">OBS 에는 <b>완전히 투명</b>(글도 오류도 안 띄움 — 방송에 나가므로). 아래는 <span class="mono">…&amp;preview=1</span> 로 브라우저에서 열었을 때만 보이는 바둑판 + 오른쪽 위 상태 글이다.
+      첫 칸만 실제 OBS 화면(카메라만 보임).</p>
+    <div class="tgrid">
+      <figure>
+        <div class="canvas cam">
+          <div class="floor"></div><div class="screen"></div>
+          <div class="p" style="left:24%; width:5%; height:20%"></div><div class="p" style="left:46.5%; width:5.5%; height:24%"></div><div class="p" style="left:70%; width:5%; height:21%"></div>
+          <div class="crowd"></div>
+        </div>
+        <figcaption><b>OBS 실제 모습</b> — 아래 모든 상태에서 이렇게 카메라만 보인다</figcaption>
+      </figure>
+      <figure><div class="canvas checker"><span class="pvbadge">미리보기</span><span class="pvstat">발표 전</span></div>
+        <figcaption><b>발표 전</b> — '발표 창 없이도 내보내기'가 꺼져 있을 때</figcaption></figure>
+      <figure><div class="canvas checker"><span class="pvbadge">미리보기</span><span class="pvstat">블랙아웃</span></div>
+        <figcaption><b>블랙아웃</b> — '블랙아웃하면 자막도 감추기' 켬(기본)</figcaption></figure>
+      <figure><div class="canvas checker"><span class="pvbadge">미리보기</span><span class="pvstat">그림 페이지 — OBS 에는 안 보임</span></div>
+        <figcaption><b>PPT 그림 · 슬라이드 편집 페이지</b> (1단계)</figcaption></figure>
+      <figure><div class="canvas checker"><span class="pvbadge">미리보기</span><span class="pvstat">빈 페이지 · 자동 여백</span></div>
+        <figcaption><b>빈 페이지(문구 없음) · 자동 여백 · 곡 안 빈 페이지 · 동영상/음악/유튜브</b></figcaption></figure>
+      <figure><div class="canvas checker"><span class="pvbadge">미리보기</span><span class="pvstat" style="background:rgba(183,121,31,.92)">숨김 (발표 보기 칩)</span></div>
+        <figcaption><b>잠시 숨기기</b> · 발표 종료 · 앱과 연결 끊김(앱 종료·강제 종료)도 같은 투명</figcaption></figure>
+    </div>
+  </section>
+</div>
+</body>
+</html>

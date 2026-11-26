@@ -44,6 +44,7 @@ flutter test test/chord_lyrics_test.dart # 코드 가사 순수 함수: 문법·
 flutter test test/chord_repository_test.dart test/chord_conti_test.dart test/chord_leak_test.dart # 코드 저장 길(saveChords)·콘티 스냅샷·관객/PPTX 누출 없음
 flutter test test/chord_sheet_test.dart  # 코드 악보 조각·ChordSheetView 배치·싱어 chord_lines/key_label·조 배지
 flutter test test/auto_advance_timer_test.dart # 발표 자동 넘기기 타이머: 반복·한 번·멈춤·간격 칸
+flutter test test/obs_caption_test.dart test/obs_overlay_store_test.dart test/obs_overlay_server_test.dart test/obs_overlay_dialog_test.dart # OBS 자막: 페이지 → 자막 규칙·설정 저장·서버(키·SSE·포트 충돌·글꼴)·설정 창
 flutter test test/singer_web_server_test.dart test/presenter_pin_store_test.dart test/presenter_pin_dialog_test.dart # 휴대폰 서버: 고정 주소·발표자 PIN·잠금·Origin·깨진 /login 본문 + PIN 창
 flutter test test/lyrics_page_grid_test.dart # 가사 수정 창 페이지 표·넘침 측정 (LYRICS_EDITOR_SHOT=경로 면 창을 PNG 로)
 python3 python/test_render.py    # render 명령 self-check (LibreOffice 없으면 skip)
@@ -102,6 +103,8 @@ lib/
       sermon_design_store.dart       -- 설교 제목 페이지 마지막 디자인 → sermon_design.json
       page_template_store.dart       -- 페이지 틀(예배 시작·주일 광고·생일자 등) → page_templates.json, 기본 3개·틀 배경 입히기 순수 함수
       singer_web_server.dart         -- 휴대폰 싱어·리모컨 HTTP 서버(SSE) + cloudflared 임시 터널
+      obs_overlay_server.dart        -- OBS 브라우저 소스용 자막 서버(고정 포트·키, SSE) + 자막 페이지 HTML `obsOverlayHtml`
+      obs_overlay_store.dart         -- OBS 자막 설정(연결·디자인) → obs_overlay.json
       presenter_pin_store.dart       -- 휴대폰 발표자 모드 PIN(4자리) → presenter_pin.txt
       app_logger.dart                -- Application Support/logs/app.log (앱 내 "로그 보기"용)
       font_library.dart              -- 내장 무료 폰트를 Application Support/fonts 로 복사해 올린다
@@ -120,6 +123,7 @@ lib/
       worship_conti.dart             -- 콘티 모델
       conti_text_parse.dart          -- 콘티 글 파싱(parseContiText) + 제목으로 곡 찾기(ContiSongMatcher, 띄어쓰기·문장부호 무시)
       page_format.dart               -- 페이지별 글자 서식(1단계 색·크기 비율): PageFormat·PageEntry·pageKey(본문 FNV)·ExportStyle.withPageFormat·pageStylesFor(PPTX). DB `worship_conti_items.page_format`(JSON, onOpen 멱등 추가, 스키마 20 유지), LoadContiResult.pageFormats(uid→PageFormat). 기획 `.claude-office/work/20261120-2336-five-fixes/`
+      obs_caption.dart               -- 지금 페이지 → OBS 자막 순수 함수 obsCaptionFor(관객 화면 따라가기·숨김 까닭)
       conti_tree.dart                -- 콘티 폴더 트리 순수 함수: 행 계산·놓을 자리·항목/그룹 이동·만들기·풀기·이름·여백 없음 규칙
     presentation/
       praise_home_page.dart          -- 단일 화면(약 12,400줄). 검색·성경·디자인·콘티·발표 제어 전부 여기
@@ -152,6 +156,7 @@ lib/
       background_image_gallery.dart  -- 배경 이미지·영상 모음 격자 UI
       libreoffice_install_dialog.dart -- LibreOffice·cloudflared 자동 설치 안내창
       offering_overlay_painter.dart  -- 헌금송 띠(라인 + 헌금 + 계좌) painter. 미리보기·PNG 공용
+      obs_overlay_dialog.dart        -- 'OBS 자막' 설정 창(연결·디자인 탭, 미리보기) + 앱 바 상태 점 버튼 ObsAppBarButton
       sync_dialog.dart               -- 동기화 설정 (가져오기 메뉴 '찬양·콘티 동기화'·상태 줄): 접속 키 넣기·찬양 동기화 버튼
       cloud_conti_dialog.dart        -- 클라우드 콘티 목록: 내려받기(이미 있으면 바꾸기)·클라우드에서 지우기
   src/features/bible/
@@ -481,6 +486,19 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   발표 중이면 보던 슬라이드를 `_slideInfoKey` 로 다시 찾아 관객 화면은 그대로이고 싱어 '다음'만 갱신한다. 놓은 항목은 2초 강조(`_contiFlashUids`, 발표 보기용 `_flashInserted` 와 별개). 되돌리기는 없다.
 - **새 콘티** (예배 콘티 머리줄, `_newConti`): 확인 후 담긴 항목만 비운다(`_replaceConti`, 불러오기와 같은 초기화). 저장한 콘티는 그대로고 발표 중에는 막는다
 - **콘티 불러오기 뒤에 붙이기** (`_appendConti`): 항목이 있으면 취소·뒤에 붙이기·교체를 묻는다. 붙이기는 불러온 항목·메모·배경·여백 없음을 맨 끝에 더할 뿐이라 기존 항목 표시·원본 감시·보던 페이지·저장본 연결(`_linkedConti`)이 그대로고, 빠진 항목 수는 `_linkedMissing` 에 더한다. 발표 중에도 된다(관객 화면은 그대로, 싱어 '다음'만 갱신)
+- **OBS 자막** (기획 `planning/obs-overlay/`, 1단계): 방송 PC 의 OBS '브라우저' 소스에 `http://<IP>:8766/obs?k=<키>` 를 넣으면
+  관객 화면과 같은 순간에 찬양 가사·성경 본문이 **투명 바탕** 자막으로 넘어간다(크로마키·OBS 쪽 재작업 없이). 위치·크기는 OBS 에서 조절한다.
+  - 서버 `ObsOverlayServer` 는 싱어 서버와 **따로**다 — 포트(기본 8766)·키(16자, 처음 한 번 만들어 `obs_overlay.json` 에)가 **고정**이고 설정에서 켜 두면 앱이 켜져 있는 동안 상시.
+    포트를 다른 프로그램이 쓰면 다른 포트로 옮기지 않고 `portInUse` 로 알린다(주소가 바뀌면 OBS 소스가 조용히 깨진다). '다른 PC 의 OBS 에서 받기'(`allow_lan`, 기본 켬) = 0.0.0.0, 끄면 127.0.0.1.
+    읽기 전용(GET 만, POST 403). `/obs`·`/obs/events`(SSE)·`/obs/state`·`/obs/font/<n>`(지금 디자인 글꼴 — 내장 3종은 에셋, 무료 글꼴은 파일, 이 PC 글꼴은 이름만)
+  - 무엇을 보낼지는 순수 함수 `obsCaptionFor`(`domain/obs_caption.dart`): **관객 화면 따라가기** — 발표 전·블랙아웃·'잠시 숨기기'(실행 동안만)·그림(PPT·편집 페이지)·미디어·빈 페이지·자동 여백은 투명.
+    보조·추가 보조·성경 참조·곡 제목·설교 제목 페이지는 **OBS 설정의 스위치**(관객 디자인과 무관). 설교 부제는 보조 스위치와 상관없이 싣는다. 코드·메모·송폼·로컬 경로는 처음부터 `ObsSlide` 에 안 들어온다
+  - 보내는 자리: `_sendCurrentSlide` **맨 앞**(관객 창 응답·가사 PNG 굽기를 기다리지 않음) + 메인 `build` 뒤 프레임 콜백(`_scheduleObsSync`) — 삭제·콘티 불러오기·블랙아웃·발표 시작/종료처럼
+    `_sendCurrentSlide` 를 안 지나는 길도 화면은 다시 그리므로 여기서 잡힌다. 같은 JSON 이면 서버가 다시 안 보낸다. 앱 종료·서버 끄기 전에 '투명'을 한 번 보낸다
+  - 페이지(`obsOverlayHtml`)는 1080 높이 기준 px 를 창 높이 비율로 그리고, 외곽선(16방향 text-shadow)·그림자·띠(없음/글 폭/화면 폭)·아래/위 기준선에서 자라기·최대 높이를 넘으면 글자 축소(이분 탐색)·두 층 크로스페이드.
+    SSE 가 끊기면 1초 안에 감춘다(앱이 꺼져도 마지막 가사가 방송에 남지 않게), EventSource 가 다시 붙으면 지금 자막을 받는다. `&preview=1` = 바둑판 + 상태 글
+  - UI: 모니터 메뉴 'OBS 자막 (방송 브라우저 소스)…' → `ObsOverlayDialog`(연결·디자인 탭, 값을 바꾸면 바로 저장·반영, 미리보기는 Flutter 근사). 켜 두면 앱 바에 상태 점 버튼(회색 연결 없음·초록 연결됨·빨강 오류·주황 숨김)
+  - **미확인(실제 OBS)**: OBS 브라우저 소스의 투명 합성·SSE 유지·`FontFace`, 앱보다 OBS 를 먼저 켰을 때(소스 '새로 고침' 필요할 수 있음), 방화벽 허용 창. 1단계는 그림 페이지 글자를 못 보낸다(PPT 글 뽑기는 이후 단계)
 - **통역 화면 (내부 이름 B, macOS 만, 기획 `.claude-office/work/20261031-2207-split-screen-subtitle/`)**: 앱 하나에서 관객 창과 같이 넘어가는 세 번째 창. 모니터를 직접 골라야 하고(자동 없음) 그 모니터 전체를 차지한 뒤 **창 안에서** 슬라이드 칸과 자막 칸을 나눈다.
   - 창은 `PresentationWindowController(keyable: true)` 두 번째 인스턴스다. `show` 대신 `place` 라 메인 창 포커스를 뺏지 않는다. 클릭하면 포커스를 받아 Ctrl+F4 로 그 창만 닫히고(`bClosed`), 넘기기 키는 싱어와 같은 `singerKey` 로 간다
   - 칸은 Dart 순수 함수 `bSplitRects` 가 0~1 비율로 정한다(슬라이드 늘 16:9 + 몫 0.4~0.8, 네이티브 `setSplit`·`layoutSplit`). 해상도가 바뀌면 비율대로 다시 놓고, 모니터 비율까지 바뀌면 칸 가운데 16:9 로 줄인다
