@@ -196,6 +196,34 @@ def test_bible_unchanged():
     check("문단 안에는 br 이 없다", para_parts(paragraphs[0]), [("run", "첫째 줄")])
 
 
+def test_bible_line_spacing():
+    print("성경 줄 간격 배율 (bible_line_spacing)")
+
+    def spacings(item_type, style):
+        prs = export([{
+            "type": item_type, "title": "요 3:16",
+            "lyrics": "16 하나님이\n17 하나님이",
+            "english_lyrics": "16 For God",
+            "extra_lyrics": "16 Karena",
+            "background": None,
+        }], style=style)
+        return [
+            [s.get("val") for s in p._p.iter(qn("a:spcPct"))]
+            for p in body_paragraphs(prs.slides[0])
+        ]
+
+    check("1.0 이면 a:lnSpc 없음", spacings("bible", _STYLE), [[], [], [], []])
+    check("키 1.0 도 없음", spacings("bible", dict(_STYLE, bible_line_spacing=1.0)),
+          [[], [], [], []])
+    check("1.5 면 본문·보조·추가 모두 150%",
+          spacings("bible", dict(_STYLE, bible_line_spacing=1.5)),
+          [["150000"]] * 4)
+    check("5.0 은 2.0 으로", spacings("bible", dict(_STYLE, bible_line_spacing=5.0)),
+          [["200000"]] * 4)
+    check("찬양엔 안 건다", spacings("song", dict(_STYLE, bible_line_spacing=1.5)),
+          [[], [], []])
+
+
 def test_chord_keys_ignored():
     print("코드 키는 무시 (관객용 PPTX 에 코드가 안 섞인다)")
     prs = export([{
@@ -226,6 +254,7 @@ if __name__ == "__main__":
     test_english_lines()
     test_alignment_kept()
     test_bible_unchanged()
+    test_bible_line_spacing()
     test_chord_keys_ignored()
     if _failures:
         print(f"\n{len(_failures)}개 실패: {_failures}")

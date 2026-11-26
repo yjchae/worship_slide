@@ -11924,6 +11924,20 @@ class _DesignRibbonState extends State<_DesignRibbon> {
               (v) => _style.copyWith(bibleExtraFontRatio: v),
             ),
           ]),
+          // 한 열은 최대 3줄이라 줄 간격은 따로 한 열.
+          _column([
+            _PropertyRow(
+              label: '줄 간격 %',
+              child: _ValueSlider(
+                value: _style.bibleLineSpacing * 100,
+                min: 80,
+                max: 200,
+                divisions: 24,
+                onChanged: (v) =>
+                    _update(_style.copyWith(bibleLineSpacing: v.round() / 100)),
+              ),
+            ),
+          ]),
         ],
       ),
       _positionGroup(

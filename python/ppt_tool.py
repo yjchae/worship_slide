@@ -1966,6 +1966,14 @@ def _sub_font_sizes(style, is_bible):
     return english, extra
 
 
+def _bible_line_spacing(style):
+    """성경 본문 줄 간격 배율(bible_line_spacing, 기본 1.0, 0.8~2.0). Dart ExportStyle 과 같은 범위."""
+    value = style.get("bible_line_spacing")
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or value != value:
+        return 1.0
+    return min(max(float(value), 0.8), 2.0)
+
+
 def _page_text_style(style, is_bible):
     """한 페이지에 쓰는 본문·보조·추가 보조 색과 글자 크기(pt)를 style 에서 읽는다."""
     text_color = parse_hex_color(
@@ -1991,6 +1999,7 @@ def add_song_slides(prs, song, style, background=None):
     include_english_lyrics = style.get("include_english_lyrics", False)
     include_extra_lyrics = style.get("include_extra_lyrics", True)
     base_text_style = _page_text_style(style, is_bible)
+    line_spacing = _bible_line_spacing(style) if is_bible else 1.0
     # 페이지별 서식(Dart pageStylesFor): 페이지 순서, 없는 페이지는 None.
     page_styles = song.get("page_styles") or []
     show_song_title = style.get(
@@ -2079,6 +2088,11 @@ def add_song_slides(prs, song, style, background=None):
                 extra_color,
                 font_name,
             )
+
+        # 성경만 줄 간격 배율을 본문·보조·추가 문단에 건다. 1.0 이면 XML 을 그대로 둔다.
+        if line_spacing != 1.0:
+            for paragraph in frame.paragraphs:
+                paragraph.line_spacing = line_spacing
 
         if show_song_title and song.get("title"):
             _add_title_textbox(slide, song.get("title", ""), style, is_bible=is_bible, font_name=font_name)

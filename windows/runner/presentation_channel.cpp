@@ -491,6 +491,10 @@ void PresentationChannel::Apply(const flutter::EncodableMap& data) {
     slide_.mainSz  = GetDbl(s, "bible_font_size", 30.0);
     slide_.txt     = HexRgb(GetStr(s, "bible_text_color", "#ffffff"), RGB(255,255,255));
     slide_.boxOffsetY = ClampOffsetY(GetDbl(s, "bible_text_offset_y", 0.0));
+    {
+      const double ls = GetDbl(s, "bible_line_spacing", 1.0);
+      slide_.lineSpacing = std::isnan(ls) ? 1.0 : std::min(std::max(ls, 0.8), 2.0);
+    }
     slide_.vAlign  = VOf(GetStr(s, "bible_text_position", "middle"));
     slide_.hAlign  = HOf(GetStr(s, "bible_text_align", "center"));
     slide_.showTitle  = GetBool(s, "show_bible_title");
@@ -503,6 +507,7 @@ void PresentationChannel::Apply(const flutter::EncodableMap& data) {
     slide_.mainSz  = GetDbl(s, "font_size", 30.0);
     slide_.txt     = HexRgb(GetStr(s, "text_color", "#ffffff"), RGB(255,255,255));
     slide_.boxOffsetY = ClampOffsetY(GetDbl(s, "text_offset_y", 0.0));
+    slide_.lineSpacing = 1.0;
     slide_.vAlign  = VOf(GetStr(s, "text_position", "middle"));
     slide_.hAlign  = HOf(GetStr(s, "lyrics_text_align", "center"));
     slide_.showTitle  = GetBool(s, "show_song_title");
@@ -605,49 +610,91 @@ void PresentationChannel::Paint(HDC hdc, RECT cli) const {
   int bodyBoxH   = bodyBottom - bodyTop;
 
   UINT hf = HFlag(slide_.hAlign);
-  UINT calcFlags = hf | DT_WORDBREAK | DT_NOPREFIX | DT_CALCRECT;
-  UINT drawFlags = hf | DT_WORDBREAK | DT_NOPREFIX;
+  // 줄 나누기는 DrawText(DT_WORDBREAK)에 맡기지 않는다 — 한글 낱말을 음절 사이에서 끊었다.
+  // 미리보기·macOS 와 같은 규칙: 공백에서만 끊고, 상자보다 긴 낱말만 글자 단위로 자른다.
+  auto textWidth = [&](const std::wstring& t) -> int {
+    SIZE sz = {};
+    GetTextExtentPoint32W(hdc, t.c_str(), (int)t.size(), &sz);
+    return sz.cx;
+  };
+  // 한 줄('\n' 없음)을 폭 maxW 안에 들어가는 줄들로 나눈다. 빈 줄도 한 줄이다.
+  auto wrapLine = [&](const std::wstring& line, int maxW) -> std::vector<std::wstring> {
+    std::vector<std::wstring> rows;
+    std::wstring cur;
+    bool started = false;
+    size_t pos = 0;
+    while (true) {
+      size_t sp = line.find(L' ', pos);
+      std::wstring word = line.substr(pos, sp == std::wstring::npos ? std::wstring::npos : sp - pos);
+      std::wstring cand = started ? cur + L" " + word : word;
+      if (started && textWidth(cand) <= maxW) {
+        cur = cand;
+      } else {
+        if (started && !cur.empty()) rows.push_back(cur);
+        cur = word;
+        // 낱말 하나가 상자보다 길 때만 글자 단위로 자른다(서로게이트 쌍은 가르지 않는다).
+        while (cur.size() > 1 && textWidth(cur) > maxW) {
+          int fit = 0;
+          SIZE sz = {};
+          GetTextExtentExPointW(hdc, cur.c_str(), (int)cur.size(), max(maxW, 0), &fit, nullptr, &sz);
+          size_t cut = (size_t)max(fit, 1);
+          if (cut < cur.size() && cur[cut] >= 0xDC00 && cur[cut] <= 0xDFFF)
+            cut = cut > 1 ? cut - 1 : cut + 1;
+          if (cut >= cur.size()) break;
+          rows.push_back(cur.substr(0, cut));
+          cur.erase(0, cut);
+        }
+        started = true;
+      }
+      if (sp == std::wstring::npos) break;
+      pos = sp + 1;
+    }
+    rows.push_back(cur);
+    return rows;
+  };
 
-  // 성경만: 절 번호 밑으로 줄이 감기도록 내어쓰기(PPTX 와 같은 1.7em). 찬양은 그대로 한 번에 그린다.
+  // 높이 재기(draw=false)와 그리기가 같은 줄 나누기를 쓴다. 줄 피치 = tmHeight × 줄 간격 배율,
+  // 남는(모자라는) 높이는 CSS line-height 처럼 줄 위아래에 반씩 나눈다.
+  // 성경만: 절 번호 밑으로 줄이 감기도록 내어쓰기(PPTX 와 같은 1.7em).
   // 줄마다 첫 공백 앞(절 번호)은 왼쪽에, 나머지는 번호 폭만큼 들여 그린다.
   auto blockPaint = [&](const std::wstring& text, int y, bool draw, int fontPt) -> int {
-    if (!slide_.isBible) {
-      RECT r = { bodyLeft, y, bodyRight, y + bodyBoxH };
-      DrawTextW(hdc, text.c_str(), -1, &r, draw ? drawFlags : calcFlags);
-      return r.bottom - r.top;
-    }
-    int total = 0;
+    TEXTMETRICW tm = {};
+    GetTextMetricsW(hdc, &tm);
+    const double pitch = tm.tmHeight * slide_.lineSpacing;
+    const int lead = (int)std::lround((pitch - tm.tmHeight) / 2.0);
+    auto rowTop = [&](size_t k) { return y + (int)std::lround(static_cast<double>(k) * pitch) + lead; };
+    size_t n = 0;  // 지금까지 쌓은 줄 수
     size_t pos = 0;
-    while (pos <= text.size()) {
+    while (true) {
       size_t nl = text.find(L'\n', pos);
       std::wstring line = text.substr(pos, nl == std::wstring::npos ? std::wstring::npos : nl - pos);
-      size_t sp = line.find(L' ');
-      std::wstring num = sp == std::wstring::npos ? L"" : line.substr(0, sp);
-      std::wstring rest = sp == std::wstring::npos ? line : line.substr(sp + 1);
+      std::wstring num, rest = line;
       // 들여쓰기 = 절 번호 + 공백의 실제 글자 폭(글꼴·번호 자릿수에 맞는다).
       int indent = 0;
-      if (!num.empty()) {
-        std::wstring numSp = num + L" ";
-        SIZE sz = {};
-        GetTextExtentPoint32W(hdc, numSp.c_str(), (int)numSp.size(), &sz);
-        indent = sz.cx;
+      if (slide_.isBible) {
+        size_t sp = line.find(L' ');
+        if (sp != std::wstring::npos) {
+          num = line.substr(0, sp);
+          rest = line.substr(sp + 1);
+          if (!num.empty()) indent = textWidth(num + L" ");
+        }
       }
-      RECT r = { bodyLeft + indent, y + total, bodyRight, y + total + bodyBoxH };
-      if (rest.empty()) rest = L" ";
-      DrawTextW(hdc, rest.c_str(), -1, &r, calcFlags);
-      int h = r.bottom - r.top;
+      std::vector<std::wstring> rows = wrapLine(rest, bodyRight - bodyLeft - indent);
       if (draw) {
-        RECT n = { bodyLeft, y + total, bodyLeft + indent, y + total + h };
-        if (!num.empty())
-          DrawTextW(hdc, num.c_str(), -1, &n, DT_LEFT | DT_NOPREFIX | DT_SINGLELINE);
-        RECT d = { bodyLeft + indent, y + total, bodyRight, y + total + h };
-        DrawTextW(hdc, rest.c_str(), -1, &d, drawFlags);
+        if (!num.empty()) {
+          RECT r = { bodyLeft, rowTop(n), bodyLeft + indent, rowTop(n) + tm.tmHeight };
+          DrawTextW(hdc, num.c_str(), (int)num.size(), &r, DT_LEFT | DT_NOPREFIX | DT_SINGLELINE);
+        }
+        for (size_t k = 0; k < rows.size(); k++) {
+          RECT r = { bodyLeft + indent, rowTop(n + k), bodyRight, rowTop(n + k) + tm.tmHeight };
+          DrawTextW(hdc, rows[k].c_str(), (int)rows[k].size(), &r, hf | DT_NOPREFIX | DT_SINGLELINE);
+        }
       }
-      total += h;
+      n += rows.size();
       if (nl == std::wstring::npos) break;
       pos = nl + 1;
     }
-    return total;
+    return (int)std::lround(static_cast<double>(n) * pitch);
   };
 
   // Measure main text

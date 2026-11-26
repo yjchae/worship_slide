@@ -750,6 +750,11 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate, WKNavi
     let bodyOffsetY = rawOffsetY.isNaN ? 0 : min(max(rawOffsetY, -2.0), 2.0)
     let bodyBoxTopPct  = (0.6 + bodyOffsetY) / 7.5 * 100
     let bodyBoxHeightPct = 5.4 / 7.5 * 100
+    // 성경 본문 줄 간격 배율(1.0 = 그대로). 찬양은 늘 1.0. 미리보기·PPTX 와 같은 범위.
+    let rawLineSpacing = isBible ? ((style["bible_line_spacing"] as? Double) ?? 1.0) : 1.0
+    let lineSpacing = rawLineSpacing.isNaN ? 1.0 : min(max(rawLineSpacing, 0.8), 2.0)
+    let mainLineHeight = String(format: "%.4f", 1.25 * lineSpacing)
+    let subLineHeight = String(format: "%.4f", 1.3 * lineSpacing)
 
     let textPositionKey = isBible ? "bible_text_position" : "text_position"
     let justifyContent: String
@@ -854,15 +859,15 @@ class PresentationWindowController: NSWindowController, NSWindowDelegate, WKNavi
         display:flex;flex-direction:column;
         justify-content:\(justifyContent);align-items:center;overflow:visible;}
       .main-text{color:\(textColor);font-size:calc(\(fontSize)/540*100vh);
-        font-weight:700;line-height:1.25;text-align:\(textAlign);
-        white-space:pre-wrap;width:100%;}
+        font-weight:700;line-height:\(mainLineHeight);text-align:\(textAlign);
+        white-space:pre-wrap;word-break:keep-all;overflow-wrap:break-word;width:100%;}
       .english-text{color:\(englishColor);font-size:calc(\(englishFontSize)/540*100vh);
-        font-weight:700;line-height:1.3;text-align:\(textAlign);
-        margin-top:0.4em;white-space:pre-wrap;width:100%;}
+        font-weight:700;line-height:\(subLineHeight);text-align:\(textAlign);
+        margin-top:0.4em;white-space:pre-wrap;word-break:keep-all;overflow-wrap:break-word;width:100%;}
       .extra-text{color:\(extraColor);font-size:calc(\(extraFontSize)/540*100vh);
-        font-weight:700;line-height:1.3;text-align:\(textAlign);
-        margin-top:0.4em;white-space:pre-wrap;width:100%;}
-      .v{display:flex;}.v .n{flex:none;white-space:pre;}.v .t{flex:1;min-width:0;word-break:keep-all;}
+        font-weight:700;line-height:\(subLineHeight);text-align:\(textAlign);
+        margin-top:0.4em;white-space:pre-wrap;word-break:keep-all;overflow-wrap:break-word;width:100%;}
+      .v{display:flex;}.v .n{flex:none;white-space:pre;}.v .t{flex:1;min-width:0;word-break:keep-all;overflow-wrap:break-word;}
       \(Self.pointerCSS)
     </style></head><body>
       <div id="stage">

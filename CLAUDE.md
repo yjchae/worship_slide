@@ -21,6 +21,7 @@ flutter test test/sync_test.dart      # 찬양 동기화·클라우드 콘티(�
 flutter test test/drive_sync_store_test.dart # 구글 드라이브 저장소(가짜 Drive 서버)·접속 키
 flutter test test/db_backup_test.dart # 스키마 올리기 전 DB 자동 백업
 flutter test test/bible_search_test.dart # 성경 본문 검색(띄어쓰기 무시·범위·강조·페이지 나누기)
+flutter test test/bible_line_spacing_test.dart # 성경 줄 간격(bible_line_spacing) 저장·미리보기 줄 높이·넘침 + 찬양 낱말 단위 줄바꿈
 flutter test test/bible_voice_parse_test.dart # 성경 음성 검색: 말 → 역본·책·장·절 (한글 수사·범위·이어 말하기·SRGS 문법)
 flutter test test/move_pages_test.dart # 발표 보기 페이지 옮기기·나누기
 flutter test test/conti_text_parse_test.dart # 콘티 한번에 넣기: 콘티 글 → 번호·제목·조·(or 곡) + 곡 찾기
@@ -390,6 +391,9 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   범위 = 전체 / 구약(앞 39권) / 신약(뒤 27권) / 책 하나. 66권이 아닌 역본은 구약·신약 칸을 숨긴다(`mapBookName` 과 같은 순서 가정).
   결과 줄의 '이 장 보기' = 장절 모드로 그 장을 열고 그 절을 골라 둔다. 본문 모드에선 여러 책·장을 같이 고를 수 있어서
   페이지는 (책, 장)마다 따로 만든다(`bibleVersePages`) — 장절 모드는 묶음이 하나라 예전과 같다
+- **성경 줄 간격** (기획 `.claude-office/work/20261125-2345-bible-line-spacing/`): `ExportStyle.bibleLineSpacing`(JSON `bible_line_spacing`, 배율 기본 1.0, 0.8~2.0, `fromJson`·`ExportStyleStore` 두 곳) = 리본 성경 탭 '본문' 묶음 '줄 간격 %'.
+  성경 본문·보조·추가 줄의 지금 줄 높이(본문 1.25·보조 1.3)에 곱한다. 렌더러 네 곳(미리보기 `SlideTextLayout.bodySpan`·넘침 측정, macOS·Windows 발표 창, PPTX)이 같은 키를 읽고 찬양엔 안 쓴다.
+  **줄바꿈은 낱말 단위**: Flutter 는 한글을 음절 사이에서 끊으므로 미리보기는 낱말 안에 word joiner(U+2060, `SlideTextLayout.keepWords`, 한글 음절 사이와 한글↔ASCII 숫자·영문 사이에만(`3천명`·`Jesus께서`) — 영문끼리·이모지·결합 문자·NFD 자모는 건드리지 않는다)를 넣는다 — 성경은 `_splitNum`, 찬양은 `bodySpan`(이중으로 넣지 않는다). 상자보다 긴 낱말만 억지로 끊는다
 - **발표 보기 성경 본문 역본 바꾸기** (기획 `planning/conti-tree-dnd-version/`, A 단계): 현재 슬라이드가 성경 페이지(자동 여백 제외)일 때만 머리줄 '역본 ○○ ▾' 칩이 나온다. 고르면 `_changeBibleVersion` 이 그 항목의 참조 앞 역본·본문을 새 역본 같은 장으로 다시 만들고(`switchBibleVersion`, `bible_text_search.dart` 순수 함수 — 그 역본에 없는 절은 참조에서 빼고 알림, 하나도 없으면 안 바꿈), 보조·추가 칸은 **전역** `bibleSubVersion`/`bibleExtraVersion` 기준으로 다시 읽는다(새 주 역본과 같으면 비고, 되돌리면 다시 찬다). uid·배경·메모·그룹·위치는 그대로, 보던 슬라이드는 슬라이드 키로 다시 찾고 `_sendCurrentSlide` 로 관객 화면에 반영. 66권이 아닌 역본은 메뉴에서 비활성(`_bibleBookCounts`). 손으로 고친 본문은 구별할 수 없어 확인창 대신 스낵바 '되돌리기'·⌘/Ctrl+Z 로 돌린다 — `_moveUndo`/`_undoSeq` 스택을 같이 써서(직전 1회, 그 사이 콘티가 바뀌었으면 되돌리지 않고 알림) 엉뚱한 삭제·옮기기가 먼저 돌아가지 않는다. 항목 스냅샷이 바뀔 뿐이라 저장·`.wsconti`·PPTX 는 그대로. 읽는 사이 항목이 고쳐졌으면 덮지 않는다. `test/bible_version_switch_test.dart`
 - **성경 음성 검색** (기획 `planning/bible-voice-search/plan.md`): 발표 보기 툴바의 말하는 사람 아이콘. 켜 두면 계속 듣고
   "다니엘 3장 1절에서 10절"·"시편 107편 5절"·"17절"(앞 책·장 이어 말하기)을 들으면 그 구절 페이지를 **현재 페이지 바로 뒤**에 넣는다

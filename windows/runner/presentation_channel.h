@@ -45,6 +45,8 @@ class PresentationChannel {
     double   mainSz  = 30.0, engSz = 24.0, extraSz = 21.0, ttlSz = 14.0;
     // 본문 세로 미세 조정 (인치, + = 아래로). 고정 크기 상자를 통째로 민다.
     double   boxOffsetY = 0.0;
+    // 성경 본문 줄 간격 배율(1.0 = 그대로, 0.8~2.0). 찬양은 늘 1.0.
+    double   lineSpacing = 1.0;
     int      vAlign  = 1;     // 0=top 1=center 2=bottom
     int      hAlign  = 1;     // 0=left 1=center 2=right
     int      ttlH    = 2;     // 0=left 1=center 2=right

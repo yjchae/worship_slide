@@ -151,6 +151,10 @@ class ExportStyleStore {
         json['bible_extra_font_ratio'],
         kDefaultExtraFontRatio,
       ),
+      bibleLineSpacing: parseLineSpacing(
+        json['bible_line_spacing'],
+        kDefaultBibleLineSpacing,
+      ),
     );
   }
 

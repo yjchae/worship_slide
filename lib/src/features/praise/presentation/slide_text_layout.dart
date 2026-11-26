@@ -37,6 +37,9 @@ class SlideTextLayout {
     final bodyFontSize = isBible ? style.bibleFontSize : style.fontSize;
     final bodyColor = isBible ? style.bibleTextColor : style.textColor;
     Color hideable(Color color) => originalOnly ? Colors.transparent : color;
+    // 성경만 줄 간격 배율을 곱한다. 성경 낱말 보호는 [_splitNum] 이 하므로 찬양만 여기서 감싼다.
+    final spacing = isBible ? style.bibleLineSpacing : 1.0;
+    String words(String s) => isBible ? s : keepWords(s);
     TextStyle textStyle(Color color, double size, double height) => TextStyle(
       color: color,
       fontSize: size * fontScale,
@@ -48,25 +51,25 @@ class SlideTextLayout {
     return TextSpan(
       children: [
         TextSpan(
-          text: data.mainText,
-          style: textStyle(bodyColor, bodyFontSize, _mainHeight),
+          text: words(data.mainText),
+          style: textStyle(bodyColor, bodyFontSize, _mainHeight * spacing),
         ),
         if (showsSub(data))
           TextSpan(
-            text: '\n${data.englishText}',
+            text: '\n${words(data.englishText)}',
             style: textStyle(
               hideable(style.englishTextColor),
               style.subFontSizeFor(isBible: isBible),
-              _subHeight,
+              _subHeight * spacing,
             ),
           ),
         if (showsExtra(data))
           TextSpan(
-            text: '\n${data.extraText}',
+            text: '\n${words(data.extraText)}',
             style: textStyle(
               hideable(style.extraTextColor),
               style.extraFontSizeFor(isBible: isBible),
-              _subHeight,
+              _subHeight * spacing,
             ),
           ),
       ],
@@ -99,13 +102,18 @@ class SlideTextLayout {
   static (String, String) _splitNum(String line) {
     final i = line.indexOf(' ');
     return i < 0
-        ? ('', _keepWords(line))
-        : (line.substring(0, i), _keepWords(line.substring(i + 1)));
+        ? ('', keepWords(line))
+        : (line.substring(0, i), keepWords(line.substring(i + 1)));
   }
 
-  /// 한글은 글자마다 줄이 나뉠 수 있어, 공백이 아닌 글자 사이에 word joiner 를 넣어 낱말째 다음 줄로 보낸다.
-  static String _keepWords(String s) =>
-      s.replaceAllMapped(RegExp(r'(?<=\S)(?=\S)'), (_) => '\u2060');
+  /// 한글은 음절마다 줄이 나뉠 수 있어, 한글 음절 사이·한글과 ASCII 숫자·영문 사이('3천명', 'Jesus께서')에
+  /// word joiner 를 넣어 낱말째 다음 줄로 보낸다. 영문끼리는 원래 안 나뉘므로 안 넣는다.
+  /// 그 밖의 글자 옆엔 넣지 않는다 — 이모지 서로게이트 쌍·결합 문자·NFD 자모 사이에 끼면 글자가 깨진다.
+  @visibleForTesting
+  static String keepWords(String s) => s.replaceAllMapped(
+    RegExp(r'(?<=[가-힣])(?=[가-힣0-9A-Za-z])|(?<=[0-9A-Za-z])(?=[가-힣])'),
+    (_) => '\u2060',
+  );
 
   static Widget bibleBody(
     SlidePageData data, {
@@ -246,6 +254,7 @@ class SlideTextLayout {
       style.extraFontSizeFor(isBible: data.isBible),
       style.includeEnglishLyrics,
       style.includeExtraLyrics,
+      data.isBible ? style.bibleLineSpacing : 1.0,
     );
   }
 

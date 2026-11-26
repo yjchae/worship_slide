@@ -91,6 +91,15 @@ double clampFontRatio(double value) =>
 double parseFontRatio(Object? value, double fallback) =>
     value is num ? clampFontRatio(value.toDouble()) : fallback;
 
+/// 성경 줄 간격 배율(1.0 = 지금 모양: 본문 1.25·보조 1.3 에 곱한다). 렌더러 네 곳이 같은 키를 읽는다.
+const kDefaultBibleLineSpacing = 1.0;
+
+double clampLineSpacing(double value) => value.clamp(0.8, 2.0).toDouble();
+
+/// 저장된 줄 간격을 읽는다. 없거나 숫자가 아니면 [fallback].
+double parseLineSpacing(Object? value, double fallback) =>
+    value is num ? clampLineSpacing(value.toDouble()) : fallback;
+
 class ExportStyle {
   const ExportStyle({
     required this.fontSize,
@@ -133,6 +142,7 @@ class ExportStyle {
     this.extraFontRatio = kDefaultExtraFontRatio,
     this.bibleSubFontRatio = kDefaultSubFontRatio,
     this.bibleExtraFontRatio = kDefaultExtraFontRatio,
+    this.bibleLineSpacing = kDefaultBibleLineSpacing,
   });
 
   final double fontSize;
@@ -205,6 +215,9 @@ class ExportStyle {
   final double bibleSubFontRatio;
   final double bibleExtraFontRatio;
 
+  /// 성경 본문·보조·추가 줄 간격 배율(0.8~2.0). 찬양엔 안 쓴다.
+  final double bibleLineSpacing;
+
   /// 보조 줄 글자 크기(pt). 설교 부제처럼 [englishFontSize] 를 정했으면 그 값이 이긴다.
   double subFontSizeFor({required bool isBible}) =>
       englishFontSize ??
@@ -256,6 +269,7 @@ class ExportStyle {
       'extra_font_ratio': extraFontRatio,
       'bible_sub_font_ratio': bibleSubFontRatio,
       'bible_extra_font_ratio': bibleExtraFontRatio,
+      'bible_line_spacing': bibleLineSpacing,
     };
   }
 
@@ -358,6 +372,10 @@ class ExportStyle {
         json['bible_extra_font_ratio'],
         kDefaultExtraFontRatio,
       ),
+      bibleLineSpacing: parseLineSpacing(
+        json['bible_line_spacing'],
+        kDefaultBibleLineSpacing,
+      ),
     );
   }
 
@@ -402,6 +420,7 @@ class ExportStyle {
     double? extraFontRatio,
     double? bibleSubFontRatio,
     double? bibleExtraFontRatio,
+    double? bibleLineSpacing,
   }) {
     return ExportStyle(
       fontSize: fontSize ?? this.fontSize,
@@ -459,6 +478,9 @@ class ExportStyle {
       ),
       bibleExtraFontRatio: clampFontRatio(
         bibleExtraFontRatio ?? this.bibleExtraFontRatio,
+      ),
+      bibleLineSpacing: clampLineSpacing(
+        bibleLineSpacing ?? this.bibleLineSpacing,
       ),
     );
   }
