@@ -20,7 +20,13 @@ import 'fnv_hash.dart';
 /// 같은 망(와이파이)에 있는 사람은 누구나 볼 수 있다는 뜻이다(사용자가 고른 편의 쪽).
 ///
 /// **발표자 주소(발표자 모드·싱어창)**: `/presenter` 로 열면 넘기기·확대·블랙아웃 제스처가 켜진다.
-/// 그 페이지의 요청은 `?p=1`(발표자 쪽)을 달고 온다. 키가 아니라 어느 화면인지 가르는 표시일 뿐이다.
+/// 그 페이지의 요청은 `?p=1`(발표자 쪽)을 달고 온다.
+/// - **PIN**: 발표자 쪽은 PC 에서 정한 4자리 [presenterPin] 이 맞아야 한다. 휴대폰이 `/presenter` 를 처음 열면
+///   PIN 입력 페이지([pinPageHtml])가 나오고, `POST /login` 이 맞으면 쿠키(`ws_pin`, 1년)를 남겨 그 휴대폰은
+///   다음부터 묻지 않는다. 쿠키라서 `<img>` 썸네일 요청에도 저절로 실린다. PIN 을 바꾸면 쿠키가 안 맞아
+///   발표자 쪽 요청이 401 → 휴대폰 페이지가 새로 읽혀 PIN 을 다시 묻는다
+/// - PIN 을 5번 틀리면 30초 동안 받지 않는다(4자리라 대입을 막으려고, 접속 주소마다)
+/// - `POST` 는 Origin 이 이 서버 주소와 다르면 403 — 같은 망 기기에서 열린 다른 웹 페이지가 발표를 조작하지 못하게
 /// - `POST /control?action=next|prev&from=<보던 쪽>` / `action=blackout&on=0|1` / `action=zoom&on&x&y&size`
 ///   → [onControl] 을 부르고 바뀐 상태 JSON 을 돌려준다
 /// - 리모컨에만 가는 값(`note`·`zoom`·`message`, [remoteOnlyKeys])은 싱어 주소로 받는 쪽에서 뺀다
@@ -95,6 +101,26 @@ class SingerWebServer {
 
   /// 발표자 화면 경로. 싱어창은 `/`.
   static const presenterPath = '/presenter';
+
+  /// 발표자 쪽 PIN(숫자 4자리). 비어 있으면 발표자 쪽은 아무도 못 들어온다.
+  /// 바꾸면 이미 들어와 있던 휴대폰도 다음 요청부터 다시 묻는다.
+  String get presenterPin => _presenterPin;
+  set presenterPin(String pin) {
+    if (pin == _presenterPin) return;
+    _presenterPin = pin;
+    // 열려 있는 발표자 SSE 는 새 요청을 안 보내서 PIN 검사를 다시 안 거친다 — 끊어서 다시 붙게(→ 401 → PIN 입력).
+    for (final c in _remoteClients.toList()) {
+      c.close().catchError((_) {});
+    }
+    _remoteClients.clear();
+  }
+
+  String _presenterPin = '';
+
+  static const _pinCookie = 'ws_pin';
+  static const maxPinFailures = 5;
+  static const pinLockout = Duration(seconds: 30);
+  final _pinFailures = <String, (int, DateTime)>{}; // 접속 주소 → (틀린 횟수, 마지막 시각)
 
   /// 다른 망에서 열 주소. 터널이 아직이면 null.
   String? publicUrl({bool remote = false}) => _publicBase == null
@@ -179,7 +205,7 @@ class SingerWebServer {
     running.value = false;
   }
 
-  /// cloudflared 를 켜 둔 뒤에 설치했을 때 — 서버는 그대로 두고 터널만 띄운다(같은 망 주소·키 유지).
+  /// cloudflared 를 켜 둔 뒤에 설치했을 때 — 서버는 그대로 두고 터널만 띄운다(같은 망 주소 유지).
   void retryTunnel() {
     final server = _server;
     if (server != null && tunnel.value == TunnelState.missing) {
@@ -481,23 +507,39 @@ class SingerWebServer {
 
   Future<void> _handle(HttpRequest req) async {
     final res = req.response;
-    // 키 없음. 발표자 페이지가 보내는 요청만 `p=1` 을 단다(어느 화면 값을 줄지 가르는 표시).
+    // 싱어 쪽은 주소만으로 열린다. 발표자 페이지가 보내는 요청만 `p=1` 을 달고, PIN 쿠키가 맞아야 한다.
     final remote = req.uri.queryParameters['p'] == '1';
     try {
+      if (req.method == 'POST' && !_sameOrigin(req)) {
+        res.statusCode = HttpStatus.forbidden;
+        await res.close();
+        return;
+      }
+      if (remote && !_pinOk(req)) {
+        res.statusCode = HttpStatus.unauthorized;
+        res.headers.set(HttpHeaders.cacheControlHeader, 'no-store');
+        await res.close();
+        return;
+      }
       switch (req.uri.path) {
-        case '/' || presenterPath || '$presenterPath/':
+        case '/':
+          res.headers
+            ..contentType = ContentType.html
+            ..set(HttpHeaders.cacheControlHeader, 'no-store');
+          res.write(singerPageHtml);
+          await res.close();
+        case presenterPath || '$presenterPath/':
           res.headers
             ..contentType = ContentType.html
             ..set(HttpHeaders.cacheControlHeader, 'no-store');
           res.write(
-            req.uri.path == '/'
-                ? singerPageHtml
-                : singerPageHtml.replaceFirst(
-                    '<body>',
-                    '<body class="remote">',
-                  ),
+            _pinOk(req)
+                ? singerPageHtml.replaceFirst('<body>', '<body class="remote">')
+                : pinPageHtml(),
           );
           await res.close();
+        case '/login':
+          await _login(req);
         case '/events':
           res.bufferOutput = false;
           res.headers
@@ -617,6 +659,74 @@ class SingerWebServer {
     }
   }
 
+  // 쿠키가 지금 PIN 과 맞는가. PIN 이 없으면(아직 안 정함) 아무도 못 들어온다.
+  bool _pinOk(HttpRequest req) {
+    if (presenterPin.isEmpty) return false;
+    try {
+      for (final c in req.cookies) {
+        if (c.name == _pinCookie && c.value == presenterPin) return true;
+      }
+    } catch (_) {} // 같은 주소의 다른 프로그램이 남긴 깨진 쿠키
+    return false;
+  }
+
+  // POST 의 Origin 이 이 서버 주소(Host)와 같은가. Origin 이 없으면(앱 밖 도구·옛 브라우저) 받는다.
+  static bool _sameOrigin(HttpRequest req) {
+    final origin = req.headers.value('origin');
+    if (origin == null || origin.isEmpty) return true;
+    final host = req.headers.value(HttpHeaders.hostHeader);
+    final o = Uri.tryParse(origin);
+    return o != null && host != null && o.hasAuthority && o.authority == host;
+  }
+
+  // PIN 입력 폼(`pin=1234`, application/x-www-form-urlencoded). 맞으면 쿠키를 남기고 발표자 화면으로 보낸다.
+  Future<void> _login(HttpRequest req) async {
+    final res = req.response;
+    if (req.method != 'POST') {
+      res.statusCode = HttpStatus.methodNotAllowed;
+      await res.close();
+      return;
+    }
+    final who = req.connectionInfo?.remoteAddress.address ?? '';
+    final now = DateTime.now();
+    final (fails, at) = _pinFailures[who] ?? (0, now);
+    final locked = fails >= maxPinFailures && now.difference(at) < pinLockout;
+    final body = await utf8.decoder.bind(req).join();
+    final pin = Uri.splitQueryString(body)['pin']?.trim() ?? '';
+    res.headers.set(HttpHeaders.cacheControlHeader, 'no-store');
+    if (!locked && presenterPin.isNotEmpty && pin == presenterPin) {
+      _pinFailures.remove(who);
+      res.cookies.add(
+        Cookie(_pinCookie, pin)
+          ..path = '/'
+          ..httpOnly = true
+          // Strict 면 QR 카메라·메신저에서 연 첫 화면에 쿠키가 안 실린다. 다른 사이트의 POST·fetch 는
+          // Lax 로도 안 실리고, POST 는 Origin 검사로 한 번 더 막는다.
+          ..sameSite = SameSite.lax
+          ..maxAge = const Duration(days: 365).inSeconds,
+      );
+      res.statusCode = HttpStatus.seeOther;
+      res.headers.set(HttpHeaders.locationHeader, presenterPath);
+      await res.close();
+      return;
+    }
+    if (!locked) {
+      // 잠금이 풀린 뒤 처음 틀리면 1부터 다시 센다.
+      final base = fails >= maxPinFailures ? 0 : fails;
+      _pinFailures[who] = (base + 1, now);
+    }
+    res.statusCode = HttpStatus.unauthorized;
+    res.headers.contentType = ContentType.html;
+    res.write(
+      pinPageHtml(
+        error: locked || (_pinFailures[who]?.$1 ?? 0) >= maxPinFailures
+            ? '여러 번 틀렸습니다. 30초 뒤에 다시 넣어 주세요.'
+            : 'PIN 이 맞지 않습니다.',
+      ),
+    );
+    await res.close();
+  }
+
   static ContentType _imageType(String path) {
     final lower = path.toLowerCase();
     return lower.endsWith('.jpg') || lower.endsWith('.jpeg')
@@ -682,6 +792,36 @@ class SingerWebServer {
         n.contains('wi-fi') ||
         n.contains('이더넷');
   }
+}
+
+/// 발표자 PIN 입력 페이지. 맞으면 서버가 쿠키를 남기고 `/presenter` 로 보낸다(JS 없이 폼 하나).
+String pinPageHtml({String error = ''}) {
+  const esc = HtmlEscape();
+  return '''<!doctype html>
+<html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>발표자 모드 · PIN</title>
+<style>
+  html,body{margin:0;height:100%;background:#111418;color:#e6e9ee;
+    font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;}
+  body{display:flex;align-items:center;justify-content:center;padding:24px;box-sizing:border-box;word-break:keep-all;}
+  form{width:100%;max-width:320px;display:flex;flex-direction:column;gap:14px;text-align:center;}
+  h1{font-size:20px;margin:0;}
+  p{margin:0;color:#9aa3ad;font-size:14px;line-height:1.5;}
+  input{font-size:32px;letter-spacing:.5em;text-align:center;padding:12px 0 12px .5em;border-radius:12px;
+    border:1px solid #3a424d;background:#1b2027;color:#fff;outline:none;}
+  input:focus{border-color:#7aa7ff;}
+  button{font-size:17px;font-weight:700;padding:14px;border:0;border-radius:12px;background:#3b6fe0;color:#fff;}
+  .err{color:#ff8a80;font-weight:600;min-height:1.4em;}
+</style></head>
+<body><form method="post" action="/login">
+  <h1>발표자 모드</h1>
+  <p>PC 의 휴대폰 화면 창(발표자 모드)에 나온<br>PIN 4자리를 넣어 주세요.</p>
+  <input name="pin" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" autofocus required>
+  <div class="err">${esc.convert(error)}</div>
+  <button type="submit">들어가기</button>
+  <p>한 번 들어오면 이 휴대폰은 다음부터 묻지 않습니다.</p>
+</form></body></html>''';
 }
 
 /// 싱어 페이지. 네이티브 싱어 창(MainFlutterWindow.swift)과 같은 모양·같은 글자 맞춤 규칙
@@ -905,6 +1045,9 @@ function $(id){ return document.getElementById(id); }
 var REMOTE=document.body.classList.contains('remote');
 // 키 없음. 발표자 페이지 요청만 p=1 을 달아 발표자 쪽 값(메모·목록)을 받는다.
 var Q=REMOTE?'?p=1':'';
+// PC 에서 PIN 을 바꾸면 발표자 쪽 요청이 401 — 다시 읽으면 서버가 PIN 입력 페이지를 준다.
+var pinGone=false;
+function checkPin(r){ if(r && r.status===401 && !pinGone){ pinGone=true; location.reload(); } return r; }
 // 발표자 주소로 열었을 때만: 발표자 모드(true) / 싱어창(false). setView 가 정한다.
 var PRESENTER=false;
 // ── 코드 ── 휴대폰마다 켜고 끈다(기본 끔). 앱은 chord_lines 를 늘 싣고 이 버튼이 정한다.
@@ -1145,7 +1288,7 @@ function apply(text){
 if(location.protocol==='https:'){
   // 바깥 망 터널 주소: Cloudflare 임시 터널이 SSE 를 흘려보내지 않아서 폴링.
   // 끊기면(PC 인터넷이 잠깐 끊김 등) 간격을 3초까지 늘려 가며 계속 묻는다 — 터널이 같은 주소로
-  // 다시 붙으면 저절로 이어진다. 키가 없어서 앱에서 껐다 켜도 같은 주소면 그대로 이어진다.
+  // 다시 붙으면 저절로 이어진다. 터널 주소는 앱에서 발표를 다시 시작하면 바뀌므로 그때는 새 QR 로 연다.
   // 화면이 가려져 있는 동안은 묻지 않는다(배터리).
   var delay=500, timer=null;
   function poll(){
@@ -1153,6 +1296,7 @@ if(location.protocol==='https:'){
     if(document.hidden) return;
     fetch('/state'+Q,{cache:'no-store'})
       .then(function(r){
+        checkPin(r);
         if(!r.ok) throw 0;
         return r.text().then(function(t){ apply(t); delay=500; });
       })
@@ -1174,7 +1318,12 @@ if(location.protocol==='https:'){
     es.onmessage=function(ev){ apply(ev.data); };
     es.onerror=function(){
       offline();
-      if(es.readyState===2 && !reopen){ es.close(); reopen=setTimeout(connect,3000); }
+      if(es.readyState===2 && !reopen){
+        es.close();
+        // 닫힌 까닭이 PIN(401)이면 다시 읽어 PIN 을 묻는다.
+        if(REMOTE) fetch('/state'+Q,{cache:'no-store'}).then(checkPin).catch(function(){});
+        reopen=setTimeout(connect,3000);
+      }
     };
   }
   // 화면을 다시 켰을 때 연결이 닫혀 있으면 바로 다시 연다.
@@ -1228,7 +1377,7 @@ function showZoom(){
 }
 function control(q){
   return fetch('/control?'+(Q?'p=1&':'')+'action='+q,{method:'POST',cache:'no-store'})
-    .then(function(r){ return r.ok?r.text():null; })
+    .then(function(r){ checkPin(r); return r.ok?r.text():null; })
     .then(function(t){ if(t) apply(t); })
     .catch(function(){});
 }
@@ -1392,7 +1541,7 @@ function syncPages(force){
   if(!pages) stat('페이지 목록을 받는 중…');
   var seq=++pagesSeq;
   fetch('/pages'+Q,{cache:'no-store'})
-    .then(function(r){ if(!r.ok) throw 0; return r.json(); })
+    .then(function(r){ checkPin(r); if(!r.ok) throw 0; return r.json(); })
     .then(function(j){ if(seq!==pagesSeq) return; pages=j.pages||[]; buildStrip(); })
     // 받는 동안·실패해도 옛 목록은 그대로 둔다. 목록이 없을 때만 알린다(다음 pages_rev 에 다시 받는다).
     .catch(function(){ if(seq===pagesSeq && !pages) stat('페이지 목록을 받지 못했습니다',true); });

@@ -5,9 +5,19 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:worship_slides/src/features/praise/data/singer_web_server.dart';
 
+const testPin = '1234';
+
+/// 테스트 요청엔 늘 맞는 PIN 쿠키를 싣는다(싱어 쪽은 쿠키를 보지 않는다).
+extension on HttpClient {
+  Future<HttpClientRequest> getP(Uri url) async =>
+      (await getUrl(url))..cookies.add(Cookie('ws_pin', testPin));
+  Future<HttpClientRequest> openP(String method, Uri url) async =>
+      (await openUrl(method, url))..cookies.add(Cookie('ws_pin', testPin));
+}
+
 void main() {
   test('키 없이 고정 주소로 열리고, 실시간 갱신·지금 페이지 이미지만 내보낸다', () async {
-    final server = SingerWebServer();
+    final server = SingerWebServer()..presenterPin = testPin;
     await server.start();
     addTearDown(server.stop);
     final url = Uri.parse(server.urlFor('127.0.0.1'));
@@ -18,11 +28,11 @@ void main() {
     final client = HttpClient();
     addTearDown(() => client.close(force: true));
     Future<HttpClientResponse> get(String path) async =>
-        (await client.getUrl(Uri.parse('$base$path'))).close();
+        (await client.getP(Uri.parse('$base$path'))).close();
 
     expect((await get('/img/current')).statusCode, 404); // 아직 페이지 없음
 
-    final page = await (await client.getUrl(url)).close();
+    final page = await (await client.getP(url)).close();
     expect(await page.transform(utf8.decoder).join(), contains('EventSource'));
 
     final img = File('${Directory.systemTemp.createTempSync().path}/p.png')
@@ -67,7 +77,7 @@ void main() {
   });
 
   test('발표자 쪽(p=1)만 넘길 수 있고, 메모·확대는 발표자 쪽에만 간다', () async {
-    final server = SingerWebServer();
+    final server = SingerWebServer()..presenterPin = testPin;
     await server.start();
     addTearDown(server.stop);
     final base = 'http://127.0.0.1:${server.port}';
@@ -84,7 +94,7 @@ void main() {
     final client = HttpClient();
     addTearDown(() => client.close(force: true));
     Future<(int, String)> send(String method, String path) async {
-      final res = await (await client.openUrl(
+      final res = await (await client.openP(
         method,
         Uri.parse('$base$path'),
       )).close();
@@ -117,7 +127,7 @@ void main() {
   });
 
   test('메시지는 리모컨에만 가고, 메시지만 바뀌면 싱어 쪽엔 보내지 않는다', () async {
-    final server = SingerWebServer();
+    final server = SingerWebServer()..presenterPin = testPin;
     await server.start();
     addTearDown(server.stop);
     final base = 'http://127.0.0.1:${server.port}';
@@ -126,7 +136,7 @@ void main() {
     final client = HttpClient();
     addTearDown(() => client.close(force: true));
     Future<HttpClientResponse> get(String path) async =>
-        (await client.getUrl(Uri.parse('$base$path'))).close();
+        (await client.getP(Uri.parse('$base$path'))).close();
     Future<Map<String, dynamic>> state(String k) async =>
         jsonDecode(await (await get('/state$k')).transform(utf8.decoder).join())
             as Map<String, dynamic>;
@@ -176,6 +186,7 @@ void main() {
 
   test('썸네일러가 멈춰도 시간 제한 뒤 원본을 보내고 다음 요청은 처리된다', () async {
     final server = SingerWebServer()
+      ..presenterPin = testPin
       ..thumbnailTimeout = const Duration(milliseconds: 100);
     await server.start();
     addTearDown(server.stop);
@@ -197,14 +208,14 @@ void main() {
     });
     final list =
         jsonDecode(
-              await (await (await client.getUrl(
+              await (await (await client.getP(
                 Uri.parse('$base/pages?p=1'),
               )).close()).transform(utf8.decoder).join(),
             )
             as Map;
     Future<List<int>> img(int i) async {
       final url = (list['pages'] as List)[i]['image'] as String;
-      final res = await (await client.getUrl(Uri.parse('$base$url'))).close();
+      final res = await (await client.getP(Uri.parse('$base$url'))).close();
       expect(res.statusCode, 200);
       return res.expand((b) => b).toList();
     }
@@ -215,14 +226,14 @@ void main() {
   });
 
   test('발표자 모드 페이지 목록·썸네일은 발표자 쪽(p=1)만, 로컬 경로 없이', () async {
-    final server = SingerWebServer();
+    final server = SingerWebServer()..presenterPin = testPin;
     await server.start();
     addTearDown(server.stop);
     final base = 'http://127.0.0.1:${server.port}';
     final client = HttpClient();
     addTearDown(() => client.close(force: true));
     Future<HttpClientResponse> get(String path) async =>
-        (await client.getUrl(Uri.parse('$base$path'))).close();
+        (await client.getP(Uri.parse('$base$path'))).close();
     Future<String> body(String path) async =>
         (await get(path)).transform(utf8.decoder).join();
 
@@ -306,7 +317,7 @@ void main() {
     await server.start();
     final b2 = 'http://127.0.0.1:${server.port}';
     server.update({...base0, 'pages': pages});
-    final raw = await (await client.getUrl(
+    final raw = await (await client.getP(
       Uri.parse('$b2/img/page/2?v=$v&p=1'),
     )).close();
     expect(await raw.expand((b) => b).toList(), [1, 2, 3]); // 끌 때 캐시도 비웠다
@@ -314,7 +325,7 @@ void main() {
     // 목록이 같으면 판 값 그대로, 페이지를 빼거나 넣으면 바뀐다.
     Future<String> revNow() async =>
         (jsonDecode(
-                  await (await (await client.getUrl(
+                  await (await (await client.getP(
                     Uri.parse('$b2/state?p=1'),
                   )).close()).transform(utf8.decoder).join(),
                 )
@@ -337,7 +348,7 @@ void main() {
   });
 
   test('goto 는 발표자 쪽(p=1) POST 로만 id 를 넘긴다', () async {
-    final server = SingerWebServer();
+    final server = SingerWebServer()..presenterPin = testPin;
     await server.start();
     addTearDown(server.stop);
     final base = 'http://127.0.0.1:${server.port}';
@@ -356,7 +367,7 @@ void main() {
     final client = HttpClient();
     addTearDown(() => client.close(force: true));
     Future<(int, Map)> send(String method, String k, String id) async {
-      final res = await (await client.openUrl(
+      final res = await (await client.openP(
         method,
         Uri.parse('$base/control?${k}action=goto&id=$id'),
       )).close();
@@ -387,13 +398,13 @@ void main() {
     } on SocketException {
       // 이미 누가 잡고 있으면 그대로 시험이 된다.
     }
-    final server = SingerWebServer();
+    final server = SingerWebServer()..presenterPin = testPin;
     addTearDown(server.stop);
     await server.start();
     expect(server.port, isNot(SingerWebServer.preferredPort));
     final client = HttpClient();
     addTearDown(() => client.close(force: true));
-    final res = await (await client.getUrl(
+    final res = await (await client.getP(
       Uri.parse('http://127.0.0.1:${server.port}/'),
     )).close();
     expect(res.statusCode, 200);
@@ -401,7 +412,7 @@ void main() {
   });
 
   test('끄고 바로 켜도, 두 번 켜도 서버는 하나이고 이전 이미지는 남지 않는다', () async {
-    final server = SingerWebServer();
+    final server = SingerWebServer()..presenterPin = testPin;
     addTearDown(server.stop);
     var portTaken = false;
     try {
@@ -428,10 +439,149 @@ void main() {
     expect(server.running.value, isTrue);
     final client = HttpClient();
     addTearDown(() => client.close(force: true));
-    final res = await (await client.getUrl(
+    final res = await (await client.getP(
       Uri.parse('http://127.0.0.1:${server.port}/img/current'),
     )).close();
     expect(res.statusCode, 404);
+  });
+
+  test('발표자 쪽은 PIN 쿠키가 있어야 하고, PIN 을 바꾸면 다시 묻는다', () async {
+    final server = SingerWebServer()..presenterPin = testPin;
+    await server.start();
+    addTearDown(server.stop);
+    server.onControl = (action, params) async {};
+    server.update({
+      'current': {'main_text': '주의 인자'},
+      'note': '여기서 기도',
+    });
+    final base = 'http://127.0.0.1:${server.port}';
+    final client = HttpClient();
+    addTearDown(() => client.close(force: true));
+    Future<(int, String, HttpClientResponse)> send(
+      String method,
+      String path, {
+      String? cookie,
+      String? body,
+      String? origin,
+    }) async {
+      final req = await client.openUrl(method, Uri.parse('$base$path'))
+        ..followRedirects = false;
+      if (cookie != null) req.cookies.add(Cookie('ws_pin', cookie));
+      if (origin != null) req.headers.set('origin', origin);
+      if (body != null) {
+        req.headers.contentType = ContentType(
+          'application',
+          'x-www-form-urlencoded',
+        );
+        req.write(body);
+      }
+      final res = await req.close();
+      return (res.statusCode, await res.transform(utf8.decoder).join(), res);
+    }
+
+    // 싱어 쪽은 PIN 없이 열린다.
+    expect((await send('GET', '/')).$1, 200);
+    expect((await send('GET', '/state')).$1, 200);
+    // 발표자 쪽: 쿠키 없음·틀린 쿠키 = 401, 화면은 PIN 입력 페이지.
+    for (final c in [null, '9999']) {
+      expect((await send('GET', '/state?p=1', cookie: c)).$1, 401);
+      expect((await send('GET', '/events?p=1', cookie: c)).$1, 401);
+      expect((await send('GET', '/pages?p=1', cookie: c)).$1, 401);
+      expect(
+        (await send('POST', '/control?p=1&action=next', cookie: c)).$1,
+        401,
+      );
+      final page = (await send('GET', '/presenter', cookie: c)).$2;
+      expect(page, contains('action="/login"'));
+      expect(page, isNot(contains('<body class="remote">')));
+    }
+
+    // 틀린 PIN → 401 + 안내, 맞는 PIN → 쿠키 + /presenter 로.
+    final wrong = await send('POST', '/login', body: 'pin=0000');
+    expect(wrong.$1, 401);
+    expect(wrong.$2, contains('PIN 이 맞지 않습니다'));
+    final ok = await send('POST', '/login', body: 'pin=$testPin');
+    expect(ok.$1, 303);
+    expect(ok.$3.headers.value('location'), '/presenter');
+    final cookie = ok.$3.cookies.singleWhere((c) => c.name == 'ws_pin');
+    expect(cookie.value, testPin);
+    expect(cookie.httpOnly, isTrue);
+    expect(
+      (await send('GET', '/presenter', cookie: cookie.value)).$2,
+      contains('<body class="remote">'),
+    );
+    expect(
+      jsonDecode((await send('GET', '/state?p=1', cookie: testPin)).$2)['note'],
+      '여기서 기도',
+    );
+
+    // 다른 사이트에서 온 POST 는 PIN 이 맞아도 막는다.
+    expect(
+      (await send(
+        'POST',
+        '/control?p=1&action=next',
+        cookie: testPin,
+        origin: 'http://evil.example',
+      )).$1,
+      403,
+    );
+    expect(
+      (await send(
+        'POST',
+        '/control?p=1&action=next',
+        cookie: testPin,
+        origin: base,
+      )).$1,
+      200,
+    );
+
+    // PC 에서 PIN 을 바꾸면 옛 쿠키는 401.
+    server.presenterPin = '5678';
+    expect((await send('GET', '/state?p=1', cookie: testPin)).$1, 401);
+    expect((await send('GET', '/state?p=1', cookie: '5678')).$1, 200);
+  });
+
+  test('PIN 을 여러 번 틀리면 잠깐 받지 않는다', () async {
+    final server = SingerWebServer()..presenterPin = testPin;
+    await server.start();
+    addTearDown(server.stop);
+    final base = 'http://127.0.0.1:${server.port}';
+    final client = HttpClient();
+    addTearDown(() => client.close(force: true));
+    Future<int> login(String pin) async {
+      final req = await client.postUrl(Uri.parse('$base/login'))
+        ..followRedirects = false
+        ..headers.contentType = ContentType(
+          'application',
+          'x-www-form-urlencoded',
+        )
+        ..write('pin=$pin');
+      final res = await req.close();
+      await res.drain<void>();
+      return res.statusCode;
+    }
+
+    for (var i = 0; i < SingerWebServer.maxPinFailures; i++) {
+      expect(await login('0000'), 401);
+    }
+    // 잠긴 동안은 맞는 PIN 도 안 된다.
+    expect(await login(testPin), 401);
+  });
+
+  test('PIN 이 정해지지 않았으면 발표자 쪽은 아무도 못 들어온다', () async {
+    final server = SingerWebServer();
+    await server.start();
+    addTearDown(server.stop);
+    final client = HttpClient();
+    addTearDown(() => client.close(force: true));
+    final req =
+        await client.getUrl(
+            Uri.parse('http://127.0.0.1:${server.port}/state?p=1'),
+          )
+          ..cookies.add(Cookie('ws_pin', ''));
+    final res = await req.close();
+    await res.drain<void>();
+    expect(res.statusCode, 401);
   });
 
   test('휴대폰이 닿는 사설망 주소·실제 네트워크만 고른다', () {

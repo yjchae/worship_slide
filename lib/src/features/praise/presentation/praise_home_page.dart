@@ -36,6 +36,7 @@ import '../data/sermon_design_store.dart';
 import '../data/background_image_library.dart';
 import '../data/libreoffice_installer.dart';
 import '../data/praise_repository.dart';
+import '../data/presenter_pin_store.dart';
 import '../data/python_bridge.dart';
 import '../data/screen_choice_store.dart';
 import '../data/singer_web_server.dart';
@@ -509,6 +510,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   bool _isSingerOpen = false;
   // 같은 망 휴대폰용 싱어 화면(웹). 발표를 끝내면 같이 끈다.
   final SingerWebServer _singerWeb = SingerWebServer();
+  final _presenterPinStore = PresenterPinStore();
   // 창을 닫아 앱이 끝날 때는 dispose 가 불리지 않는다. 그대로 두면 cloudflared 터널 프로세스가
   // 앱 밖에 남으므로 종료 요청 때 끈다. 이 신호가 안 오는 경우(강제 종료, Windows 에서 발표 창이
   // 열린 채 닫기 등)는 다음 시작 때 [SingerWebServer.killLeftoverTunnel] 이 치운다.
@@ -1953,11 +1955,19 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   /// 다음 발표를 시작할 때 저절로 다시 켠다(앱 실행 동안만).
   bool _mobileWebWanted = false;
 
+  /// 발표자 PIN 을 서버에 넣는다(처음 한 번 파일에서 읽고, 없으면 새로 만든다).
+  Future<void> _ensurePresenterPin() async {
+    if (_singerWeb.presenterPin.isNotEmpty) return;
+    _singerWeb.presenterPin = await _presenterPinStore.load();
+  }
+
   Future<void> _restartMobileWeb() async {
     try {
+      await _ensurePresenterPin();
       await _singerWeb.start();
     } catch (e) {
       await AppLogger.instance.error('[singer-web] 다시 켜기 실패', e);
+      _showSnack('휴대폰 화면을 다시 켜지 못했습니다. 발표 보기의 휴대폰 버튼으로 다시 켜 주세요.');
       return;
     }
     if (!mounted) return;
@@ -1977,6 +1987,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   Future<void> _showMobileSingerDialog() async {
     try {
+      await _ensurePresenterPin();
       // 앞서 걸어 둔 stop(발표 종료) 이 있으면 그 뒤에 켜진다.
       await _singerWeb.start();
     } catch (e) {
@@ -2075,7 +2086,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                         TunnelState.ready => Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text('어느 망에서든(LTE 포함) 이 QR 이나 주소로 열 수 있습니다.'),
+                            const Text(
+                              '어느 망에서든(LTE 포함) 이 QR 이나 주소로 열 수 있습니다.\n'
+                              '이 주소는 발표를 다시 시작하면 바뀌므로 그때는 새 QR 로 여세요.',
+                            ),
                             const SizedBox(height: 8),
                             qr(_singerWeb.publicUrl(remote: remote)!),
                             const SizedBox(height: 16),
@@ -2114,19 +2128,30 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                       },
                     ),
                     if (remote) ...[
+                      _PresenterPinRow(
+                        pin: _singerWeb.presenterPin,
+                        onChange: () async {
+                          final pin = await _askPresenterPin();
+                          if (pin == null) return;
+                          await _presenterPinStore.save(pin);
+                          _singerWeb.presenterPin = pin;
+                          setDialogState(() {});
+                        },
+                      ),
+                      const SizedBox(height: 12),
                       Text(
-                        '맨 위 ◀ 이전 · 다음 ▶ 이나 아래 \'모든 페이지\'에서 페이지를 눌러 관객 화면을 옮깁니다.\n'
-                        '휴대폰 화면 위쪽에서 \'싱어창\'으로 바꾸면 밀어서 넘기기·두 손가락 확대·발표자 메모를 쓸 수 있습니다. '
-                        '\'화면 끄기\' 길게 누르기 = 블랙아웃.\n'
-                        '이 주소는 발표를 조작할 수 있습니다. 같은 와이파이의 누구나 열 수 있으니 주소를 널리 알리지 마세요.',
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.error,
-                          fontWeight: FontWeight.w600,
-                        ),
+                        '발표자 휴대폰에서 이 주소를 열고 PIN 을 넣으면 들어옵니다. 한 번 넣은 휴대폰은 다음부터 묻지 않습니다.\n'
+                        'PIN 을 바꾸면 들어와 있던 휴대폰도 다시 PIN 을 물어봅니다.\n'
+                        '맨 위 ◀ 이전 · 다음 ▶ 이나 아래 \'모든 페이지\'에서 페이지를 눌러 관객 화면을 옮깁니다. '
+                        '\'싱어창\'으로 바꾸면 밀어서 넘기기·두 손가락 확대·발표자 메모를 쓸 수 있고, '
+                        '\'화면 끄기\' 길게 누르기 = 블랙아웃.',
+                        style: Theme.of(context).textTheme.bodySmall,
                       ),
                       const SizedBox(height: 12),
                     ] else ...[
-                      const Text('가사만 보는 화면입니다. 이 주소로 연 사람은 페이지를 넘길 수 없습니다.'),
+                      const Text(
+                        '가사만 보는 화면입니다. PIN 없이 누구나 열 수 있고, 페이지는 넘길 수 없습니다.',
+                      ),
                       const SizedBox(height: 12),
                     ],
                     const Text(
@@ -2146,8 +2171,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                     const SizedBox(height: 12),
                     Text(
                       '처음 켤 때 방화벽이 "들어오는 연결 허용"을 물으면 허용해 주세요.\n'
-                      '같은 와이파이 주소는 늘 같습니다(키 없음). 브라우저 즐겨찾기에 넣어 두면 다음에도 그대로 열립니다.\n'
-                      '발표를 끝냈다 다시 시작해도 휴대폰 화면은 저절로 다시 연결됩니다.\n'
+                      '같은 와이파이 주소는 늘 같아서(포트 ${SingerWebServer.preferredPort}) 즐겨찾기에 넣어 두면 다음에도 그대로 열립니다. '
+                      '발표를 끝냈다 다시 시작해도 열어 둔 휴대폰은 저절로 다시 연결됩니다.\n'
+                      '단, PC 의 IP 가 바뀌거나 다른 프로그램이 포트 ${SingerWebServer.preferredPort} 을 쓰고 있으면 주소가 바뀝니다(위 주소를 확인하세요).\n'
                       '같은 와이파이 주소로 열면 휴대폰 화면 꺼짐 방지가 안 되니 휴대폰 자동 잠금을 꺼 두세요.\n'
                       '발표를 끝내면 잠시 꺼졌다가 다음 발표를 시작하면 다시 켜집니다. 완전히 끄려면 \'끄기\'를 누르세요.',
                       style: Theme.of(context).textTheme.bodySmall,
@@ -2175,6 +2201,73 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       await _singerWeb.stop();
       if (mounted) setState(() {});
     }
+  }
+
+  /// 새 발표자 PIN(숫자 4자리)을 묻는다. 취소하면 null.
+  Future<String?> _askPresenterPin() async {
+    final controller = TextEditingController(text: _singerWeb.presenterPin);
+    String? error;
+    final pin = await showDialog<String>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) {
+          void submit() {
+            final v = controller.text.trim();
+            if (PresenterPinStore.isValid(v)) {
+              Navigator.pop(context, v);
+            } else {
+              setState(() => error = '숫자 4자리를 넣어 주세요.');
+            }
+          }
+
+          return AlertDialog(
+            title: const Text('발표자 PIN 바꾸기'),
+            content: SizedBox(
+              width: 280,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextField(
+                    controller: controller,
+                    autofocus: true,
+                    maxLength: 4,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    style: const TextStyle(fontSize: 28, letterSpacing: 8),
+                    decoration: InputDecoration(
+                      errorText: error,
+                      counterText: '',
+                    ),
+                    onSubmitted: (_) => submit(),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text('바꾸면 들어와 있던 발표자 휴대폰도 새 PIN 을 다시 넣어야 합니다.'),
+                  const SizedBox(height: 8),
+                  TextButton.icon(
+                    icon: const Icon(Icons.casino_outlined, size: 18),
+                    label: const Text('무작위로 정하기'),
+                    onPressed: () => setState(() {
+                      controller.text = PresenterPinStore.random();
+                      error = null;
+                    }),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('취소'),
+              ),
+              FilledButton(onPressed: submit, child: const Text('바꾸기')),
+            ],
+          );
+        },
+      ),
+    );
+    controller.dispose();
+    return pin;
   }
 
   // ── 모니터 선택 ─────────────────────────────────────────────────────────
@@ -17936,6 +18029,50 @@ class _ZoomDimPainter extends CustomPainter {
 }
 
 /// 누르면 [text] 를 클립보드에 넣고 2초 동안 체크 표시로 바뀌는 작은 버튼.
+/// 휴대폰 화면 창 '발표자 모드' 탭의 PIN 표시 + 바꾸기 버튼.
+class _PresenterPinRow extends StatelessWidget {
+  const _PresenterPinRow({required this.pin, required this.onChange});
+
+  final String pin;
+  final VoidCallback onChange;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: scheme.secondaryContainer,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.lock_outline,
+            size: 20,
+            color: scheme.onSecondaryContainer,
+          ),
+          const SizedBox(width: 8),
+          Text('발표자 PIN', style: TextStyle(color: scheme.onSecondaryContainer)),
+          const SizedBox(width: 12),
+          SelectableText(
+            pin,
+            style: TextStyle(
+              fontSize: 26,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 6,
+              color: scheme.onSecondaryContainer,
+            ),
+          ),
+          const SizedBox(width: 12),
+          OutlinedButton(onPressed: onChange, child: const Text('바꾸기')),
+        ],
+      ),
+    );
+  }
+}
+
 class _CopyTextButton extends StatefulWidget {
   const _CopyTextButton({required this.text});
 

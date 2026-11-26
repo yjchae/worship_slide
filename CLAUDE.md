@@ -44,6 +44,7 @@ flutter test test/chord_lyrics_test.dart # 코드 가사 순수 함수: 문법·
 flutter test test/chord_repository_test.dart test/chord_conti_test.dart test/chord_leak_test.dart # 코드 저장 길(saveChords)·콘티 스냅샷·관객/PPTX 누출 없음
 flutter test test/chord_sheet_test.dart  # 코드 악보 조각·ChordSheetView 배치·싱어 chord_lines/key_label·조 배지
 flutter test test/auto_advance_timer_test.dart # 발표 자동 넘기기 타이머: 반복·한 번·멈춤·간격 칸
+flutter test test/singer_web_server_test.dart test/presenter_pin_store_test.dart # 휴대폰 서버: 고정 주소·발표자 PIN·잠금·Origin
 flutter test test/lyrics_page_grid_test.dart # 가사 수정 창 페이지 표·넘침 측정 (LYRICS_EDITOR_SHOT=경로 면 창을 PNG 로)
 python3 python/test_render.py    # render 명령 self-check (LibreOffice 없으면 skip)
 python3 python/test_animation.py # 애니메이션 단계 펼치기 self-check (LibreOffice 불필요)
@@ -101,6 +102,7 @@ lib/
       sermon_design_store.dart       -- 설교 제목 페이지 마지막 디자인 → sermon_design.json
       page_template_store.dart       -- 페이지 틀(예배 시작·주일 광고·생일자 등) → page_templates.json, 기본 3개·틀 배경 입히기 순수 함수
       singer_web_server.dart         -- 휴대폰 싱어·리모컨 HTTP 서버(SSE) + cloudflared 임시 터널
+      presenter_pin_store.dart       -- 휴대폰 발표자 모드 PIN(4자리) → presenter_pin.txt
       app_logger.dart                -- Application Support/logs/app.log (앱 내 "로그 보기"용)
       font_library.dart              -- 내장 무료 폰트를 Application Support/fonts 로 복사해 올린다
       source_file_watcher.dart       -- 바깥 프로그램에서 연 원본 PPT 가 저장되는지 수정 시각·크기로 지켜본다
@@ -220,7 +222,11 @@ macOS `didChangeScreenParametersNotification` + `NSScreen.displayID`, Windows `W
   사용자가 켜 둔 채('끄기' 안 누름) 끝냈으면 다음 발표 시작 때 저절로 다시 켠다(`_mobileWebWanted`, 실행 동안만).
   **키(토큰)가 없다** — 싱어창 `http://<IP>:<포트>/`, 발표자 모드 `/presenter`. 주소가 늘 같아서 발표를 껐다 켜거나 연결이 끊겨도
   휴대폰은 다시 찍을 필요 없이 저절로 다시 붙는다(SSE 가 닫히면 3초 뒤 새로 연다). 대신 같은 와이파이의 누구나 열 수 있다(사용자가 고른 편의 쪽).
-  발표자 페이지의 요청만 `?p=1` 을 달아 발표자 쪽 값(메모·목록·조작)을 받는다 — 키가 아니라 화면 구분 표시다. 이미지는 `v`(경로+수정 시각)가
+  발표자 페이지의 요청만 `?p=1` 을 달아 발표자 쪽 값(메모·목록·조작)을 받는다.
+  **발표자 쪽만 PIN 4자리**(`PresenterPinStore` → `Application Support/presenter_pin.txt`, 처음 무작위, 휴대폰 화면 창 '발표자 모드' 탭에서 보고 바꾼다):
+  쿠키 `ws_pin`(HttpOnly·SameSite=Lax·1년)이 맞아야 하고 없으면 `/presenter` 는 PIN 입력 페이지(`pinPageHtml`, `POST /login`), `p=1` 요청은 401 → 휴대폰 페이지가 다시 읽혀 PIN 을 묻는다.
+  PIN 을 바꾸면(`presenterPin` setter) 발표자 SSE 를 끊어 들어와 있던 휴대폰도 다시 묻는다. 5번 틀리면 30초 잠금(접속 주소마다 — 터널로 온 요청은 한 묶음).
+  POST 는 Origin 이 Host 와 다르면 403(같은 망의 다른 웹 페이지가 조작 못 하게). 싱어창은 PIN 없이 열린다. 이미지는 `v`(경로+수정 시각)가
   지금 것과 다르면 404 + `no-store`(빠르게 넘길 때 브라우저가 엉뚱한 이미지를 기억하지 않게). start/stop 은 큐로 차례만 돈다.
   주소 후보는 사설망 IPv4 만, VPN·가상 머신 인터페이스는 빼고 와이파이·유선을 앞에 둔다(`lanAddresses`).
   화면 꺼짐 방지(`navigator.wakeLock`)는 https 에서만 되므로 같은 망(http) 주소에선 안 걸린다 — 휴대폰 자동 잠금을 끄라고 안내한다.
