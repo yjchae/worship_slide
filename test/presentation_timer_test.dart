@@ -78,13 +78,11 @@ void main() {
     final server = SingerWebServer();
     await server.start();
     addTearDown(server.stop);
-    final url = Uri.parse(server.urlFor('127.0.0.1'));
-    final k = url.queryParameters['k']!;
     final client = HttpClient();
     addTearDown(() => client.close(force: true));
     Future<String> state() async {
       final res = await (await client.getUrl(
-        Uri.parse('http://127.0.0.1:${server.port}/state?k=$k'),
+        Uri.parse('http://127.0.0.1:${server.port}/state'),
       )).close();
       return res.transform(utf8.decoder).join();
     }

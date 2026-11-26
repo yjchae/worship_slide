@@ -36,6 +36,7 @@ import '../data/sermon_design_store.dart';
 import '../data/background_image_library.dart';
 import '../data/libreoffice_installer.dart';
 import '../data/praise_repository.dart';
+import '../data/presenter_pin_store.dart';
 import '../data/python_bridge.dart';
 import '../data/screen_choice_store.dart';
 import '../data/singer_web_server.dart';
@@ -72,6 +73,7 @@ import 'page_to_free.dart';
 import 'page_editor_dialog.dart';
 import 'page_format_editor.dart';
 import 'page_template_dialog.dart';
+import 'presenter_pin_dialog.dart';
 import 'page_rich_text.dart' show pageFontFamilies;
 import 'ppt_layout_dialog.dart';
 import 'auto_advance_box.dart';
@@ -509,6 +511,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   bool _isSingerOpen = false;
   // 같은 망 휴대폰용 싱어 화면(웹). 발표를 끝내면 같이 끈다.
   final SingerWebServer _singerWeb = SingerWebServer();
+  final _presenterPinStore = PresenterPinStore();
   // 창을 닫아 앱이 끝날 때는 dispose 가 불리지 않는다. 그대로 두면 cloudflared 터널 프로세스가
   // 앱 밖에 남으므로 종료 요청 때 끈다. 이 신호가 안 오는 경우(강제 종료, Windows 에서 발표 창이
   // 열린 채 닫기 등)는 다음 시작 때 [SingerWebServer.killLeftoverTunnel] 이 치운다.
@@ -1514,6 +1517,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       _mainTabController.index = 1;
       // 발표 전에 잡아둔 확대 영역을 새 창에 그대로 반영한다.
       await _sendZoom();
+      // 지난 발표에서 휴대폰 화면을 켜 뒀으면 다시 켠다. 주소가 늘 같아서(키 없음)
+      // 휴대폰은 다시 찍지 않아도 저절로 다시 붙는다.
+      if (_mobileWebWanted) unawaited(_restartMobileWeb());
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -1946,6 +1952,30 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   /// 켜져 있지 않으면 켜고, 휴대폰에서 열 주소를 보여 준다. 다이얼로그에서 끌 수 있다.
   bool _isMobileSingerBusy = false; // 두 번 눌러 다이얼로그가 둘 뜨지 않게
 
+  /// 사용자가 휴대폰 화면을 켰고 '끄기'를 누르지 않았다. 발표를 끝내면 서버는 꺼지지만
+  /// 다음 발표를 시작할 때 저절로 다시 켠다(앱 실행 동안만).
+  bool _mobileWebWanted = false;
+
+  /// 발표자 PIN 을 서버에 넣는다(처음 한 번 파일에서 읽고, 없으면 새로 만든다).
+  Future<void> _ensurePresenterPin() async {
+    if (_singerWeb.presenterPin.isNotEmpty) return;
+    _singerWeb.presenterPin = await _presenterPinStore.load();
+  }
+
+  Future<void> _restartMobileWeb() async {
+    try {
+      await _ensurePresenterPin();
+      await _singerWeb.start();
+    } catch (e) {
+      await AppLogger.instance.error('[singer-web] 다시 켜기 실패', e);
+      _showSnack('휴대폰 화면을 다시 켜지 못했습니다. 발표 보기의 휴대폰 버튼으로 다시 켜 주세요.');
+      return;
+    }
+    if (!mounted) return;
+    setState(() {});
+    await _sendSingerView();
+  }
+
   Future<void> _showMobileSinger() async {
     if (_isMobileSingerBusy) return;
     _isMobileSingerBusy = true;
@@ -1958,6 +1988,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   Future<void> _showMobileSingerDialog() async {
     try {
+      await _ensurePresenterPin();
       // 앞서 걸어 둔 stop(발표 종료) 이 있으면 그 뒤에 켜진다.
       await _singerWeb.start();
     } catch (e) {
@@ -1967,12 +1998,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       ).showSnackBar(SnackBar(content: Text('휴대폰 화면 켜기 실패: $e')));
       return;
     }
+    _mobileWebWanted = true;
     if (!mounted) return;
     setState(() {});
     await _sendSingerView();
     final addresses = await SingerWebServer.lanAddresses();
     if (!mounted) return;
-    // 싱어창(보기만) / 발표자 모드(넘기기·페이지 고르기·블랙아웃, 휴대폰에서 싱어창으로도 바꿈). 키가 달라 QR 도 다르다.
+    // 싱어창(보기만, `/`) / 발표자 모드(넘기기·페이지 고르기·블랙아웃, `/presenter`). 경로가 달라 QR 도 다르다.
     var remote = false;
     // 주소 줄과 QR 을 왼쪽에 맞춘다(주소 길이가 달라도 QR 이 같은 자리에).
     Widget qr(String url) => Column(
@@ -2043,7 +2075,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   if (!running)
-                    const Text('휴대폰 화면이 꺼졌습니다. 발표를 다시 시작한 뒤 켜 주세요.')
+                    const Text(
+                      '휴대폰 화면이 꺼졌습니다. 발표를 다시 시작하면 같은 주소로 다시 켜지고, '
+                      '열어 둔 휴대폰은 저절로 다시 연결됩니다.',
+                    )
                   else ...[
                     // 다른 망(LTE·다른 와이파이)용 공개 주소. 터널은 몇 초 걸려서 따로 듣는다.
                     ValueListenableBuilder<TunnelState>(
@@ -2052,7 +2087,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                         TunnelState.ready => Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text('어느 망에서든(LTE 포함) 이 QR 이나 주소로 열 수 있습니다.'),
+                            const Text(
+                              '어느 망에서든(LTE 포함) 이 QR 이나 주소로 열 수 있습니다.\n'
+                              '이 주소는 발표를 다시 시작하면 바뀌므로 그때는 새 QR 로 여세요.',
+                            ),
                             const SizedBox(height: 8),
                             qr(_singerWeb.publicUrl(remote: remote)!),
                             const SizedBox(height: 16),
@@ -2091,19 +2129,33 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                       },
                     ),
                     if (remote) ...[
+                      PresenterPinRow(
+                        pin: _singerWeb.presenterPin,
+                        onChange: () async {
+                          final pin = await _askPresenterPin();
+                          if (pin == null) return;
+                          // 서버에는 바로 넣는다(저장에 실패해도 이번 실행 동안은 새 PIN).
+                          _singerWeb.presenterPin = pin;
+                          await _presenterPinStore.save(pin);
+                          if (context.mounted) setDialogState(() {});
+                        },
+                      ),
+                      const SizedBox(height: 12),
                       Text(
-                        '맨 위 ◀ 이전 · 다음 ▶ 이나 아래 \'모든 페이지\'에서 페이지를 눌러 관객 화면을 옮깁니다.\n'
-                        '휴대폰 화면 위쪽에서 \'싱어창\'으로 바꾸면 밀어서 넘기기·두 손가락 확대·발표자 메모를 쓸 수 있습니다. '
-                        '\'화면 끄기\' 길게 누르기 = 블랙아웃.\n'
-                        '이 QR 은 발표를 조작할 수 있으니 발표자만 찍으세요.',
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.error,
-                          fontWeight: FontWeight.w600,
-                        ),
+                        '발표자 휴대폰에서 이 주소를 열고 PIN 을 넣으면 들어옵니다. 한 번 넣은 휴대폰은 같은 와이파이 주소로 열 때 다음부터 묻지 않습니다'
+                        '(바깥 망 주소는 발표마다 바뀌어 그때마다 PIN 을 넣습니다).\n'
+                        '관객 화면이 PC 화면을 복제하고 있으면 PIN 이 관객에게 보일 수 있으니 이 창은 발표 전에 여세요.\n'
+                        'PIN 을 바꾸면 들어와 있던 휴대폰도 다시 PIN 을 물어봅니다.\n'
+                        '맨 위 ◀ 이전 · 다음 ▶ 이나 아래 \'모든 페이지\'에서 페이지를 눌러 관객 화면을 옮깁니다. '
+                        '\'싱어창\'으로 바꾸면 밀어서 넘기기·두 손가락 확대·발표자 메모를 쓸 수 있고, '
+                        '\'화면 끄기\' 길게 누르기 = 블랙아웃.',
+                        style: Theme.of(context).textTheme.bodySmall,
                       ),
                       const SizedBox(height: 12),
                     ] else ...[
-                      const Text('가사만 보는 화면입니다. 이 QR 로 연 사람은 페이지를 넘길 수 없습니다.'),
+                      const Text(
+                        '가사만 보는 화면입니다. PIN 없이 누구나 열 수 있고, 페이지는 넘길 수 없습니다.',
+                      ),
                       const SizedBox(height: 12),
                     ],
                     const Text(
@@ -2123,9 +2175,11 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                     const SizedBox(height: 12),
                     Text(
                       '처음 켤 때 방화벽이 "들어오는 연결 허용"을 물으면 허용해 주세요.\n'
-                      '주소는 켤 때마다 바뀌므로(보안 키 포함) 매번 이 QR 로 여세요.\n'
+                      '같은 와이파이 주소는 늘 같아서(포트 ${SingerWebServer.preferredPort}) 즐겨찾기에 넣어 두면 다음에도 그대로 열립니다. '
+                      '발표를 끝냈다 다시 시작해도 열어 둔 휴대폰은 저절로 다시 연결됩니다.\n'
+                      '단, PC 의 IP 가 바뀌거나 다른 프로그램이 포트 ${SingerWebServer.preferredPort} 을 쓰고 있으면 주소가 바뀝니다(위 주소를 확인하세요).\n'
                       '같은 와이파이 주소로 열면 휴대폰 화면 꺼짐 방지가 안 되니 휴대폰 자동 잠금을 꺼 두세요.\n'
-                      '발표를 끝내면 자동으로 꺼집니다.',
+                      '발표를 끝내면 잠시 꺼졌다가 다음 발표를 시작하면 다시 켜집니다. 완전히 끄려면 \'끄기\'를 누르세요.',
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ],
@@ -2147,10 +2201,17 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       ),
     );
     if (stop == true) {
+      _mobileWebWanted = false;
       await _singerWeb.stop();
       if (mounted) setState(() {});
     }
   }
+
+  /// 새 발표자 PIN(숫자 4자리)을 묻는다. 취소하면 null.
+  Future<String?> _askPresenterPin() => showDialog<String>(
+    context: context,
+    builder: (_) => PresenterPinDialog(initial: _singerWeb.presenterPin),
+  );
 
   // ── 모니터 선택 ─────────────────────────────────────────────────────────
 
@@ -2438,7 +2499,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     return _slideKey(info.stagingUid, info.pageIndexInItem);
   }
 
-  /// 휴대폰 발표자 키 요청([SingerWebServer.onControl]) — 발표자 모드·싱어창 공통.
+  /// 휴대폰 발표자 주소 요청([SingerWebServer.onControl]) — 발표자 모드·싱어창 공통.
   Future<void> _handleRemoteControl(
     String action,
     Map<String, String> params,
