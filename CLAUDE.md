@@ -216,37 +216,40 @@ macOS `didChangeScreenParametersNotification` + `NSScreen.displayID`, Windows `W
 - **휴대폰 화면 — 싱어창**: 발표 보기 툴바의 휴대폰 버튼 → 앱 안 HTTP 서버(`SingerWebServer`, `dart:io`, 포트 8765·쓰고 있으면 아무 빈 포트)를
   켜고 `http://<사설 IP>:<포트>` 와 그 QR(`qr_flutter`, 다이얼로그를 열 때마다 지금 IP 로 새로 만든다)을 보여 준다. 같은 와이파이의 휴대폰 브라우저가 SSE(`/events`)로 같은 `SingerViewData` JSON 을 받는다
   (`_sendSingerView` 에 얹혀 있다 — 네이티브 싱어 창이 닫혀 있어도 보낸다). 페이지 이미지는 로컬 경로를 내보내지 않고
-  `/img/current`·`/img/next` 로 지금 두 장만 준다(망 안의 다른 기기가 아무 파일이나 읽지 못하게). 발표를 끝내면 같이 꺼진다.
-  모든 요청은 켤 때마다 새로 만드는 토큰(`?k=`, 주소·QR 에 포함)이 맞아야 한다(게스트 와이파이 대비). 이미지는 `v`(경로+수정 시각)가
+  `/img/current`·`/img/next` 로 지금 두 장만 준다(망 안의 다른 기기가 아무 파일이나 읽지 못하게). 발표를 끝내면 같이 꺼지지만,
+  사용자가 켜 둔 채('끄기' 안 누름) 끝냈으면 다음 발표 시작 때 저절로 다시 켠다(`_mobileWebWanted`, 실행 동안만).
+  **키(토큰)가 없다** — 싱어창 `http://<IP>:<포트>/`, 발표자 모드 `/presenter`. 주소가 늘 같아서 발표를 껐다 켜거나 연결이 끊겨도
+  휴대폰은 다시 찍을 필요 없이 저절로 다시 붙는다(SSE 가 닫히면 3초 뒤 새로 연다). 대신 같은 와이파이의 누구나 열 수 있다(사용자가 고른 편의 쪽).
+  발표자 페이지의 요청만 `?p=1` 을 달아 발표자 쪽 값(메모·목록·조작)을 받는다 — 키가 아니라 화면 구분 표시다. 이미지는 `v`(경로+수정 시각)가
   지금 것과 다르면 404 + `no-store`(빠르게 넘길 때 브라우저가 엉뚱한 이미지를 기억하지 않게). start/stop 은 큐로 차례만 돈다.
   주소 후보는 사설망 IPv4 만, VPN·가상 머신 인터페이스는 빼고 와이파이·유선을 앞에 둔다(`lanAddresses`).
   화면 꺼짐 방지(`navigator.wakeLock`)는 https 에서만 되므로 같은 망(http) 주소에선 안 걸린다 — 휴대폰 자동 잠금을 끄라고 안내한다.
   처음엔 OS 방화벽이 들어오는 연결을 물으므로 허용해야 한다. 페이지 HTML 은 `singerPageHtml` 상수(네이티브 싱어와 같은 모양·맞춤 규칙)
   - **바깥 망(LTE 등) 주소**: `cloudflared` 가 깔려 있으면 서버를 켤 때 Cloudflare 임시 터널(`cloudflared tunnel --url`,
-    계정 불필요)을 같이 띄워 `https://<이름>.trycloudflare.com/?k=<토큰>` QR 을 하나 더 보여 준다(`SingerWebServer.tunnel`).
+    계정 불필요)을 같이 띄워 `https://<이름>.trycloudflare.com/`(발표자 `/presenter`) QR 을 하나 더 보여 준다(`SingerWebServer.tunnel`).
     LibreOffice·Tesseract 같은 **선택 의존성** — 없으면 다이얼로그 안 '자동 설치' 버튼(`_CloudflaredInstallButton`, `LibreOfficeInstaller` 를 패키지 이름만 바꿔 씀: winget `Cloudflare.cloudflared`·`brew install cloudflared`)이 깔고 `retryTunnel` 로 서버는 그대로 둔 채 터널만 띄운다. 같은 망 주소는 그대로. 찾는 곳은 앱 폴더 →
     Homebrew·`Program Files`·WinGet Links → PATH(Finder 로 띄운 macOS 앱은 PATH 에 Homebrew 가 없다). 서버를 끄면 터널 프로세스도 죽인다.
     **인터넷이 잠깐 끊겨도 주소는 그대로다** — cloudflared 는 처음 붙은 뒤엔 포기하지 않고 같은 터널로 다시 붙는다
     (`supervisor.go` `retryForever`). `--retries 2` 는 다시 붙는 간격을 20~40초로 줄이려는 값(기본 5 면 최대 5분).
-    프로세스가 죽었을 때만 `_runTunnel` 이 새로 띄우고, 그러면 주소가 바뀐다(키는 그대로) — 임시 터널로는 피할 수 없다.
+    프로세스가 죽었을 때만 `_runTunnel` 이 새로 띄우고, 그러면 주소가 바뀐다 — 임시 터널로는 피할 수 없다.
     앱 종료는 `AppLifecycleListener.onExitRequested` 에서 끄고, 그 신호가 안 오는 경우(강제 종료, Windows 에서 발표 창이
     열린 채 닫기 — Windows 는 마지막 창일 때만 종료 요청을 보낸다)는 pid 파일(임시 폴더)로 다음 시작 때 치운다(`killLeftoverTunnel`,
-    이름이 cloudflared 일 때만). 키는 인터넷에 열리므로 16자
+    이름이 cloudflared 일 때만). 터널 주소도 키가 없으니 주소를 아는 사람은 누구나 연다
     **임시 터널은 SSE 를 흘려보내지 않는다**(헤더만 오고 본문이 안 온다 — 실제로 확인). 그래서 https 로 열린 페이지는
-    `/state`(지금 JSON)를 0.5초마다 묻고(실패하면 3초까지 늘려 계속, 403 = 키 바뀜이면 멈춤, 화면이 가려지면 쉼), http(같은 망)만 SSE 를 쓴다. https 라 `navigator.wakeLock` 도 그쪽에서만 걸린다.
-    트래픽은 Cloudflare 를 거쳐 가고(거기서 TLS 가 풀린다), 토큰을 아는 사람은 어느 망에서든 본다
-- **휴대폰 화면 — 발표자 키 (발표자 모드 / 싱어창)**: 다이얼로그 탭 '싱어창 | 발표자 모드' 중 '발표자 모드' 쪽 QR. 서버·터널·페이지 HTML 은 싱어창과 같고, **키만 다르다**
-  (`remoteToken`, 켤 때마다 새로). 이 키로 열면 `<body class="remote">` 로 내보내고, 머리줄 **[발표자 모드 | 싱어창]** 으로 두 화면을 오간다
-  (기본 발표자 모드, 휴대폰마다 `localStorage` `presenter_view`, 문서 제목도 바뀐다). 싱어 키 화면엔 전환이 없다(싱어창만).
+    `/state`(지금 JSON)를 0.5초마다 묻고(실패하면 3초까지 늘려 계속, 화면이 가려지면 쉼), http(같은 망)만 SSE 를 쓴다. https 라 `navigator.wakeLock` 도 그쪽에서만 걸린다.
+    트래픽은 Cloudflare 를 거쳐 가고(거기서 TLS 가 풀린다), 주소를 아는 사람은 어느 망에서든 본다
+- **휴대폰 화면 — 발표자 주소 (발표자 모드 / 싱어창)**: 다이얼로그 탭 '싱어창 | 발표자 모드' 중 '발표자 모드' 쪽 QR. 서버·터널·페이지 HTML 은 싱어창과 같고, **경로만 다르다**
+  (`/presenter`, `SingerWebServer.presenterPath`). 이 경로로 열면 `<body class="remote">` 로 내보내고, 머리줄 **[발표자 모드 | 싱어창]** 으로 두 화면을 오간다
+  (기본 발표자 모드, 휴대폰마다 `localStorage` `presenter_view`, 문서 제목도 바뀐다). 싱어 주소(`/`) 화면엔 전환이 없다(싱어창만).
   - **발표자 모드**(`body.presenter`): 맨 위 '◀ 이전 · n / N·시계 · 다음 ▶'(기존 `go(±1)`, 처음·끝은 비활성), 제목 줄, 현재(폭 70%)·다음(오른쪽 작게) 16:9(`layoutPresenter`),
     아래 '모든 페이지' **한 줄 가로 스크롤**(세로·가로 화면 공통) 썸네일, '화면 끄기' 길게 누르기(가로 화면은 맨 위 ⏻). 가로 화면(`body.land`)은 위 두 줄이 한 줄이 된다.
     썸네일을 누르면 `goto&id=<슬라이드 키 uid:페이지:자동여백>` → `_handleRemoteControl` 이 `_slideInfoKey` 로 찾아 `_goToSlide`(없으면 무시).
     누른 칸은 점선 → 바뀌면 노란 테두리, 2초 안에 안 바뀌면 '페이지 목록이 바뀌었습니다' + 목록 다시 받기. 지금 칸은 가로 가운데로 스크롤하되 손으로 민 지 3초 안이면 안 한다(`n / N` 누르면 바로).
-    목록은 `_sendSingerView` 가 `pages`(`phonePageList`)로 넘기고 서버는 JSON 엔 판 값 `pages_rev` 만 싣는다 — 휴대폰은 그 값이 바뀔 때·다시 연결될 때만 `GET /pages`(리모컨 키만)로 받는다.
+    목록은 `_sendSingerView` 가 `pages`(`phonePageList`)로 넘기고 서버는 JSON 엔 판 값 `pages_rev` 만 싣는다 — 휴대폰은 그 값이 바뀔 때·다시 연결될 때만 `GET /pages?p=1`(발표자 쪽만)로 받는다.
     그림 썸네일은 `/img/page/<n>?v=`(서버가 `thumbnailer` = `_phoneThumbnail` 로 폭 320 PNG 로 줄여 서버 켜 있는 동안 기억). 코드는 늘 끄고, 밀기·확대·양끝 누르기 제스처도 끈다(확대 표시도 안 한다)
-  - **싱어창**(발표자 키): 예전 '발표자 리모컨' 그대로 — 좌우 밀기·양쪽 끝(22%) 누르기 = 넘기기,
+  - **싱어창**(발표자 주소): 예전 '발표자 리모컨' 그대로 — 좌우 밀기·양쪽 끝(22%) 누르기 = 넘기기,
     두 손가락 = 확대(확대 중 한 손가락 = 옮기기), 가운데 두 번 누르기 = 확대 풀기, '화면 끄기' 0.6초 길게 = 블랙아웃. 발표자 메모도 보인다.
-  - `POST /control`(리모컨 키만, GET 은 403) → `SingerWebServer.onControl` = `_handleRemoteControl`. 응답에 바뀐 상태 JSON 을 실어
+  - `POST /control?p=1`(발표자 쪽만, GET 은 403) → `SingerWebServer.onControl` = `_handleRemoteControl`. 응답에 바뀐 상태 JSON 을 실어
     터널(폴링)에서도 넘긴 휴대폰은 바로 바뀐다
   - 넘기기는 `from`(휴대폰이 보던 쪽 번호)이 지금 쪽과 같을 때만 — 늦게 온 요청·리모컨 두 대·PC 에서 먼저 넘긴 경우 두 장씩 넘어가지 않게.
     블랙아웃도 토글이 아니라 `on=0|1` 원하는 상태를 보낸다
@@ -254,12 +257,12 @@ macOS `didChangeScreenParametersNotification` + `NSScreen.displayID`, Windows `W
     좌표 = 슬라이드 좌표. 단 가사 페이지는 휴대폰이 디자인 없이 글자만 그리므로 확대 위치가 실제 슬라이드 배치와 조금 다를 수 있다(PPT 이미지는 정확)
   - **발표자에게 메시지 = 알림, 60초 뒤 사라짐**: 발표 보기 '발표자에게 메시지' 칸에서 '보내기'(Enter)를 누를 때만 나간다(`_presenterMessage`, 페이지와 무관, 콘티에 저장 안 함). 입력칸은 서버(`SingerWebServer.running`)가 켜져 있을 때만 쓸 수 있고, 서버가 꺼지면(발표 종료 포함) 비운다.
     보낼 때마다 `message_id` 를 올리고 60초 타이머(`_messageTimer`, 새로 보내면 다시 시작)가 끝나면 PC 가 비워 다시 보낸다 — 기준 시계는 PC 하나. PC 칸엔 '보냄 · 1분 뒤 사라짐'.
-    휴대폰(발표자 키 두 모드 공통)은 `message_id` 가 바뀌면 맨 위 흰 띠(`#message`)를 페이드 인 + 진동 + 남은 시간 막대로 띄우고, 받은 순간부터 60초 뒤(PC 비움 신호를 놓쳐도) 또는 `message` 가 비면 페이드 아웃·자리 없앰. 띠를 누르면 그 휴대폰만 닫힌다.
-    같은 글을 다시 보내도 id 가 바뀌어 다시 뜬다. `message`·`message_id` 는 `remoteOnlyKeys` 라 싱어 키·네이티브 싱어 창에는 안 간다. 띠에서 시작한 터치는 확대도 넘기기도 안 한다(좌우 밀기까지 막는 점이 `#note` 와 다르다)
-  - 싱어창(싱어 키·발표자 키 공통) 머리줄의 '좌우/위아래' 버튼으로 현재·다음 페이지 배치를 바꾼다. 휴대폰마다 `localStorage`(`singer_layout`)에 기억한다.
+    휴대폰(발표자 주소 두 모드 공통)은 `message_id` 가 바뀌면 맨 위 흰 띠(`#message`)를 페이드 인 + 진동 + 남은 시간 막대로 띄우고, 받은 순간부터 60초 뒤(PC 비움 신호를 놓쳐도) 또는 `message` 가 비면 페이드 아웃·자리 없앰. 띠를 누르면 그 휴대폰만 닫힌다.
+    같은 글을 다시 보내도 id 가 바뀌어 다시 뜬다. `message`·`message_id` 는 `remoteOnlyKeys` 라 싱어 주소·네이티브 싱어 창에는 안 간다. 띠에서 시작한 터치는 확대도 넘기기도 안 한다(좌우 밀기까지 막는 점이 `#note` 와 다르다)
+  - 싱어창(싱어 주소·발표자 주소 공통) 머리줄의 '좌우/위아래' 버튼으로 현재·다음 페이지 배치를 바꾼다. 휴대폰마다 `localStorage`(`singer_layout`)에 기억한다.
     현재·다음 사이 막대(`#split`)를 끌면 비율이 바뀐다(현재 몫 0.3~0.85, 기본 0.65, `singer_split`). 아이폰 가로 노치에 안 잘리게 좌우도 `safe-area-inset` 만큼 띄운다.
     다음 페이지 글자는 현재 페이지 글자의 0.75 배를 넘지 않는다(`fitAll`) — 짧은 다음 가사가 현재보다 크게 보이지 않게
-  - `note`·`zoom`·`message`·`message_id`·`pages_rev` 는 `_sendSingerView` 가 얹고(`pages_rev` 는 서버가 만든다), 서버가 싱어 키 쪽에서는 뺀다(`remoteOnlyKeys`) — 싱어 QR 로는 메모·페이지 목록을 못 본다
+  - `note`·`zoom`·`message`·`message_id`·`pages_rev` 는 `_sendSingerView` 가 얹고(`pages_rev` 는 서버가 만든다), 서버가 싱어 쪽(`p=1` 없음)에서는 뺀다(`remoteOnlyKeys`) — 싱어 화면에는 메모·페이지 목록이 안 보인다
 
 ### Python (`python/ppt_tool.py`, 약 3,100줄)
 

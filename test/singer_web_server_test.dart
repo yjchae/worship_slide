@@ -6,29 +6,28 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:worship_slides/src/features/praise/data/singer_web_server.dart';
 
 void main() {
-  test('토큰이 맞아야 하고, 실시간 갱신·지금 페이지 이미지만 내보낸다', () async {
+  test('키 없이 고정 주소로 열리고, 실시간 갱신·지금 페이지 이미지만 내보낸다', () async {
     final server = SingerWebServer();
     await server.start();
     addTearDown(server.stop);
     final url = Uri.parse(server.urlFor('127.0.0.1'));
     final base = 'http://127.0.0.1:${server.port}';
-    final k = url.queryParameters['k']!;
+    // 주소에 키가 없다 — 껐다 켜도 같은 주소.
+    expect(url.toString(), '$base/');
+    expect(server.urlFor('127.0.0.1', remote: true), '$base/presenter');
     final client = HttpClient();
     addTearDown(() => client.close(force: true));
     Future<HttpClientResponse> get(String path) async =>
         (await client.getUrl(Uri.parse('$base$path'))).close();
 
-    // 토큰 없이는 아무것도 못 본다.
-    expect((await get('/')).statusCode, 403);
-    expect((await get('/events')).statusCode, 403);
-    expect((await get('/img/current')).statusCode, 403);
+    expect((await get('/img/current')).statusCode, 404); // 아직 페이지 없음
 
     final page = await (await client.getUrl(url)).close();
     expect(await page.transform(utf8.decoder).join(), contains('EventSource'));
 
     final img = File('${Directory.systemTemp.createTempSync().path}/p.png')
       ..writeAsBytesSync([1, 2, 3]);
-    final events = await get('/events?k=$k');
+    final events = await get('/events');
     final got = Completer<Map<String, dynamic>>();
     events.transform(utf8.decoder).listen((chunk) {
       for (final line in chunk.split('\n')) {
@@ -54,12 +53,11 @@ void main() {
     expect(bytes.headers.value('cache-control'), 'no-store');
     expect(await bytes.expand((b) => b).toList(), [1, 2, 3]);
     // 버전이 다르면(그 사이 페이지가 넘어감) 주지 않는다.
-    expect((await get('/img/current?v=old&k=$k')).statusCode, 404);
-    expect((await get('/img/next?k=$k')).statusCode, 404);
+    expect((await get('/img/current?v=old')).statusCode, 404);
+    expect((await get('/img/next')).statusCode, 404);
 
-    // 터널 주소용 폴링도 같은 내용, 토큰 필요.
-    expect((await get('/state')).statusCode, 403);
-    final state = await get('/state?k=$k');
+    // 터널 주소용 폴링도 같은 내용.
+    final state = await get('/state');
     expect(
       jsonDecode(
         await state.transform(utf8.decoder).join(),
@@ -68,15 +66,11 @@ void main() {
     );
   });
 
-  test('리모컨 키만 넘길 수 있고, 메모·확대는 리모컨에만 간다', () async {
+  test('발표자 쪽(p=1)만 넘길 수 있고, 메모·확대는 발표자 쪽에만 간다', () async {
     final server = SingerWebServer();
     await server.start();
     addTearDown(server.stop);
     final base = 'http://127.0.0.1:${server.port}';
-    final singerK = Uri.parse(server.urlFor('127.0.0.1')).queryParameters['k'];
-    final remoteUrl = Uri.parse(server.urlFor('127.0.0.1', remote: true));
-    final remoteK = remoteUrl.queryParameters['k'];
-    expect(remoteK, isNot(singerK));
     final calls = <String>[];
     server.onControl = (action, params) async {
       calls.add('$action ${params['from']}');
@@ -97,30 +91,27 @@ void main() {
       return (res.statusCode, await res.transform(utf8.decoder).join());
     }
 
-    // 싱어 키로는 못 넘긴다. GET 도 안 된다(미리 불러오기 등으로 넘어가지 않게).
-    expect((await send('POST', '/control?k=$singerK&action=next')).$1, 403);
-    expect((await send('GET', '/control?k=$remoteK&action=next')).$1, 403);
+    // 싱어 쪽으로는 못 넘긴다. GET 도 안 된다(미리 불러오기 등으로 넘어가지 않게).
+    expect((await send('POST', '/control?action=next')).$1, 403);
+    expect((await send('GET', '/control?p=1&action=next')).$1, 403);
     expect(calls, isEmpty);
 
-    final (code, body) = await send(
-      'POST',
-      '/control?k=$remoteK&action=next&from=1',
-    );
+    final (code, body) = await send('POST', '/control?p=1&action=next&from=1');
     expect(code, 200);
     expect(calls, ['next 1']);
     // 응답에 바뀐 상태가 실린다.
     expect(jsonDecode(body)['note'], '여기서 기도');
 
-    final singer = jsonDecode((await send('GET', '/state?k=$singerK')).$2);
+    final singer = jsonDecode((await send('GET', '/state')).$2);
     expect(singer['current']['main_text'], '다음 쪽');
     expect(singer.containsKey('note'), isFalse);
     expect(singer.containsKey('zoom'), isFalse);
 
-    // 리모컨 키로 연 페이지만 제스처가 켜진다.
-    final page = (await send('GET', '/?k=$remoteK')).$2;
+    // /presenter 로 연 페이지만 제스처가 켜진다.
+    final page = (await send('GET', '/presenter')).$2;
     expect(page, contains('<body class="remote">'));
     expect(
-      (await send('GET', '/?k=$singerK')).$2,
+      (await send('GET', '/')).$2,
       isNot(contains('<body class="remote">')),
     );
   });
@@ -130,24 +121,20 @@ void main() {
     await server.start();
     addTearDown(server.stop);
     final base = 'http://127.0.0.1:${server.port}';
-    final singerK = Uri.parse(server.urlFor('127.0.0.1')).queryParameters['k'];
-    final remoteK = Uri.parse(
-      server.urlFor('127.0.0.1', remote: true),
-    ).queryParameters['k'];
+    const singerK = '';
+    const remoteK = '?p=1';
     final client = HttpClient();
     addTearDown(() => client.close(force: true));
     Future<HttpClientResponse> get(String path) async =>
         (await client.getUrl(Uri.parse('$base$path'))).close();
-    Future<Map<String, dynamic>> state(String? k) async =>
-        jsonDecode(
-              await (await get('/state?k=$k')).transform(utf8.decoder).join(),
-            )
+    Future<Map<String, dynamic>> state(String k) async =>
+        jsonDecode(await (await get('/state$k')).transform(utf8.decoder).join())
             as Map<String, dynamic>;
 
     // SSE 로 받은 data 줄을 모은다. 붙자마자 지금 값을 받으면(늦게 접속) 그것도 들어온다.
-    Future<List<Map<String, dynamic>>> listen(String? k) async {
+    Future<List<Map<String, dynamic>>> listen(String k) async {
       final got = <Map<String, dynamic>>[];
-      (await get('/events?k=$k')).transform(utf8.decoder).listen((chunk) {
+      (await get('/events$k')).transform(utf8.decoder).listen((chunk) {
         for (final line in chunk.split('\n')) {
           if (line.startsWith('data: ')) {
             got.add(jsonDecode(line.substring(6)) as Map<String, dynamic>);
@@ -193,9 +180,6 @@ void main() {
     await server.start();
     addTearDown(server.stop);
     final base = 'http://127.0.0.1:${server.port}';
-    final remoteK = Uri.parse(
-      server.urlFor('127.0.0.1', remote: true),
-    ).queryParameters['k'];
     final client = HttpClient();
     addTearDown(() => client.close(force: true));
     final dir = Directory.systemTemp.createTempSync('thumb_timeout');
@@ -214,7 +198,7 @@ void main() {
     final list =
         jsonDecode(
               await (await (await client.getUrl(
-                Uri.parse('$base/pages?k=$remoteK'),
+                Uri.parse('$base/pages?p=1'),
               )).close()).transform(utf8.decoder).join(),
             )
             as Map;
@@ -230,15 +214,11 @@ void main() {
     expect(both[1], [9]); // 뒤 요청은 막히지 않는다
   });
 
-  test('발표자 모드 페이지 목록·썸네일은 리모컨 키만, 로컬 경로 없이', () async {
+  test('발표자 모드 페이지 목록·썸네일은 발표자 쪽(p=1)만, 로컬 경로 없이', () async {
     final server = SingerWebServer();
     await server.start();
     addTearDown(server.stop);
     final base = 'http://127.0.0.1:${server.port}';
-    final singerK = Uri.parse(server.urlFor('127.0.0.1')).queryParameters['k'];
-    final remoteK = Uri.parse(
-      server.urlFor('127.0.0.1', remote: true),
-    ).queryParameters['k'];
     final client = HttpClient();
     addTearDown(() => client.close(force: true));
     Future<HttpClientResponse> get(String path) async =>
@@ -271,22 +251,22 @@ void main() {
     };
     server.update({...base0, 'pages': pages});
 
-    // 싱어 키: 목록·썸네일 403, JSON 에 목록·메시지 없음.
+    // 싱어 쪽: 목록·썸네일 403, JSON 에 목록·메시지 없음.
     final pageUrl = '/img/page/2';
-    expect((await get('/pages?k=$singerK')).statusCode, 403);
-    expect((await get('$pageUrl?v=x&k=$singerK')).statusCode, 403);
-    final singer = jsonDecode(await body('/state?k=$singerK')) as Map;
+    expect((await get('/pages')).statusCode, 403);
+    expect((await get('$pageUrl?v=x')).statusCode, 403);
+    final singer = jsonDecode(await body('/state')) as Map;
     for (final key in ['pages', 'pages_rev', 'message', 'message_id']) {
       expect(singer.containsKey(key), isFalse, reason: key);
     }
 
-    // 리모컨 키: JSON 엔 판 값만, 목록엔 로컬 경로 없음.
-    final remote = jsonDecode(await body('/state?k=$remoteK')) as Map;
+    // 발표자 쪽: JSON 엔 판 값만, 목록엔 로컬 경로 없음.
+    final remote = jsonDecode(await body('/state?p=1')) as Map;
     expect(remote.containsKey('pages'), isFalse);
     expect(remote['message_id'], 3);
     final rev = remote['pages_rev'] as String;
     expect(rev, isNotEmpty);
-    final listText = await body('/pages?k=$remoteK');
+    final listText = await body('/pages?p=1');
     expect(listText, isNot(contains(dir.path)));
     for (final bad in ['/Users/', r'C:\\', 'Application Support']) {
       expect(listText, isNot(contains(bad)));
@@ -297,7 +277,7 @@ void main() {
     expect(got[1]['text'], '주의 인자');
     expect(got[1]['image'], isNull);
     final imgUrl = got[2]['image'] as String;
-    expect(imgUrl, matches(RegExp(r'^/img/page/2\?v=[0-9a-f]+&k=' + remoteK!)));
+    expect(imgUrl, matches(RegExp(r'^/img/page/2\?v=[0-9a-f]+&p=1$')));
 
     // 지금 목록 번호 + 맞는 v 일 때만. 동시에 와도 한 번만 줄인다.
     final res = await Future.wait([get(imgUrl), get(imgUrl)]);
@@ -308,10 +288,10 @@ void main() {
     }
     expect(thumbCalls, 1);
     final v = Uri.parse(imgUrl).queryParameters['v'];
-    expect((await get('$pageUrl?v=old&k=$remoteK')).statusCode, 404);
-    expect((await get('/img/page/1?v=$v&k=$remoteK')).statusCode, 404);
-    expect((await get('/img/page/3?v=$v&k=$remoteK')).statusCode, 404);
-    expect((await get('/img/page/x?v=$v&k=$remoteK')).statusCode, 404);
+    expect((await get('$pageUrl?v=old&p=1')).statusCode, 404);
+    expect((await get('/img/page/1?v=$v&p=1')).statusCode, 404);
+    expect((await get('/img/page/3?v=$v&p=1')).statusCode, 404);
+    expect((await get('/img/page/x?v=$v&p=1')).statusCode, 404);
 
     // 썸네일러가 없으면 원본 그대로.
     server.thumbnailer = null;
@@ -324,13 +304,10 @@ void main() {
     expect(await orig.expand((b) => b).toList(), [9, 9]); // 기억한 썸네일
     await server.stop();
     await server.start();
-    final k2 = Uri.parse(
-      server.urlFor('127.0.0.1', remote: true),
-    ).queryParameters['k'];
     final b2 = 'http://127.0.0.1:${server.port}';
     server.update({...base0, 'pages': pages});
     final raw = await (await client.getUrl(
-      Uri.parse('$b2/img/page/2?v=$v&k=$k2'),
+      Uri.parse('$b2/img/page/2?v=$v&p=1'),
     )).close();
     expect(await raw.expand((b) => b).toList(), [1, 2, 3]); // 끌 때 캐시도 비웠다
 
@@ -338,7 +315,7 @@ void main() {
     Future<String> revNow() async =>
         (jsonDecode(
                   await (await (await client.getUrl(
-                    Uri.parse('$b2/state?k=$k2'),
+                    Uri.parse('$b2/state?p=1'),
                   )).close()).transform(utf8.decoder).join(),
                 )
                 as Map)['pages_rev']
@@ -359,15 +336,13 @@ void main() {
     expect(await revNow(), isNot(rev2));
   });
 
-  test('goto 는 리모컨 키 POST 로만 id 를 넘긴다', () async {
+  test('goto 는 발표자 쪽(p=1) POST 로만 id 를 넘긴다', () async {
     final server = SingerWebServer();
     await server.start();
     addTearDown(server.stop);
     final base = 'http://127.0.0.1:${server.port}';
-    final singerK = Uri.parse(server.urlFor('127.0.0.1')).queryParameters['k'];
-    final remoteK = Uri.parse(
-      server.urlFor('127.0.0.1', remote: true),
-    ).queryParameters['k'];
+    const singerK = '';
+    const remoteK = 'p=1&';
     final ids = ['-1:0:false', '5:0:false', '5:1:false'];
     var current = 0;
     server.onControl = (action, params) async {
@@ -383,7 +358,7 @@ void main() {
     Future<(int, Map)> send(String method, String k, String id) async {
       final res = await (await client.openUrl(
         method,
-        Uri.parse('$base/control?k=$k&action=goto&id=$id'),
+        Uri.parse('$base/control?${k}action=goto&id=$id'),
       )).close();
       final text = await res.transform(utf8.decoder).join();
       return (
@@ -392,8 +367,8 @@ void main() {
       );
     }
 
-    expect((await send('POST', singerK!, '5:1:false')).$1, 403);
-    expect((await send('GET', remoteK!, '5:1:false')).$1, 403);
+    expect((await send('POST', singerK, '5:1:false')).$1, 403);
+    expect((await send('GET', remoteK, '5:1:false')).$1, 403);
     expect(current, 0);
     final (code, state) = await send('POST', remoteK, '5:1:false');
     expect(code, 200);
@@ -421,8 +396,8 @@ void main() {
     final res = await (await client.getUrl(
       Uri.parse('http://127.0.0.1:${server.port}/'),
     )).close();
-    expect(res.statusCode, 403); // 키 없음 = 우리 서버가 받았다
-    await res.drain<void>();
+    expect(res.statusCode, 200);
+    expect(await res.transform(utf8.decoder).join(), contains('EventSource'));
   });
 
   test('끄고 바로 켜도, 두 번 켜도 서버는 하나이고 이전 이미지는 남지 않는다', () async {
@@ -451,11 +426,10 @@ void main() {
     // 이 PC 의 다른 프로그램이 8765 를 쓰고 있으면 다른 포트로 켜지는 게 맞다.
     if (!portTaken) expect(server.port, SingerWebServer.preferredPort);
     expect(server.running.value, isTrue);
-    final k = Uri.parse(server.urlFor('127.0.0.1')).queryParameters['k'];
     final client = HttpClient();
     addTearDown(() => client.close(force: true));
     final res = await (await client.getUrl(
-      Uri.parse('http://127.0.0.1:${server.port}/img/current?k=$k'),
+      Uri.parse('http://127.0.0.1:${server.port}/img/current'),
     )).close();
     expect(res.statusCode, 404);
   });

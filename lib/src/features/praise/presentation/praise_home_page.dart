@@ -1514,6 +1514,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       _mainTabController.index = 1;
       // 발표 전에 잡아둔 확대 영역을 새 창에 그대로 반영한다.
       await _sendZoom();
+      // 지난 발표에서 휴대폰 화면을 켜 뒀으면 다시 켠다. 주소가 늘 같아서(키 없음)
+      // 휴대폰은 다시 찍지 않아도 저절로 다시 붙는다.
+      if (_mobileWebWanted) unawaited(_restartMobileWeb());
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -1946,6 +1949,22 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   /// 켜져 있지 않으면 켜고, 휴대폰에서 열 주소를 보여 준다. 다이얼로그에서 끌 수 있다.
   bool _isMobileSingerBusy = false; // 두 번 눌러 다이얼로그가 둘 뜨지 않게
 
+  /// 사용자가 휴대폰 화면을 켰고 '끄기'를 누르지 않았다. 발표를 끝내면 서버는 꺼지지만
+  /// 다음 발표를 시작할 때 저절로 다시 켠다(앱 실행 동안만).
+  bool _mobileWebWanted = false;
+
+  Future<void> _restartMobileWeb() async {
+    try {
+      await _singerWeb.start();
+    } catch (e) {
+      await AppLogger.instance.error('[singer-web] 다시 켜기 실패', e);
+      return;
+    }
+    if (!mounted) return;
+    setState(() {});
+    await _sendSingerView();
+  }
+
   Future<void> _showMobileSinger() async {
     if (_isMobileSingerBusy) return;
     _isMobileSingerBusy = true;
@@ -1967,12 +1986,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       ).showSnackBar(SnackBar(content: Text('휴대폰 화면 켜기 실패: $e')));
       return;
     }
+    _mobileWebWanted = true;
     if (!mounted) return;
     setState(() {});
     await _sendSingerView();
     final addresses = await SingerWebServer.lanAddresses();
     if (!mounted) return;
-    // 싱어창(보기만) / 발표자 모드(넘기기·페이지 고르기·블랙아웃, 휴대폰에서 싱어창으로도 바꿈). 키가 달라 QR 도 다르다.
+    // 싱어창(보기만, `/`) / 발표자 모드(넘기기·페이지 고르기·블랙아웃, `/presenter`). 경로가 달라 QR 도 다르다.
     var remote = false;
     // 주소 줄과 QR 을 왼쪽에 맞춘다(주소 길이가 달라도 QR 이 같은 자리에).
     Widget qr(String url) => Column(
@@ -2043,7 +2063,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   if (!running)
-                    const Text('휴대폰 화면이 꺼졌습니다. 발표를 다시 시작한 뒤 켜 주세요.')
+                    const Text(
+                      '휴대폰 화면이 꺼졌습니다. 발표를 다시 시작하면 같은 주소로 다시 켜지고, '
+                      '열어 둔 휴대폰은 저절로 다시 연결됩니다.',
+                    )
                   else ...[
                     // 다른 망(LTE·다른 와이파이)용 공개 주소. 터널은 몇 초 걸려서 따로 듣는다.
                     ValueListenableBuilder<TunnelState>(
@@ -2095,7 +2118,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                         '맨 위 ◀ 이전 · 다음 ▶ 이나 아래 \'모든 페이지\'에서 페이지를 눌러 관객 화면을 옮깁니다.\n'
                         '휴대폰 화면 위쪽에서 \'싱어창\'으로 바꾸면 밀어서 넘기기·두 손가락 확대·발표자 메모를 쓸 수 있습니다. '
                         '\'화면 끄기\' 길게 누르기 = 블랙아웃.\n'
-                        '이 QR 은 발표를 조작할 수 있으니 발표자만 찍으세요.',
+                        '이 주소는 발표를 조작할 수 있습니다. 같은 와이파이의 누구나 열 수 있으니 주소를 널리 알리지 마세요.',
                         style: TextStyle(
                           color: Theme.of(context).colorScheme.error,
                           fontWeight: FontWeight.w600,
@@ -2103,7 +2126,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                       ),
                       const SizedBox(height: 12),
                     ] else ...[
-                      const Text('가사만 보는 화면입니다. 이 QR 로 연 사람은 페이지를 넘길 수 없습니다.'),
+                      const Text('가사만 보는 화면입니다. 이 주소로 연 사람은 페이지를 넘길 수 없습니다.'),
                       const SizedBox(height: 12),
                     ],
                     const Text(
@@ -2123,9 +2146,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                     const SizedBox(height: 12),
                     Text(
                       '처음 켤 때 방화벽이 "들어오는 연결 허용"을 물으면 허용해 주세요.\n'
-                      '주소는 켤 때마다 바뀌므로(보안 키 포함) 매번 이 QR 로 여세요.\n'
+                      '같은 와이파이 주소는 늘 같습니다(키 없음). 브라우저 즐겨찾기에 넣어 두면 다음에도 그대로 열립니다.\n'
+                      '발표를 끝냈다 다시 시작해도 휴대폰 화면은 저절로 다시 연결됩니다.\n'
                       '같은 와이파이 주소로 열면 휴대폰 화면 꺼짐 방지가 안 되니 휴대폰 자동 잠금을 꺼 두세요.\n'
-                      '발표를 끝내면 자동으로 꺼집니다.',
+                      '발표를 끝내면 잠시 꺼졌다가 다음 발표를 시작하면 다시 켜집니다. 완전히 끄려면 \'끄기\'를 누르세요.',
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ],
@@ -2147,6 +2171,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       ),
     );
     if (stop == true) {
+      _mobileWebWanted = false;
       await _singerWeb.stop();
       if (mounted) setState(() {});
     }
@@ -2438,7 +2463,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     return _slideKey(info.stagingUid, info.pageIndexInItem);
   }
 
-  /// 휴대폰 발표자 키 요청([SingerWebServer.onControl]) — 발표자 모드·싱어창 공통.
+  /// 휴대폰 발표자 주소 요청([SingerWebServer.onControl]) — 발표자 모드·싱어창 공통.
   Future<void> _handleRemoteControl(
     String action,
     Map<String, String> params,
