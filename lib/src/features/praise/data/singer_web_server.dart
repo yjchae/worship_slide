@@ -15,22 +15,29 @@ import 'fnv_hash.dart';
 /// - `GET /img/current`, `/img/next`  지금·다음 페이지 이미지(PPT 페이지).
 ///   **로컬 경로를 그대로 받지 않는다** — 지금 띄운 두 장만 내보내므로 망 안의 누구도 다른 파일은 못 읽는다
 ///
-/// 모든 요청은 켤 때마다 새로 만드는 토큰(`?k=`)이 맞아야 한다. 주소·QR 에 들어 있어서 찍은 사람만 본다
-/// (게스트 와이파이처럼 모르는 사람이 같은 망에 있어도 포트만으로는 못 본다).
+/// **키(토큰)가 없다** — `http://<IP>:<포트>/` 를 치면 누구나 싱어창을 본다. 주소가 늘 같아서(포트 8765)
+/// 발표를 끝냈다 다시 시작하거나 연결이 끊겨도 휴대폰은 다시 찍을 필요 없이 저절로 다시 붙는다.
+/// 같은 망(와이파이)에 있는 사람은 누구나 볼 수 있다는 뜻이다(사용자가 고른 편의 쪽).
 ///
-/// **발표자 키(발표자 모드·싱어창)**: 같은 페이지를 리모컨 키(`?k=` 가 [remoteToken])로 열면 넘기기·확대·블랙아웃 제스처가 켜진다.
+/// **발표자 주소(발표자 모드·싱어창)**: `/presenter` 로 열면 넘기기·확대·블랙아웃 제스처가 켜진다.
+/// 그 페이지의 요청은 `?p=1`(발표자 쪽)을 달고 온다.
+/// - **PIN**: 발표자 쪽은 PC 에서 정한 4자리 [presenterPin] 이 맞아야 한다. 휴대폰이 `/presenter` 를 처음 열면
+///   PIN 입력 페이지([pinPageHtml])가 나오고, `POST /login` 이 맞으면 쿠키(`ws_pin`, 1년)를 남겨 그 휴대폰은
+///   다음부터 묻지 않는다. 쿠키라서 `<img>` 썸네일 요청에도 저절로 실린다. PIN 을 바꾸면 쿠키가 안 맞아
+///   발표자 쪽 요청이 401 → 휴대폰 페이지가 새로 읽혀 PIN 을 다시 묻는다
+/// - PIN 을 5번 틀리면 30초 동안 받지 않는다(4자리라 대입을 막으려고, 접속 주소마다)
+/// - `POST` 는 Origin 이 이 서버 주소와 다르면 403 — 같은 망 기기에서 열린 다른 웹 페이지가 발표를 조작하지 못하게
 /// - `POST /control?action=next|prev&from=<보던 쪽>` / `action=blackout&on=0|1` / `action=zoom&on&x&y&size`
 ///   → [onControl] 을 부르고 바뀐 상태 JSON 을 돌려준다
-/// - 리모컨에만 가는 값(`note`·`zoom`·`message`, [remoteOnlyKeys])은 싱어 키로 받는 쪽에서 뺀다.
-///   싱어 QR 을 단체방에 돌려도 그 키로는 넘기지도, 발표자 메모를 보지도 못한다
+/// - 리모컨에만 가는 값(`note`·`zoom`·`message`, [remoteOnlyKeys])은 싱어 주소로 받는 쪽에서 뺀다
 ///
-/// **발표자 모드 페이지 목록**(리모컨 키만, 싱어 키는 403):
+/// **발표자 모드 페이지 목록**(발표자 쪽 `?p=1` 만, 싱어 쪽은 403):
 /// - [update] 의 `pages`(`phonePageList`) 는 JSON 에 싣지 않고 따로 둔다. JSON 엔 판 값 `pages_rev` 만 —
 ///   휴대폰은 이 값이 바뀔 때만 `GET /pages` 로 목록(`{rev, pages}`)을 다시 받는다
 /// - `GET /img/page/<n>?v=` 목록 n번 그림 페이지의 썸네일([thumbnailer]). 로컬 경로는 목록에도 주소에도 없다
 ///
 /// **바깥 망 주소**: cloudflared 가 깔려 있으면 Cloudflare 임시 터널(`*.trycloudflare.com`, 계정 불필요)을
-/// 같이 띄워 https 공개 주소를 만든다. 다른 망의 휴대폰도 그 주소로 본다. 토큰은 그대로 필요하다.
+/// 같이 띄워 https 공개 주소를 만든다. 다른 망의 휴대폰도 그 주소로 본다(임시 터널 주소는 켤 때마다 바뀐다).
 /// 없으면 같은 망 주소만 쓴다(LibreOffice·Tesseract 처럼 선택 의존성).
 enum TunnelState { off, missing, connecting, ready, failed }
 
@@ -41,8 +48,6 @@ class SingerWebServer {
   final _clients = <HttpResponse>{};
   Timer? _ping;
   String? _lastJson; // 지금 페이지. SSE(/events)·폴링(/state) 둘 다 이걸 보낸다
-  String _token = '';
-  String _remoteToken = '';
   String? _lastRemoteJson; // 리모컨용(메모·확대 포함)
   final _remoteClients = <HttpResponse>{};
 
@@ -94,17 +99,40 @@ class SingerWebServer {
   Process? _tunnelProcess;
   String? _publicBase; // https://xxxx.trycloudflare.com
 
-  /// 다른 망에서 열 주소(토큰 포함). 터널이 아직이면 null.
+  /// 발표자 화면 경로. 싱어창은 `/`.
+  static const presenterPath = '/presenter';
+
+  /// 발표자 쪽 PIN(숫자 4자리). 비어 있으면 발표자 쪽은 아무도 못 들어온다.
+  /// 바꾸면 이미 들어와 있던 휴대폰도 다음 요청부터 다시 묻는다.
+  String get presenterPin => _presenterPin;
+  set presenterPin(String pin) {
+    if (pin == _presenterPin) return;
+    _presenterPin = pin;
+    // 열려 있는 발표자 SSE 는 새 요청을 안 보내서 PIN 검사를 다시 안 거친다 — 끊어서 다시 붙게(→ 401 → PIN 입력).
+    for (final c in _remoteClients.toList()) {
+      c.close().catchError((_) {});
+    }
+    _remoteClients.clear();
+  }
+
+  String _presenterPin = '';
+
+  static const _pinCookie = 'ws_pin';
+  static const maxPinFailures = 5;
+  static const pinLockout = Duration(seconds: 30);
+  final _pinFailures = <String, (int, DateTime)>{}; // 접속 주소 → (틀린 횟수, 마지막 시각)
+
+  /// 다른 망에서 열 주소. 터널이 아직이면 null.
   String? publicUrl({bool remote = false}) => _publicBase == null
       ? null
-      : '$_publicBase/?k=${remote ? _remoteToken : _token}';
+      : '$_publicBase${remote ? presenterPath : '/'}';
 
   bool get isRunning => _server != null;
   int? get port => _server?.port;
 
-  /// 휴대폰에서 열 주소(토큰 포함).
+  /// 휴대폰에서 열 주소. 키가 없어 늘 같다(포트를 다른 프로그램이 쓰고 있을 때만 바뀐다).
   String urlFor(String address, {bool remote = false}) =>
-      'http://$address:$port/?k=${remote ? _remoteToken : _token}';
+      'http://$address:$port${remote ? presenterPath : '/'}';
 
   // 앞 작업이 실패해도(포트 못 잡음 등) 줄이 막히지 않게 오류는 그 호출에만 돌려준다.
   // 막히면 그 뒤 stop 이 영영 안 돌아 터널이 앱 밖에 남는다.
@@ -119,14 +147,6 @@ class SingerWebServer {
 
   Future<void> _start() async {
     if (_server != null) return;
-    final rnd = Random.secure();
-    // 터널 주소는 인터넷 어디서나 닿으므로 넉넉히(31^16 ≈ 7×10^23).
-    String newToken() => List.generate(
-      16,
-      (_) => 'abcdefghjkmnpqrstuvwxyz23456789'[rnd.nextInt(31)],
-    ).join();
-    _token = newToken();
-    _remoteToken = newToken();
     try {
       // 다른 프로그램이 127.0.0.1 로만 잡고 있어도 0.0.0.0 bind 는 성공한다(macOS). 그러면
       // 터널(127.0.0.1 로 붙는다)이 그 프로그램으로 가므로 127.0.0.1 도 비었는지 먼저 본다.
@@ -185,7 +205,7 @@ class SingerWebServer {
     running.value = false;
   }
 
-  /// cloudflared 를 켜 둔 뒤에 설치했을 때 — 서버는 그대로 두고 터널만 띄운다(같은 망 주소·키 유지).
+  /// cloudflared 를 켜 둔 뒤에 설치했을 때 — 서버는 그대로 두고 터널만 띄운다(같은 망 주소 유지).
   void retryTunnel() {
     final server = _server;
     if (server != null && tunnel.value == TunnelState.missing) {
@@ -378,7 +398,7 @@ class SingerWebServer {
       } else {
         _images[key] = path;
         // 경로 대신 주소. v 는 이미지가 바뀌면 브라우저 캐시를 피하려는 값.
-        copy['image_path'] = '/img/$key?v=${_version(path)}&k=$_token';
+        copy['image_path'] = '/img/$key?v=${_version(path)}';
       }
       public[key] = copy;
     }
@@ -425,7 +445,7 @@ class SingerWebServer {
         ...page.cast<String, Object?>(),
         'image': path == null
             ? null
-            : '/img/page/${images.length - 1}?v=${_pathVersion(path)}&k=$_remoteToken',
+            : '/img/page/${images.length - 1}?v=${_pathVersion(path)}&p=1',
       });
     }
     _pageImages = images;
@@ -487,25 +507,39 @@ class SingerWebServer {
 
   Future<void> _handle(HttpRequest req) async {
     final res = req.response;
-    final key = req.uri.queryParameters['k'];
-    final remote = _remoteToken.isNotEmpty && key == _remoteToken;
-    if (!remote && (_token.isEmpty || key != _token)) {
-      res.statusCode = HttpStatus.forbidden;
-      res.headers.contentType = ContentType.text;
-      res.write('QR 코드나 앱에 나온 주소로 다시 열어 주세요.');
-      await res.close();
-      return;
-    }
+    // 싱어 쪽은 주소만으로 열린다. 발표자 페이지가 보내는 요청만 `p=1` 을 달고, PIN 쿠키가 맞아야 한다.
+    final remote = req.uri.queryParameters['p'] == '1';
     try {
+      if (req.method == 'POST' && !_sameOrigin(req)) {
+        res.statusCode = HttpStatus.forbidden;
+        await res.close();
+        return;
+      }
+      if (remote && !_pinOk(req)) {
+        res.statusCode = HttpStatus.unauthorized;
+        res.headers.set(HttpHeaders.cacheControlHeader, 'no-store');
+        await res.close();
+        return;
+      }
       switch (req.uri.path) {
         case '/':
-          res.headers.contentType = ContentType.html;
+          res.headers
+            ..contentType = ContentType.html
+            ..set(HttpHeaders.cacheControlHeader, 'no-store');
+          res.write(singerPageHtml);
+          await res.close();
+        case presenterPath || '$presenterPath/':
+          res.headers
+            ..contentType = ContentType.html
+            ..set(HttpHeaders.cacheControlHeader, 'no-store');
           res.write(
-            remote
+            _pinOk(req)
                 ? singerPageHtml.replaceFirst('<body>', '<body class="remote">')
-                : singerPageHtml,
+                : pinPageHtml(),
           );
           await res.close();
+        case '/login':
+          await _login(req);
         case '/events':
           res.bufferOutput = false;
           res.headers
@@ -625,6 +659,84 @@ class SingerWebServer {
     }
   }
 
+  // 쿠키가 지금 PIN 과 맞는가. PIN 이 없으면(아직 안 정함) 아무도 못 들어온다.
+  bool _pinOk(HttpRequest req) {
+    if (presenterPin.isEmpty) return false;
+    try {
+      for (final c in req.cookies) {
+        if (c.name == _pinCookie && c.value == presenterPin) return true;
+      }
+    } catch (_) {} // 같은 주소의 다른 프로그램이 남긴 깨진 쿠키
+    return false;
+  }
+
+  // POST 의 Origin 이 이 서버 주소(Host)와 같은가. Origin 이 없으면(앱 밖 도구·옛 브라우저) 받는다.
+  // 터널 주소(https://*.trycloudflare.com)도 받는다 — cloudflared 가 Host 를 원래대로 넘기는지 확인 못 해서.
+  bool _sameOrigin(HttpRequest req) {
+    final origin = req.headers.value('origin');
+    if (origin == null || origin.isEmpty) return true;
+    if (_publicBase != null && origin == _publicBase) return true;
+    final host = req.headers.value(HttpHeaders.hostHeader);
+    final o = Uri.tryParse(origin);
+    return o != null && host != null && o.hasAuthority && o.authority == host;
+  }
+
+  // PIN 입력 폼(`pin=1234`, application/x-www-form-urlencoded). 맞으면 쿠키를 남기고 발표자 화면으로 보낸다.
+  Future<void> _login(HttpRequest req) async {
+    final res = req.response;
+    if (req.method != 'POST') {
+      res.statusCode = HttpStatus.methodNotAllowed;
+      await res.close();
+      return;
+    }
+    final who = req.connectionInfo?.remoteAddress.address ?? '';
+    final now = DateTime.now();
+    final (fails, at) = _pinFailures[who] ?? (0, now);
+    final locked = fails >= maxPinFailures && now.difference(at) < pinLockout;
+    // 폼은 `pin=1234` 하나라 짧다. 길거나 깨진 본문(잘못된 % 인코딩·UTF-8)은 틀린 PIN 으로 본다.
+    var pin = '';
+    try {
+      final bytes = <int>[];
+      await for (final chunk in req) {
+        bytes.addAll(chunk);
+        if (bytes.length > 256) throw const FormatException('too long');
+      }
+      pin = Uri.splitQueryString(utf8.decode(bytes))['pin']?.trim() ?? '';
+    } catch (_) {}
+    res.headers.set(HttpHeaders.cacheControlHeader, 'no-store');
+    if (!locked && presenterPin.isNotEmpty && pin == presenterPin) {
+      _pinFailures.remove(who);
+      res.cookies.add(
+        Cookie(_pinCookie, pin)
+          ..path = '/'
+          ..httpOnly = true
+          // Strict 면 QR 카메라·메신저에서 연 첫 화면에 쿠키가 안 실린다. 다른 사이트의 POST·fetch 는
+          // Lax 로도 안 실리고, POST 는 Origin 검사로 한 번 더 막는다.
+          ..sameSite = SameSite.lax
+          ..maxAge = const Duration(days: 365).inSeconds,
+      );
+      res.statusCode = HttpStatus.seeOther;
+      res.headers.set(HttpHeaders.locationHeader, presenterPath);
+      await res.close();
+      return;
+    }
+    if (!locked) {
+      // 잠금이 풀린 뒤 처음 틀리면 1부터 다시 센다.
+      final base = fails >= maxPinFailures ? 0 : fails;
+      _pinFailures[who] = (base + 1, now);
+    }
+    res.statusCode = HttpStatus.unauthorized;
+    res.headers.contentType = ContentType.html;
+    res.write(
+      pinPageHtml(
+        error: locked || (_pinFailures[who]?.$1 ?? 0) >= maxPinFailures
+            ? '여러 번 틀렸습니다. 30초 뒤에 다시 넣어 주세요.'
+            : 'PIN 이 맞지 않습니다.',
+      ),
+    );
+    await res.close();
+  }
+
   static ContentType _imageType(String path) {
     final lower = path.toLowerCase();
     return lower.endsWith('.jpg') || lower.endsWith('.jpeg')
@@ -692,10 +804,40 @@ class SingerWebServer {
   }
 }
 
+/// 발표자 PIN 입력 페이지. 맞으면 서버가 쿠키를 남기고 `/presenter` 로 보낸다(JS 없이 폼 하나).
+String pinPageHtml({String error = ''}) {
+  const esc = HtmlEscape();
+  return '''<!doctype html>
+<html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>발표자 모드 · PIN</title>
+<style>
+  html,body{margin:0;height:100%;background:#111418;color:#e6e9ee;
+    font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;}
+  body{display:flex;align-items:center;justify-content:center;padding:24px;box-sizing:border-box;word-break:keep-all;}
+  form{width:100%;max-width:320px;display:flex;flex-direction:column;gap:14px;text-align:center;}
+  h1{font-size:20px;margin:0;}
+  p{margin:0;color:#9aa3ad;font-size:14px;line-height:1.5;}
+  input{font-size:32px;letter-spacing:.5em;text-align:center;padding:12px 0 12px .5em;border-radius:12px;
+    border:1px solid #3a424d;background:#1b2027;color:#fff;outline:none;}
+  input:focus{border-color:#7aa7ff;}
+  button{font-size:17px;font-weight:700;padding:14px;border:0;border-radius:12px;background:#3b6fe0;color:#fff;}
+  .err{color:#ff8a80;font-weight:600;min-height:1.4em;}
+</style></head>
+<body><form method="post" action="/login">
+  <h1>발표자 모드</h1>
+  <p>PC 의 휴대폰 화면 창(발표자 모드)에 나온<br>PIN 4자리를 넣어 주세요.</p>
+  <input name="pin" aria-label="PIN 4자리" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" autofocus required>
+  <div class="err">${esc.convert(error)}</div>
+  <button type="submit">들어가기</button>
+  <p>한 번 들어오면 이 휴대폰은 다음부터 묻지 않습니다.</p>
+</form></body></html>''';
+}
+
 /// 싱어 페이지. 네이티브 싱어 창(MainFlutterWindow.swift)과 같은 모양·같은 글자 맞춤 규칙
 /// (원본 줄 그대로, 너무 작아지면 그때만 줄바꿈). 글자는 textContent 로만 넣는다(HTML 주입 없음).
 ///
-/// `<body class="remote">`(발표자 키로 연 경우)면 머리줄 [발표자 모드 | 싱어창] 으로 두 화면을 오간다(`presenter_view`).
+/// `<body class="remote">`(`/presenter` 로 연 경우)면 머리줄 [발표자 모드 | 싱어창] 으로 두 화면을 오간다(`presenter_view`).
 /// 발표자 모드 = 이전·다음 버튼 + 현재·다음 + '모든 페이지' 한 줄(`/pages`, 눌러 `goto`). 싱어창 = 현재 페이지가
 /// 관객 화면과 같은 16:9 틀(그래야 핀치로 고른 영역이 관객 화면 좌표와 맞는다), 메모·블랙아웃 버튼, 제스처.
 /// 메시지 띠는 두 모드 공통 알림(`message_id` 가 바뀌면 뜨고 60초 뒤 사라짐).
@@ -801,7 +943,7 @@ const singerPageHtml =
   #black.on,#pblack.on{background:#e5484d;border-color:#e5484d;}
   .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;}
   button:focus-visible{outline:2px solid #ffd54f;outline-offset:2px;}
-  /* ── 발표자 모드(발표자 키 + presenter_view) ── 이동 줄 · 제목 줄 · 무대(현재 70% · 다음, 16:9) ·
+  /* ── 발표자 모드(발표자 주소 + presenter_view) ── 이동 줄 · 제목 줄 · 무대(현재 70% · 다음, 16:9) ·
      모든 페이지 한 줄 가로 스크롤 · 화면 끄기. 가로 화면(body.land)은 위 두 줄이 한 줄이 된다. */
   #top{display:flex;flex-direction:column;gap:8px;flex:none;}
   #pnav,#mode,#plist,#pblack{display:none;}
@@ -844,7 +986,6 @@ const singerPageHtml =
   #pstat:empty{display:none;}
   #pstat .retry{height:44px;padding:0 16px;background:#1b2028;color:#e6e9ee;border:1px solid #3a424d;
     border-radius:10px;font:inherit;font-weight:700;}
-  #pstat.gone{font-size:16px;font-weight:700;color:#e6e9ee;}
   .th{flex:none;position:relative;width:160px;height:90px;padding:0;border:1px solid #232930;border-radius:6px;
     overflow:hidden;background:#1b2028;color:#c3cad4;font:inherit;display:flex;align-items:center;justify-content:center;}
   .th.pic.ok{background:#000;}
@@ -912,7 +1053,12 @@ function el(tag, cls, text){ var e=document.createElement(tag); if(cls) e.classN
   if(text!=null) e.textContent=text; return e; }
 function $(id){ return document.getElementById(id); }
 var REMOTE=document.body.classList.contains('remote');
-// 발표자 키로 열었을 때만: 발표자 모드(true) / 싱어창(false). setView 가 정한다.
+// 키 없음. 발표자 페이지 요청만 p=1 을 달아 발표자 쪽 값(메모·목록)을 받는다.
+var Q=REMOTE?'?p=1':'';
+// PC 에서 PIN 을 바꾸면 발표자 쪽 요청이 401 — 다시 읽으면 서버가 PIN 입력 페이지를 준다.
+var pinGone=false;
+function checkPin(r){ if(r && r.status===401 && !pinGone){ pinGone=true; location.reload(); } return r; }
+// 발표자 주소로 열었을 때만: 발표자 모드(true) / 싱어창(false). setView 가 정한다.
 var PRESENTER=false;
 // ── 코드 ── 휴대폰마다 켜고 끈다(기본 끔). 앱은 chord_lines 를 늘 싣고 이 버튼이 정한다.
 // 발표자 모드에선 늘 끈다(관객 화면 모양 확인용).
@@ -1126,7 +1272,7 @@ function setBadge(text, cls){
 }
 var last='';
 // 연결 상태. null = 아직 모름(처음 연결 중). 끊긴 지 10초가 넘으면 발표자에게 까닭을 짐작해 알린다.
-var alive=null, gone=false, deadTimer=null;
+var alive=null, deadTimer=null;
 function setAlive(v){
   if(alive===v) return;
   alive=v;
@@ -1135,16 +1281,11 @@ function setAlive(v){
   if(!v){
     live('연결 끊김');
     if(REMOTE) deadTimer=setTimeout(function(){
-      if(!gone) hint('발표가 끝났거나 PC 인터넷이 끊겼습니다. 계속 안 되면 PC 에서 새 QR 로 여세요');
+      hint('발표가 끝났거나 연결이 끊겼습니다. PC 에서 다시 켜지면 저절로 이어집니다');
     },10000);
   }else pagesAsked=''; // 다시 붙으면 목록을 한 번 다시 받는다
 }
 function offline(){ last=''; lastPages=''; setBadge('연결 끊김','badge off'); setAlive(false); }
-// 키가 바뀜(403, 앱에서 껐다 켬): 다시 묻지 않는다.
-function keyGone(){
-  gone=true; setBadge('주소가 바뀌었습니다 · 새 QR 로 여세요','badge off'); setAlive(false);
-  var s=$('pstat'); s.textContent='주소가 바뀌었습니다 · 새 QR 로 여세요'; s.className='gone';
-}
 function apply(text){
   setAlive(true);
   text=takeClock(text);
@@ -1157,34 +1298,53 @@ function apply(text){
 if(location.protocol==='https:'){
   // 바깥 망 터널 주소: Cloudflare 임시 터널이 SSE 를 흘려보내지 않아서 폴링.
   // 끊기면(PC 인터넷이 잠깐 끊김 등) 간격을 3초까지 늘려 가며 계속 묻는다 — 터널이 같은 주소로
-  // 다시 붙으면 저절로 이어진다. 403 은 키가 바뀐 것(앱에서 껐다 켬)이라 묻기를 멈춘다.
+  // 다시 붙으면 저절로 이어진다. 터널 주소는 앱에서 발표를 다시 시작하면 바뀌므로 그때는 새 QR 로 연다.
   // 화면이 가려져 있는 동안은 묻지 않는다(배터리).
   var delay=500, timer=null;
   function poll(){
     timer=null;
     if(document.hidden) return;
-    fetch('/state'+location.search,{cache:'no-store'})
+    fetch('/state'+Q,{cache:'no-store'})
       .then(function(r){
-        if(r.status===403){ keyGone(); return 'stop'; }
+        checkPin(r);
         if(!r.ok) throw 0;
         return r.text().then(function(t){ apply(t); delay=500; });
       })
       .catch(function(){ offline(); delay=Math.min(delay*2,3000); })
-      .then(function(stop){ if(stop!=='stop' && !timer) timer=setTimeout(poll,delay); });
+      .then(function(){ if(!timer) timer=setTimeout(poll,delay); });
   }
   document.addEventListener('visibilitychange', function(){
     if(!document.hidden && !timer){ delay=500; poll(); }
   });
   poll();
 }else{
-  var es=new EventSource('/events'+location.search);
-  es.onopen=function(){ if(last==='') apply('{}'); };
-  es.onmessage=function(ev){ apply(ev.data); };
-  es.onerror=offline;
+  // 같은 망(http): SSE. 브라우저가 끊기면 다시 붙지만, 아예 닫아 버리면(서버가 한동안 꺼져 있음 등)
+  // 3초 뒤 새로 연다 — 발표를 끝냈다 다시 시작해도 휴대폰은 그대로 두면 이어진다.
+  var es=null, reopen=null;
+  function connect(){
+    reopen=null;
+    es=new EventSource('/events'+Q);
+    es.onopen=function(){ if(last==='') apply('{}'); };
+    es.onmessage=function(ev){ apply(ev.data); };
+    es.onerror=function(){
+      offline();
+      if(es.readyState===2 && !reopen){
+        es.close();
+        // 닫힌 까닭이 PIN(401)이면 다시 읽어 PIN 을 묻는다.
+        if(REMOTE) fetch('/state'+Q,{cache:'no-store'}).then(checkPin).catch(function(){});
+        reopen=setTimeout(connect,3000);
+      }
+    };
+  }
+  // 화면을 다시 켰을 때 연결이 닫혀 있으면 바로 다시 연다.
+  document.addEventListener('visibilitychange', function(){
+    if(!document.hidden && es && es.readyState===2){ clearTimeout(reopen); connect(); }
+  });
+  connect();
 }
 window.addEventListener('resize', relayout);
 
-// ── 발표자 키: 싱어창 제스처 ──
+// ── 발표자 주소: 싱어창 제스처 ──
 // 좌우로 밀기·양쪽 끝 누르기 = 넘기기, 두 손가락 = 확대(확대 중엔 한 손가락 = 옮기기),
 // 가운데 두 번 누르기 = 확대 풀기, '화면 끄기' 길게 = 블랙아웃.
 var state=null, zoom={on:false,x:0,y:0,size:1}, zoomLocalUntil=0, zoomSyncTimer=null;
@@ -1226,8 +1386,8 @@ function showZoom(){
     +(-f.x-zoom.x*f.w)+'px,'+(-f.y-zoom.y*f.h)+'px)';
 }
 function control(q){
-  return fetch('/control'+location.search+'&action='+q,{method:'POST',cache:'no-store'})
-    .then(function(r){ return r.ok?r.text():null; })
+  return fetch('/control?'+(Q?'p=1&':'')+'action='+q,{method:'POST',cache:'no-store'})
+    .then(function(r){ checkPin(r); return r.ok?r.text():null; })
     .then(function(t){ if(t) apply(t); })
     .catch(function(){});
 }
@@ -1345,7 +1505,7 @@ if(REMOTE){
   });
 }
 
-// ── 메시지 알림(발표자 키 두 모드 공통) ──
+// ── 메시지 알림(발표자 주소 두 모드 공통) ──
 // message_id 가 바뀌면 띄우고 60초 뒤(PC 가 비우면 그 전에, 띠를 누르면 바로) 감춘다.
 // 같은 글을 다시 보내도 id 가 바뀌어 다시 뜬다. 닫은 알림은 같은 id 로 다시 와도 안 띄운다.
 var msgId, msgTimer=null, msgOut=null;
@@ -1384,17 +1544,17 @@ function stat(text, retry){
   if(retry){ var b=el('button','retry','다시 시도'); b.addEventListener('click',function(){ syncPages(true); }); s.appendChild(b); }
 }
 function syncPages(force){
-  if(!PRESENTER || !lastData || gone) return;
+  if(!PRESENTER || !lastData) return;
   var rev=lastData.pages_rev||'';
   if(!force && rev===pagesAsked) return;
   pagesAsked=rev;
   if(!pages) stat('페이지 목록을 받는 중…');
   var seq=++pagesSeq;
-  fetch('/pages'+location.search,{cache:'no-store'})
-    .then(function(r){ if(r.status===403){ keyGone(); throw 0; } if(!r.ok) throw 0; return r.json(); })
+  fetch('/pages'+Q,{cache:'no-store'})
+    .then(function(r){ checkPin(r); if(!r.ok) throw 0; return r.json(); })
     .then(function(j){ if(seq!==pagesSeq) return; pages=j.pages||[]; buildStrip(); })
     // 받는 동안·실패해도 옛 목록은 그대로 둔다. 목록이 없을 때만 알린다(다음 pages_rev 에 다시 받는다).
-    .catch(function(){ if(seq===pagesSeq && !pages && !gone) stat('페이지 목록을 받지 못했습니다',true); });
+    .catch(function(){ if(seq===pagesSeq && !pages) stat('페이지 목록을 받지 못했습니다',true); });
 }
 function buildStrip(){
   var s=$('strip'); s.textContent='';
@@ -1438,7 +1598,7 @@ function clearPending(){
 }
 function canAct(){
   if(alive) return true;
-  hint(gone?'주소가 바뀌었습니다 · 새 QR 로 여세요':'연결이 끊겨 넘길 수 없습니다');
+  hint('연결이 끊겨 넘길 수 없습니다');
   return false;
 }
 function gotoPage(i){
@@ -1473,7 +1633,7 @@ $('pmid').addEventListener('click',function(){ centerThumb(true); });
 ['touchmove','wheel'].forEach(function(ev){
   $('strip').addEventListener(ev,function(){ stripTouched=Date.now(); },{passive:true});
 });
-// 발표자 키 화면의 [발표자 모드 | 싱어창]. 휴대폰마다 기억한다(기본 발표자 모드).
+// 발표자 주소 화면의 [발표자 모드 | 싱어창]. 휴대폰마다 기억한다(기본 발표자 모드).
 function setView(v){
   PRESENTER=REMOTE && v==='presenter';
   document.body.classList.toggle('presenter',PRESENTER);
@@ -1484,7 +1644,7 @@ function setView(v){
   if(REMOTE) try{ localStorage.setItem('presenter_view',PRESENTER?'presenter':'singer'); }catch(_){}
   if(lastData){ lastPages=''; render(lastData); }
   else if(PRESENTER) fill($('current'),null,'연결 중…');
-  if(PRESENTER && !pages && !gone) stat('페이지 목록을 받는 중…');
+  if(PRESENTER && !pages) stat('페이지 목록을 받는 중…');
   relayout();
   if(PRESENTER) markCurrent(true);
 }

@@ -35,7 +35,10 @@ import '../data/page_template_store.dart';
 import '../data/sermon_design_store.dart';
 import '../data/background_image_library.dart';
 import '../data/libreoffice_installer.dart';
+import '../data/obs_overlay_server.dart';
+import '../data/obs_overlay_store.dart';
 import '../data/praise_repository.dart';
+import '../data/presenter_pin_store.dart';
 import '../data/python_bridge.dart';
 import '../data/screen_choice_store.dart';
 import '../data/singer_web_server.dart';
@@ -48,6 +51,7 @@ import '../domain/chord_lyrics.dart';
 import '../domain/conti_tree.dart';
 import '../domain/worship_conti.dart';
 import '../domain/export_style.dart';
+import '../domain/obs_caption.dart';
 import '../domain/offering_design.dart';
 import '../domain/page_element.dart';
 import '../domain/page_format.dart';
@@ -65,6 +69,7 @@ import 'libreoffice_install_dialog.dart';
 import 'lyrics_editor_dialog.dart';
 import 'lyrics_overlay_renderer.dart';
 import 'lyrics_page_grid.dart';
+import 'obs_overlay_dialog.dart';
 import 'offering_dialog.dart';
 import 'offering_overlay_painter.dart';
 import 'page_canvas.dart';
@@ -72,6 +77,7 @@ import 'page_to_free.dart';
 import 'page_editor_dialog.dart';
 import 'page_format_editor.dart';
 import 'page_template_dialog.dart';
+import 'presenter_pin_dialog.dart';
 import 'page_rich_text.dart' show pageFontFamilies;
 import 'ppt_layout_dialog.dart';
 import 'auto_advance_box.dart';
@@ -509,6 +515,15 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   bool _isSingerOpen = false;
   // 같은 망 휴대폰용 싱어 화면(웹). 발표를 끝내면 같이 끈다.
   final SingerWebServer _singerWeb = SingerWebServer();
+  // OBS '브라우저' 소스용 자막 서버. 싱어 서버와 달리 포트·키가 고정이고 앱이 켜져 있는 동안 상시.
+  final ObsOverlayServer _obs = ObsOverlayServer();
+  final ObsOverlayStore _obsStore = ObsOverlayStore();
+  ObsOverlayConfig _obsConfig = const ObsOverlayConfig();
+  // 'OBS 자막 잠시 숨기기'(실행 동안만, 저장 안 함).
+  final ValueNotifier<bool> _obsHidden = ValueNotifier(false);
+  bool _obsSyncScheduled = false;
+  Timer? _obsSaveTimer;
+  final _presenterPinStore = PresenterPinStore();
   // 창을 닫아 앱이 끝날 때는 dispose 가 불리지 않는다. 그대로 두면 cloudflared 터널 프로세스가
   // 앱 밖에 남으므로 종료 요청 때 끈다. 이 신호가 안 오는 경우(강제 종료, Windows 에서 발표 창이
   // 열린 채 닫기 등)는 다음 시작 때 [SingerWebServer.killLeftoverTunnel] 이 치운다.
@@ -572,16 +587,19 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _exitListener = AppLifecycleListener(
       onExitRequested: () async {
         // 무슨 일이 있어도 앱은 닫혀야 한다.
-        await _singerWeb
-            .stop()
-            .timeout(const Duration(seconds: 3))
-            .catchError((_) {});
+        await Future.wait([
+          _singerWeb.stop(),
+          _obs.stop(),
+          if (_obsSaveTimer?.isActive ?? false) _obsStore.save(_obsConfig),
+        ]).timeout(const Duration(seconds: 3)).catchError((_) => <void>[]);
         return AppExitResponse.exit;
       },
     );
     unawaited(SingerWebServer.killLeftoverTunnel());
     _singerWeb.onControl = _handleRemoteControl;
     _singerWeb.thumbnailer = _phoneThumbnail;
+    _obsHidden.addListener(_syncObs);
+    unawaited(_initObs());
     // 탭 전환에 애니메이션을 쓰지 않는다. TabBarView(PageView) 의 전환 애니메이션이
     // 중간에 멈추면(발표 창이 뜨면서 메인 창이 가려지는 등으로 프레임이 끊길 때)
     // 내부 카운터가 0으로 안 돌아와 탭이 영영 안 넘어간다.
@@ -686,6 +704,12 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _remoteSyncTimer?.cancel();
     _messageTimer?.cancel();
     _singerWeb.stop();
+    if (_obsSaveTimer?.isActive ?? false) {
+      _obsSaveTimer!.cancel();
+      _obsStore.save(_obsConfig);
+    }
+    _obs.stop();
+    _obsHidden.removeListener(_syncObs);
     _sourceWatcher.dispose();
     _repository.onSongsChanged = null;
     _sync.dispose();
@@ -1509,11 +1533,15 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         // 발표 전에 치다 만 번호가 시작 뒤 Enter 로 관객 화면을 옮기지 않게.
         _slideJumpBuffer = '';
       });
+      _scheduleObsSync();
       _presenterView.timer.start();
       // 발표를 시작하면 발표 보기 탭으로. 편집 탭은 그대로 살아 있다.
       _mainTabController.index = 1;
       // 발표 전에 잡아둔 확대 영역을 새 창에 그대로 반영한다.
       await _sendZoom();
+      // 지난 발표에서 휴대폰 화면을 켜 뒀으면 다시 켠다. 주소가 늘 같아서(키 없음)
+      // 휴대폰은 다시 찍지 않아도 저절로 다시 붙는다.
+      if (_mobileWebWanted) unawaited(_restartMobileWeb());
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -1536,6 +1564,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _sentMediaKey = null;
     _mediaPlayback.value = null;
     _singerWeb.stop();
+    _scheduleObsSync();
   }
 
   Future<void> _closePresentation() async {
@@ -1552,6 +1581,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     // 네이티브 'blackout' 은 토글이다. 값을 먼저 바꿔 둬야 응답을 기다리는 사이 온 리모컨 요청
     // (on=1 두 번 등)이 옛 값을 보고 한 번 더 토글하지 않는다.
     setState(() => _isBlackout = !_isBlackout);
+    _scheduleObsSync();
     try {
       await _presentationChannel.invokeMethod('blackout');
     } catch (_) {
@@ -1946,6 +1976,30 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   /// 켜져 있지 않으면 켜고, 휴대폰에서 열 주소를 보여 준다. 다이얼로그에서 끌 수 있다.
   bool _isMobileSingerBusy = false; // 두 번 눌러 다이얼로그가 둘 뜨지 않게
 
+  /// 사용자가 휴대폰 화면을 켰고 '끄기'를 누르지 않았다. 발표를 끝내면 서버는 꺼지지만
+  /// 다음 발표를 시작할 때 저절로 다시 켠다(앱 실행 동안만).
+  bool _mobileWebWanted = false;
+
+  /// 발표자 PIN 을 서버에 넣는다(처음 한 번 파일에서 읽고, 없으면 새로 만든다).
+  Future<void> _ensurePresenterPin() async {
+    if (_singerWeb.presenterPin.isNotEmpty) return;
+    _singerWeb.presenterPin = await _presenterPinStore.load();
+  }
+
+  Future<void> _restartMobileWeb() async {
+    try {
+      await _ensurePresenterPin();
+      await _singerWeb.start();
+    } catch (e) {
+      await AppLogger.instance.error('[singer-web] 다시 켜기 실패', e);
+      _showSnack('휴대폰 화면을 다시 켜지 못했습니다. 발표 보기의 휴대폰 버튼으로 다시 켜 주세요.');
+      return;
+    }
+    if (!mounted) return;
+    setState(() {});
+    await _sendSingerView();
+  }
+
   Future<void> _showMobileSinger() async {
     if (_isMobileSingerBusy) return;
     _isMobileSingerBusy = true;
@@ -1958,6 +2012,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   Future<void> _showMobileSingerDialog() async {
     try {
+      await _ensurePresenterPin();
       // 앞서 걸어 둔 stop(발표 종료) 이 있으면 그 뒤에 켜진다.
       await _singerWeb.start();
     } catch (e) {
@@ -1967,12 +2022,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       ).showSnackBar(SnackBar(content: Text('휴대폰 화면 켜기 실패: $e')));
       return;
     }
+    _mobileWebWanted = true;
     if (!mounted) return;
     setState(() {});
     await _sendSingerView();
     final addresses = await SingerWebServer.lanAddresses();
     if (!mounted) return;
-    // 싱어창(보기만) / 발표자 모드(넘기기·페이지 고르기·블랙아웃, 휴대폰에서 싱어창으로도 바꿈). 키가 달라 QR 도 다르다.
+    // 싱어창(보기만, `/`) / 발표자 모드(넘기기·페이지 고르기·블랙아웃, `/presenter`). 경로가 달라 QR 도 다르다.
     var remote = false;
     // 주소 줄과 QR 을 왼쪽에 맞춘다(주소 길이가 달라도 QR 이 같은 자리에).
     Widget qr(String url) => Column(
@@ -2043,7 +2099,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   if (!running)
-                    const Text('휴대폰 화면이 꺼졌습니다. 발표를 다시 시작한 뒤 켜 주세요.')
+                    const Text(
+                      '휴대폰 화면이 꺼졌습니다. 발표를 다시 시작하면 같은 주소로 다시 켜지고, '
+                      '열어 둔 휴대폰은 저절로 다시 연결됩니다.',
+                    )
                   else ...[
                     // 다른 망(LTE·다른 와이파이)용 공개 주소. 터널은 몇 초 걸려서 따로 듣는다.
                     ValueListenableBuilder<TunnelState>(
@@ -2052,7 +2111,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                         TunnelState.ready => Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text('어느 망에서든(LTE 포함) 이 QR 이나 주소로 열 수 있습니다.'),
+                            const Text(
+                              '어느 망에서든(LTE 포함) 이 QR 이나 주소로 열 수 있습니다.\n'
+                              '이 주소는 발표를 다시 시작하면 바뀌므로 그때는 새 QR 로 여세요.',
+                            ),
                             const SizedBox(height: 8),
                             qr(_singerWeb.publicUrl(remote: remote)!),
                             const SizedBox(height: 16),
@@ -2091,19 +2153,33 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                       },
                     ),
                     if (remote) ...[
+                      PresenterPinRow(
+                        pin: _singerWeb.presenterPin,
+                        onChange: () async {
+                          final pin = await _askPresenterPin();
+                          if (pin == null) return;
+                          // 서버에는 바로 넣는다(저장에 실패해도 이번 실행 동안은 새 PIN).
+                          _singerWeb.presenterPin = pin;
+                          await _presenterPinStore.save(pin);
+                          if (context.mounted) setDialogState(() {});
+                        },
+                      ),
+                      const SizedBox(height: 12),
                       Text(
-                        '맨 위 ◀ 이전 · 다음 ▶ 이나 아래 \'모든 페이지\'에서 페이지를 눌러 관객 화면을 옮깁니다.\n'
-                        '휴대폰 화면 위쪽에서 \'싱어창\'으로 바꾸면 밀어서 넘기기·두 손가락 확대·발표자 메모를 쓸 수 있습니다. '
-                        '\'화면 끄기\' 길게 누르기 = 블랙아웃.\n'
-                        '이 QR 은 발표를 조작할 수 있으니 발표자만 찍으세요.',
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.error,
-                          fontWeight: FontWeight.w600,
-                        ),
+                        '발표자 휴대폰에서 이 주소를 열고 PIN 을 넣으면 들어옵니다. 한 번 넣은 휴대폰은 같은 와이파이 주소로 열 때 다음부터 묻지 않습니다'
+                        '(바깥 망 주소는 발표마다 바뀌어 그때마다 PIN 을 넣습니다).\n'
+                        '관객 화면이 PC 화면을 복제하고 있으면 PIN 이 관객에게 보일 수 있으니 이 창은 발표 전에 여세요.\n'
+                        'PIN 을 바꾸면 들어와 있던 휴대폰도 다시 PIN 을 물어봅니다.\n'
+                        '맨 위 ◀ 이전 · 다음 ▶ 이나 아래 \'모든 페이지\'에서 페이지를 눌러 관객 화면을 옮깁니다. '
+                        '\'싱어창\'으로 바꾸면 밀어서 넘기기·두 손가락 확대·발표자 메모를 쓸 수 있고, '
+                        '\'화면 끄기\' 길게 누르기 = 블랙아웃.',
+                        style: Theme.of(context).textTheme.bodySmall,
                       ),
                       const SizedBox(height: 12),
                     ] else ...[
-                      const Text('가사만 보는 화면입니다. 이 QR 로 연 사람은 페이지를 넘길 수 없습니다.'),
+                      const Text(
+                        '가사만 보는 화면입니다. PIN 없이 누구나 열 수 있고, 페이지는 넘길 수 없습니다.',
+                      ),
                       const SizedBox(height: 12),
                     ],
                     const Text(
@@ -2123,9 +2199,11 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                     const SizedBox(height: 12),
                     Text(
                       '처음 켤 때 방화벽이 "들어오는 연결 허용"을 물으면 허용해 주세요.\n'
-                      '주소는 켤 때마다 바뀌므로(보안 키 포함) 매번 이 QR 로 여세요.\n'
+                      '같은 와이파이 주소는 늘 같아서(포트 ${SingerWebServer.preferredPort}) 즐겨찾기에 넣어 두면 다음에도 그대로 열립니다. '
+                      '발표를 끝냈다 다시 시작해도 열어 둔 휴대폰은 저절로 다시 연결됩니다.\n'
+                      '단, PC 의 IP 가 바뀌거나 다른 프로그램이 포트 ${SingerWebServer.preferredPort} 을 쓰고 있으면 주소가 바뀝니다(위 주소를 확인하세요).\n'
                       '같은 와이파이 주소로 열면 휴대폰 화면 꺼짐 방지가 안 되니 휴대폰 자동 잠금을 꺼 두세요.\n'
-                      '발표를 끝내면 자동으로 꺼집니다.',
+                      '발표를 끝내면 잠시 꺼졌다가 다음 발표를 시작하면 다시 켜집니다. 완전히 끄려면 \'끄기\'를 누르세요.',
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ],
@@ -2147,10 +2225,17 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       ),
     );
     if (stop == true) {
+      _mobileWebWanted = false;
       await _singerWeb.stop();
       if (mounted) setState(() {});
     }
   }
+
+  /// 새 발표자 PIN(숫자 4자리)을 묻는다. 취소하면 null.
+  Future<String?> _askPresenterPin() => showDialog<String>(
+    context: context,
+    builder: (_) => PresenterPinDialog(initial: _singerWeb.presenterPin),
+  );
 
   // ── 모니터 선택 ─────────────────────────────────────────────────────────
 
@@ -2236,10 +2321,13 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         ...group('관객 화면', false, audienceIndex, singerIndex),
         const PopupMenuDivider(),
         ...group('싱어 화면', true, singerIndex, audienceIndex),
-        if (Platform.isMacOS) ...[
-          const PopupMenuDivider(),
+        const PopupMenuDivider(),
+        if (Platform.isMacOS)
           PopupMenuItem(onTap: _openBSettings, child: const Text('통역 화면 설정…')),
-        ],
+        PopupMenuItem(
+          onTap: _openObsDialog,
+          child: const Text('OBS 자막 (방송 브라우저 소스)…'),
+        ),
       ],
     );
     if (picked == null || !mounted) return;
@@ -2438,7 +2526,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     return _slideKey(info.stagingUid, info.pageIndexInItem);
   }
 
-  /// 휴대폰 발표자 키 요청([SingerWebServer.onControl]) — 발표자 모드·싱어창 공통.
+  /// 휴대폰 발표자 주소 요청([SingerWebServer.onControl]) — 발표자 모드·싱어창 공통.
   Future<void> _handleRemoteControl(
     String action,
     Map<String, String> params,
@@ -2489,6 +2577,118 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     }
   }
 
+  // ── OBS 자막 ────────────────────────────────────────────────────────
+
+  Future<void> _initObs() async {
+    final config = await _obsStore.load();
+    if (!mounted) return;
+    setState(() => _obsConfig = config);
+    if (config.enabled) await _startObs();
+  }
+
+  Future<void> _startObs() async {
+    await _obs.start(
+      port: _obsConfig.port,
+      key: _obsConfig.key,
+      allowLan: _obsConfig.allowLan,
+    );
+    _syncObs();
+  }
+
+  String get _obsFamily =>
+      _obsConfig.fontFamily.isEmpty ? _style.fontFamily : _obsConfig.fontFamily;
+
+  /// 설정 창에서 값이 바뀔 때마다. 연결 칸(켜기·포트·키·망)이 바뀌었을 때만 서버를 다시 켠다.
+  Future<void> _applyObsConfig(ObsOverlayConfig next) async {
+    final old = _obsConfig;
+    final restart =
+        old.enabled != next.enabled ||
+        old.port != next.port ||
+        old.key != next.key ||
+        old.allowLan != next.allowLan;
+    // 디자인만 바뀌면(슬라이더를 끄는 동안 틱마다) 큰 화면을 다시 그리지 않는다. 앱 바 점은 켜기만 본다.
+    if (old.enabled != next.enabled) {
+      setState(() => _obsConfig = next);
+    } else {
+      _obsConfig = next;
+    }
+    // 저장은 0.3초 멈췄을 때 한 번(동시에 여러 번 쓰다 늦게 끝난 옛 값이 이기지 않게).
+    _obsSaveTimer?.cancel();
+    _obsSaveTimer = Timer(
+      const Duration(milliseconds: 300),
+      () => _obsStore.save(_obsConfig),
+    );
+    if (!restart) {
+      _syncObs();
+      return;
+    }
+    if (next.enabled) {
+      await _startObs();
+    } else {
+      await _obs.stop();
+    }
+  }
+
+  /// 지금 하는 일(setState 블록·build)이 끝난 바로 뒤에 한 번 맞춘다. 프레임을 기다리지 않는다 —
+  /// 메인 창을 가리거나 최소화해 다시 그리지 않아도(휴대폰으로 블랙아웃 등) OBS 는 바뀌어야 한다.
+  void _scheduleObsSync() {
+    if (!_obs.isRunning || _obsSyncScheduled) return;
+    _obsSyncScheduled = true;
+    scheduleMicrotask(() {
+      _obsSyncScheduled = false;
+      if (mounted) _syncObs();
+    });
+  }
+
+  /// 발표 화면 쪽 슬라이드 → OBS 자막에 필요한 칸만.
+  ObsSlide? _obsSlideAt(List<_SlideInfo> slides, int index) {
+    if (slides.isEmpty) return null;
+    final s = slides[index.clamp(0, slides.length - 1)];
+    return ObsSlide(
+      mainText: s.mainText,
+      subText: s.englishText,
+      extraText: s.extraText,
+      title: s.title,
+      isBible: s.isBible,
+      isSermon: s.background?.isSermon ?? false,
+      hasImage: s.imagePath != null,
+      hasMedia: s.media != null,
+    );
+  }
+
+  /// 지금 페이지를 OBS 자막으로 보낸다(관객 화면 따라가기: 발표 중에만, 블랙아웃이면 투명).
+  void _syncObs([List<_SlideInfo>? slides]) {
+    if (!_obs.isRunning) return;
+    final family = _obsFamily;
+    _obs.setFonts(obsFontSources(family));
+    _obs.update(
+      obsCaptionFor(
+        slide: _obsSlideAt(slides ?? _allSlides, _currentSlideIndex),
+        presenting: _isPresentationOpen,
+        blackout: _isBlackout,
+        hidden: _obsHidden.value,
+        config: _obsConfig,
+      ),
+      _obsConfig,
+      family,
+    );
+  }
+
+  Future<void> _openObsDialog() async {
+    final slides = _allSlides;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => ObsOverlayDialog(
+        config: _obsConfig,
+        server: _obs,
+        hidden: _obsHidden,
+        audienceFont: _style.fontFamily,
+        currentSlide: _obsSlideAt(slides, _currentSlideIndex),
+        onChanged: _applyObsConfig,
+      ),
+    );
+  }
+
   int _pageSendSeq = 0;
 
   Future<void> _sendCurrentSlide() async {
@@ -2496,6 +2696,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     // 싱어 화면도 여기서 함께 갱신한다. 관객 화면을 먼저 보내 싱어 갱신을 기다리지 않게 한다.
     final slides = _allSlides;
     final seq = ++_pageSendSeq;
+    // OBS 자막은 관객 창 응답·가사 PNG 굽기를 기다리지 않고 먼저(글자뿐이라 바로).
+    _syncObs(slides);
     if (_isPresentationOpen) {
       try {
         final pageData = await _presentablePage(
@@ -4852,6 +5054,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     bool Function(({int uid, StagingItem item})) test, {
     bool prune = true,
   }) {
+    _scheduleObsSync();
     for (var i = _stagingItems.length - 1; i >= 0; i--) {
       final e = _stagingItems[i];
       if (!test(e)) continue;
@@ -6346,6 +6549,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     WorshipConti? linked,
     int missing = 0,
   }) {
+    _scheduleObsSync();
     // 불러온 콘티의 원본은 '원본 열어 수정' 을 누르기 전까지 지켜보지 않는다.
     _sourceWatcher.unwatchAll();
     _clearInsertFlash();
@@ -7762,6 +7966,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         : _itemBackgrounds[previewEntry.uid];
 
     final slides = _allSlides;
+    // 화면이 바뀌는 모든 길(삭제·불러오기·블랙아웃·발표 종료 등)이 다시 그리기를 지나므로
+    // 그린 뒤에 OBS 자막을 맞춘다. 같은 내용이면 서버가 다시 보내지 않는다.
+    _scheduleObsSync();
     return FocusScope(
       node: _presentationFocusNode,
       onKeyEvent: _handleKeyEvent,
@@ -8207,11 +8414,20 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         label: Text(_isExporting ? '생성 중' : 'PPTX 저장'),
       ),
       const SizedBox(width: 8),
+      // 켜 두었을 때만 상태 점 버튼을 보인다(앱 바 폭이 빠듯하다). 처음 설정은 모니터 메뉴의 'OBS 자막…'.
+      if (_obsConfig.enabled)
+        ObsAppBarButton(
+          enabled: _obsConfig.enabled,
+          port: _obsConfig.port,
+          server: _obs,
+          hidden: _obsHidden,
+          onPressed: _openObsDialog,
+        ),
       Builder(
         builder: (anchor) => IconButton(
           tooltip: Platform.isMacOS
-              ? '화면 모니터 선택 (관객·싱어·통역)'
-              : '화면 모니터 선택 (관객·싱어)',
+              ? '화면 모니터 선택 (관객·싱어·통역) · OBS 자막'
+              : '화면 모니터 선택 (관객·싱어) · OBS 자막',
           icon: const Icon(Icons.desktop_windows_outlined, size: 19),
           onPressed: () => _showScreenMenu(anchor),
         ),

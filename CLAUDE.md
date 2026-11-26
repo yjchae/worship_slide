@@ -45,6 +45,8 @@ flutter test test/chord_lyrics_test.dart # 코드 가사 순수 함수: 문법·
 flutter test test/chord_repository_test.dart test/chord_conti_test.dart test/chord_leak_test.dart # 코드 저장 길(saveChords)·콘티 스냅샷·관객/PPTX 누출 없음
 flutter test test/chord_sheet_test.dart  # 코드 악보 조각·ChordSheetView 배치·싱어 chord_lines/key_label·조 배지
 flutter test test/auto_advance_timer_test.dart # 발표 자동 넘기기 타이머: 반복·한 번·멈춤·간격 칸
+flutter test test/obs_caption_test.dart test/obs_overlay_store_test.dart test/obs_overlay_server_test.dart test/obs_overlay_dialog_test.dart # OBS 자막: 페이지 → 자막 규칙·설정 저장·서버(키·SSE·포트 충돌·글꼴)·설정 창
+flutter test test/singer_web_server_test.dart test/presenter_pin_store_test.dart test/presenter_pin_dialog_test.dart # 휴대폰 서버: 고정 주소·발표자 PIN·잠금·Origin·깨진 /login 본문 + PIN 창
 flutter test test/lyrics_page_grid_test.dart # 가사 수정 창 페이지 표·넘침 측정 (LYRICS_EDITOR_SHOT=경로 면 창을 PNG 로)
 python3 python/test_render.py    # render 명령 self-check (LibreOffice 없으면 skip)
 python3 python/test_animation.py # 애니메이션 단계 펼치기 self-check (LibreOffice 불필요)
@@ -102,6 +104,9 @@ lib/
       sermon_design_store.dart       -- 설교 제목 페이지 마지막 디자인 → sermon_design.json
       page_template_store.dart       -- 페이지 틀(예배 시작·주일 광고·생일자 등) → page_templates.json, 기본 3개·틀 배경 입히기 순수 함수
       singer_web_server.dart         -- 휴대폰 싱어·리모컨 HTTP 서버(SSE) + cloudflared 임시 터널
+      obs_overlay_server.dart        -- OBS 브라우저 소스용 자막 서버(고정 포트·키, SSE) + 자막 페이지 HTML `obsOverlayHtml`
+      obs_overlay_store.dart         -- OBS 자막 설정(연결·디자인) → obs_overlay.json
+      presenter_pin_store.dart       -- 휴대폰 발표자 모드 PIN(4자리) → presenter_pin.txt
       app_logger.dart                -- Application Support/logs/app.log (앱 내 "로그 보기"용)
       font_library.dart              -- 내장 무료 폰트를 Application Support/fonts 로 복사해 올린다
       source_file_watcher.dart       -- 바깥 프로그램에서 연 원본 PPT 가 저장되는지 수정 시각·크기로 지켜본다
@@ -119,6 +124,7 @@ lib/
       worship_conti.dart             -- 콘티 모델
       conti_text_parse.dart          -- 콘티 글 파싱(parseContiText) + 제목으로 곡 찾기(ContiSongMatcher, 띄어쓰기·문장부호 무시)
       page_format.dart               -- 페이지별 글자 서식(1단계 색·크기 비율): PageFormat·PageEntry·pageKey(본문 FNV)·ExportStyle.withPageFormat·pageStylesFor(PPTX). DB `worship_conti_items.page_format`(JSON, onOpen 멱등 추가, 스키마 20 유지), LoadContiResult.pageFormats(uid→PageFormat). 기획 `.claude-office/work/20261120-2336-five-fixes/`
+      obs_caption.dart               -- 지금 페이지 → OBS 자막 순수 함수 obsCaptionFor(관객 화면 따라가기·숨김 까닭)
       conti_tree.dart                -- 콘티 폴더 트리 순수 함수: 행 계산·놓을 자리·항목/그룹 이동·만들기·풀기·이름·여백 없음 규칙
     presentation/
       praise_home_page.dart          -- 단일 화면(약 12,400줄). 검색·성경·디자인·콘티·발표 제어 전부 여기
@@ -146,10 +152,12 @@ lib/
       auto_advance_timer.dart        -- 발표 자동 넘기기 타이머(정한 간격마다 onElapsed, 반복/한 번). auto_advance_box.dart = 발표 보기 오른쪽 칸 UI
       presentation_timer.dart        -- 발표 경과 시간(기준 시각 방식). 발표 보기 시계·싱어 화면이 같이 본다
       offering_dialog.dart           -- 헌금송 디자인 등록 / 항목에 적용(높낮이) 다이얼로그
+      presenter_pin_dialog.dart      -- 휴대폰 화면 창의 발표자 PIN 줄(PresenterPinRow)·바꾸기 창(PresenterPinDialog)
       media_player_html.dart         -- 발표 창 미디어 레이어 페이지 HTML·페이드 JS (mediaPlayerHtml)
       background_image_gallery.dart  -- 배경 이미지·영상 모음 격자 UI
       libreoffice_install_dialog.dart -- LibreOffice·cloudflared 자동 설치 안내창
       offering_overlay_painter.dart  -- 헌금송 띠(라인 + 헌금 + 계좌) painter. 미리보기·PNG 공용
+      obs_overlay_dialog.dart        -- 'OBS 자막' 설정 창(연결·디자인 탭, 미리보기) + 앱 바 상태 점 버튼 ObsAppBarButton
       sync_dialog.dart               -- 동기화 설정 (가져오기 메뉴 '찬양·콘티 동기화'·상태 줄): 접속 키 넣기·찬양 동기화 버튼
       cloud_conti_dialog.dart        -- 클라우드 콘티 목록: 내려받기(이미 있으면 바꾸기)·클라우드에서 지우기
   src/features/bible/
@@ -217,37 +225,44 @@ macOS `didChangeScreenParametersNotification` + `NSScreen.displayID`, Windows `W
 - **휴대폰 화면 — 싱어창**: 발표 보기 툴바의 휴대폰 버튼 → 앱 안 HTTP 서버(`SingerWebServer`, `dart:io`, 포트 8765·쓰고 있으면 아무 빈 포트)를
   켜고 `http://<사설 IP>:<포트>` 와 그 QR(`qr_flutter`, 다이얼로그를 열 때마다 지금 IP 로 새로 만든다)을 보여 준다. 같은 와이파이의 휴대폰 브라우저가 SSE(`/events`)로 같은 `SingerViewData` JSON 을 받는다
   (`_sendSingerView` 에 얹혀 있다 — 네이티브 싱어 창이 닫혀 있어도 보낸다). 페이지 이미지는 로컬 경로를 내보내지 않고
-  `/img/current`·`/img/next` 로 지금 두 장만 준다(망 안의 다른 기기가 아무 파일이나 읽지 못하게). 발표를 끝내면 같이 꺼진다.
-  모든 요청은 켤 때마다 새로 만드는 토큰(`?k=`, 주소·QR 에 포함)이 맞아야 한다(게스트 와이파이 대비). 이미지는 `v`(경로+수정 시각)가
+  `/img/current`·`/img/next` 로 지금 두 장만 준다(망 안의 다른 기기가 아무 파일이나 읽지 못하게). 발표를 끝내면 같이 꺼지지만,
+  사용자가 켜 둔 채('끄기' 안 누름) 끝냈으면 다음 발표 시작 때 저절로 다시 켠다(`_mobileWebWanted`, 실행 동안만).
+  **키(토큰)가 없다** — 싱어창 `http://<IP>:<포트>/`, 발표자 모드 `/presenter`. 주소가 늘 같아서 발표를 껐다 켜거나 연결이 끊겨도
+  휴대폰은 다시 찍을 필요 없이 저절로 다시 붙는다(SSE 가 닫히면 3초 뒤 새로 연다). 대신 같은 와이파이의 누구나 열 수 있다(사용자가 고른 편의 쪽).
+  발표자 페이지의 요청만 `?p=1` 을 달아 발표자 쪽 값(메모·목록·조작)을 받는다.
+  **발표자 쪽만 PIN 4자리**(`PresenterPinStore` → `Application Support/presenter_pin.txt`, 처음 무작위, 휴대폰 화면 창 '발표자 모드' 탭에서 보고 바꾼다):
+  쿠키 `ws_pin`(HttpOnly·SameSite=Lax·1년)이 맞아야 하고 없으면 `/presenter` 는 PIN 입력 페이지(`pinPageHtml`, `POST /login`), `p=1` 요청은 401 → 휴대폰 페이지가 다시 읽혀 PIN 을 묻는다.
+  PIN 을 바꾸면(`presenterPin` setter) 발표자 SSE 를 끊어 들어와 있던 휴대폰도 다시 묻는다. 5번 틀리면 30초 잠금(접속 주소마다 — 터널로 온 요청은 한 묶음).
+  POST 는 Origin 이 Host(또는 터널 주소)와 다르면 403(같은 망의 다른 웹 페이지가 조작 못 하게). `/login` 본문은 256바이트까지, 깨진 본문은 틀린 PIN. 싱어창은 PIN 없이 열린다. 이미지는 `v`(경로+수정 시각)가
   지금 것과 다르면 404 + `no-store`(빠르게 넘길 때 브라우저가 엉뚱한 이미지를 기억하지 않게). start/stop 은 큐로 차례만 돈다.
   주소 후보는 사설망 IPv4 만, VPN·가상 머신 인터페이스는 빼고 와이파이·유선을 앞에 둔다(`lanAddresses`).
   화면 꺼짐 방지(`navigator.wakeLock`)는 https 에서만 되므로 같은 망(http) 주소에선 안 걸린다 — 휴대폰 자동 잠금을 끄라고 안내한다.
   처음엔 OS 방화벽이 들어오는 연결을 물으므로 허용해야 한다. 페이지 HTML 은 `singerPageHtml` 상수(네이티브 싱어와 같은 모양·맞춤 규칙)
   - **바깥 망(LTE 등) 주소**: `cloudflared` 가 깔려 있으면 서버를 켤 때 Cloudflare 임시 터널(`cloudflared tunnel --url`,
-    계정 불필요)을 같이 띄워 `https://<이름>.trycloudflare.com/?k=<토큰>` QR 을 하나 더 보여 준다(`SingerWebServer.tunnel`).
+    계정 불필요)을 같이 띄워 `https://<이름>.trycloudflare.com/`(발표자 `/presenter`) QR 을 하나 더 보여 준다(`SingerWebServer.tunnel`).
     LibreOffice·Tesseract 같은 **선택 의존성** — 없으면 다이얼로그 안 '자동 설치' 버튼(`_CloudflaredInstallButton`, `LibreOfficeInstaller` 를 패키지 이름만 바꿔 씀: winget `Cloudflare.cloudflared`·`brew install cloudflared`)이 깔고 `retryTunnel` 로 서버는 그대로 둔 채 터널만 띄운다. 같은 망 주소는 그대로. 찾는 곳은 앱 폴더 →
     Homebrew·`Program Files`·WinGet Links → PATH(Finder 로 띄운 macOS 앱은 PATH 에 Homebrew 가 없다). 서버를 끄면 터널 프로세스도 죽인다.
     **인터넷이 잠깐 끊겨도 주소는 그대로다** — cloudflared 는 처음 붙은 뒤엔 포기하지 않고 같은 터널로 다시 붙는다
     (`supervisor.go` `retryForever`). `--retries 2` 는 다시 붙는 간격을 20~40초로 줄이려는 값(기본 5 면 최대 5분).
-    프로세스가 죽었을 때만 `_runTunnel` 이 새로 띄우고, 그러면 주소가 바뀐다(키는 그대로) — 임시 터널로는 피할 수 없다.
+    프로세스가 죽었을 때만 `_runTunnel` 이 새로 띄우고, 그러면 주소가 바뀐다 — 임시 터널로는 피할 수 없다.
     앱 종료는 `AppLifecycleListener.onExitRequested` 에서 끄고, 그 신호가 안 오는 경우(강제 종료, Windows 에서 발표 창이
     열린 채 닫기 — Windows 는 마지막 창일 때만 종료 요청을 보낸다)는 pid 파일(임시 폴더)로 다음 시작 때 치운다(`killLeftoverTunnel`,
-    이름이 cloudflared 일 때만). 키는 인터넷에 열리므로 16자
+    이름이 cloudflared 일 때만). 터널 주소도 키가 없으니 주소를 아는 사람은 누구나 연다
     **임시 터널은 SSE 를 흘려보내지 않는다**(헤더만 오고 본문이 안 온다 — 실제로 확인). 그래서 https 로 열린 페이지는
-    `/state`(지금 JSON)를 0.5초마다 묻고(실패하면 3초까지 늘려 계속, 403 = 키 바뀜이면 멈춤, 화면이 가려지면 쉼), http(같은 망)만 SSE 를 쓴다. https 라 `navigator.wakeLock` 도 그쪽에서만 걸린다.
-    트래픽은 Cloudflare 를 거쳐 가고(거기서 TLS 가 풀린다), 토큰을 아는 사람은 어느 망에서든 본다
-- **휴대폰 화면 — 발표자 키 (발표자 모드 / 싱어창)**: 다이얼로그 탭 '싱어창 | 발표자 모드' 중 '발표자 모드' 쪽 QR. 서버·터널·페이지 HTML 은 싱어창과 같고, **키만 다르다**
-  (`remoteToken`, 켤 때마다 새로). 이 키로 열면 `<body class="remote">` 로 내보내고, 머리줄 **[발표자 모드 | 싱어창]** 으로 두 화면을 오간다
-  (기본 발표자 모드, 휴대폰마다 `localStorage` `presenter_view`, 문서 제목도 바뀐다). 싱어 키 화면엔 전환이 없다(싱어창만).
+    `/state`(지금 JSON)를 0.5초마다 묻고(실패하면 3초까지 늘려 계속, 화면이 가려지면 쉼), http(같은 망)만 SSE 를 쓴다. https 라 `navigator.wakeLock` 도 그쪽에서만 걸린다.
+    트래픽은 Cloudflare 를 거쳐 가고(거기서 TLS 가 풀린다), 주소를 아는 사람은 어느 망에서든 본다
+- **휴대폰 화면 — 발표자 주소 (발표자 모드 / 싱어창)**: 다이얼로그 탭 '싱어창 | 발표자 모드' 중 '발표자 모드' 쪽 QR. 서버·터널·페이지 HTML 은 싱어창과 같고, **경로만 다르다**
+  (`/presenter`, `SingerWebServer.presenterPath`). 이 경로로 열면 `<body class="remote">` 로 내보내고, 머리줄 **[발표자 모드 | 싱어창]** 으로 두 화면을 오간다
+  (기본 발표자 모드, 휴대폰마다 `localStorage` `presenter_view`, 문서 제목도 바뀐다). 싱어 주소(`/`) 화면엔 전환이 없다(싱어창만).
   - **발표자 모드**(`body.presenter`): 맨 위 '◀ 이전 · n / N·시계 · 다음 ▶'(기존 `go(±1)`, 처음·끝은 비활성), 제목 줄, 현재(폭 70%)·다음(오른쪽 작게) 16:9(`layoutPresenter`),
     아래 '모든 페이지' **한 줄 가로 스크롤**(세로·가로 화면 공통) 썸네일, '화면 끄기' 길게 누르기(가로 화면은 맨 위 ⏻). 가로 화면(`body.land`)은 위 두 줄이 한 줄이 된다.
     썸네일을 누르면 `goto&id=<슬라이드 키 uid:페이지:자동여백>` → `_handleRemoteControl` 이 `_slideInfoKey` 로 찾아 `_goToSlide`(없으면 무시).
     누른 칸은 점선 → 바뀌면 노란 테두리, 2초 안에 안 바뀌면 '페이지 목록이 바뀌었습니다' + 목록 다시 받기. 지금 칸은 가로 가운데로 스크롤하되 손으로 민 지 3초 안이면 안 한다(`n / N` 누르면 바로).
-    목록은 `_sendSingerView` 가 `pages`(`phonePageList`)로 넘기고 서버는 JSON 엔 판 값 `pages_rev` 만 싣는다 — 휴대폰은 그 값이 바뀔 때·다시 연결될 때만 `GET /pages`(리모컨 키만)로 받는다.
+    목록은 `_sendSingerView` 가 `pages`(`phonePageList`)로 넘기고 서버는 JSON 엔 판 값 `pages_rev` 만 싣는다 — 휴대폰은 그 값이 바뀔 때·다시 연결될 때만 `GET /pages?p=1`(발표자 쪽만)로 받는다.
     그림 썸네일은 `/img/page/<n>?v=`(서버가 `thumbnailer` = `_phoneThumbnail` 로 폭 320 PNG 로 줄여 서버 켜 있는 동안 기억). 코드는 늘 끄고, 밀기·확대·양끝 누르기 제스처도 끈다(확대 표시도 안 한다)
-  - **싱어창**(발표자 키): 예전 '발표자 리모컨' 그대로 — 좌우 밀기·양쪽 끝(22%) 누르기 = 넘기기,
+  - **싱어창**(발표자 주소): 예전 '발표자 리모컨' 그대로 — 좌우 밀기·양쪽 끝(22%) 누르기 = 넘기기,
     두 손가락 = 확대(확대 중 한 손가락 = 옮기기), 가운데 두 번 누르기 = 확대 풀기, '화면 끄기' 0.6초 길게 = 블랙아웃. 발표자 메모도 보인다.
-  - `POST /control`(리모컨 키만, GET 은 403) → `SingerWebServer.onControl` = `_handleRemoteControl`. 응답에 바뀐 상태 JSON 을 실어
+  - `POST /control?p=1`(발표자 쪽만, GET 은 403) → `SingerWebServer.onControl` = `_handleRemoteControl`. 응답에 바뀐 상태 JSON 을 실어
     터널(폴링)에서도 넘긴 휴대폰은 바로 바뀐다
   - 넘기기는 `from`(휴대폰이 보던 쪽 번호)이 지금 쪽과 같을 때만 — 늦게 온 요청·리모컨 두 대·PC 에서 먼저 넘긴 경우 두 장씩 넘어가지 않게.
     블랙아웃도 토글이 아니라 `on=0|1` 원하는 상태를 보낸다
@@ -255,12 +270,12 @@ macOS `didChangeScreenParametersNotification` + `NSScreen.displayID`, Windows `W
     좌표 = 슬라이드 좌표. 단 가사 페이지는 휴대폰이 디자인 없이 글자만 그리므로 확대 위치가 실제 슬라이드 배치와 조금 다를 수 있다(PPT 이미지는 정확)
   - **발표자에게 메시지 = 알림, 60초 뒤 사라짐**: 발표 보기 '발표자에게 메시지' 칸에서 '보내기'(Enter)를 누를 때만 나간다(`_presenterMessage`, 페이지와 무관, 콘티에 저장 안 함). 입력칸은 서버(`SingerWebServer.running`)가 켜져 있을 때만 쓸 수 있고, 서버가 꺼지면(발표 종료 포함) 비운다.
     보낼 때마다 `message_id` 를 올리고 60초 타이머(`_messageTimer`, 새로 보내면 다시 시작)가 끝나면 PC 가 비워 다시 보낸다 — 기준 시계는 PC 하나. PC 칸엔 '보냄 · 1분 뒤 사라짐'.
-    휴대폰(발표자 키 두 모드 공통)은 `message_id` 가 바뀌면 맨 위 흰 띠(`#message`)를 페이드 인 + 진동 + 남은 시간 막대로 띄우고, 받은 순간부터 60초 뒤(PC 비움 신호를 놓쳐도) 또는 `message` 가 비면 페이드 아웃·자리 없앰. 띠를 누르면 그 휴대폰만 닫힌다.
-    같은 글을 다시 보내도 id 가 바뀌어 다시 뜬다. `message`·`message_id` 는 `remoteOnlyKeys` 라 싱어 키·네이티브 싱어 창에는 안 간다. 띠에서 시작한 터치는 확대도 넘기기도 안 한다(좌우 밀기까지 막는 점이 `#note` 와 다르다)
-  - 싱어창(싱어 키·발표자 키 공통) 머리줄의 '좌우/위아래' 버튼으로 현재·다음 페이지 배치를 바꾼다. 휴대폰마다 `localStorage`(`singer_layout`)에 기억한다.
+    휴대폰(발표자 주소 두 모드 공통)은 `message_id` 가 바뀌면 맨 위 흰 띠(`#message`)를 페이드 인 + 진동 + 남은 시간 막대로 띄우고, 받은 순간부터 60초 뒤(PC 비움 신호를 놓쳐도) 또는 `message` 가 비면 페이드 아웃·자리 없앰. 띠를 누르면 그 휴대폰만 닫힌다.
+    같은 글을 다시 보내도 id 가 바뀌어 다시 뜬다. `message`·`message_id` 는 `remoteOnlyKeys` 라 싱어 주소·네이티브 싱어 창에는 안 간다. 띠에서 시작한 터치는 확대도 넘기기도 안 한다(좌우 밀기까지 막는 점이 `#note` 와 다르다)
+  - 싱어창(싱어 주소·발표자 주소 공통) 머리줄의 '좌우/위아래' 버튼으로 현재·다음 페이지 배치를 바꾼다. 휴대폰마다 `localStorage`(`singer_layout`)에 기억한다.
     현재·다음 사이 막대(`#split`)를 끌면 비율이 바뀐다(현재 몫 0.3~0.85, 기본 0.65, `singer_split`). 아이폰 가로 노치에 안 잘리게 좌우도 `safe-area-inset` 만큼 띄운다.
     다음 페이지 글자는 현재 페이지 글자의 0.75 배를 넘지 않는다(`fitAll`) — 짧은 다음 가사가 현재보다 크게 보이지 않게
-  - `note`·`zoom`·`message`·`message_id`·`pages_rev` 는 `_sendSingerView` 가 얹고(`pages_rev` 는 서버가 만든다), 서버가 싱어 키 쪽에서는 뺀다(`remoteOnlyKeys`) — 싱어 QR 로는 메모·페이지 목록을 못 본다
+  - `note`·`zoom`·`message`·`message_id`·`pages_rev` 는 `_sendSingerView` 가 얹고(`pages_rev` 는 서버가 만든다), 서버가 싱어 쪽(`p=1` 없음)에서는 뺀다(`remoteOnlyKeys`) — 싱어 화면에는 메모·페이지 목록이 안 보인다
 
 ### Python (`python/ppt_tool.py`, 약 3,100줄)
 
@@ -475,6 +490,19 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   발표 중이면 보던 슬라이드를 `_slideInfoKey` 로 다시 찾아 관객 화면은 그대로이고 싱어 '다음'만 갱신한다. 놓은 항목은 2초 강조(`_contiFlashUids`, 발표 보기용 `_flashInserted` 와 별개). 되돌리기는 없다.
 - **새 콘티** (예배 콘티 머리줄, `_newConti`): 확인 후 담긴 항목만 비운다(`_replaceConti`, 불러오기와 같은 초기화). 저장한 콘티는 그대로고 발표 중에는 막는다
 - **콘티 불러오기 뒤에 붙이기** (`_appendConti`): 항목이 있으면 취소·뒤에 붙이기·교체를 묻는다. 붙이기는 불러온 항목·메모·배경·여백 없음을 맨 끝에 더할 뿐이라 기존 항목 표시·원본 감시·보던 페이지·저장본 연결(`_linkedConti`)이 그대로고, 빠진 항목 수는 `_linkedMissing` 에 더한다. 발표 중에도 된다(관객 화면은 그대로, 싱어 '다음'만 갱신)
+- **OBS 자막** (기획 `planning/obs-overlay/`, 1단계): 방송 PC 의 OBS '브라우저' 소스에 `http://<IP>:8766/obs?k=<키>` 를 넣으면
+  관객 화면과 같은 순간에 찬양 가사·성경 본문이 **투명 바탕** 자막으로 넘어간다(크로마키·OBS 쪽 재작업 없이). 위치·크기는 OBS 에서 조절한다.
+  - 서버 `ObsOverlayServer` 는 싱어 서버와 **따로**다 — 포트(기본 8766)·키(16자, 처음 한 번 만들어 `obs_overlay.json` 에)가 **고정**이고 설정에서 켜 두면 앱이 켜져 있는 동안 상시.
+    포트를 다른 프로그램이 쓰면 다른 포트로 옮기지 않고 `portInUse` 로 알린다(주소가 바뀌면 OBS 소스가 조용히 깨진다). '다른 PC 의 OBS 에서 받기'(`allow_lan`, 기본 켬) = 0.0.0.0, 끄면 127.0.0.1.
+    읽기 전용(GET 만, POST 403). `/obs`·`/obs/events`(SSE)·`/obs/state`·`/obs/font/<n>`(지금 디자인 글꼴 — 내장 3종은 에셋, 무료 글꼴은 파일, 이 PC 글꼴은 이름만)
+  - 무엇을 보낼지는 순수 함수 `obsCaptionFor`(`domain/obs_caption.dart`): **관객 화면 따라가기** — 발표 전·블랙아웃·'잠시 숨기기'(실행 동안만)·그림(PPT·편집 페이지)·미디어·빈 페이지·자동 여백은 투명.
+    보조·추가 보조·성경 참조·곡 제목·설교 제목 페이지는 **OBS 설정의 스위치**(관객 디자인과 무관). 설교 부제는 보조 스위치와 상관없이 싣는다. 코드·메모·송폼·로컬 경로는 처음부터 `ObsSlide` 에 안 들어온다
+  - 보내는 자리: `_sendCurrentSlide` **맨 앞**(관객 창 응답·가사 PNG 굽기를 기다리지 않음) + 메인 `build` 뒤 프레임 콜백(`_scheduleObsSync`) — 삭제·콘티 불러오기·블랙아웃·발표 시작/종료처럼
+    `_sendCurrentSlide` 를 안 지나는 길도 화면은 다시 그리므로 여기서 잡힌다. 같은 JSON 이면 서버가 다시 안 보낸다. 앱 종료·서버 끄기 전에 '투명'을 한 번 보낸다
+  - 페이지(`obsOverlayHtml`)는 1080 높이 기준 px 를 창 높이 비율로 그리고, 외곽선(16방향 text-shadow)·그림자·띠(없음/글 폭/화면 폭)·아래/위 기준선에서 자라기·최대 높이를 넘으면 글자 축소(이분 탐색)·두 층 크로스페이드.
+    SSE 가 끊기면 1초 안에 감춘다(앱이 꺼져도 마지막 가사가 방송에 남지 않게), EventSource 가 다시 붙으면 지금 자막을 받는다. `&preview=1` = 바둑판 + 상태 글
+  - UI: 모니터 메뉴 'OBS 자막 (방송 브라우저 소스)…' → `ObsOverlayDialog`(연결·디자인 탭, 값을 바꾸면 바로 저장·반영, 미리보기는 Flutter 근사). 켜 두면 앱 바에 상태 점 버튼(회색 연결 없음·초록 연결됨·빨강 오류·주황 숨김)
+  - **미확인(실제 OBS)**: OBS 브라우저 소스의 투명 합성·SSE 유지·`FontFace`, 앱보다 OBS 를 먼저 켰을 때(소스 '새로 고침' 필요할 수 있음), 방화벽 허용 창. 1단계는 그림 페이지 글자를 못 보낸다(PPT 글 뽑기는 이후 단계)
 - **통역 화면 (내부 이름 B, macOS 만, 기획 `.claude-office/work/20261031-2207-split-screen-subtitle/`)**: 앱 하나에서 관객 창과 같이 넘어가는 세 번째 창. 모니터를 직접 골라야 하고(자동 없음) 그 모니터 전체를 차지한 뒤 **창 안에서** 슬라이드 칸과 자막 칸을 나눈다.
   - 창은 `PresentationWindowController(keyable: true)` 두 번째 인스턴스다. `show` 대신 `place` 라 메인 창 포커스를 뺏지 않는다. 클릭하면 포커스를 받아 Ctrl+F4 로 그 창만 닫히고(`bClosed`), 넘기기 키는 싱어와 같은 `singerKey` 로 간다
   - 칸은 Dart 순수 함수 `bSplitRects` 가 0~1 비율로 정한다(슬라이드 늘 16:9 + 몫 0.4~0.8, 네이티브 `setSplit`·`layoutSplit`). 해상도가 바뀌면 비율대로 다시 놓고, 모니터 비율까지 바뀌면 칸 가운데 16:9 로 줄인다
