@@ -520,6 +520,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   // 'OBS 자막 잠시 숨기기'(실행 동안만, 저장 안 함).
   final ValueNotifier<bool> _obsHidden = ValueNotifier(false);
   bool _obsSyncScheduled = false;
+  Timer? _obsSaveTimer;
   // 창을 닫아 앱이 끝날 때는 dispose 가 불리지 않는다. 그대로 두면 cloudflared 터널 프로세스가
   // 앱 밖에 남으므로 종료 요청 때 끈다. 이 신호가 안 오는 경우(강제 종료, Windows 에서 발표 창이
   // 열린 채 닫기 등)는 다음 시작 때 [SingerWebServer.killLeftoverTunnel] 이 치운다.
@@ -586,6 +587,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         await Future.wait([
           _singerWeb.stop(),
           _obs.stop(),
+          if (_obsSaveTimer?.isActive ?? false) _obsStore.save(_obsConfig),
         ]).timeout(const Duration(seconds: 3)).catchError((_) => <void>[]);
         return AppExitResponse.exit;
       },
@@ -699,6 +701,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _remoteSyncTimer?.cancel();
     _messageTimer?.cancel();
     _singerWeb.stop();
+    if (_obsSaveTimer?.isActive ?? false) {
+      _obsSaveTimer!.cancel();
+      _obsStore.save(_obsConfig);
+    }
     _obs.stop();
     _obsHidden.removeListener(_syncObs);
     _sourceWatcher.dispose();
@@ -1524,6 +1530,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         // 발표 전에 치다 만 번호가 시작 뒤 Enter 로 관객 화면을 옮기지 않게.
         _slideJumpBuffer = '';
       });
+      _scheduleObsSync();
       _presenterView.timer.start();
       // 발표를 시작하면 발표 보기 탭으로. 편집 탭은 그대로 살아 있다.
       _mainTabController.index = 1;
@@ -1551,6 +1558,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _sentMediaKey = null;
     _mediaPlayback.value = null;
     _singerWeb.stop();
+    _scheduleObsSync();
   }
 
   Future<void> _closePresentation() async {
@@ -1567,6 +1575,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     // 네이티브 'blackout' 은 토글이다. 값을 먼저 바꿔 둬야 응답을 기다리는 사이 온 리모컨 요청
     // (on=1 두 번 등)이 옛 값을 보고 한 번 더 토글하지 않는다.
     setState(() => _isBlackout = !_isBlackout);
+    _scheduleObsSync();
     try {
       await _presentationChannel.invokeMethod('blackout');
     } catch (_) {
@@ -2531,13 +2540,23 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   /// 설정 창에서 값이 바뀔 때마다. 연결 칸(켜기·포트·키·망)이 바뀌었을 때만 서버를 다시 켠다.
   Future<void> _applyObsConfig(ObsOverlayConfig next) async {
     final old = _obsConfig;
-    setState(() => _obsConfig = next);
-    unawaited(_obsStore.save(next));
     final restart =
         old.enabled != next.enabled ||
         old.port != next.port ||
         old.key != next.key ||
         old.allowLan != next.allowLan;
+    // 디자인만 바뀌면(슬라이더를 끄는 동안 틱마다) 큰 화면을 다시 그리지 않는다. 앱 바 점은 켜기만 본다.
+    if (old.enabled != next.enabled) {
+      setState(() => _obsConfig = next);
+    } else {
+      _obsConfig = next;
+    }
+    // 저장은 0.3초 멈췄을 때 한 번(동시에 여러 번 쓰다 늦게 끝난 옛 값이 이기지 않게).
+    _obsSaveTimer?.cancel();
+    _obsSaveTimer = Timer(
+      const Duration(milliseconds: 300),
+      () => _obsStore.save(_obsConfig),
+    );
     if (!restart) {
       _syncObs();
       return;
@@ -2549,10 +2568,12 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     }
   }
 
+  /// 지금 하는 일(setState 블록·build)이 끝난 바로 뒤에 한 번 맞춘다. 프레임을 기다리지 않는다 —
+  /// 메인 창을 가리거나 최소화해 다시 그리지 않아도(휴대폰으로 블랙아웃 등) OBS 는 바뀌어야 한다.
   void _scheduleObsSync() {
     if (!_obs.isRunning || _obsSyncScheduled) return;
     _obsSyncScheduled = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    scheduleMicrotask(() {
       _obsSyncScheduled = false;
       if (mounted) _syncObs();
     });
@@ -4972,6 +4993,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     bool Function(({int uid, StagingItem item})) test, {
     bool prune = true,
   }) {
+    _scheduleObsSync();
     for (var i = _stagingItems.length - 1; i >= 0; i--) {
       final e = _stagingItems[i];
       if (!test(e)) continue;
@@ -6466,6 +6488,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     WorshipConti? linked,
     int missing = 0,
   }) {
+    _scheduleObsSync();
     // 불러온 콘티의 원본은 '원본 열어 수정' 을 누르기 전까지 지켜보지 않는다.
     _sourceWatcher.unwatchAll();
     _clearInsertFlash();

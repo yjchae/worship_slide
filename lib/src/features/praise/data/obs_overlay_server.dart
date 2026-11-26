@@ -134,10 +134,11 @@ class ObsOverlayServer {
       return;
     }
     _server!.listen(_handle, onError: (_) {});
-    // 잠깐 끊긴 것을 알아채게 주기적으로 빈 줄을 보낸다.
+    // 살아 있다는 신호. 주석(`: ping`)이 아니라 data 로 보낸다 — 페이지가 받은 시각을 재서, 두 PC 사이
+    // 연결이 반쯤 죽어(공유기 재시작 등) 아무것도 안 오면 스스로 다시 붙는다(`obsOverlayHtml` 감시).
     _ping = Timer.periodic(
       const Duration(seconds: 15),
-      (_) => _broadcast(': ping\n\n'),
+      (_) => _broadcast('data: {"ping":1}\n\n'),
     );
     status.value = ObsServerStatus.running;
     await AppLogger.instance.info(
@@ -310,7 +311,7 @@ var q=new URLSearchParams(location.search),key=q.get('k')||'';
 if(q.get('preview')==='1')document.body.classList.add('preview');
 var layers=[document.getElementById('a'),document.getElementById('b')],front=0;
 var statusEl=document.getElementById('status');
-var last=null,lastKey='',fontKey='',connected=false,dropTimer=null;
+var last=null,lastKey='',fontKey='',fontName='ObsFont0',fontSeq=0,fontFaces=[],connected=false,dropTimer=null,lastRecv=Date.now(),es=null;
 function rgba(hex,a){var n=parseInt(hex.slice(1),16);return 'rgba('+(n>>16&255)+','+(n>>8&255)+','+(n&255)+','+a+')';}
 function shadowCss(d,s){
   var out=[],w=d.outline_width*s;
@@ -333,7 +334,7 @@ function build(layer,data,k){
   layer.style.justifyContent=d.align==='left'?'flex-start':d.align==='right'?'flex-end':'center';
   var box=document.createElement('div');box.className='box';
   box.style.textAlign=d.align;
-  box.style.fontFamily='ObsFont,"'+(d.font_family||'').replace(/"/g,'')+'",sans-serif';
+  box.style.fontFamily=fontName+',"'+(d.font_family||'').replace(/"/g,'')+'",sans-serif';
   box.style.textShadow=shadowCss(d,s);
   if(d.band!=='none'){
     box.style.background=rgba(d.band_color,d.band_opacity);
@@ -357,12 +358,17 @@ function render(layer,data){
   for(var i=0;i<8;i++){var mid=(lo+hi)/2;box=build(layer,data,mid);if(box.offsetHeight<=limit)lo=mid;else hi=mid;}
   build(layer,data,lo);
 }
+// 글꼴 묶음이 바뀔 때마다 새 이름을 쓰고 옛 면은 지운다 — 같은 이름에 쌓이면 굵기마다 다른 글꼴이 섞인다.
 function loadFonts(data){
-  var key=JSON.stringify(data.fonts||[]);if(key===fontKey||!document.fonts||!window.FontFace)return;
-  fontKey=key;
+  var key=JSON.stringify(data.fonts||[]);if(key===fontKey)return;
+  fontKey=key;fontName='ObsFont'+(++fontSeq);
+  if(document.fonts)fontFaces.forEach(function(f){try{document.fonts.delete(f);}catch(e){}});
+  fontFaces=[];
+  if(!document.fonts||!window.FontFace)return;
+  var name=fontName;
   (data.fonts||[]).forEach(function(f){
-    var face=new FontFace('ObsFont','url('+f.url+')',{weight:String(f.weight)});
-    face.load().then(function(ff){document.fonts.add(ff);if(last)show(last,true);}).catch(function(){});
+    var face=new FontFace(name,'url('+f.url+')',{weight:String(f.weight)});
+    face.load().then(function(ff){if(name!==fontName)return;document.fonts.add(ff);fontFaces.push(ff);if(last)show(last,true);}).catch(function(){});
   });
 }
 function show(data,force){
@@ -382,15 +388,22 @@ function show(data,force){
   layers[next].classList.add('on');layers[front].classList.remove('on');front=next;
 }
 function hideAll(){connected=false;last=last?{caption:{show:false},design:last.design,fonts:last.fonts}:null;lastKey='';layers.forEach(function(l){l.classList.remove('on');});statusEl.textContent='앱과 연결 안 됨';}
-function onData(text){try{var data=JSON.parse(text);if(data&&data.caption){connected=true;show(data);}}catch(e){}}
+function onData(text){lastRecv=Date.now();try{var data=JSON.parse(text);if(data&&data.caption){connected=true;show(data);}}catch(e){}}
 window.addEventListener('resize',function(){if(last)show(last,true);});
 function poll(){fetch('/obs/state?k='+encodeURIComponent(key),{cache:'no-store'}).then(function(r){return r.text();}).then(function(t){onData(t);setTimeout(poll,500);}).catch(function(){hideAll();setTimeout(poll,2000);});}
 if(!window.EventSource){poll();return;}
-var es=new EventSource('/obs/events?k='+encodeURIComponent(key));
-es.onmessage=function(e){if(dropTimer){clearTimeout(dropTimer);dropTimer=null;}onData(e.data);};
-es.onopen=function(){if(dropTimer){clearTimeout(dropTimer);dropTimer=null;}connected=true;};
-// 끊기면(앱 종료·네트워크) 1초 안에 감춘다. EventSource 는 알아서 다시 붙는다.
-es.onerror=function(){if(!dropTimer)dropTimer=setTimeout(hideAll,1000);};
+function connect(){
+  if(es)es.close();
+  lastRecv=Date.now();
+  es=new EventSource('/obs/events?k='+encodeURIComponent(key));
+  es.onmessage=function(e){if(dropTimer){clearTimeout(dropTimer);dropTimer=null;}onData(e.data);};
+  es.onopen=function(){if(dropTimer){clearTimeout(dropTimer);dropTimer=null;}lastRecv=Date.now();connected=true;};
+  // 끊기면(앱 종료·네트워크) 1초 안에 감춘다. EventSource 는 알아서 다시 붙는다.
+  es.onerror=function(){if(!dropTimer)dropTimer=setTimeout(hideAll,1000);};
+}
+connect();
+// 서버는 15초마다 신호를 보낸다. 40초 넘게 아무것도 안 오면 연결이 반쯤 죽은 것 — 감추고 새로 붙는다.
+setInterval(function(){if(Date.now()-lastRecv>40000){hideAll();connect();}},5000);
 })();
 </script></body></html>
 ''';
