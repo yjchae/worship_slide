@@ -49,6 +49,10 @@ jobs:
         shell: pwsh
         run: flutter pub get
 
+      - name: Test UI on Windows
+        shell: pwsh
+        run: flutter test test/page_editor_test.dart test/lyrics_page_grid_test.dart test/conti_tree_page_test.dart test/obs_overlay_dialog_test.dart test/presenter_keys_test.dart
+
       - name: Build distribution
         shell: pwsh
         run: ./scripts/build.ps1
