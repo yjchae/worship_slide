@@ -54,6 +54,47 @@ void main() {
 
   tearDownAll(() => temp.delete(recursive: true));
 
+  testWidgets('작은 창에서 콘티와 발표 보기를 사용할 수 있다', (tester) async {
+    tester.view.physicalSize = const Size(640, 480);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(const MaterialApp(home: PraiseHomePage()));
+    await settle(tester);
+    expect(tester.takeException(), isNull, reason: '준비 화면');
+    await tester.tap(find.text('첫째 곡'));
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.tap(find.text('첫째 곡'));
+    await settle(tester);
+    expect(tester.takeException(), isNull, reason: '콘티 구성');
+    await tester.tap(find.text('발표 보기'));
+    await settle(tester);
+    expect(find.text('현재 슬라이드'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    await settle(tester);
+  });
+
+  testWidgets('800×600 큰 글자에서도 준비 화면이 넘치지 않는다', (tester) async {
+    tester.view.physicalSize = const Size(800, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(
+            context,
+          ).copyWith(textScaler: const TextScaler.linear(1.6)),
+          child: child!,
+        ),
+        home: const PraiseHomePage(),
+      ),
+    );
+    await settle(tester);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    await settle(tester);
+  });
+
   testWidgets('하위 그룹 만들기 → 들여쓰기·접기(상위가 하위도 가림) → 되돌리기', (tester) async {
     tester.view.physicalSize = const Size(1920, 1400);
     tester.view.devicePixelRatio = 1;

@@ -65,6 +65,8 @@ class OfferingDialog extends StatefulWidget {
 }
 
 class _OfferingDialogState extends State<OfferingDialog> {
+  bool _compactSettings = false;
+
   late OfferingDesign _design = widget.initial;
   late int _pageIndex = _longestPageIndex(
     widget.previewPages,
@@ -160,13 +162,45 @@ class _OfferingDialogState extends State<OfferingDialog> {
       content: SizedBox(
         width: 940,
         height: 560,
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(child: _buildPreviewColumn(context)),
-            const SizedBox(width: 20),
-            SizedBox(width: 320, child: _buildSettingsColumn(context)),
-          ],
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            if (constraints.maxWidth < 700) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SegmentedButton<bool>(
+                    segments: const [
+                      ButtonSegment(value: false, label: Text('미리보기 · 위치')),
+                      ButtonSegment(value: true, label: Text('디자인 설정')),
+                    ],
+                    selected: {_compactSettings},
+                    onSelectionChanged: (value) =>
+                        setState(() => _compactSettings = value.first),
+                  ),
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: _compactSettings
+                        ? _buildSettingsColumn(context)
+                        : SingleChildScrollView(
+                            child: _buildPreviewColumn(context),
+                          ),
+                  ),
+                ],
+              );
+            }
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: SingleChildScrollView(
+                    child: _buildPreviewColumn(context),
+                  ),
+                ),
+                const SizedBox(width: 20),
+                SizedBox(width: 320, child: _buildSettingsColumn(context)),
+              ],
+            );
+          },
         ),
       ),
       actions: [
@@ -283,7 +317,9 @@ class _OfferingDialogState extends State<OfferingDialog> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
+          Wrap(
+            spacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               Icon(Icons.height_rounded, size: 18, color: cs.primary),
               const SizedBox(width: 6),
@@ -296,7 +332,6 @@ class _OfferingDialogState extends State<OfferingDialog> {
                 positionText,
                 style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
               ),
-              const Spacer(),
               IconButton(
                 tooltip: '위로',
                 visualDensity: VisualDensity.compact,

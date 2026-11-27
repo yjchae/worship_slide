@@ -458,95 +458,111 @@ class _ObsOverlayDialogState extends State<ObsOverlayDialog> {
       hidden: false,
       config: _config,
     );
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(
-          flex: 3,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(24, 20, 12, 20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                AspectRatio(
-                  aspectRatio: 16 / 9,
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(AppRadius.control),
-                    child: _PreviewStage(
-                      back: _back,
-                      caption: caption,
-                      config: _config,
-                      family: _config.fontFamily.isEmpty
-                          ? widget.audienceFont
-                          : _config.fontFamily,
+    final preview = Padding(
+      padding: const EdgeInsets.fromLTRB(24, 20, 12, 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          AspectRatio(
+            aspectRatio: 16 / 9,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(AppRadius.control),
+              child: _PreviewStage(
+                back: _back,
+                caption: caption,
+                config: _config,
+                family: _config.fontFamily.isEmpty
+                    ? widget.audienceFont
+                    : _config.fontFamily,
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              SegmentedButton<_PreviewSample>(
+                showSelectedIcon: false,
+                segments: [
+                  if (widget.currentSlide != null)
+                    const ButtonSegment(
+                      value: _PreviewSample.current,
+                      label: Text('지금 페이지'),
                     ),
+                  const ButtonSegment(
+                    value: _PreviewSample.song,
+                    label: Text('찬양 예시'),
                   ),
-                ),
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    SegmentedButton<_PreviewSample>(
-                      showSelectedIcon: false,
-                      segments: [
-                        if (widget.currentSlide != null)
-                          const ButtonSegment(
-                            value: _PreviewSample.current,
-                            label: Text('지금 페이지'),
-                          ),
-                        const ButtonSegment(
-                          value: _PreviewSample.song,
-                          label: Text('찬양 예시'),
-                        ),
-                        const ButtonSegment(
-                          value: _PreviewSample.bible,
-                          label: Text('성경 예시'),
-                        ),
-                      ],
-                      selected: {_sample},
-                      onSelectionChanged: (s) =>
-                          setState(() => _sample = s.first),
-                    ),
-                    SegmentedButton<_PreviewBack>(
-                      showSelectedIcon: false,
-                      segments: const [
-                        ButtonSegment(
-                          value: _PreviewBack.camera,
-                          label: Text('어두운 화면'),
-                        ),
-                        ButtonSegment(
-                          value: _PreviewBack.bright,
-                          label: Text('밝은 화면'),
-                        ),
-                        ButtonSegment(
-                          value: _PreviewBack.checker,
-                          label: Text('바둑판'),
-                        ),
-                      ],
-                      selected: {_back},
-                      onSelectionChanged: (s) =>
-                          setState(() => _back = s.first),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  '미리보기는 앱이 비슷하게 그린 것입니다. 실제 모양은 OBS 또는 \'브라우저에서 열어 보기\'로 확인하세요.',
-                  style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+                  const ButtonSegment(
+                    value: _PreviewSample.bible,
+                    label: Text('성경 예시'),
+                  ),
+                ],
+                selected: {_sample},
+                onSelectionChanged: (s) => setState(() => _sample = s.first),
+              ),
+              SegmentedButton<_PreviewBack>(
+                showSelectedIcon: false,
+                segments: const [
+                  ButtonSegment(
+                    value: _PreviewBack.camera,
+                    label: Text('어두운 화면'),
+                  ),
+                  ButtonSegment(
+                    value: _PreviewBack.bright,
+                    label: Text('밝은 화면'),
+                  ),
+                  ButtonSegment(
+                    value: _PreviewBack.checker,
+                    label: Text('바둑판'),
+                  ),
+                ],
+                selected: {_back},
+                onSelectionChanged: (s) => setState(() => _back = s.first),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '미리보기는 앱이 비슷하게 그린 것입니다. 실제 모양은 OBS 또는 \'브라우저에서 열어 보기\'로 확인하세요.',
+            style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+          ),
+        ],
+      ),
+    );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < 760) {
+          return SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                preview,
+                const Divider(),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: _designForm(cs),
                 ),
               ],
             ),
-          ),
-        ),
-        Expanded(
-          flex: 2,
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(12, 16, 24, 24),
-            child: _designForm(cs),
-          ),
-        ),
-      ],
+          );
+        }
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(flex: 3, child: SingleChildScrollView(child: preview)),
+            Expanded(
+              flex: 2,
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(12, 16, 24, 24),
+                child: _designForm(cs),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 

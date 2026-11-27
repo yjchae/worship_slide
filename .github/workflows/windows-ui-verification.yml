@@ -1,0 +1,17 @@
+name: Windows UI verification
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - run: flutter config --enable-windows-desktop
+      - run: flutter pub get
+      - run: flutter test test/page_editor_test.dart test/lyrics_page_grid_test.dart test/conti_tree_page_test.dart test/obs_overlay_dialog_test.dart test/presenter_keys_test.dart
+      - run: flutter build windows --debug

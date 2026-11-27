@@ -253,8 +253,10 @@ void main() {
       WidgetTester tester, {
       String extraLanguage = '스페인어',
       PraiseSong? edit,
+      Size size = const Size(1400, 900),
+      double textScale = 1,
     }) async {
-      await tester.binding.setSurfaceSize(const Size(1400, 900));
+      await tester.binding.setSurfaceSize(size);
       addTearDown(() => tester.binding.setSurfaceSize(null));
       SongEditResult? result;
       await tester.pumpWidget(
@@ -262,6 +264,12 @@ void main() {
           key: shotKey,
           child: MaterialApp(
             theme: AppThemeKind.light.theme,
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(
+                context,
+              ).copyWith(textScaler: TextScaler.linear(textScale)),
+              child: child!,
+            ),
             home: Builder(
               builder: (context) => Scaffold(
                 body: Center(
@@ -288,6 +296,13 @@ void main() {
       await tester.pumpAndSettle();
       return result;
     }
+
+    testWidgets('작은 창에서 가사 편집과 저장을 사용할 수 있다', (tester) async {
+      await openDialog(tester, size: const Size(800, 600), textScale: 1.6);
+      expect(find.text('저장'), findsOneWidget);
+      expect(find.text('찬양해 찬양해'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
 
     testWidgets('세 칸을 페이지 행으로 보여 주고 저장하면 언어별로 돌려준다', (tester) async {
       await openDialog(tester);

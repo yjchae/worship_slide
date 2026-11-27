@@ -506,6 +506,7 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
 
   bool _pasting = false;
   bool _composing = false;
+  bool _showCompactProperties = false;
   String? _message;
   bool _messageIsError = false;
   Timer? _messageTimer;
@@ -1421,14 +1422,34 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
-                  child: Text(
-                    widget.templateMode
-                        ? '틀 편집'
-                        : _isNew
-                        ? '슬라이드 편집 페이지'
-                        : '슬라이드 편집 페이지 수정',
-                    style: Theme.of(context).textTheme.titleMedium,
+                  padding: const EdgeInsets.fromLTRB(20, 12, 12, 4),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          widget.templateMode
+                              ? '틀 편집'
+                              : _isNew
+                              ? '슬라이드 편집 페이지'
+                              : '슬라이드 편집 페이지 수정',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                      ),
+                      if (screen.width * 0.95 < 800)
+                        TextButton.icon(
+                          onPressed: () => setState(
+                            () => _showCompactProperties =
+                                !_showCompactProperties,
+                          ),
+                          icon: Icon(
+                            _showCompactProperties
+                                ? Icons.dashboard_outlined
+                                : Icons.tune_rounded,
+                            size: 18,
+                          ),
+                          label: Text(_showCompactProperties ? '캔버스' : '속성'),
+                        ),
+                    ],
                   ),
                 ),
                 _blockWhileComposing(
@@ -1477,28 +1498,32 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
                 ),
                 Divider(height: 1, color: cs.outlineVariant),
                 Expanded(
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Expanded(
-                        child: _blockWhileComposing(
-                          FocusTraversalOrder(
-                            order: const NumericFocusOrder(3),
-                            child: _canvasArea(cs),
-                          ),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final compact = constraints.maxWidth < 800;
+                      final canvas = _blockWhileComposing(
+                        FocusTraversalOrder(
+                          order: const NumericFocusOrder(3),
+                          child: _canvasArea(cs),
                         ),
-                      ),
-                      VerticalDivider(width: 1, color: cs.outlineVariant),
-                      SizedBox(
-                        width: 280,
-                        child: _blockWhileComposing(
-                          FocusTraversalOrder(
-                            order: const NumericFocusOrder(4),
-                            child: _propertiesPanel(cs),
-                          ),
+                      );
+                      final properties = _blockWhileComposing(
+                        FocusTraversalOrder(
+                          order: const NumericFocusOrder(4),
+                          child: _propertiesPanel(cs),
                         ),
-                      ),
-                    ],
+                      );
+                      if (compact)
+                        return _showCompactProperties ? properties : canvas;
+                      return Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(child: canvas),
+                          VerticalDivider(width: 1, color: cs.outlineVariant),
+                          SizedBox(width: 280, child: properties),
+                        ],
+                      );
+                    },
                   ),
                 ),
                 Divider(height: 1, color: cs.outlineVariant),

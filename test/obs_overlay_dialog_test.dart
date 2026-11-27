@@ -52,6 +52,41 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('작은 창에서 OBS 디자인 미리보기와 설정을 스크롤한다', (tester) async {
+    tester.view.physicalSize = const Size(800, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final server = ObsOverlayServer();
+    final hidden = ValueNotifier(false);
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(
+            context,
+          ).copyWith(textScaler: const TextScaler.linear(1.3)),
+          child: child!,
+        ),
+        home: Scaffold(
+          body: ObsOverlayDialog(
+            config: const ObsOverlayConfig(key: 'abcdefgh23456789'),
+            server: server,
+            hidden: hidden,
+            audienceFont: 'Pretendard',
+            currentSlide: null,
+            onChanged: (_) {},
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('디자인'));
+    await tester.pumpAndSettle();
+    expect(find.text('찬양 예시'), findsOneWidget);
+    await tester.ensureVisible(find.text('반투명 띠'));
+    await tester.pumpAndSettle();
+    expect(find.text('반투명 띠'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('앱 바 버튼: 숨김이면 툴팁에 숨김', (tester) async {
     final server = ObsOverlayServer();
     final hidden = ValueNotifier(true);
