@@ -33,7 +33,7 @@ const _style = ExportStyle(
   bibleTitleVerticalPosition: VerticalTextPosition.bottom,
 );
 
-/// 코드는 싱어·발표자 화면 전용이다(§0). 관객 화면·통역(B)·PPTX 로 새지 않는다.
+/// 코드는 싱어·발표자 화면 전용이다(§0). 관객 화면·PPTX 로 새지 않는다.
 void main() {
   const song = PraiseSong(
     id: 1,
@@ -55,7 +55,7 @@ void main() {
       json.contains('key_label') ||
       json.contains('transpose');
 
-  test('관객 페이지(SlidePageData)·통역(B) JSON 에 코드가 없다', () {
+  test('관객 페이지(SlidePageData) JSON 에 코드가 없다', () {
     final pairs = song.pairedPages;
     expect(pairs.first.chord, isNotEmpty); // 코드는 있다 — 그래도 안 나간다.
     for (var j = 0; j < pairs.length; j++) {
@@ -72,8 +72,6 @@ void main() {
       );
       final json = jsonEncode(page.toJson());
       expect(leaks(json), isFalse, reason: json);
-      final b = jsonEncode(page.forB(null).toJson());
-      expect(leaks(b), isFalse, reason: b);
     }
   });
 

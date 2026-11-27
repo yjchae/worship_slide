@@ -31,7 +31,6 @@ flutter test test/conti_group_test.dart # 콘티 항목 그룹: item_group 칸 �
 flutter test test/slide_group_test.dart # 발표 보기 격자 그룹 구간·머리줄 높이 계산(그룹 끝 '그룹 없음' 머리줄)
 flutter test test/conti_tree_test.dart test/conti_tree_page_test.dart # 콘티 폴더 트리: 순수 함수·불변식·끌어 넣기/빼기/그룹째/접기 위젯·실제 페이지
 flutter test test/thumb_click_test.dart # 썸네일 원클릭=고르기·더블클릭=이동·끌기·빈 곳 클릭 제스처가 서로 안 막는지
-flutter test test/b_screen_test.dart # 통역 화면(B): 칸 계산·폴더 대응표·보조 칸 올리기
 flutter test test/page_image_test.dart # 슬라이드 편집 페이지: 요소 JSON·clamp·배경 page_elements·.wsconti 경로·화면 밖 PNG 굽기
 flutter test test/page_rich_text_test.dart # 글 상자 글 줄 모델(Delta → 줄): 색 8자리·bold·글머리·번호·깨진 rich·저장 정규화·상자째 서식·모르는 요소 왕복
 flutter test test/page_editor_test.dart # 슬라이드 편집 창: 손잡이·되돌리기·자동 이름·틀·캔버스 안 편집(더블클릭·Enter/F2·글자 키·Esc)·리본 서식·여러 개 고르기·순서
@@ -99,7 +98,6 @@ lib/
       background_image_library.dart  -- 공통 배경 이미지 모음(등록 = 앱 폴더로 복사). 헌금송·항목 배경이 같이 쓴다
       atomic_file.dart               -- 임시 파일 → 이름 바꾸기 쓰기 (동기화·설정 파일 공용)
       fnv_hash.dart                  -- FNV-1a 16자리 hex (캐시·공유 파일 이름)
-      b_screen_store.dart            -- 통역 화면(B) 설정·폴더 대응표 → b_screen.json, 칸 계산 bSplitRects, bImagePath
       screen_choice_store.dart       -- 발표·싱어 창 모니터 선택 → screen_choice.json
       sermon_design_store.dart       -- 설교 제목 페이지 마지막 디자인 → sermon_design.json
       page_template_store.dart       -- 페이지 틀(예배 시작·주일 광고·생일자 등) → page_templates.json, 기본 3개·틀 배경 입히기 순수 함수
@@ -442,7 +440,7 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   `replaceAllSongs` 는 uid 를 이어 쓰는 곡의 코드를 옮기고, `addNewSongs` 고치기는 `realignChords` 가 확실할 때만 저장한다.
   동기화는 스냅샷 `chords` 구역(`SyncChord`, `_mergeChords`)으로 따로 맞춘다 — 옛 앱은 이 키를 모르고 지나갈 뿐 코드를 못 지운다. 합칠 때 코드를 다시 맞추지 않는다.
   콘티 항목은 `song_chord_lyrics`·`song_chord_key`·`song_transpose`(−11..11, 그 밖은 0)·`song_chord_accidental`('' / '#' / 'b') 스냅샷. 곡을 나누면(`_songWithPages`) 코드가 페이지를 따라간다.
-  **관객 화면·통역(B)·PPTX 에는 코드가 없다** — `SlidePageData`·`PythonBridge.exportPayload` 에 코드 칸이 없다(`test/chord_leak_test.dart`)
+  **관객 화면·PPTX 에는 코드가 없다** — `SlidePageData`·`PythonBridge.exportPayload` 에 코드 칸이 없다(`test/chord_leak_test.dart`)
   - **보이는 곳 = macOS 싱어 창 · 휴대폰 · 발표 보기**(Windows 싱어 창은 2차 — `_nativeSingerChords` 가 macOS 만, 스위치도 숨긴다).
     싱어 JSON `chord_lines`(`[{t: strip 한 줄, c: [[UTF-16 오프셋, 조 바꾼 이름]]}]`)·`key_label`. 렌더러(HTML·Swift)는 이것만 읽고 ChordPro 를 풀지 않는다.
     네이티브 싱어용은 발표 보기 툴바 '싱어 코드'(`PresenterViewState.singerChords`, 실행 동안만)가 켜졌을 때만 싣고, 휴대폰용은 늘 싣고 휴대폰 '코드' 버튼(`localStorage` `singer_chords`)이 정한다.
@@ -503,14 +501,6 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
     SSE 가 끊기면 1초 안에 감춘다(앱이 꺼져도 마지막 가사가 방송에 남지 않게), EventSource 가 다시 붙으면 지금 자막을 받는다. `&preview=1` = 바둑판 + 상태 글
   - UI: 모니터 메뉴 'OBS 자막 (방송 브라우저 소스)…' → `ObsOverlayDialog`(연결·디자인 탭, 값을 바꾸면 바로 저장·반영, 미리보기는 Flutter 근사). 켜 두면 앱 바에 상태 점 버튼(회색 연결 없음·초록 연결됨·빨강 오류·주황 숨김)
   - **미확인(실제 OBS)**: OBS 브라우저 소스의 투명 합성·SSE 유지·`FontFace`, 앱보다 OBS 를 먼저 켰을 때(소스 '새로 고침' 필요할 수 있음), 방화벽 허용 창. 1단계는 그림 페이지 글자를 못 보낸다(PPT 글 뽑기는 이후 단계)
-- **통역 화면 (내부 이름 B, macOS 만, 기획 `.claude-office/work/20261031-2207-split-screen-subtitle/`)**: 앱 하나에서 관객 창과 같이 넘어가는 세 번째 창. 모니터를 직접 골라야 하고(자동 없음) 그 모니터 전체를 차지한 뒤 **창 안에서** 슬라이드 칸과 자막 칸을 나눈다.
-  - 창은 `PresentationWindowController(keyable: true)` 두 번째 인스턴스다. `show` 대신 `place` 라 메인 창 포커스를 뺏지 않는다. 클릭하면 포커스를 받아 Ctrl+F4 로 그 창만 닫히고(`bClosed`), 넘기기 키는 싱어와 같은 `singerKey` 로 간다
-  - 칸은 Dart 순수 함수 `bSplitRects` 가 0~1 비율로 정한다(슬라이드 늘 16:9 + 몫 0.4~0.8, 네이티브 `setSplit`·`layoutSplit`). 해상도가 바뀌면 비율대로 다시 놓고, 모니터 비율까지 바뀌면 칸 가운데 16:9 로 줄인다
-  - 자막 칸은 WKWebView 로 stt_translate 의 `display.html?net` 을 그대로 띄운다. 읽히기 전엔 숨겨서 검정이고 실패(4xx·5xx 포함)하면 3초마다 다시 읽는다. 읽힌 뒤 서버가 꺼졌다 켜지는 것은 그 페이지의 웹소켓이 스스로 다시 붙는다.
-    Info.plist 에 ATS 키는 필요 없다 — ATS 키 없는 번들에서 `127.0.0.1`·`localhost`·사설 IP·`.local` 의 http·ws 가 뜨는 것을 확인했다
-  - 외국어 PPT 는 `b_screen.json` 의 폴더 대응표(A 렌더 폴더 → B 렌더 폴더 + 같은 파일 이름, `bImagePath`)로 잇는다. 슬라이드 번호를 안 써서 지우기·나누기·옮기기가 저절로 맞고, B 에 없는 쪽은 A 페이지가 나간다. DB·콘티 저장 형식은 그대로라 `.wsconti` 로는 안 옮겨 간다. A 를 다시 구워 폴더가 바뀌면 `movePair`
-  - 곡·성경은 `SlidePageData.forB` 가 보조 → 추가 보조 순으로 본문으로 올리고, 둘 다 있으면 추가 보조는 그 아래 보조 줄이 된다(렌더러는 그대로). 설교 부제는 올리지 않는다(`sermon`). 미디어·배경 영상은 빼서 소리가 두 번 나지 않는다. 확대·포인터는 안 따라간다
-  - 블랙아웃 `blackoutB {on}` 은 슬라이드 칸만 끄고 자막은 그대로다. 관객 '자동'·싱어 '자동'과 겹치지 않게 `openB` 가 실제 창 위치로 겹침을 검사하고(`no_screen`·`screen_taken`), `openSingerWindow` 는 `avoid_screen` 을 피한다
 - **콘티 파일 내보내기/가져오기** (`.wsconti`, 다른 PC 로 옮기기): 불러오기 다이얼로그의 항목별 내보내기 버튼 /
   "파일에서 가져오기". `exportContiFile` 이 DB 행을 그대로 JSON 에 담고, 행이 가리키는 이미지(PPT 페이지·항목 배경·
   헌금송 PNG 와 그 원본)는 base64 로 같이 넣어 경로 자리를 키로 바꾼다. `importContiFile` 은
@@ -668,7 +658,7 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   '새 페이지 추가'(편집 탭 콘티 머리줄·발표 보기 툴바, 메뉴 = 빈 / 슬라이드 편집 / 동영상 / 음악 / 유튜브)의 '슬라이드 편집 페이지', 콘티 목록 태그 '편집'.
   편집 창에서 아무것도 안 고르면 오른쪽에 '페이지 배경'(색 + 공통 배경 이미지 모음, 새 페이지 시작값 = 전역 배경)이 보이고, 결과 `PageEditorResult.background` 가
   `_itemBackgrounds` 에 들어가 그 배경으로 굽는다(배경은 되돌리기에 안 넣는다). '글 상자 추가'는 고른(없으면 마지막) 글 상자의 글꼴·크기·색·굵기·정렬을 이어받는다(`newTextBox`).
-  **요소 목록을 저장하고 화면에는 1920x1080 PNG 한 장으로 구워** 기존 PPT 이미지 길로 보낸다 — 렌더러 네 곳(미리보기·macOS·Windows·PPTX)·싱어·통역·확대·포인터는 이 페이지를 모른다.
+  **요소 목록을 저장하고 화면에는 1920x1080 PNG 한 장으로 구워** 기존 PPT 이미지 길로 보낸다 — 렌더러 네 곳(미리보기·macOS·Windows·PPTX)·싱어·확대·포인터는 이 페이지를 모른다.
   - 요소 `PageElement`(`domain/page_element.dart`, sealed: `PageImageElement(path)` / `PageTextElement(text, fontSize(540pt 기준), color, bold, align, fontFamily)`),
     `rect` 0~1(`clampRect` = w·h 0.02~2, 슬라이드 안 5% 이상), 뒤 요소가 위. 저장은 항목 배경 JSON `page_elements`(`SlideBackground.pageElements`, 마이그레이션 없음),
     판별 `isFreePage`. '배경' 버튼으로 색을 바꿔도 `withPageElementsOf` 로 요소를 옮겨 붙이고 다시 굽는다. 틀린 요소는 읽을 때 버린다.

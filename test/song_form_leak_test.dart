@@ -34,7 +34,7 @@ const _style = ExportStyle(
   bibleTitleVerticalPosition: VerticalTextPosition.bottom,
 );
 
-/// 송폼은 싱어·발표자 화면 전용이다. 관객 화면·통역(B)·PPTX 로 새지 않는다.
+/// 송폼은 싱어·발표자 화면 전용이다. 관객 화면·PPTX 로 새지 않는다.
 void main() {
   final song = PraiseSong(
     id: 1,
@@ -55,7 +55,7 @@ void main() {
       json.contains('PC') ||
       json.contains('직접 라벨');
 
-  test('관객 페이지(SlidePageData)·통역(B) JSON 에 송폼이 없다', () {
+  test('관객 페이지(SlidePageData) JSON 에 송폼이 없다', () {
     final pairs = song.pairedPages;
     expect(pairs.first.form, 'V1,PC'); // 라벨은 있다 — 그래도 안 나간다.
     for (var j = 0; j < pairs.length; j++) {
@@ -71,8 +71,6 @@ void main() {
       );
       final json = jsonEncode(page.toJson());
       expect(leaks(json), isFalse, reason: json);
-      final b = jsonEncode(page.forB(null).toJson());
-      expect(leaks(b), isFalse, reason: b);
     }
   });
 

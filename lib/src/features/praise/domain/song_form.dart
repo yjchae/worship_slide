@@ -8,7 +8,7 @@ import 'praise_song.dart';
 /// 저장은 곡 단위 JSON 한 칸(`praise_songs.song_form`, 콘티 `worship_conti_items.song_form`):
 /// `{"v":1,"pages":[{"k":"<pageKey>","l":["V2","PC"]}]}` — 페이지 번호 순서대로 한 항목씩.
 /// 읽을 때 같은 번호 항목의 `k`(원본 글 해시)가 맞아야 보이고, 어긋나면 **숨길 뿐 지우지 않는다**.
-/// 관객 화면·통역(B)·PPTX 로는 가지 않는다(`test/song_form_leak_test.dart`).
+/// 관객 화면·PPTX 로는 가지 않는다(`test/song_form_leak_test.dart`).
 
 enum SectionKind {
   intro,

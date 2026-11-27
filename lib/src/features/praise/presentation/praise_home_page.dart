@@ -26,7 +26,6 @@ import '../../../features/bible/domain/bible_voice_parse.dart';
 import '../../../features/bible/domain/bible_verse.dart';
 import '../../../features/update/update_service.dart';
 import '../data/app_logger.dart';
-import '../data/b_screen_store.dart';
 import '../data/export_style_store.dart';
 import '../data/font_library.dart';
 import '../data/offering_background_composer.dart';
@@ -61,7 +60,6 @@ import '../domain/song_form.dart';
 import '../domain/slide_background.dart';
 import '../domain/slide_media.dart';
 import '../domain/staging_item.dart';
-import 'b_screen_dialogs.dart';
 import 'chord_key_controls.dart';
 import 'chord_sheet_view.dart';
 import 'background_image_gallery.dart';
@@ -159,7 +157,7 @@ class _SlideInfo {
   final String chordText;
   // 코드 있는 곡 항목의 곡(조 묶음·조 배지용). 코드가 없으면 null.
   final PraiseSong? chordSong;
-  // 이 페이지 글자 서식(색·크기). 관객 화면·미리보기·썸네일만 쓴다 — 싱어·통역(B)·휴대폰은 무시.
+  // 이 페이지 글자 서식(색·크기). 관객 화면·미리보기·썸네일만 쓴다 — 싱어·휴대폰은 무시.
   final PageEntry? pageFormat;
   // 이 페이지 송폼 라벨 글(`V2,PC`). 발표 보기·싱어만 쓴다 — 관객 쪽 SlidePageData 로는 안 간다.
   final String formText;
@@ -364,10 +362,6 @@ class _PraiseHomePageState extends State<PraiseHomePage>
   // 관객·싱어 창을 띄울 모니터. null = 자동.
   ScreenChoice? _audienceScreen;
   ScreenChoice? _singerScreen;
-  // 통역 화면(내부 이름 B, macOS 만). Windows 에서는 읽지 않아 대응표도 늘 비어 있다.
-  final BScreenStore _bStore = BScreenStore();
-  BScreenConfig _bConfig = const BScreenConfig();
-  bool _isBOpen = false;
   final OfferingBackgroundComposer _offeringComposer =
       OfferingBackgroundComposer();
   final BackgroundImageLibrary _backgroundImages = BackgroundImageLibrary();
@@ -638,11 +632,6 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         _singerScreen = v.$2;
       });
     });
-    if (Platform.isMacOS) {
-      _bStore.load().then((v) {
-        if (mounted) setState(() => _bConfig = v);
-      });
-    }
     _loadBibleCount();
     _loadSubLanguages();
     _searchController.addListener(_loadSongs);
@@ -657,14 +646,9 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         case 'presentationClosed':
           // 발표가 끝나면 싱어 화면도 같이 닫는다.
           await _closeSingerWindow();
-          await _closeB();
           if (mounted) setState(_resetPresentationState);
         case 'singerClosed':
           setState(() => _isSingerOpen = false);
-        case 'bClosed':
-          // 창에서 직접 닫았을 때만 온다.
-          setState(() => _isBOpen = false);
-          _showSnack('통역 화면을 닫았습니다.');
         case 'mediaState':
           _mediaPlayback.value = MediaPlayback.tryParse(call.arguments);
         case 'singerKey':
@@ -1363,7 +1347,6 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       ]),
       Object.hashAllUnordered(_deletedSlideKeys),
       Object.hashAllUnordered(_noSpacerUids),
-      _bConfig.screen != null,
     );
     if (signature == _overflowSignature) return _overflowCountsMemo;
     _overflowSignature = signature;
@@ -1375,7 +1358,6 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   Map<int, int> _measureOverflowCounts() {
     final slides = _allSlides;
-    final usesB = _bConfig.screen != null;
     final counts = <int, int>{};
     for (var i = 0; i < slides.length; i++) {
       final slide = slides[i];
@@ -1389,16 +1371,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         style: slide.styleOn(_style),
         imagePath: slide.imagePath,
       );
-      final overflows =
-          SlideTextLayout.overflows(page) ||
-          (usesB &&
-              SlideTextLayout.overflows(
-                _buildSlidePageData(i, slides, false).forB(
-                  page.imagePath,
-                  sermon: slide.background?.isSermon ?? false,
-                ),
-              ));
-      if (overflows) {
+      if (SlideTextLayout.overflows(page)) {
         counts.update(slides[i].stagingUid, (n) => n + 1, ifAbsent: () => 1);
       }
     }
@@ -1556,7 +1529,6 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     _presenterView.autoAdvance.stop();
     _isPresentationOpen = false;
     _slideJumpBuffer = '';
-    _isBOpen = false;
     _isBlackout = false;
     // 발표 창을 닫으면 네이티브 쪽 확대 상태도 함께 사라진다(macOS 는 컨트롤러를
     // 통째로 버린다). Dart 쪽만 켜져 있으면 다음 발표에서 어긋나므로 같이 끈다.
@@ -1569,7 +1541,6 @@ class _PraiseHomePageState extends State<PraiseHomePage>
 
   Future<void> _closePresentation() async {
     await _closeSingerWindow();
-    await _closeB();
     try {
       await _presentationChannel.invokeMethod('closeWindow');
     } catch (_) {}
@@ -1590,14 +1561,6 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         setState(() => _isBlackout = !_isBlackout);
       }
       return;
-    }
-    // 자막 칸은 그대로고 슬라이드 칸만 꺼진다. 원하는 상태를 보내므로 어긋나지 않는다.
-    if (_isBOpen) {
-      try {
-        await _presentationChannel.invokeMethod('blackoutB', {
-          'on': _isBlackout,
-        });
-      } catch (_) {}
     }
     // 싱어 화면은 가사를 계속 보여 주고 "관객 화면 꺼짐" 표시만 바꾼다.
     await _sendSingerView();
@@ -1685,12 +1648,6 @@ class _PraiseHomePageState extends State<PraiseHomePage>
       await _presentationChannel.invokeMethod('openSingerWindow', {
         ...json,
         'screen': await _screenIndex(_singerScreen, singer: true),
-        // 자동일 때 고른 통역 화면 모니터로 가지 않게. -1 = 없음.
-        if (Platform.isMacOS)
-          'avoid_screen': ScreenChoice.resolve(
-            _bConfig.screen,
-            await _getScreens(),
-          ),
       });
       _lastSingerJson = _singerDedupeKey(json);
       if (mounted) setState(() => _isSingerOpen = true);
@@ -1700,275 +1657,6 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         context,
       ).showSnackBar(SnackBar(content: Text('싱어 화면 열기 실패: $e')));
     }
-  }
-
-  // ── 통역 화면 (내부 이름 B, macOS 만) ──────────────────────────────────
-
-  /// 지금 페이지의 B 판. 배경 영상 PNG 를 굽지 않으므로 _presentablePage 를 안 거친다.
-  SlidePageData _bPage(List<_SlideInfo> slides) {
-    final index = slides.isEmpty
-        ? 0
-        : _currentSlideIndex.clamp(0, slides.length - 1);
-    final slide = slides.isEmpty ? null : slides[index];
-    return _buildSlidePageData(index, slides, false).forB(
-      bImagePath(slide?.imagePath, _bConfig.pairs),
-      sermon: slide?.background?.isSermon ?? false,
-    );
-  }
-
-  /// 실패하면 B 만 닫는다. 관객 화면은 계속된다.
-  Future<void> _sendB([List<_SlideInfo>? slides]) async {
-    if (!_isBOpen) return;
-    try {
-      await _presentationChannel.invokeMethod(
-        'updateB',
-        _bPage(slides ?? _allSlides).toJson(),
-      );
-    } catch (_) {
-      await _closeB();
-      _showSnack('통역 화면을 닫았습니다. 관객 화면은 계속됩니다. 버튼으로 다시 열 수 있습니다.');
-    }
-  }
-
-  void _showBScreenError(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(message),
-          action: SnackBarAction(label: '설정', onPressed: _openBSettings),
-        ),
-      );
-  }
-
-  /// 열거나, 이미 열려 있으면 모니터·칸·자막 주소를 지금 설정으로 바꾼다.
-  Future<void> _openB() async {
-    if (!Platform.isMacOS || !_isPresentationOpen) return;
-    final screens = await _getScreens();
-    final index = ScreenChoice.resolve(_bConfig.screen, screens);
-    if (index < 0) {
-      _showBScreenError('통역 화면 모니터를 찾을 수 없습니다. 모니터를 다시 골라 주세요.');
-      return;
-    }
-    final monitor = screens[index];
-    try {
-      await _presentationChannel.invokeMethod('openB', {
-        ..._bPage(_allSlides).toJson(),
-        ..._bConfig.layoutJson(monitor.width, monitor.height),
-        'screen': index,
-        'blackout': _isBlackout,
-      });
-    } on PlatformException catch (e) {
-      switch (e.code) {
-        case 'no_screen':
-          _showBScreenError('통역 화면 모니터를 찾을 수 없습니다. 모니터를 다시 골라 주세요.');
-        case 'screen_taken':
-          _showBScreenError('통역 화면 모니터가 메인 창이나 다른 화면과 겹칩니다. 모니터를 다시 골라 주세요.');
-        default:
-          _showSnack('통역 화면 열기 실패: ${e.message ?? e.code}');
-      }
-      return;
-    } catch (e) {
-      _showSnack('통역 화면 열기 실패: $e');
-      return;
-    }
-    // 여는 사이 발표가 끝났으면 닫는다. 닫기 경로는 아직 꺼져 있던 B 를 건너뛰었다.
-    if (!mounted || !_isPresentationOpen) {
-      try {
-        await _presentationChannel.invokeMethod('closeB');
-      } catch (_) {}
-      return;
-    }
-    setState(() => _isBOpen = true);
-    // 여는 사이 넘겼거나 내용·블랙아웃이 바뀌었으면 B 에 안 갔다. 쪽 번호로는 못 가린다.
-    await _sendB();
-    if (!_isBOpen) return;
-    try {
-      await _presentationChannel.invokeMethod('blackoutB', {'on': _isBlackout});
-    } catch (_) {}
-  }
-
-  Future<void> _closeB() async {
-    if (!_isBOpen) return;
-    if (mounted) setState(() => _isBOpen = false);
-    try {
-      await _presentationChannel.invokeMethod('closeB');
-    } catch (_) {}
-  }
-
-  Future<void> _toggleB() async {
-    if (_isBOpen) {
-      await _closeB();
-    } else if (_bConfig.screen == null) {
-      await _openBSettings(openAfter: true);
-    } else {
-      await _openB();
-    }
-  }
-
-  /// [openAfter] = 툴바 '미설정'에서 왔다. 모니터를 골라 저장하면 바로 연다.
-  Future<void> _openBSettings({bool openAfter = false}) async {
-    final screens = await _getScreens();
-    final audience = await _screenIndex(_audienceScreen);
-    final singer = await _screenIndex(_singerScreen, singer: true);
-    final blocked = <int, String>{
-      // 관객이 자동이면 네이티브가 screens[1] 로 연다.
-      if (audience >= 0)
-        audience: '관객 화면'
-      else if (screens.length > 1)
-        1: '관객 화면(자동)',
-      if (singer >= 0) singer: '싱어 화면',
-      for (final s in screens)
-        if (s.isMain) s.index: '메인 창',
-    };
-    if (!mounted) return;
-    final saved = await BScreenSettingsDialog.show(
-      context,
-      config: _bConfig,
-      screens: screens,
-      blocked: blocked,
-    );
-    if (saved == null || !mounted) return;
-    // 창이 떠 있는 사이 원본을 다시 구워 대응표가 바뀌었을 수 있다.
-    final next = saved.copyWith(pairs: _bConfig.pairs);
-    setState(() => _bConfig = next);
-    await _bStore.save(next);
-    if (_isBOpen && next.screen == null) {
-      await _closeB();
-    } else if (_isBOpen || (openAfter && next.screen != null)) {
-      await _openB();
-    }
-  }
-
-  /// 현재 쪽이 연결된 PPT 인데 B 에 그 쪽이 없어 원본이 나가고 있는가.
-  bool _bPageMissing(List<_SlideInfo> slides) {
-    if (!_isBOpen || slides.isEmpty) return false;
-    final path =
-        slides[_currentSlideIndex.clamp(0, slides.length - 1)].imagePath;
-    return path != null &&
-        _bConfig.pairs.containsKey(p.dirname(path)) &&
-        bImagePath(path, _bConfig.pairs) == path;
-  }
-
-  Future<void> _setBPairs(Map<String, BPptPair> pairs) async {
-    setState(() => _bConfig = _bConfig.copyWith(pairs: pairs));
-    await _bStore.save(_bConfig);
-    await _sendB();
-  }
-
-  void _unlinkBPpt(int uid) {
-    final dir = _imageDirOf(uid);
-    if (dir == null) return;
-    unawaited(_setBPairs(_bConfig.unlinkPair(dir).pairs));
-    _showSnack('외국어 PPT 연결을 끊었습니다.');
-  }
-
-  /// PPT 항목의 렌더 폴더(대응표 키).
-  String? _imageDirOf(int uid) {
-    final item = _stagingItems.where((e) => e.uid == uid).firstOrNull?.item;
-    if (item is! ImageStagingItem || item.imagePaths.isEmpty) return null;
-    return p.dirname(item.imagePaths.first);
-  }
-
-  Future<void> _linkBPpt(int uid) async {
-    final item = _stagingItems.where((e) => e.uid == uid).firstOrNull?.item;
-    final aDir = _imageDirOf(uid);
-    if (item is! ImageStagingItem || aDir == null) return;
-    await FilePicker.skipEntitlementsChecks();
-    final picked = await FilePicker.pickFiles(
-      dialogTitle: '외국어 PPT / PDF 파일 선택',
-      type: FileType.custom,
-      allowedExtensions: ['ppt', 'pptx', 'pdf'],
-    );
-    final path = picked?.paths.whereType<String>().firstOrNull;
-    if (path == null || !mounted) return;
-    if (path == item.sourcePath) {
-      _showSnack('원본과 같은 파일입니다. 외국어 버전 파일을 골라 주세요.');
-      return;
-    }
-    await _renderAndLinkB(aDir, item.sourceName, path);
-  }
-
-  Future<void> _renderAndLinkB(String aDir, String aName, String path) async {
-    final progress = ValueNotifier<String>('${p.basename(path)} 변환 중…');
-    _showProgressDialog(progress);
-    ImageStagingItem? rendered;
-    String? failure;
-    var libreofficeMissing = false;
-    var aMissing = false;
-    var aCount = 0;
-    try {
-      // 변환이 길어서 A 폴더부터 센다. 없으면 여기서 멈춘다.
-      aCount = await countRenderedPages(aDir);
-      rendered = await _pythonBridge.renderPptToImages(path);
-      if (rendered.imagePaths.isEmpty) failure = '페이지가 없습니다';
-    } on LibreOfficeMissingException {
-      libreofficeMissing = true;
-    } on FileSystemException {
-      aMissing = true;
-    } catch (error, stack) {
-      await AppLogger.instance.error('외국어 PPT 변환 실패', error, stack);
-      failure = '$error';
-    }
-    progress.dispose();
-    if (!mounted) return;
-    Navigator.of(context, rootNavigator: true).pop();
-
-    if (libreofficeMissing) {
-      final installed = await _showLibreofficeDialog(
-        reason:
-            'PPT를 이미지로 바꾸려면 LibreOffice가 설치되어 있어야 합니다.\n'
-            'PDF 파일은 LibreOffice 없이도 넣을 수 있습니다.',
-      );
-      if (installed && mounted) await _renderAndLinkB(aDir, aName, path);
-      return;
-    }
-    if (aMissing) {
-      _showSnack('원본 PPT 페이지 이미지를 찾을 수 없습니다. 원본을 다시 불러온 뒤 연결해 주세요.');
-      return;
-    }
-    if (rendered == null || failure != null) {
-      _showSnack('외국어 PPT를 불러오지 못했습니다: $failure');
-      return;
-    }
-
-    final bDir = p.dirname(rendered.imagePaths.first);
-    if (bDir == aDir) {
-      // 나눈 항목은 원본 경로가 없어서 구운 폴더로 가린다.
-      _showSnack('원본과 같은 파일입니다. 외국어 버전 파일을 골라 주세요.');
-      return;
-    }
-    final bCount = rendered.imagePaths.length;
-    final animated =
-        await _pythonBridge.renderAnimated(aDir) ||
-        await _pythonBridge.renderAnimated(bDir);
-    if (!mounted) return;
-    final linked = await showBPairDialog(
-      context,
-      aName: aName,
-      bName: rendered.sourceName,
-      aDir: aDir,
-      bDir: bDir,
-      aCount: aCount,
-      bCount: bCount,
-      animated: animated,
-    );
-    if (!linked || !mounted) return;
-    await _setBPairs(
-      _bConfig
-          .linkPair(
-            aDir,
-            BPptPair(
-              bDir: bDir,
-              bName: rendered.sourceName,
-              aCount: aCount,
-              bCount: bCount,
-            ),
-          )
-          .pairs,
-    );
-    _showSnack('외국어 PPT를 연결했습니다.');
   }
 
   // ── 휴대폰 화면(싱어창·발표자 모드) ──────────────────────────────────────
@@ -2280,7 +1968,6 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     );
     final audienceIndex = ScreenChoice.resolve(_audienceScreen, screens);
     final singerIndex = ScreenChoice.resolve(_singerScreen, screens);
-    final bIndex = ScreenChoice.resolve(_bConfig.screen, screens);
 
     // 메인 창 모니터와 다른 쪽 창이 고른 모니터는 고를 수 없다(전체화면이 서로를 덮는다).
     List<PopupMenuEntry<(bool, ScreenInfo?)>> group(
@@ -2303,12 +1990,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         CheckedPopupMenuItem(
           value: (singer, s),
           checked: selected == s.index,
-          enabled: !s.isMain && s.index != taken && s.index != bIndex,
+          enabled: !s.isMain && s.index != taken,
           child: Text(
             s.index == taken
                 ? '${s.label} · ${singer ? '관객' : '싱어'} 화면'
-                : s.index == bIndex
-                ? '${s.label} · 통역 화면'
                 : s.label,
           ),
         ),
@@ -2322,8 +2007,6 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         const PopupMenuDivider(),
         ...group('싱어 화면', true, singerIndex, audienceIndex),
         const PopupMenuDivider(),
-        if (Platform.isMacOS)
-          PopupMenuItem(onTap: _openBSettings, child: const Text('통역 화면 설정…')),
         PopupMenuItem(
           onTap: _openObsDialog,
           child: const Text('OBS 자막 (방송 브라우저 소스)…'),
@@ -2716,14 +2399,11 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         );
       } catch (_) {
         await _closeSingerWindow();
-        await _closeB();
         await _singerWeb.stop();
         if (mounted) setState(() => _isPresentationOpen = false);
         return;
       }
     }
-    // 그 사이 더 새 요청이 왔으면 그쪽이 보낸다.
-    if (seq == _pageSendSeq) await _sendB(slides);
     await _sendSingerView(slides);
   }
 
@@ -5711,30 +5391,12 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         ? null
         : slides[_currentSlideIndex.clamp(0, slides.length - 1)];
     var restoredPages = false;
-    final newDir = newCount == 0 ? null : p.dirname(rendered.imagePaths.first);
-    var bConfig = _bConfig;
-    var bMoved = false;
-    BPptPair? bWarnPair;
 
     setState(() {
       for (var i = 0; i < _stagingItems.length; i++) {
         final entry = _stagingItems[i];
         final item = entry.item;
         if (item is! ImageStagingItem || item.sourcePath != path) continue;
-        final oldDir = item.imagePaths.isEmpty
-            ? null
-            : p.dirname(item.imagePaths.first);
-        final pair = bConfig.pairs[oldDir];
-        if (pair != null && newDir != null && oldDir != newDir) {
-          // 옛 키는 남긴다 — 나눈 항목·저장한 콘티가 아직 옛 폴더를 가리킨다.
-          final old = bConfig.pairs;
-          final moved = bConfig.movePair(oldDir!, newDir, newCount);
-          bConfig = moved.copyWith(pairs: {...old, ...moved.pairs});
-          bMoved = true;
-          if (newCount != pair.aCount && newCount != pair.bCount) {
-            bWarnPair = pair;
-          }
-        }
         _stagingItems[i] = (uid: entry.uid, item: rendered);
         if (remapReloadedPages(
           uid: entry.uid,
@@ -5760,9 +5422,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         );
       }
       _clampCurrentSlideIndex();
-      _bConfig = bConfig;
     });
-    if (bMoved) await _bStore.save(bConfig);
     await _sendCurrentSlide();
     _showSnack(
       restoredPages
@@ -5770,12 +5430,6 @@ class _PraiseHomePageState extends State<PraiseHomePage>
           : '${p.basename(path)} 을(를) 다시 불러왔습니다 ($newCount장).',
       replace: !automatic,
     );
-    if (bWarnPair case final pair?) {
-      _showSnack(
-        '쪽 수가 달라졌습니다 (원본 $newCount장 / 외국어 ${pair.bCount}장). 외국어 PPT도 확인해 주세요.',
-        replace: false,
-      );
-    }
   }
 
   /// 다시 불러오기 전에 보던 슬라이드 [before] 가 지금 몇 번째인지.
@@ -8049,9 +7703,6 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                                   _reloadImageSource(path, automatic: false);
                                 }
                               },
-                              bPairs: _bConfig.pairs,
-                              onLinkB: _linkBPpt,
-                              onUnlinkB: _unlinkBPpt,
                               onTranspose: (uid, n, acc) => _setChordTranspose(
                                 uid,
                                 transpose: n,
@@ -8169,10 +7820,6 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                               onToggleSinger: _toggleSingerWindow,
                               isMobileSingerOn: _singerWeb.isRunning,
                               onShowMobileSinger: _showMobileSinger,
-                              isBOpen: _isBOpen,
-                              bScreen: _bConfig.screen,
-                              onToggleB: _toggleB,
-                              bPageMissing: _bPageMissing(slides),
                               pointerMode: _pointerMode,
                               pointerSize: _pointerSize,
                               onPointerModeChanged: (m) {
@@ -8425,9 +8072,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
         ),
       Builder(
         builder: (anchor) => IconButton(
-          tooltip: Platform.isMacOS
-              ? '화면 모니터 선택 (관객·싱어·통역) · OBS 자막'
-              : '화면 모니터 선택 (관객·싱어) · OBS 자막',
+          tooltip: '화면 모니터 선택 (관객·싱어) · OBS 자막',
           icon: const Icon(Icons.desktop_windows_outlined, size: 19),
           onPressed: () => _showScreenMenu(anchor),
         ),
@@ -9148,7 +8793,7 @@ class _ToggleChip extends StatelessWidget {
 
 // ── StagingPanel ──────────────────────────────────────────────────────────
 
-enum _PptMenu { open, reload, linkB, unlinkB }
+enum _PptMenu { open, reload }
 
 class _StagingPanel extends StatelessWidget {
   const _StagingPanel({
@@ -9190,10 +8835,7 @@ class _StagingPanel extends StatelessWidget {
     required this.onLoadConti,
     required this.onAddBlank,
     this.pageTemplates = const [],
-    required this.onLinkB,
-    required this.onUnlinkB,
     required this.onTranspose,
-    this.bPairs = const {},
     this.overflowCounts = const {},
     this.contiName,
   });
@@ -9217,10 +8859,6 @@ class _StagingPanel extends StatelessWidget {
   // PPT 항목: 원본을 PowerPoint 등으로 열어 고치기 / 원본에서 다시 굽기
   final ValueChanged<int> onOpenSource;
   final ValueChanged<int> onReloadSource;
-  // PPT 항목에 이은 외국어 PPT. 키 = A 렌더 폴더(macOS 만, Windows 는 비어 있다).
-  final Map<String, BPptPair> bPairs;
-  final ValueChanged<int> onLinkB;
-  final ValueChanged<int> onUnlinkB;
   // 코드 있는 곡 항목의 조 칩 → 조 바꾸기 팝오버.
   final void Function(int uid, int transpose, ChordAccidental accidental)
   onTranspose;
@@ -9284,73 +8922,34 @@ class _StagingPanel extends StatelessWidget {
     );
   }
 
-  BPptPair? _bPairOf(StagingItem item) {
-    if (item is! ImageStagingItem || item.imagePaths.isEmpty) return null;
-    return bPairs[p.dirname(item.imagePaths.first)];
-  }
-
-  /// PPT 항목 연필 메뉴. 나눈 항목(원본 없음)은 macOS 에서 외국어 연결만 보인다.
-  Widget _pptMenu(int uid, ImageStagingItem item, ButtonStyle iconStyle) {
-    final pair = _bPairOf(item);
-    final first = item.imagePaths.firstOrNull;
-    final linkable = first != null && isRenderedPage(first);
+  /// PPT 항목 연필 메뉴(원본이 있는 항목만).
+  Widget _pptMenu(int uid, ButtonStyle iconStyle) {
     return PopupMenuButton<_PptMenu>(
       icon: const Icon(Icons.edit_note_rounded, size: 20),
-      tooltip: Platform.isMacOS ? 'PPT 수정·외국어 연결' : '원본 PPT 수정',
+      tooltip: '원본 PPT 수정',
       style: iconStyle,
       onSelected: (action) => switch (action) {
         _PptMenu.open => onOpenSource(uid),
         _PptMenu.reload => onReloadSource(uid),
-        _PptMenu.linkB => onLinkB(uid),
-        _PptMenu.unlinkB => onUnlinkB(uid),
       },
-      itemBuilder: (_) => [
-        if (item.sourcePath != null) ...const [
-          PopupMenuItem(
-            value: _PptMenu.open,
-            child: ListTile(
-              leading: Icon(Icons.open_in_new),
-              title: Text('원본 열어 수정'),
-              subtitle: Text('저장하면 자동으로 다시 불러옵니다'),
-              dense: true,
-            ),
+      itemBuilder: (_) => const [
+        PopupMenuItem(
+          value: _PptMenu.open,
+          child: ListTile(
+            leading: Icon(Icons.open_in_new),
+            title: Text('원본 열어 수정'),
+            subtitle: Text('저장하면 자동으로 다시 불러옵니다'),
+            dense: true,
           ),
-          PopupMenuItem(
-            value: _PptMenu.reload,
-            child: ListTile(
-              leading: Icon(Icons.refresh),
-              title: Text('원본에서 다시 불러오기'),
-              dense: true,
-            ),
+        ),
+        PopupMenuItem(
+          value: _PptMenu.reload,
+          child: ListTile(
+            leading: Icon(Icons.refresh),
+            title: Text('원본에서 다시 불러오기'),
+            dense: true,
           ),
-        ],
-        if (Platform.isMacOS) ...[
-          if (item.sourcePath != null) const PopupMenuDivider(),
-          PopupMenuItem(
-            value: _PptMenu.linkB,
-            enabled: linkable,
-            child: ListTile(
-              enabled: linkable,
-              leading: const Icon(Icons.subtitles_outlined),
-              title: Text(pair == null ? '외국어 PPT 연결…' : '외국어 PPT 바꾸기…'),
-              subtitle: Text(
-                !linkable
-                    ? '다른 PC에서 받은 PPT는 연결할 수 없습니다. 파일을 다시 추가해 주세요'
-                    : pair?.bName ?? '통역 화면에 같은 쪽 번호로 나옵니다',
-              ),
-              dense: true,
-            ),
-          ),
-          if (pair != null)
-            const PopupMenuItem(
-              value: _PptMenu.unlinkB,
-              child: ListTile(
-                leading: Icon(Icons.link_off),
-                title: Text('외국어 PPT 연결 끊기'),
-                dense: true,
-              ),
-            ),
-        ],
+        ),
       ],
     );
   }
@@ -9665,15 +9264,6 @@ class _StagingPanel extends StatelessWidget {
                                                 _KindTag(
                                                   isFreePage ? '편집' : '이미지',
                                                 ),
-                                              if (_bPairOf(item)
-                                                  case final pair?)
-                                                Tooltip(
-                                                  message:
-                                                      '외국어 PPT: ${pair.bName} · '
-                                                      '원본 ${pair.aCount}장 / '
-                                                      '외국어 ${pair.bCount}장',
-                                                  child: const _KindTag('외국어'),
-                                                ),
                                               // 편집 페이지는 늘 배경을 갖고 있어 표시가 뜻이 없다.
                                               if (background != null &&
                                                   !isFreePage)
@@ -9766,17 +9356,6 @@ class _StagingPanel extends StatelessWidget {
                                                       '가사 상자를 넘는 페이지가 $count장 있습니다. '
                                                       '페이지를 나누거나 글자 크기를 줄여 주세요.',
                                                 ),
-                                              if (_bPairOf(item)
-                                                  case final pair?
-                                                  when pair.aCount !=
-                                                      pair.bCount)
-                                                _OverflowChip(
-                                                  '쪽 수 다름',
-                                                  tooltip:
-                                                      '원본 ${pair.aCount}장 / '
-                                                      '외국어 ${pair.bCount}장. '
-                                                      '쪽이 어긋날 수 있습니다.',
-                                                ),
                                             ],
                                           ),
                                           if (previewText.isNotEmpty)
@@ -9808,9 +9387,8 @@ class _StagingPanel extends StatelessWidget {
                                     ),
                                     if (item is ImageStagingItem &&
                                         !isFreePage &&
-                                        (item.sourcePath != null ||
-                                            Platform.isMacOS))
-                                      _pptMenu(entry.uid, item, compactIcon),
+                                        item.sourcePath != null)
+                                      _pptMenu(entry.uid, compactIcon),
                                     if (isFreePage)
                                       IconButton(
                                         icon: const Icon(
@@ -13467,7 +13045,6 @@ class ConsoleSlideView extends StatelessWidget {
 class _SlideThumbnail extends StatefulWidget {
   const _SlideThumbnail({
     required this.data,
-    this.bData,
     required this.isSelected,
     required this.index,
     this.isEditable = true,
@@ -13487,8 +13064,6 @@ class _SlideThumbnail extends StatefulWidget {
   /// 송폼 라벨 — 좌하단 작은 배지(코드 ♪ 배지가 있으면 그 오른쪽). 관객 화면엔 안 나간다.
   final List<SectionLabel> formLabels;
 
-  /// 통역 화면 판. 있으면 그 기준 넘침도 표시한다.
-  final SlidePageData? bData;
   final bool isSelected;
   final int index;
   final bool isEditable;
@@ -13510,18 +13085,9 @@ class _SlideThumbnailState extends State<_SlideThumbnail> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    // 넘친 비율. 안 넘치면 null. 관객 화면이 넘치면 그쪽을 먼저 알린다.
+    // 넘친 비율. 안 넘치면 null.
     final ratio = SlideTextLayout.cachedOverflowRatio(widget.data);
-    final bData = widget.bData;
-    final bRatio = bData == null
-        ? 0.0
-        : SlideTextLayout.cachedOverflowRatio(bData);
-    const threshold = SlideTextLayout.overflowThreshold;
-    final overflow = ratio > threshold
-        ? ratio
-        : bRatio > threshold
-        ? bRatio
-        : null;
+    final overflow = ratio > SlideTextLayout.overflowThreshold ? ratio : null;
 
     return Tooltip(
       message: widget.onDoubleTap == null ? '' : '클릭: 선택 / 더블클릭: 이동',
@@ -13621,7 +13187,7 @@ class _SlideThumbnailState extends State<_SlideThumbnail> {
                         right: 4,
                         child: Tooltip(
                           message:
-                              '${ratio > threshold ? '관객' : '통역'} 화면에서 가사가 상자를 넘습니다 '
+                              '가사가 상자를 넘습니다 '
                               '(${SlideTextLayout.overflowLabel(overflow)})',
                           child: Container(
                             padding: const EdgeInsets.symmetric(
@@ -15210,10 +14776,6 @@ class _PresenterConsole extends StatefulWidget {
     required this.onToggleSinger,
     required this.isMobileSingerOn,
     required this.onShowMobileSinger,
-    required this.isBOpen,
-    required this.bScreen,
-    required this.onToggleB,
-    required this.bPageMissing,
     required this.pointerMode,
     required this.pointerSize,
     required this.onPointerModeChanged,
@@ -15280,11 +14842,6 @@ class _PresenterConsole extends StatefulWidget {
   final VoidCallback onToggleSinger;
   final bool isMobileSingerOn;
   final VoidCallback onShowMobileSinger;
-  // 통역 화면. bScreen 이 null 이면 아직 모니터를 안 골랐다.
-  final bool isBOpen;
-  final ScreenChoice? bScreen;
-  final VoidCallback onToggleB;
-  final bool bPageMissing;
   final PresenterPointerMode pointerMode;
   final double pointerSize;
   final ValueChanged<PresenterPointerMode> onPointerModeChanged;
@@ -16018,14 +15575,6 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
     );
   }
 
-  /// 넘침을 잴 통역 화면 판. 모니터를 안 골랐으면 null.
-  SlidePageData? _bOverflowDataFor(int i) => widget.bScreen == null
-      ? null
-      : _pageDataFor(i, formatted: false).forB(
-          widget.slides[i].imagePath,
-          sermon: widget.slides[i].background?.isSermon ?? false,
-        );
-
   String _keyAt(int index) {
     if (index < 0 || index >= widget.slides.length) return '';
     final info = widget.slides[index];
@@ -16498,22 +16047,6 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
                 : '휴대폰 화면 — 싱어창·발표자 모드 (같은 와이파이)',
             color: widget.isMobileSingerOn ? cs.primary : null,
           ),
-        if (open && Platform.isMacOS)
-          IconButton(
-            onPressed: widget.onToggleB,
-            icon: Icon(
-              widget.isBOpen
-                  ? Icons.subtitles_rounded
-                  : Icons.subtitles_outlined,
-            ),
-            tooltip: widget.isBOpen
-                ? '통역 화면 닫기'
-                : switch (widget.bScreen) {
-                    null => '통역 화면 열기 (모니터를 먼저 골라 주세요)',
-                    final s => '통역 화면 열기 (${s.index + 1}. ${s.name})',
-                  },
-            color: widget.isBOpen ? cs.primary : null,
-          ),
       ],
     );
   }
@@ -16582,11 +16115,6 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
                         fontSize: 12,
                         color: cs.onSurfaceVariant,
                       ),
-                    ),
-                  if (widget.bPageMissing)
-                    const _OverflowChip(
-                      '외국어 쪽 없음',
-                      tooltip: '통역 화면에 원본 쪽이 나가고 있습니다.',
                     ),
                 ],
               ),
@@ -17053,7 +16581,6 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
           cs,
           _SlideThumbnail(
             data: _pageDataFor(i),
-            bData: _bOverflowDataFor(i),
             isSelected: i == widget.currentIndex,
             index: i,
             isEditable: !widget.slides[i].isAutoSpacer,
@@ -17345,7 +16872,6 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
                         cs,
                         _SlideThumbnail(
                           data: _pageDataFor(i),
-                          bData: _bOverflowDataFor(i),
                           isSelected: i == widget.currentIndex,
                           index: i,
                           isEditable: !widget.slides[i].isAutoSpacer,

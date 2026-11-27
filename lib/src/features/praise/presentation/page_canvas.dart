@@ -208,7 +208,7 @@ class PageShapePainter extends CustomPainter {
 }
 
 /// [PageCanvas] 를 1920x1080 PNG 한 장으로 굽는다. 구운 PNG 는 `ImageStagingItem` 의 이미지가
-/// 되어 기존 'PPT 이미지 페이지' 길로 관객 화면·발표 보기·PPTX·싱어·통역 화면에 나간다.
+/// 되어 기존 'PPT 이미지 페이지' 길로 관객 화면·발표 보기·PPTX·싱어 화면에 나간다.
 ///
 /// 파일은 `Application Support/page_images/render_<키>.png`. 키 = 요소 JSON + 배경(색·그림)
 /// + 쓰인 그림 파일의 수정 시각·크기 + [_renderVersion] — 같으면 다시 굽지 않는다.
