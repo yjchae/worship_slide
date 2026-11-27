@@ -539,8 +539,23 @@ class _ObsOverlayDialogState extends State<ObsOverlayDialog> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                preview,
+                Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 560),
+                    child: preview,
+                  ),
+                ),
                 const Divider(),
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                  child: Text(
+                    '자막 디자인 설정',
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                ),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   child: _designForm(cs),
