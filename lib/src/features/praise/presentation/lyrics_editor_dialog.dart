@@ -1385,72 +1385,83 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
   }
 
   Widget _buildHeader(bool isNew) {
-    return Row(
+    final title = widget.contiOnly
+        ? '이 콘티에서만 수정'
+        : (isNew ? '새 곡 추가' : '가사 수정');
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(
-          widget.contiOnly ? '이 콘티에서만 수정' : (isNew ? '새 곡 추가' : '가사 수정'),
-          style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w700),
+        Row(
+          children: [
+            Text(
+              title,
+              style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: widget.contiOnly
+                  ? Text(
+                      '${widget.song?.displayTitle ?? ''} · 이번 콘티에만 적용됩니다',
+                      overflow: TextOverflow.ellipsis,
+                    )
+                  : TextField(
+                      controller: _titleController,
+                      onChanged: (_) => setState(() {}),
+                      decoration: const InputDecoration(
+                        labelText: '제목',
+                        isDense: true,
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+            ),
+          ],
         ),
-        const SizedBox(width: 14),
-        if (widget.contiOnly)
-          Expanded(
-            child: Text(
-              '${widget.song?.displayTitle ?? ''} · 저장된 곡은 그대로 두고 이번 콘티에만 적용됩니다',
-              overflow: TextOverflow.ellipsis,
-            ),
-          )
-        else
-          Expanded(
-            child: TextField(
-              controller: _titleController,
-              onChanged: (_) => setState(() {}),
-              decoration: const InputDecoration(
-                labelText: '제목',
-                isDense: true,
-                border: OutlineInputBorder(),
-              ),
-            ),
-          ),
-        const SizedBox(width: 14),
-        Tooltip(
-          message:
-              '원본 가사 위에 코드(G, D/F#, Em7 …)를 넣습니다.\n'
-              '코드는 싱어·휴대폰·발표 보기에서만 보이고 관객 화면·PPTX 에는 안 나갑니다.',
+        const SizedBox(height: 6),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
           child: Row(
-            mainAxisSize: MainAxisSize.min,
             children: [
-              const Text('코드', style: TextStyle(fontWeight: FontWeight.w600)),
-              Switch(value: _chordMode, onChanged: _setChordMode),
+              Tooltip(
+                message: '코드는 싱어·휴대폰·발표 보기에서만 보입니다.',
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      '코드',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    Switch(value: _chordMode, onChanged: _setChordMode),
+                  ],
+                ),
+              ),
+              if (_chordMode) ...[const SizedBox(width: 6), _keyPicker()],
+              const SizedBox(width: 14),
+              Tooltip(
+                message: '원본 가사로 보조 언어를 번역하거나 발음으로 변환합니다.',
+                child: OutlinedButton.icon(
+                  onPressed: _translating ? null : _translate,
+                  icon: _translating
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.translate_rounded, size: 18),
+                  label: Text(_translating ? '번역 중…' : '번역·변환'),
+                ),
+              ),
+              const SizedBox(width: 14),
+              SegmentedButton<_EditorView>(
+                showSelectedIcon: false,
+                segments: const [
+                  ButtonSegment(value: _EditorView.table, label: Text('페이지 표')),
+                  ButtonSegment(value: _EditorView.whole, label: Text('통째로')),
+                ],
+                selected: {_view},
+                onSelectionChanged: (s) => _setView(s.first),
+              ),
             ],
           ),
-        ),
-        if (_chordMode) ...[const SizedBox(width: 6), _keyPicker()],
-        const SizedBox(width: 14),
-        Tooltip(
-          message:
-              '원본 가사로 보조·추가 보조 칸을 채웁니다 (Claude).\n'
-              "언어 이름에 '발음'이 들어 있으면 한글 발음을 영어 글자로, 아니면 그 언어로 번역합니다.",
-          child: OutlinedButton.icon(
-            onPressed: _translating ? null : _translate,
-            icon: _translating
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.translate_rounded, size: 18),
-            label: Text(_translating ? '번역 중…' : '번역·변환'),
-          ),
-        ),
-        const SizedBox(width: 14),
-        SegmentedButton<_EditorView>(
-          showSelectedIcon: false,
-          segments: const [
-            ButtonSegment(value: _EditorView.table, label: Text('페이지 표')),
-            ButtonSegment(value: _EditorView.whole, label: Text('통째로')),
-          ],
-          selected: {_view},
-          onSelectionChanged: (s) => _setView(s.first),
         ),
       ],
     );
@@ -1712,13 +1723,11 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
             },
           ),
         ),
-        TextButton(
+        IconButton(
           onPressed: () => _addLanguage(column),
-          style: TextButton.styleFrom(
-            minimumSize: const Size(0, 30),
-            padding: const EdgeInsets.symmetric(horizontal: 6),
-          ),
-          child: const Text('＋ 언어'),
+          tooltip: '언어 추가',
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.add_rounded, size: 18),
         ),
       ],
     );

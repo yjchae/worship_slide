@@ -5,6 +5,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_quill/flutter_quill.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:worship_slides/src/features/praise/data/page_template_store.dart';
+import 'package:worship_slides/src/features/praise/data/background_image_library.dart';
+import 'package:worship_slides/src/features/praise/domain/offering_design.dart';
+import 'package:worship_slides/src/features/praise/presentation/offering_dialog.dart';
 import 'package:worship_slides/src/features/praise/domain/export_style.dart';
 import 'package:worship_slides/src/features/praise/domain/page_element.dart';
 import 'package:worship_slides/src/features/praise/domain/slide_background.dart';
@@ -44,13 +47,21 @@ class _Harness {
 Future<_Harness> _open(
   WidgetTester tester, {
   List<PageElement>? elements,
+  Size size = const Size(1600, 1000),
+  double textScale = 1,
 }) async {
-  tester.view.physicalSize = const Size(1600, 1000);
+  tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.reset);
   final h = _Harness();
   await tester.pumpWidget(
     MaterialApp(
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(
+          context,
+        ).copyWith(textScaler: TextScaler.linear(textScale)),
+        child: child!,
+      ),
       home: Builder(
         builder: (context) => TextButton(
           onPressed: () async {
@@ -102,6 +113,56 @@ void main() {
       (a.top - b.top).abs() < 1e-9 &&
       (a.width - b.width).abs() < 1e-9 &&
       (a.height - b.height).abs() < 1e-9;
+
+  testWidgets('작은 창에서 캔버스와 속성을 전환한다', (tester) async {
+    await _open(tester, size: const Size(800, 600), textScale: 1.6);
+    expect(find.byType(PageCanvas), findsOneWidget);
+    await tester.tap(find.text('속성'));
+    await tester.pumpAndSettle();
+    expect(find.byType(PageCanvas), findsNothing);
+    expect(find.text('캔버스'), findsOneWidget);
+    await tester.tap(find.text('캔버스'));
+    await tester.pumpAndSettle();
+    expect(find.byType(PageCanvas), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('작은 창과 큰 글자에서 헌금송 미리보기와 설정을 전환한다', (tester) async {
+    tester.view.physicalSize = const Size(800, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(
+            context,
+          ).copyWith(textScaler: const TextScaler.linear(1.6)),
+          child: child!,
+        ),
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () => showDialog<void>(
+              context: context,
+              builder: (_) => const OfferingDialog(
+                mode: OfferingDialogMode.item,
+                initial: OfferingDesign(),
+                globalStyle: _style,
+                imageLibrary: BackgroundImageLibrary(),
+              ),
+            ),
+            child: const Text('열기'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('열기'));
+    await tester.pumpAndSettle();
+    expect(find.text('미리보기 · 위치'), findsOneWidget);
+    await tester.tap(find.text('디자인 설정'));
+    await tester.pumpAndSettle();
+    expect(find.text('가사 위치'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 
   group('resizePageRect', () {
     test('변 손잡이는 그 변만 움직인다', () {

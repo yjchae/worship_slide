@@ -29,6 +29,7 @@ class _CloudContiDialogState extends State<CloudContiDialog> {
   List<CloudConti>? _cloud;
   Map<String, WorshipConti> _local = const {};
   String? _error;
+  int _loadGeneration = 0;
 
   /// 받거나 지우는 중인 콘티 uid(버튼을 잠깐 막는다).
   final _busy = <String>{};
@@ -43,19 +44,20 @@ class _CloudContiDialogState extends State<CloudContiDialog> {
   }
 
   Future<void> _load() async {
+    final generation = ++_loadGeneration;
     try {
       final listed = await widget.service.listCloudContis();
-      if (!mounted) return;
+      if (!mounted || generation != _loadGeneration) return;
       setState(() {
         _cloud = listed.cloud;
         _local = listed.local;
         _error = null;
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || generation != _loadGeneration) return;
       setState(() {
         _cloud = const [];
-        _error = '클라우드 콘티를 읽지 못했습니다: $error';
+        _error = '클라우드 콘티를 읽지 못했습니다: ${_message(error)}';
       });
     }
   }
@@ -216,6 +218,16 @@ class _CloudContiDialogState extends State<CloudContiDialog> {
                               fontSize: 12,
                               fontWeight: FontWeight.w600,
                               color: cs.onSurface,
+                            ),
+                          ),
+                        if (busy)
+                          Semantics(
+                            liveRegion: true,
+                            child: Text(
+                              _downloading.contains(conti.uid)
+                                  ? '내려받는 중…'
+                                  : '클라우드에서 지우는 중…',
+                              style: TextStyle(color: cs.primary, fontSize: 12),
                             ),
                           ),
                       ],

@@ -1477,9 +1477,8 @@ class MainFlutterWindow: NSWindow {
     let windowFrame = self.frame
     self.contentViewController = flutterViewController
     self.setFrame(windowFrame, display: true)
-    // 1180x700 미만에서는 예배 콘티/검색 패널 내부 콘텐츠가 RenderFlex overflow를 일으켜
-    // 버튼이 경고 줄무늬에 가려짐 (실측 확인: 1180x560 깨짐, 1180x650 정상).
-    self.minSize = NSSize(width: 1180, height: 700)
+    // 작은 화면에서도 준비·발표 도구를 사용할 수 있도록 창 크기를 제한한다.
+    self.minSize = NSSize(width: 800, height: 600)
     if self.frame.size.width < self.minSize.width || self.frame.size.height < self.minSize.height {
       self.setContentSize(self.minSize)
       self.center()

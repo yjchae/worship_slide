@@ -152,32 +152,60 @@ class _ChordPickDialogState extends State<ChordPickDialog> {
       ),
       content: SizedBox(
         width: 420,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            CallbackShortcuts(
-              bindings: {
-                const SingleActivator(LogicalKeyboardKey.tab): () =>
-                    _submit(next: true),
-              },
-              child: TextField(
-                controller: _input,
-                autofocus: true,
-                onChanged: (_) => setState(() {}),
-                onSubmitted: (_) => _submit(),
-                decoration: InputDecoration(
-                  labelText: '코드 (예: G, D/F#, Em7, Cadd9)',
-                  border: const OutlineInputBorder(),
-                  isDense: true,
-                  errorText: text.isEmpty || _valid ? null : '코드로 읽을 수 없습니다',
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              CallbackShortcuts(
+                bindings: {
+                  const SingleActivator(LogicalKeyboardKey.tab): () =>
+                      _submit(next: true),
+                },
+                child: TextField(
+                  controller: _input,
+                  autofocus: true,
+                  onChanged: (_) => setState(() {}),
+                  onSubmitted: (_) => _submit(),
+                  decoration: InputDecoration(
+                    labelText: '코드 (예: G, D/F#, Em7, Cadd9)',
+                    border: const OutlineInputBorder(),
+                    isDense: true,
+                    errorText: text.isEmpty || _valid ? null : '코드로 읽을 수 없습니다',
+                  ),
                 ),
               ),
-            ),
-            if (widget.songChords.isNotEmpty) ...[
+              if (widget.songChords.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Text(
+                  '이 곡에서 쓴 코드',
+                  style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+                ),
+                const SizedBox(height: 4),
+                Wrap(
+                  spacing: 4,
+                  runSpacing: 4,
+                  children: [
+                    for (final c in widget.songChords.take(12)) quick(c),
+                  ],
+                ),
+              ],
+              if (diatonic.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Text(
+                  '${widget.songKey} 조 코드',
+                  style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+                ),
+                const SizedBox(height: 4),
+                Wrap(
+                  spacing: 4,
+                  runSpacing: 4,
+                  children: [for (final c in diatonic) quick(c)],
+                ),
+              ],
               const SizedBox(height: 10),
               Text(
-                '이 곡에서 쓴 코드',
+                '조립',
                 style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
               ),
               const SizedBox(height: 4),
@@ -185,49 +213,33 @@ class _ChordPickDialogState extends State<ChordPickDialog> {
                 spacing: 4,
                 runSpacing: 4,
                 children: [
-                  for (final c in widget.songChords.take(12)) quick(c),
+                  for (final r in const ['C', 'D', 'E', 'F', 'G', 'A', 'B'])
+                    part(r),
+                  part('♯', '#'),
+                  part('♭', 'b'),
+                  for (final q in const [
+                    'm',
+                    '7',
+                    'maj7',
+                    'sus4',
+                    'add9',
+                    'dim',
+                  ])
+                    part(q),
+                  part('/베이스', '/'),
+                  TextButton(
+                    onPressed: () => _put(''),
+                    child: const Text('비우기'),
+                  ),
                 ],
               ),
-            ],
-            if (diatonic.isNotEmpty) ...[
-              const SizedBox(height: 10),
+              const SizedBox(height: 8),
               Text(
-                '${widget.songKey} 조 코드',
-                style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
-              ),
-              const SizedBox(height: 4),
-              Wrap(
-                spacing: 4,
-                runSpacing: 4,
-                children: [for (final c in diatonic) quick(c)],
+                'Enter 넣기 · Tab 넣고 다음 글자로 · Esc 닫기',
+                style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
               ),
             ],
-            const SizedBox(height: 10),
-            Text(
-              '조립',
-              style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
-            ),
-            const SizedBox(height: 4),
-            Wrap(
-              spacing: 4,
-              runSpacing: 4,
-              children: [
-                for (final r in const ['C', 'D', 'E', 'F', 'G', 'A', 'B'])
-                  part(r),
-                part('♯', '#'),
-                part('♭', 'b'),
-                for (final q in const ['m', '7', 'maj7', 'sus4', 'add9', 'dim'])
-                  part(q),
-                part('/베이스', '/'),
-                TextButton(onPressed: () => _put(''), child: const Text('비우기')),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Enter 넣기 · Tab 넣고 다음 글자로 · Esc 닫기',
-              style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
-            ),
-          ],
+          ),
         ),
       ),
       actions: [

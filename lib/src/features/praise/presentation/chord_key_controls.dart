@@ -187,130 +187,132 @@ class _ChordTransposeDialogState extends State<ChordTransposeDialog> {
       ),
       content: SizedBox(
         width: 380,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Text(
-                  from == null
-                      ? '원래 조  모름'
-                      : '원래 조  $from${song.chordKeyEstimated ? ' (추정)' : ''}',
-                ),
-                const Spacer(),
-                if (song.chordKeyEstimated && widget.onEditKey != null)
-                  TextButton(
-                    onPressed: widget.onEditKey,
-                    child: const Text('가사 수정에서 정하기'),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                IconButton.outlined(
-                  tooltip: '반음 내리기',
-                  onPressed: () => _set(n: _n - 1),
-                  icon: const Icon(Icons.remove_rounded),
-                ),
-                const SizedBox(width: 12),
-                Container(
-                  width: 120,
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    border: Border.all(color: cs.outline),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    _n == 0 ? now : '$now  $sign',
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                IconButton.outlined(
-                  tooltip: '반음 올리기',
-                  onPressed: () => _set(n: _n + 1),
-                  icon: const Icon(Icons.add_rounded),
-                ),
-              ],
-            ),
-            if (from != null) ...[
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 4,
-                runSpacing: 4,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
                 children: [
-                  for (var d = -5; d <= 6; d++)
-                    ChoiceChip(
-                      label: Text(keyAfter(from, d, accidental: _acc)),
-                      selected: (d - _n) % 12 == 0,
-                      visualDensity: VisualDensity.compact,
-                      showCheckmark: false,
-                      onSelected: (_) => _set(n: d),
+                  Text(
+                    from == null
+                        ? '원래 조  모름'
+                        : '원래 조  $from${song.chordKeyEstimated ? ' (추정)' : ''}',
+                  ),
+                  const Spacer(),
+                  if (song.chordKeyEstimated && widget.onEditKey != null)
+                    TextButton(
+                      onPressed: widget.onEditKey,
+                      child: const Text('가사 수정에서 정하기'),
                     ),
                 ],
               ),
-            ],
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                const Text('♯/♭ 표기'),
-                const SizedBox(width: 10),
-                SegmentedButton<ChordAccidental>(
-                  showSelectedIcon: false,
-                  style: SegmentedButton.styleFrom(
-                    visualDensity: VisualDensity.compact,
+              const SizedBox(height: 10),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  IconButton.outlined(
+                    tooltip: '반음 내리기',
+                    onPressed: () => _set(n: _n - 1),
+                    icon: const Icon(Icons.remove_rounded),
                   ),
-                  segments: const [
-                    ButtonSegment(
-                      value: ChordAccidental.auto,
-                      label: Text('자동'),
+                  const SizedBox(width: 12),
+                  Container(
+                    width: 120,
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      border: Border.all(color: cs.outline),
+                      borderRadius: BorderRadius.circular(8),
                     ),
-                    ButtonSegment(
-                      value: ChordAccidental.sharp,
-                      label: Text('♯'),
+                    child: Text(
+                      _n == 0 ? now : '$now  $sign',
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
-                    ButtonSegment(
-                      value: ChordAccidental.flat,
-                      label: Text('♭'),
-                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  IconButton.outlined(
+                    tooltip: '반음 올리기',
+                    onPressed: () => _set(n: _n + 1),
+                    icon: const Icon(Icons.add_rounded),
+                  ),
+                ],
+              ),
+              if (from != null) ...[
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 4,
+                  runSpacing: 4,
+                  children: [
+                    for (var d = -5; d <= 6; d++)
+                      ChoiceChip(
+                        label: Text(keyAfter(from, d, accidental: _acc)),
+                        selected: (d - _n) % 12 == 0,
+                        visualDensity: VisualDensity.compact,
+                        showCheckmark: false,
+                        onSelected: (_) => _set(n: d),
+                      ),
                   ],
-                  selected: {_acc},
-                  onSelectionChanged: (s) => _set(acc: s.first),
                 ),
               ],
-            ),
-            if (preview != null) ...[
               const SizedBox(height: 12),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: SizedBox(
-                  height: 64,
-                  width: double.infinity,
-                  child: ChordSheetView(
-                    lines: [preview],
-                    fontSize: 22,
-                    fit: BoxFit.scaleDown,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 6,
+              Row(
+                children: [
+                  const Text('♯/♭ 표기'),
+                  const SizedBox(width: 10),
+                  SegmentedButton<ChordAccidental>(
+                    showSelectedIcon: false,
+                    style: SegmentedButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    segments: const [
+                      ButtonSegment(
+                        value: ChordAccidental.auto,
+                        label: Text('자동'),
+                      ),
+                      ButtonSegment(
+                        value: ChordAccidental.sharp,
+                        label: Text('♯'),
+                      ),
+                      ButtonSegment(
+                        value: ChordAccidental.flat,
+                        label: Text('♭'),
+                      ),
+                    ],
+                    selected: {_acc},
+                    onSelectionChanged: (s) => _set(acc: s.first),
+                  ),
+                ],
+              ),
+              if (preview != null) ...[
+                const SizedBox(height: 12),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: SizedBox(
+                    height: 64,
+                    width: double.infinity,
+                    child: ChordSheetView(
+                      lines: [preview],
+                      fontSize: 22,
+                      fit: BoxFit.scaleDown,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 6,
+                      ),
                     ),
                   ),
                 ),
+              ],
+              const SizedBox(height: 8),
+              Text(
+                '이 콘티 항목만 바뀝니다. 라이브러리 곡·관객 화면은 그대로입니다.',
+                style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
               ),
             ],
-            const SizedBox(height: 8),
-            Text(
-              '이 콘티 항목만 바뀝니다. 라이브러리 곡·관객 화면은 그대로입니다.',
-              style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
-            ),
-          ],
+          ),
         ),
       ),
       actions: [

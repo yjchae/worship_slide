@@ -167,7 +167,9 @@ class PageInsertRow extends StatelessWidget {
           onPressed: onPressed,
         );
     return SizedBox(
-      height: pageRibbonRowHeight,
+      height:
+          pageRibbonRowHeight +
+          (MediaQuery.textScalerOf(context).scale(14) - 14).clamp(0, 14),
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -384,7 +386,9 @@ class _PageFormatRowState extends State<PageFormatRow> {
     ) => toggleOn(icon, tooltip, selected && on, onPressed);
 
     return Container(
-      height: pageRibbonRowHeight,
+      height:
+          pageRibbonRowHeight +
+          (MediaQuery.textScalerOf(context).scale(14) - 14).clamp(0, 14),
       color: cs.surfaceContainerLow,
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,

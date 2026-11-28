@@ -54,6 +54,138 @@ void main() {
 
   tearDownAll(() => temp.delete(recursive: true));
 
+  testWidgets('작은 창에서 콘티와 발표 보기를 사용할 수 있다', (tester) async {
+    tester.view.physicalSize = const Size(640, 480);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(const MaterialApp(home: PraiseHomePage()));
+    await settle(tester);
+    expect(tester.takeException(), isNull, reason: '준비 화면');
+    await tester.tap(find.text('첫째 곡'));
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.tap(find.text('첫째 곡'));
+    await settle(tester);
+    expect(tester.takeException(), isNull, reason: '콘티 구성');
+    await tester.tap(find.text('발표 보기'));
+    await settle(tester);
+    expect(find.text('현재 슬라이드'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    await settle(tester);
+  });
+
+  testWidgets('800×600 큰 글자에서도 준비 화면이 넘치지 않는다', (tester) async {
+    tester.view.physicalSize = const Size(800, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(
+            context,
+          ).copyWith(textScaler: const TextScaler.linear(1.6)),
+          child: child!,
+        ),
+        home: const PraiseHomePage(),
+      ),
+    );
+    await settle(tester);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    await settle(tester);
+  });
+
+  testWidgets('발표 디자인의 기능 탭과 글자 크기 입력을 작은 창에서 사용한다', (tester) async {
+    tester.view.physicalSize = const Size(800, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(
+            context,
+          ).copyWith(textScaler: const TextScaler.linear(1.6)),
+          child: child!,
+        ),
+        home: const PraiseHomePage(),
+      ),
+    );
+    await settle(tester);
+    await tester.tap(find.text('발표 보기'));
+    await settle(tester);
+    await tester.tap(find.byKey(const ValueKey('design-tab-song')));
+    await settle(tester);
+    expect(tester.takeException(), isNull, reason: '찬양 설정');
+    final increase = find.byTooltip('글자 크기 1 늘리기').first;
+    final input = find.byKey(const ValueKey('design-font-size-input')).first;
+    final initial = int.parse(tester.widget<TextField>(input).controller!.text);
+    await tester.tap(increase);
+    await tester.pump();
+    expect(tester.widget<TextField>(input).controller!.text, '${initial + 1}');
+    await tester.enterText(input, '37');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
+    expect(tester.widget<TextField>(input).controller!.text, '37');
+    await tester.tap(find.byKey(const ValueKey('design-group-song-2')));
+    await settle(tester);
+    expect(find.text('제목 표시'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('design-group-song-0')));
+    await settle(tester);
+    expect(tester.widget<TextField>(input).controller!.text, '37');
+    await tester.enterText(input, '999');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
+    expect(tester.widget<TextField>(input).controller!.text, '54');
+    await tester.tap(find.byKey(const ValueKey('design-tab-common')));
+    await settle(tester);
+    await tester.tap(find.byKey(const ValueKey('design-group-common-4')));
+    await settle(tester);
+    expect(find.text('틀 관리'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('design-tab-bible')));
+    await settle(tester);
+    expect(find.text('줄 간격 %'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    for (final entry in <String, int>{
+      'common': 5,
+      'song': 3,
+      'bible': 3,
+    }.entries) {
+      await tester.tap(find.byKey(ValueKey('design-tab-${entry.key}')));
+      await settle(tester);
+      for (var i = 0; i < entry.value; i++) {
+        await tester.tap(find.byKey(ValueKey('design-group-${entry.key}-$i')));
+        await settle(tester);
+        expect(tester.takeException(), isNull, reason: '${entry.key} $i');
+      }
+    }
+    await tester.pumpWidget(const SizedBox());
+    await settle(tester);
+  });
+
+  testWidgets('좁은 창에서 마우스로 디자인 설정을 좌우로 이동한다', (tester) async {
+    tester.view.physicalSize = const Size(640, 480);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(const MaterialApp(home: PraiseHomePage()));
+    await settle(tester);
+    await tester.tap(find.text('발표 보기'));
+    await settle(tester);
+    await tester.tap(find.byKey(const ValueKey('design-tab-bible')));
+    await settle(tester);
+    final bar = find.byKey(const ValueKey('design-group-scrollbar'));
+    final controller = tester.widget<Scrollbar>(bar).controller!;
+    expect(controller.position.maxScrollExtent, greaterThan(0));
+    await tester.tap(find.byTooltip('설정 오른쪽으로 이동'));
+    await tester.pumpAndSettle();
+    expect(controller.offset, greaterThan(0));
+    await tester.tap(find.byTooltip('설정 왼쪽으로 이동'));
+    await tester.pumpAndSettle();
+    expect(controller.offset, 0);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    await settle(tester);
+  });
+
   testWidgets('하위 그룹 만들기 → 들여쓰기·접기(상위가 하위도 가림) → 되돌리기', (tester) async {
     tester.view.physicalSize = const Size(1920, 1400);
     tester.view.devicePixelRatio = 1;

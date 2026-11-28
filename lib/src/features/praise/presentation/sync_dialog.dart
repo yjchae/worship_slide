@@ -107,72 +107,77 @@ class _SyncDialogState extends State<SyncDialog> {
         width: 460,
         child: ValueListenableBuilder<SyncStatus>(
           valueListenable: widget.service.status,
-          builder: (context, status, _) => Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '같은 접속 키를 넣은 PC 끼리 구글 드라이브로 찬양과 콘티를 주고받습니다. '
-                '구글 로그인이나 드라이브 앱은 필요 없습니다.',
-                style: muted,
-              ),
-              const SizedBox(height: 16),
-              if (status.enabled) ...[
-                _FolderBox(status: status),
-                const SizedBox(height: 12),
-                _StatusLine(status: status),
-                CheckboxListTile(
-                  contentPadding: EdgeInsets.zero,
-                  controlAffinity: ListTileControlAffinity.leading,
-                  dense: true,
-                  value: widget.service.bibleUpload,
-                  onChanged: (v) async {
-                    await widget.service.setBibleUpload(v ?? false);
-                    if (mounted) setState(() {});
-                  },
-                  title: const Text(
-                    '이 PC 의 성경을 올립니다',
-                    style: TextStyle(fontSize: 13),
-                  ),
-                  subtitle: Text(
-                    '성경을 관리하는 PC 한 대만 켜세요. 꺼진 PC 는 성경을 받기만 합니다.',
-                    style: muted,
-                  ),
+          builder: (context, status, _) => SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '같은 접속 키를 넣은 PC 끼리 구글 드라이브로 찬양과 콘티를 주고받습니다. '
+                  '구글 로그인이나 드라이브 앱은 필요 없습니다.',
+                  style: muted,
                 ),
-              ] else ...[
-                TextField(
-                  controller: _keyController,
-                  enabled: !_connecting,
-                  minLines: 2,
-                  maxLines: 4,
-                  style: const TextStyle(fontSize: 12),
-                  decoration: InputDecoration(
-                    labelText: '접속 키 (관리자에게 받은 WS1- 로 시작하는 글)',
-                    errorText: _keyError ?? status.lastError,
-                    errorMaxLines: 3,
-                    border: const OutlineInputBorder(),
+                const SizedBox(height: 16),
+                if (status.enabled) ...[
+                  _FolderBox(status: status),
+                  const SizedBox(height: 12),
+                  _StatusLine(status: status),
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    dense: true,
+                    value: widget.service.bibleUpload,
+                    onChanged: (v) async {
+                      await widget.service.setBibleUpload(v ?? false);
+                      if (mounted) setState(() {});
+                    },
+                    title: const Text(
+                      '이 PC 의 성경을 올립니다',
+                      style: TextStyle(fontSize: 13),
+                    ),
+                    subtitle: Text(
+                      '성경을 관리하는 PC 한 대만 켜세요. 꺼진 PC 는 성경을 받기만 합니다.',
+                      style: muted,
+                    ),
                   ),
-                  onSubmitted: (_) => _connect(),
+                ] else ...[
+                  TextField(
+                    controller: _keyController,
+                    enabled: !_connecting,
+                    minLines: 2,
+                    maxLines: 4,
+                    style: const TextStyle(fontSize: 12),
+                    decoration: InputDecoration(
+                      labelText: '접속 키',
+                      helperText: '관리자에게 받은 WS1- 로 시작하는 글을 넣으세요.',
+                      helperMaxLines: 3,
+                      errorText: _keyError ?? status.lastError,
+                      errorMaxLines: 3,
+                      border: const OutlineInputBorder(),
+                    ),
+                    onSubmitted: (_) => _connect(),
+                  ),
+                ],
+                const SizedBox(height: 16),
+                Text(
+                  '· 찬양 동기화: 누를 때마다 다른 PC 의 새 찬양·바뀐 찬양을 받고, 이 PC 의 찬양을 올립니다.\n'
+                  '  같은 곡을 두 PC 에서 고쳤으면 나중에 고친 쪽이 남고, 지운 곡은 다른 PC 에서도 지워집니다.\n'
+                  '· 콘티: 콘티 불러오기 창에서 하나씩 클라우드에 올리고, 여기서 내려받습니다\n'
+                  '  (PPT 페이지·배경 이미지까지 같이 갑니다. 동영상·음악 파일은 안 갑니다).\n'
+                  '· 프로그램을 켤 때 한 번 서버를 보고, 새 찬양이나 콘티가 있으면 알려 드립니다.',
+                  style: muted.copyWith(height: 1.6),
                 ),
               ],
-              const SizedBox(height: 16),
-              Text(
-                '· 찬양 동기화: 누를 때마다 다른 PC 의 새 찬양·바뀐 찬양을 받고, 이 PC 의 찬양을 올립니다.\n'
-                '  같은 곡을 두 PC 에서 고쳤으면 나중에 고친 쪽이 남고, 지운 곡은 다른 PC 에서도 지워집니다.\n'
-                '· 콘티: 콘티 불러오기 창에서 하나씩 클라우드에 올리고, 여기서 내려받습니다\n'
-                '  (PPT 페이지·배경 이미지까지 같이 갑니다. 동영상·음악 파일은 안 갑니다).\n'
-                '· 프로그램을 켤 때 한 번 서버를 보고, 새 찬양이나 콘티가 있으면 알려 드립니다.',
-                style: muted.copyWith(height: 1.6),
-              ),
-            ],
+            ),
           ),
         ),
       ),
       actions: [
         ValueListenableBuilder<SyncStatus>(
           valueListenable: widget.service.status,
-          builder: (context, status, _) => Row(
-            mainAxisSize: MainAxisSize.min,
+          builder: (context, status, _) => Wrap(
+            alignment: WrapAlignment.end,
+            runSpacing: 8,
             children: [
               if (status.enabled) ...[
                 TextButton(
