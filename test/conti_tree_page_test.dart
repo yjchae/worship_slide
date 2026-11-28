@@ -211,7 +211,7 @@ void main() {
     await settle(tester);
   });
 
-  testWidgets('좁은 창에서 마우스로 디자인 설정을 좌우로 이동한다', (tester) async {
+  testWidgets('좁은 창에서 디자인 설정은 가로 스크롤된다', (tester) async {
     tester.view.physicalSize = const Size(640, 480);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
@@ -223,23 +223,10 @@ void main() {
     await settle(tester);
     final bar = find.byKey(const ValueKey('design-group-scrollbar'));
     final controller = tester.widget<Scrollbar>(bar).controller!;
-    IconButton button(String tooltip) => tester.widget<IconButton>(
-      find.byWidgetPredicate(
-        (widget) => widget is IconButton && widget.tooltip == tooltip,
-      ),
-    );
     expect(controller.position.maxScrollExtent, greaterThan(0));
-    expect(button('설정 왼쪽으로 이동').onPressed, isNull);
-    expect(button('설정 오른쪽으로 이동').onPressed, isNotNull);
-    await tester.tap(find.byTooltip('설정 오른쪽으로 이동'));
-    await tester.pumpAndSettle();
-    expect(controller.offset, greaterThan(0));
-    await tester.tap(find.byTooltip('설정 왼쪽으로 이동'));
-    await tester.pumpAndSettle();
-    expect(controller.offset, 0);
-    await tester.tap(find.byKey(const ValueKey('design-tab-common')));
-    await settle(tester);
-    expect(button('설정 오른쪽으로 이동').onPressed, isNull);
+    controller.jumpTo(100);
+    await tester.pump();
+    expect(controller.offset, 100);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
     await settle(tester);

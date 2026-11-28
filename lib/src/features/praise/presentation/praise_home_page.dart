@@ -11294,8 +11294,6 @@ class _DesignRibbonState extends State<_DesignRibbon> {
   final _groupSelection = <_RibbonTab, int>{};
   final _groupScroll = ScrollController();
   final _tabsScroll = ScrollController();
-  bool _canScrollLeft = false;
-  bool _canScrollRight = false;
 
   @override
   void dispose() {
@@ -11311,24 +11309,6 @@ class _DesignRibbonState extends State<_DesignRibbon> {
   void initState() {
     super.initState();
     _tab = widget.contextTab ?? _RibbonTab.song;
-    _groupScroll.addListener(_syncScrollButtons);
-  }
-
-  void _syncScrollButtons() {
-    if (!mounted ||
-        !_groupScroll.hasClients ||
-        !_groupScroll.position.hasContentDimensions) {
-      return;
-    }
-    final position = _groupScroll.position;
-    final left = position.pixels > position.minScrollExtent + 0.5;
-    final right = position.pixels < position.maxScrollExtent - 0.5;
-    if (left != _canScrollLeft || right != _canScrollRight) {
-      setState(() {
-        _canScrollLeft = left;
-        _canScrollRight = right;
-      });
-    }
   }
 
   @override
@@ -11355,16 +11335,6 @@ class _DesignRibbonState extends State<_DesignRibbon> {
     } else {
       setState(() => _tab = tab);
     }
-  }
-
-  void _scrollGroup(double delta) {
-    if (!_groupScroll.hasClients) return;
-    final position = _groupScroll.position;
-    _groupScroll.animateTo(
-      (position.pixels + delta).clamp(0.0, position.maxScrollExtent),
-      duration: const Duration(milliseconds: 180),
-      curve: Curves.easeOut,
-    );
   }
 
   @override
@@ -11497,51 +11467,22 @@ class _DesignRibbonState extends State<_DesignRibbon> {
                   ),
                   const SizedBox(height: 4),
                   Expanded(
-                    child: Row(
-                      children: [
-                        _NudgeButton(
-                          tooltip: '설정 왼쪽으로 이동',
-                          icon: Icons.chevron_left_rounded,
-                          onPressed: _canScrollLeft
-                              ? () => _scrollGroup(-200)
-                              : null,
+                    child: Scrollbar(
+                      key: const ValueKey('design-group-scrollbar'),
+                      controller: _groupScroll,
+                      thumbVisibility: true,
+                      interactive: true,
+                      child: SingleChildScrollView(
+                        controller: _groupScroll,
+                        scrollDirection: Axis.horizontal,
+                        child: Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: KeyedSubtree(
+                            key: ValueKey('$_tab:$selected'),
+                            child: groups[selected],
+                          ),
                         ),
-                        Expanded(
-                          child:
-                              NotificationListener<ScrollMetricsNotification>(
-                                onNotification: (_) {
-                                  WidgetsBinding.instance.addPostFrameCallback(
-                                    (_) => _syncScrollButtons(),
-                                  );
-                                  return false;
-                                },
-                                child: Scrollbar(
-                                  key: const ValueKey('design-group-scrollbar'),
-                                  controller: _groupScroll,
-                                  thumbVisibility: true,
-                                  interactive: true,
-                                  child: SingleChildScrollView(
-                                    controller: _groupScroll,
-                                    scrollDirection: Axis.horizontal,
-                                    child: Padding(
-                                      padding: const EdgeInsets.only(bottom: 8),
-                                      child: KeyedSubtree(
-                                        key: ValueKey('$_tab:$selected'),
-                                        child: groups[selected],
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                        ),
-                        _NudgeButton(
-                          tooltip: '설정 오른쪽으로 이동',
-                          icon: Icons.chevron_right_rounded,
-                          onPressed: _canScrollRight
-                              ? () => _scrollGroup(200)
-                              : null,
-                        ),
-                      ],
+                      ),
                     ),
                   ),
                 ],
