@@ -15,6 +15,7 @@ import 'package:worship_slides/src/features/praise/presentation/praise_home_page
 /// 실제 편집 탭 콘티 목록에서 폴더 트리: 그룹 만들기 → 끌어 넣기 → 접기 → 풀기.
 void main() {
   late Directory temp;
+  final presentationCalls = <String>[];
 
   Future<void> settle(WidgetTester tester) async {
     for (var i = 0; i < 6; i++) {
@@ -38,7 +39,10 @@ void main() {
     );
     messenger.setMockMethodCallHandler(
       const MethodChannel('worship_slides/presentation'),
-      (call) async => null,
+      (call) async {
+        presentationCalls.add(call.method);
+        return null;
+      },
     );
     await PraiseRepository().replaceAllSongs([
       for (final t in ['첫째 곡', '둘째 곡'])
@@ -69,6 +73,35 @@ void main() {
     await tester.tap(find.text('발표 보기'));
     await settle(tester);
     expect(find.text('현재 슬라이드'), findsOneWidget);
+    final mobile = find.widgetWithText(OutlinedButton, '모바일 연결');
+    expect(mobile, findsOneWidget);
+    expect(tester.widget<OutlinedButton>(mobile).onPressed, isNotNull);
+    expect(find.byTooltip('발표를 시작하면 싱어 화면을 열 수 있습니다'), findsOneWidget);
+    await tester.runAsync(() async {
+      await tester.tap(mobile);
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+    });
+    await settle(tester);
+    expect(find.text('휴대폰 화면 연결'), findsOneWidget);
+    expect(find.text('싱어창'), findsOneWidget);
+    await tester.tap(find.text('발표자 모드'));
+    await settle(tester);
+    expect(find.textContaining('발표자 휴대폰에서 이 주소를'), findsOneWidget);
+    expect(tester.takeException(), isNull, reason: '모바일 연결 대화상자');
+    await tester.tap(find.text('끄기'));
+    await settle(tester);
+    expect(tester.takeException(), isNull);
+    presentationCalls.clear();
+    await tester.tap(find.text('발표 시작'));
+    await settle(tester);
+    expect(presentationCalls, contains('openWindow'));
+    expect(presentationCalls, isNot(contains('openSingerWindow')));
+    await tester.tap(find.text('싱어 창 열기'));
+    await settle(tester);
+    expect(presentationCalls, contains('openSingerWindow'));
+    await tester.tap(find.text('싱어 창 닫기'));
+    await settle(tester);
+    expect(presentationCalls, contains('closeSingerWindow'));
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
     await settle(tester);
@@ -111,6 +144,12 @@ void main() {
       ),
     );
     await settle(tester);
+    expect(find.text('PPTX 저장'), findsNothing);
+    await tester.tap(find.byTooltip('파일 메뉴'));
+    await settle(tester);
+    expect(find.text('PPTX 내보내기'), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await settle(tester);
     await tester.tap(find.text('발표 보기'));
     await settle(tester);
     await tester.tap(find.byKey(const ValueKey('design-tab-song')));
@@ -126,7 +165,8 @@ void main() {
     await tester.testTextInput.receiveAction(TextInputAction.done);
     await tester.pump();
     expect(tester.widget<TextField>(input).controller!.text, '37');
-    await tester.tap(find.byKey(const ValueKey('design-group-song-2')));
+    expect(find.text('가로 정렬'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('design-group-song-1')));
     await settle(tester);
     expect(find.text('제목 표시'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('design-group-song-0')));
@@ -144,11 +184,12 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('design-tab-bible')));
     await settle(tester);
     expect(find.text('줄 간격 %'), findsOneWidget);
+    expect(find.text('가로 정렬'), findsOneWidget);
     expect(tester.takeException(), isNull);
     for (final entry in <String, int>{
       'common': 5,
-      'song': 3,
-      'bible': 3,
+      'song': 2,
+      'bible': 2,
     }.entries) {
       await tester.tap(find.byKey(ValueKey('design-tab-${entry.key}')));
       await settle(tester);
@@ -174,13 +215,23 @@ void main() {
     await settle(tester);
     final bar = find.byKey(const ValueKey('design-group-scrollbar'));
     final controller = tester.widget<Scrollbar>(bar).controller!;
+    IconButton button(String tooltip) => tester.widget<IconButton>(
+      find.byWidgetPredicate(
+        (widget) => widget is IconButton && widget.tooltip == tooltip,
+      ),
+    );
     expect(controller.position.maxScrollExtent, greaterThan(0));
+    expect(button('설정 왼쪽으로 이동').onPressed, isNull);
+    expect(button('설정 오른쪽으로 이동').onPressed, isNotNull);
     await tester.tap(find.byTooltip('설정 오른쪽으로 이동'));
     await tester.pumpAndSettle();
     expect(controller.offset, greaterThan(0));
     await tester.tap(find.byTooltip('설정 왼쪽으로 이동'));
     await tester.pumpAndSettle();
     expect(controller.offset, 0);
+    await tester.tap(find.byKey(const ValueKey('design-tab-common')));
+    await settle(tester);
+    expect(button('설정 오른쪽으로 이동').onPressed, isNull);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
     await settle(tester);

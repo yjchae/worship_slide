@@ -1764,9 +1764,12 @@ class _PraiseHomePageState extends State<PraiseHomePage>
           return AlertDialog(
             // QR 이 두 줄(바깥 망 + 같은 망)이라 작은 화면에서 넘치지 않게.
             scrollable: true,
-            title: Row(
+            title: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Expanded(child: Text('휴대폰 화면')),
+                const Text('휴대폰 화면 연결'),
+                const SizedBox(height: 8),
                 SegmentedButton<bool>(
                   segments: const [
                     ButtonSegment(value: false, label: Text('싱어창')),
@@ -7666,6 +7669,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                             ),
                           ),
                           actions: _appBarActions(slides),
+                          isExporting: _isExporting,
+                          onExportPresentation: _exportPresentation,
                           isImporting: _isImporting,
                           isBibleImporting: _isBibleImporting,
                           onImportPressed: _pickAndImportFolder,
@@ -8045,22 +8050,10 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     );
   }
 
-  /// 앱 바 오른쪽 끝: PPTX 저장 + 발표 시작(발표 중이면 진행 표시 + 종료).
+  /// 앱 바 오른쪽 끝: 발표 시작(발표 중이면 진행 표시 + 종료).
   List<Widget> _appBarActions(List<_SlideInfo> slides) {
     final cs = Theme.of(context).colorScheme;
     return [
-      OutlinedButton.icon(
-        onPressed: _isExporting ? null : _exportPresentation,
-        icon: _isExporting
-            ? const SizedBox(
-                width: 14,
-                height: 14,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            : const Icon(Icons.file_download_outlined, size: 17),
-        label: Text(_isExporting ? '생성 중' : 'PPTX 저장'),
-      ),
-      const SizedBox(width: 8),
       // 켜 두었을 때만 상태 점 버튼을 보인다(앱 바 폭이 빠듯하다). 처음 설정은 모니터 메뉴의 'OBS 자막…'.
       if (_obsConfig.enabled)
         ObsAppBarButton(
@@ -8347,12 +8340,14 @@ class _CollapsedPanelStrip extends StatelessWidget {
 
 // ── TopBar ────────────────────────────────────────────────────────────────
 
-/// 앱 바 한 줄: 제목 · 편집/발표 보기 탭 · 가져오기 메뉴 · 업데이트 · [actions](PPTX 저장, 발표 시작).
+/// 앱 바 한 줄: 제목 · 편집/발표 보기 탭 · 파일 메뉴 · 업데이트 · 발표 동작.
 /// 보관함 정보(곡 수·폴더·진행률)는 아래 [_StatusBar] 로 내렸다.
 class _TopBar extends StatelessWidget {
   const _TopBar({
     required this.tabs,
     required this.actions,
+    required this.isExporting,
+    required this.onExportPresentation,
     required this.isImporting,
     required this.isBibleImporting,
     required this.onImportPressed,
@@ -8373,6 +8368,8 @@ class _TopBar extends StatelessWidget {
 
   final Widget tabs;
   final List<Widget> actions;
+  final bool isExporting;
+  final VoidCallback onExportPresentation;
   final bool isImporting;
   final bool isBibleImporting;
   final VoidCallback onImportPressed;
@@ -8415,7 +8412,7 @@ class _TopBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final busy = isImporting || isBibleImporting;
+    final busy = isImporting || isBibleImporting || isExporting;
     return SizedBox(
       height: 44,
       child: Row(
@@ -8438,7 +8435,7 @@ class _TopBar extends StatelessWidget {
                   const SizedBox(width: 16),
                   // 매주 쓰는 것(위)과 처음 한 번·가끔 쓰는 것(구분선 아래)을 한 메뉴로.
                   PopupMenuButton<VoidCallback>(
-                    tooltip: '가져오기',
+                    tooltip: '파일 메뉴',
                     onSelected: (action) => action(),
                     itemBuilder: (context) => [
                       _item(
@@ -8451,6 +8448,12 @@ class _TopBar extends StatelessWidget {
                         Icons.edit_note_rounded,
                         'PPT 를 편집 페이지로 가져오기…',
                         subtitle: '글·도형을 고칠 수 있게',
+                      ),
+                      _item(
+                        onExportPresentation,
+                        Icons.file_download_outlined,
+                        isExporting ? 'PPTX 생성 중' : 'PPTX 내보내기',
+                        enabled: !isExporting,
                       ),
                       _item(
                         onImportSheetPressed,
@@ -8518,13 +8521,13 @@ class _TopBar extends StatelessWidget {
                             )
                           else
                             Icon(
-                              Icons.add_rounded,
+                              Icons.folder_open_outlined,
                               size: 18,
                               color: cs.onSurface,
                             ),
                           const SizedBox(width: 6),
                           const Text(
-                            '가져오기',
+                            '파일',
                             style: TextStyle(
                               fontSize: 13,
                               fontWeight: FontWeight.w500,
@@ -10648,7 +10651,7 @@ class _BibleSearchPanelState extends State<_BibleSearchPanel>
             ),
             const SizedBox(height: 10),
             Text(
-              '성경 데이터가 없습니다\n위쪽 가져오기 메뉴에서 \'성경 불러오기\'를 고르세요',
+              '성경 데이터가 없습니다\n위쪽 파일 메뉴에서 \'성경 불러오기\'를 고르세요',
               textAlign: TextAlign.center,
               style: TextStyle(color: muted, height: 1.5),
             ),
@@ -11286,6 +11289,8 @@ class _DesignRibbonState extends State<_DesignRibbon> {
   final _groupSelection = <_RibbonTab, int>{};
   final _groupScroll = ScrollController();
   final _tabsScroll = ScrollController();
+  bool _canScrollLeft = false;
+  bool _canScrollRight = false;
 
   @override
   void dispose() {
@@ -11301,6 +11306,24 @@ class _DesignRibbonState extends State<_DesignRibbon> {
   void initState() {
     super.initState();
     _tab = widget.contextTab ?? _RibbonTab.song;
+    _groupScroll.addListener(_syncScrollButtons);
+  }
+
+  void _syncScrollButtons() {
+    if (!mounted ||
+        !_groupScroll.hasClients ||
+        !_groupScroll.position.hasContentDimensions) {
+      return;
+    }
+    final position = _groupScroll.position;
+    final left = position.pixels > position.minScrollExtent + 0.5;
+    final right = position.pixels < position.maxScrollExtent - 0.5;
+    if (left != _canScrollLeft || right != _canScrollRight) {
+      setState(() {
+        _canScrollLeft = left;
+        _canScrollRight = right;
+      });
+    }
   }
 
   @override
@@ -11418,8 +11441,8 @@ class _DesignRibbonState extends State<_DesignRibbon> {
     final selected = (_groupSelection[_tab] ?? 0).clamp(0, groups.length - 1);
     final groupLabels = switch (_tab) {
       _RibbonTab.common => ['글꼴', '배경', '미디어', '헌금송', '페이지 틀'],
-      _RibbonTab.song => ['가사', '가사 위치', '제목'],
-      _RibbonTab.bible => ['본문', '본문 위치', '제목'],
+      _RibbonTab.song => ['가사', '제목'],
+      _RibbonTab.bible => ['본문', '제목'],
     };
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -11474,31 +11497,44 @@ class _DesignRibbonState extends State<_DesignRibbon> {
                         _NudgeButton(
                           tooltip: '설정 왼쪽으로 이동',
                           icon: Icons.chevron_left_rounded,
-                          onPressed: () => _scrollGroup(-200),
+                          onPressed: _canScrollLeft
+                              ? () => _scrollGroup(-200)
+                              : null,
                         ),
                         Expanded(
-                          child: Scrollbar(
-                            key: const ValueKey('design-group-scrollbar'),
-                            controller: _groupScroll,
-                            thumbVisibility: true,
-                            interactive: true,
-                            child: SingleChildScrollView(
-                              controller: _groupScroll,
-                              scrollDirection: Axis.horizontal,
-                              child: Padding(
-                                padding: const EdgeInsets.only(bottom: 8),
-                                child: KeyedSubtree(
-                                  key: ValueKey('$_tab:$selected'),
-                                  child: groups[selected],
+                          child:
+                              NotificationListener<ScrollMetricsNotification>(
+                                onNotification: (_) {
+                                  WidgetsBinding.instance.addPostFrameCallback(
+                                    (_) => _syncScrollButtons(),
+                                  );
+                                  return false;
+                                },
+                                child: Scrollbar(
+                                  key: const ValueKey('design-group-scrollbar'),
+                                  controller: _groupScroll,
+                                  thumbVisibility: true,
+                                  interactive: true,
+                                  child: SingleChildScrollView(
+                                    controller: _groupScroll,
+                                    scrollDirection: Axis.horizontal,
+                                    child: Padding(
+                                      padding: const EdgeInsets.only(bottom: 8),
+                                      child: KeyedSubtree(
+                                        key: ValueKey('$_tab:$selected'),
+                                        child: groups[selected],
+                                      ),
+                                    ),
+                                  ),
                                 ),
                               ),
-                            ),
-                          ),
                         ),
                         _NudgeButton(
                           tooltip: '설정 오른쪽으로 이동',
                           icon: Icons.chevron_right_rounded,
-                          onPressed: () => _scrollGroup(200),
+                          onPressed: _canScrollRight
+                              ? () => _scrollGroup(200)
+                              : null,
                         ),
                       ],
                     ),
@@ -11699,6 +11735,15 @@ class _DesignRibbonState extends State<_DesignRibbon> {
               ),
             ),
           ], width: _threeColorColumnWidth),
+          ..._positionGroup(
+            label: '가사 위치',
+            vertical: _style.textPosition,
+            offsetY: _style.textOffsetY,
+            align: _style.lyricsTextAlign,
+            onVertical: (v) => _update(_style.copyWith(textPosition: v)),
+            onOffsetY: (v) => _update(_style.copyWith(textOffsetY: v)),
+            onAlign: (v) => _update(_style.copyWith(lyricsTextAlign: v)),
+          ).columns,
           _column([
             _PropertyRow(
               label: '추가 보조',
@@ -11735,15 +11780,6 @@ class _DesignRibbonState extends State<_DesignRibbon> {
             ),
           ]),
         ],
-      ),
-      _positionGroup(
-        label: '가사 위치',
-        vertical: _style.textPosition,
-        offsetY: _style.textOffsetY,
-        align: _style.lyricsTextAlign,
-        onVertical: (v) => _update(_style.copyWith(textPosition: v)),
-        onOffsetY: (v) => _update(_style.copyWith(textOffsetY: v)),
-        onAlign: (v) => _update(_style.copyWith(lyricsTextAlign: v)),
       ),
       _titleGroup(
         visible: _style.showSongTitle,
@@ -11832,6 +11868,15 @@ class _DesignRibbonState extends State<_DesignRibbon> {
                     ),
             ),
           ], width: _threeColorColumnWidth),
+          ..._positionGroup(
+            label: '본문 위치',
+            vertical: _style.bibleTextPosition,
+            offsetY: _style.bibleTextOffsetY,
+            align: _style.bibleTextAlign,
+            onVertical: (v) => _update(_style.copyWith(bibleTextPosition: v)),
+            onOffsetY: (v) => _update(_style.copyWith(bibleTextOffsetY: v)),
+            onAlign: (v) => _update(_style.copyWith(bibleTextAlign: v)),
+          ).columns,
           _column([
             _PropertyRow(
               label: '추가 역본',
@@ -11888,15 +11933,6 @@ class _DesignRibbonState extends State<_DesignRibbon> {
             ),
           ]),
         ],
-      ),
-      _positionGroup(
-        label: '본문 위치',
-        vertical: _style.bibleTextPosition,
-        offsetY: _style.bibleTextOffsetY,
-        align: _style.bibleTextAlign,
-        onVertical: (v) => _update(_style.copyWith(bibleTextPosition: v)),
-        onOffsetY: (v) => _update(_style.copyWith(bibleTextOffsetY: v)),
-        onAlign: (v) => _update(_style.copyWith(bibleTextAlign: v)),
       ),
       _titleGroup(
         visible: _style.showBibleTitle,
@@ -16075,6 +16111,35 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
       scrollDirection: Axis.horizontal,
       child: Row(
         children: [
+          OutlinedButton.icon(
+            onPressed: widget.onShowMobileSinger,
+            icon: const Icon(Icons.qr_code_rounded, size: 18),
+            label: const Text('모바일 연결'),
+            style: OutlinedButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+            ),
+          ),
+          const SizedBox(width: 4),
+          Tooltip(
+            message: !open
+                ? '발표를 시작하면 싱어 화면을 열 수 있습니다'
+                : '별도 모니터의 싱어 화면을 여닫습니다',
+            child: OutlinedButton.icon(
+              onPressed: open ? widget.onToggleSinger : null,
+              icon: Icon(
+                widget.isSingerOpen
+                    ? Icons.mic_rounded
+                    : Icons.mic_none_rounded,
+                size: 18,
+              ),
+              label: Text(widget.isSingerOpen ? '싱어 창 닫기' : '싱어 창 열기'),
+              style: OutlinedButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                foregroundColor: widget.isSingerOpen ? cs.primary : null,
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
             decoration: BoxDecoration(
@@ -16285,19 +16350,6 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
               tooltip: '화면 끄기 (B)',
               color: widget.isBlackout ? cs.error : null,
             ),
-          if (open)
-            IconButton(
-              onPressed: widget.onToggleSinger,
-              icon: Icon(
-                widget.isSingerOpen
-                    ? Icons.mic_rounded
-                    : Icons.mic_none_rounded,
-              ),
-              tooltip: widget.isSingerOpen
-                  ? '싱어 화면 닫기'
-                  : '싱어 화면 열기 (현재 + 다음 페이지)',
-              color: widget.isSingerOpen ? cs.primary : null,
-            ),
           // Windows 싱어 창 코드는 2차 — 스위치를 숨긴다(휴대폰·코드 보기는 된다).
           if (open && Platform.isMacOS)
             _ToggleChip(
@@ -16307,15 +16359,6 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
                   : '싱어 화면 가사 위에 코드 보이기 (관객 화면은 그대로)',
               value: _view.singerChords,
               onChanged: widget.onSingerChordsChanged,
-            ),
-          if (open)
-            IconButton(
-              onPressed: widget.onShowMobileSinger,
-              icon: const Icon(Icons.phone_iphone_rounded),
-              tooltip: widget.isMobileSingerOn
-                  ? '휴대폰 화면 (켜짐 — 주소 보기·끄기)'
-                  : '휴대폰 화면 — 싱어창·발표자 모드 (같은 와이파이)',
-              color: widget.isMobileSingerOn ? cs.primary : null,
             ),
         ],
       ),
