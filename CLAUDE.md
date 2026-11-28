@@ -156,7 +156,7 @@ lib/
       libreoffice_install_dialog.dart -- LibreOffice·cloudflared 자동 설치 안내창
       offering_overlay_painter.dart  -- 헌금송 띠(라인 + 헌금 + 계좌) painter. 미리보기·PNG 공용
       obs_overlay_dialog.dart        -- 'OBS 자막' 설정 창(연결·디자인 탭, 미리보기) + 앱 바 상태 점 버튼 ObsAppBarButton
-      sync_dialog.dart               -- 동기화 설정 (가져오기 메뉴 '찬양·콘티 동기화'·상태 줄): 접속 키 넣기·찬양 동기화 버튼
+      sync_dialog.dart               -- 동기화 설정 (파일 메뉴 '찬양·콘티 동기화'·상태 줄): 접속 키 넣기·찬양 동기화 버튼
       cloud_conti_dialog.dart        -- 클라우드 콘티 목록: 내려받기(이미 있으면 바꾸기)·클라우드에서 지우기
   src/features/bible/
     data/bible_repository.dart       -- 역본·책·장·절 조회, 본문 검색(searchVerses), JSON 임포트
@@ -202,7 +202,7 @@ macOS `didChangeScreenParametersNotification` + `NSScreen.displayID`, Windows `W
 모니터가 (잠깐) 없으면 아무것도 안 한다 — 프로젝터는 해상도를 다시 잡으며 잠깐 빠졌다 돌아오는 일이 흔하고, 돌아오면 다음 알림에서 맞춘다
 (빠지면 일반 창으로 내리는 처리를 넣었다가, 잠깐 빠진 순간 내려가서 영영 안 돌아와 뺐다).
 
-**싱어 화면**: 발표 중 발표 보기 툴바의 마이크 버튼으로 여는 두 번째 네이티브 창. 디자인(배경·폰트·위치)은
+**싱어 화면**: 발표 중 발표 보기 머리줄의 '싱어 창 열기' 버튼으로 여는 두 번째 네이티브 창. 디자인(배경·폰트·위치)은
 무시하고 현재 페이지(크게, 63%) + 다음 페이지(작게, 37%)를 어두운 고정 레이아웃으로 그린다(글자 크기는 상자에
 맞춰 자동). **줄은 원본 그대로**(자동 줄바꿈 없음) — 가장 긴 줄이 들어가게 글자를 줄여서 관객 화면과 줄 수가 같다.
 단 그러다 글자가 창 높이의 3.5% 보다 작아지면(긴 성경 구절) 그때만 자동 줄바꿈한다. 스타일을 싣지 않는 별도 JSON(`SingerViewData`)을 받는다. 보조 가사는 디자인의 보조 언어 스위치를 따른다.
@@ -220,7 +220,7 @@ macOS `didChangeScreenParametersNotification` + `NSScreen.displayID`, Windows `W
 - 갱신은 `_sendCurrentSlide` 에 얹혀 있다(페이지가 바뀌는 모든 경로가 거기를 지난다). 블랙아웃 중에도 가사는 계속
   보이고 "관객 화면 꺼짐" 표시만 뜬다. 발표를 끝내면 같이 닫힌다
 - macOS `SingerWindowController`(MainFlutterWindow.swift, WKWebView HTML), Windows `windows/runner/singer_window.cpp`(GDI)
-- **휴대폰 화면 — 싱어창**: 발표 보기 툴바의 휴대폰 버튼 → 앱 안 HTTP 서버(`SingerWebServer`, `dart:io`, 포트 8765·쓰고 있으면 아무 빈 포트)를
+- **휴대폰 화면 — 싱어창**: 발표 보기 머리줄의 '모바일 연결' 버튼(발표 전에도 됨, 켜져 있으면 '모바일 연결됨') → 앱 안 HTTP 서버(`SingerWebServer`, `dart:io`, 포트 8765·쓰고 있으면 아무 빈 포트)를
   켜고 `http://<사설 IP>:<포트>` 와 그 QR(`qr_flutter`, 다이얼로그를 열 때마다 지금 IP 로 새로 만든다)을 보여 준다. 같은 와이파이의 휴대폰 브라우저가 SSE(`/events`)로 같은 `SingerViewData` JSON 을 받는다
   (`_sendSingerView` 에 얹혀 있다 — 네이티브 싱어 창이 닫혀 있어도 보낸다). 페이지 이미지는 로컬 경로를 내보내지 않고
   `/img/current`·`/img/next` 로 지금 두 장만 준다(망 안의 다른 기기가 아무 파일이나 읽지 못하게). 발표를 끝내면 같이 꺼지지만,
@@ -424,7 +424,7 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   확신도 Medium 미만은 버린다(문법일 때만). 한국어 음성 언어 팩이 필요하다. 켜기·끄기는 한 번에 하나씩(`State::op`), 늦은 켜기는 뒤 요청이 있으면 건너뛴다.
   macOS 는 입력 장치가 바뀌면(`AVAudioEngineConfigurationChange`) 새 장치로 다시 켜고, 없으면(샘플레이트 0) 켜지 않는다 — 그대로 `installTap` 하면 잡을 수 없는 예외로 앱이 죽는다. C++ 은 오류 코드만 보내고 한글 안내는 `SpeechListener._describe`.
   **실제 음성 인식은 사람이 말해 봐야 확인된다**(Windows 는 PR CI 컴파일만)
-- **콘티 한번에 넣기** (예배 콘티 머리줄의 목록+ 버튼, `ContiTextImportDialog`): 단톡방에 올리는 콘티 글을 붙여 넣으면 줄마다 곡을 찾아 콘티 끝에 담는다.
+- **콘티 한번에 넣기** (콘티 순서 머리줄 ⋯ '콘티 관리' 메뉴의 '콘티 글로 한 번에 넣기', `ContiTextImportDialog`): 단톡방에 올리는 콘티 글을 붙여 넣으면 줄마다 곡을 찾아 콘티 끝에 담는다.
   `<…>` 로 시작하는 머리말 줄은 빼고(꺾쇠 뒤에 글이 붙어도), 번호 줄이 있으면 번호 줄 + 번호 없이 `->`·`→` 로 시작하는 이어 부르기 줄만 곡이다.
   번호는 `1.`·`1)` 꼴(뒤에 숫자가 오면 날짜 `11.01` 이라 아님, `:` 는 시각이라 안 받음)이거나 `1 제목` 꼴이 **두 줄 이상**일 때만 — `7 Days` 같은 제목 하나가 번호 모드를 켜지 않게.
   끝의 조(`F`·`Bb`·`F#m`·`F-G`·`(Key Bb)`, 대소문자 가림 — 영어 제목 끝 낱말 보호, 괄호는 짝이 맞을 때만)와 앞의 `->` 는 떼고,
@@ -486,7 +486,7 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   행 위 DragTarget 오버레이이고 가장 안쪽 DragTarget 이 이겨서 패널 전체 '맨 끝에 놓기'·더블클릭·담기 버튼(맨 끝)은 행 밖·기존 길에서만 일한다(`test/conti_insert_target_test.dart`). 콘티 항목 순서 바꾸기·그룹 이동은 위 폴더 트리가 같은 `ContiInsertTarget` 으로 받는다.
   성경은 놓은 뒤 DB 를 읽는 동안 콘티가 바뀔 수 있어 **자리를 읽은 뒤 기준 uid 로 다시 찾고** 없으면 맨 끝. 그룹은 기준 항목의 것을 이어받고, 여백은 예전 순서 바꾸기처럼 앞 항목의 '여백 없음' 표시만 풀어 사이에 둔다(끝에 넣을 땐 안 건드림).
   발표 중이면 보던 슬라이드를 `_slideInfoKey` 로 다시 찾아 관객 화면은 그대로이고 싱어 '다음'만 갱신한다. 놓은 항목은 2초 강조(`_contiFlashUids`, 발표 보기용 `_flashInserted` 와 별개). 되돌리기는 없다.
-- **새 콘티** (예배 콘티 머리줄, `_newConti`): 확인 후 담긴 항목만 비운다(`_replaceConti`, 불러오기와 같은 초기화). 저장한 콘티는 그대로고 발표 중에는 막는다
+- **새 콘티** (콘티 순서 머리줄 ⋯ '콘티 관리' 메뉴 — 저장·불러오기도 거기, `_newConti`): 확인 후 담긴 항목만 비운다(`_replaceConti`, 불러오기와 같은 초기화). 저장한 콘티는 그대로고 발표 중에는 막는다
 - **콘티 불러오기 뒤에 붙이기** (`_appendConti`): 항목이 있으면 취소·뒤에 붙이기·교체를 묻는다. 붙이기는 불러온 항목·메모·배경·여백 없음을 맨 끝에 더할 뿐이라 기존 항목 표시·원본 감시·보던 페이지·저장본 연결(`_linkedConti`)이 그대로고, 빠진 항목 수는 `_linkedMissing` 에 더한다. 발표 중에도 된다(관객 화면은 그대로, 싱어 '다음'만 갱신)
 - **OBS 자막** (기획 `planning/obs-overlay/`, 1단계): 방송 PC 의 OBS '브라우저' 소스에 `http://<IP>:8766/obs?k=<키>` 를 넣으면
   관객 화면과 같은 순간에 찬양 가사·성경 본문이 **투명 바탕** 자막으로 넘어간다(크로마키·OBS 쪽 재작업 없이). 위치·크기는 OBS 에서 조절한다.
@@ -707,7 +707,7 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   - 편집 창 `PageEditorDialog`(`presentation/page_editor_dialog.dart`)는 '완료' 때 창 안에서 `compose` 콜백으로 굽고, 실패하면 창을 닫지 않는다. 다시 고쳐도 항목 uid 는 그대로
   - 콘티 불러오기·뒤에 붙이기 때 구운 PNG 가 없으면 요소 목록으로 다시 굽는다(`_restoreFreePages`, `app.log` `[page]`)
   - 2차 '이미지 페이지'(`image_rect`·제목 키, 렌더러 네 곳 변경)는 되돌렸다(`SlideBackground.imageRect` 등도 지웠다)
-  - **PPT 를 편집 페이지로 가져오기** (기획 `planning/ppt-style-editor/` 3단계, 가져오기 메뉴): 파일 → `PythonBridge.layout`(`Process.start`, 임시 작업 폴더, 진행 창 문구는 stderr 진행 줄 → `pptLayoutProgressLabel`.
+  - **PPT 를 편집 페이지로 가져오기** (기획 `planning/ppt-style-editor/` 3단계, 파일 메뉴): 파일 → `PythonBridge.layout`(`Process.start`, 임시 작업 폴더, 진행 창 문구는 stderr 진행 줄 → `pptLayoutProgressLabel`.
     '취소' = macOS SIGTERM(Python 이 soffice·osascript 를 죽이고 PowerPoint 는 우리 사본만 닫는다)·Windows `taskkill /T`(실행 미확인) → 끝나기를 기다려 작업 폴더를 지운다) →
     결과 창 `PptLayoutResultDialog`(s6: 슬라이드 N장 중 M장·그림으로 둔 요소·빠진 꾸밈·없는 글꼴·16:9 아님·숨긴 슬라이드·'애니메이션 N장 → 클릭 단계 M장'·'처음부터 보이게 둔 애니메이션'(`anim_lost` 까닭, exit 빼고)·'다시 나타나지 않는 애니메이션'(`anim_lost.exit`, 사라진 채로 둠), 0 인 줄 숨김) → '콘티에 담기'면
     배경 PNG·그림을 `page_images/` 로 복사(`register`)하고 작업 폴더를 지운 뒤 슬라이드마다 편집 페이지(검정 + 배경 PNG + 요소, 이름 = 슬라이드 제목 또는 '파일 이름 N')를 구워
@@ -929,12 +929,16 @@ Flutter가 서브프로세스로 호출하고 stdout의 JSON을 읽는다.
   - 키가 없는 예전 설정·콘티는 0으로 읽혀 기존 동작 그대로다
 
 - **디자인 리본**: 폰트·색·위치 설정은 오른쪽 패널이 아니라 접이식 리본(`_DesignRibbon`)에 있다.
-  메인 탭(편집/발표 보기)·가져오기 메뉴·PPTX 저장·발표 시작은 맨 위 앱 바(`_TopBar`) 한 줄에 있고, 보관함 정보(곡 수·폴더·진행률·버전)는
+  메인 탭(콘티 준비/발표 보기)·파일 메뉴(가져오기·PPTX 내보내기·동기화 등)·발표 시작은 맨 위 앱 바(`_TopBar`) 한 줄에 있고
+  (좁으면 가로 스크롤, 발표 시작/종료 버튼 `presentationButton` 만 스크롤 밖 오른쪽 끝에 고정), 보관함 정보(곡 수·폴더·진행률·버전)는
   맨 아래 `_StatusBar` 다. 리본은 머리줄(디자인 탭)과 내용을 한 카드에 담는다. 두 탭이 같이 쓰고, `_updateStyle` 이 발표 창에 현재 페이지를
   다시 보내므로 발표 중에도 바로 반영된다. 찬양/성경 리본 탭은 편집 탭에선 고른 콘티 항목,
   발표 보기에선 현재 슬라이드를 따라 자동 전환된다.
-  - 리본 전체를 `ExcludeFocus` 로 감쌌다. Tab 키로 포커스가 슬라이더에 들어가면 발표 단축키
-    (←/→)를 슬라이더가 가로채 슬라이드 대신 값이 바뀐다(위젯 테스트로 확인). 마우스 클릭은
+  - 탭(공통·찬양·성경)마다 기능별 하위 칩(`_RibbonGroup.label`)으로 한 묶음씩 보이고, 넘치면 가로 스크롤·좌우 이동 버튼(더 못 가는 쪽은 비활성).
+    글자 크기는 슬라이더가 아니라 ±1 버튼 + 직접 입력(`_FontSizeField`). 리본은 처음에 접혀 있다
+  - 리본은 `FocusTraversalGroup(descendantsAreTraversable: false)` 라 **Tab 으로 들어가지 않는다**. Tab 키로 포커스가 슬라이더에 들어가면
+    발표 단축키(←/→)를 슬라이더가 가로채 슬라이드 대신 값이 바뀐다(`test/conti_tree_page_test.dart`). 예전엔 `ExcludeFocus` 였는데
+    글자 크기 입력칸이 포커스를 받아야 해서 바꿨다 — 입력칸은 눌러야만 포커스를 받고 Enter·바깥 클릭이면 놓는다. 마우스 클릭은
     원래 포커스를 가져가지 않으므로 마우스 조작은 영향 없다
 - **앱 화면 테마**: 7종(`AppThemeKind`)을 앱 바 팔레트 메뉴로 고른다(`appThemeKind`, `Application Support/ui_theme.txt` 에 enum 이름 — 예전 `light`/`dark` 값도 그대로 읽힌다).
   밝은·어두운은 원래 상수 그대로, 나머지는 `_tinted()` 로 바탕·선·강조·선택색만 바꿔 만든다. `primary` 는 흰 바탕 위 아이콘·글자로도 쓰이므로 늘 진하게 둔다.

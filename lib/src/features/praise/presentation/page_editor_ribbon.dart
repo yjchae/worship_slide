@@ -12,6 +12,11 @@ import 'style_fields.dart';
 /// 리본 한 줄 높이. 두 줄 다 늘 자리를 차지한다(고르기를 바꿔도 캔버스가 튀지 않게).
 const double pageRibbonRowHeight = 42;
 
+/// 리본 한 줄 높이 — 글자를 키우면(최대 +14) 그만큼 늘린다.
+double pageRibbonHeight(BuildContext context) =>
+    pageRibbonRowHeight +
+    (MediaQuery.textScalerOf(context).scale(14) - 14).clamp(0, 14);
+
 Widget _divider(ColorScheme cs) => SizedBox(
   height: 22,
   child: VerticalDivider(width: 13, color: cs.outlineVariant),
@@ -167,9 +172,7 @@ class PageInsertRow extends StatelessWidget {
           onPressed: onPressed,
         );
     return SizedBox(
-      height:
-          pageRibbonRowHeight +
-          (MediaQuery.textScalerOf(context).scale(14) - 14).clamp(0, 14),
+      height: pageRibbonHeight(context),
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -386,9 +389,7 @@ class _PageFormatRowState extends State<PageFormatRow> {
     ) => toggleOn(icon, tooltip, selected && on, onPressed);
 
     return Container(
-      height:
-          pageRibbonRowHeight +
-          (MediaQuery.textScalerOf(context).scale(14) - 14).clamp(0, 14),
+      height: pageRibbonHeight(context),
       color: cs.surfaceContainerLow,
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,

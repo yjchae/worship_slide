@@ -1422,7 +1422,7 @@ class _LyricsEditorDialogState extends State<LyricsEditorDialog> {
           child: Row(
             children: [
               Tooltip(
-                message: '코드는 싱어·휴대폰·발표 보기에서만 보입니다.',
+                message: '코드는 싱어·휴대폰·발표 보기에서만 보이고 관객 화면·PPTX 에는 안 나갑니다.',
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [

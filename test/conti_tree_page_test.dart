@@ -199,6 +199,14 @@ void main() {
         expect(tester.takeException(), isNull, reason: '${entry.key} $i');
       }
     }
+    // Tab 으로 리본 슬라이더에 들어가면 발표 중 ←/→ 를 빼앗긴다 — 리본은 Tab 순서에서 빠진다.
+    await tester.tap(find.byKey(const ValueKey('design-group-bible-0')));
+    await settle(tester);
+    bool inSlider(FocusNode n) =>
+        n.context?.findAncestorWidgetOfExactType<Slider>() != null;
+    final root = FocusManager.instance.rootScope;
+    expect(root.descendants.where(inSlider), isNotEmpty);
+    expect(root.traversalDescendants.where(inSlider), isEmpty);
     await tester.pumpWidget(const SizedBox());
     await settle(tester);
   });

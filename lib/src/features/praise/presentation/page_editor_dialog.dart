@@ -1401,6 +1401,8 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final screen = MediaQuery.sizeOf(context);
+    // 창 폭(화면 - 좌우 여백 2.5%씩)이 좁으면 캔버스·속성을 번갈아 보인다.
+    final compact = screen.width * 0.95 < 800;
     final editing = _editingId != null;
     return PopScope(
       canPop: false,
@@ -1435,7 +1437,7 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
                           style: Theme.of(context).textTheme.titleMedium,
                         ),
                       ),
-                      if (screen.width * 0.95 < 800)
+                      if (compact)
                         TextButton.icon(
                           onPressed: () => setState(
                             () => _showCompactProperties =
@@ -1498,9 +1500,8 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
                 ),
                 Divider(height: 1, color: cs.outlineVariant),
                 Expanded(
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      final compact = constraints.maxWidth < 800;
+                  child: Builder(
+                    builder: (context) {
                       final canvas = _blockWhileComposing(
                         FocusTraversalOrder(
                           order: const NumericFocusOrder(3),
@@ -1513,8 +1514,9 @@ class _PageEditorDialogState extends State<PageEditorDialog> {
                           child: _propertiesPanel(cs),
                         ),
                       );
-                      if (compact)
+                      if (compact) {
                         return _showCompactProperties ? properties : canvas;
+                      }
                       return Row(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [

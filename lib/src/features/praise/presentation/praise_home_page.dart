@@ -7669,6 +7669,7 @@ class _PraiseHomePageState extends State<PraiseHomePage>
                             ),
                           ),
                           actions: _appBarActions(slides),
+                          presentationButton: _presentationButton(slides),
                           isExporting: _isExporting,
                           onExportPresentation: _exportPresentation,
                           isImporting: _isImporting,
@@ -8050,9 +8051,8 @@ class _PraiseHomePageState extends State<PraiseHomePage>
     );
   }
 
-  /// 앱 바 오른쪽 끝: 발표 시작(발표 중이면 진행 표시 + 종료).
+  /// 앱 바 오른쪽: OBS 상태 · 모니터 메뉴 · 발표 진행 표시(버튼은 [_presentationButton]).
   List<Widget> _appBarActions(List<_SlideInfo> slides) {
-    final cs = Theme.of(context).colorScheme;
     return [
       // 켜 두었을 때만 상태 점 버튼을 보인다(앱 바 폭이 빠듯하다). 처음 설정은 모니터 메뉴의 'OBS 자막…'.
       if (_obsConfig.enabled)
@@ -8080,31 +8080,32 @@ class _PraiseHomePageState extends State<PraiseHomePage>
               : '이동 → $_slideJumpBuffer',
           style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
         ),
-        const SizedBox(width: 10),
-        FilledButton.icon(
-          onPressed: _closePresentation,
-          icon: const Icon(Icons.stop_rounded, size: 17),
-          label: const Text('발표 종료'),
-          style: FilledButton.styleFrom(
-            backgroundColor: cs.errorContainer,
-            foregroundColor: cs.onErrorContainer,
-          ),
+      ] else if (_slideJumpBuffer.isNotEmpty)
+        Text(
+          '이동 → $_slideJumpBuffer',
+          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
         ),
-      ] else ...[
-        if (_slideJumpBuffer.isNotEmpty) ...[
-          Text(
-            '이동 → $_slideJumpBuffer',
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(width: 10),
-        ],
-        FilledButton.icon(
-          onPressed: slides.isEmpty ? null : _openPresentation,
-          icon: const Icon(Icons.play_arrow_rounded, size: 18),
-          label: const Text('발표 시작'),
-        ),
-      ],
     ];
+  }
+
+  /// 앱 바 맨 오른쪽 발표 시작/종료 버튼.
+  Widget _presentationButton(List<_SlideInfo> slides) {
+    final cs = Theme.of(context).colorScheme;
+    return _isPresentationOpen
+        ? FilledButton.icon(
+            onPressed: _closePresentation,
+            icon: const Icon(Icons.stop_rounded, size: 17),
+            label: const Text('발표 종료'),
+            style: FilledButton.styleFrom(
+              backgroundColor: cs.errorContainer,
+              foregroundColor: cs.onErrorContainer,
+            ),
+          )
+        : FilledButton.icon(
+            onPressed: slides.isEmpty ? null : _openPresentation,
+            icon: const Icon(Icons.play_arrow_rounded, size: 18),
+            label: const Text('발표 시작'),
+          );
   }
 }
 
@@ -8346,6 +8347,7 @@ class _TopBar extends StatelessWidget {
   const _TopBar({
     required this.tabs,
     required this.actions,
+    required this.presentationButton,
     required this.isExporting,
     required this.onExportPresentation,
     required this.isImporting,
@@ -8368,6 +8370,9 @@ class _TopBar extends StatelessWidget {
 
   final Widget tabs;
   final List<Widget> actions;
+
+  /// 발표 시작/종료. 앱 바가 좁아도 가로 스크롤 밖 오른쪽 끝에 늘 보인다.
+  final Widget presentationButton;
   final bool isExporting;
   final VoidCallback onExportPresentation;
   final bool isImporting;
@@ -8605,13 +8610,13 @@ class _TopBar extends StatelessWidget {
                           : const Icon(Icons.refresh_rounded, size: 18),
                     ),
                   const SizedBox(width: 8),
-                  ...actions.take(actions.length - 1),
+                  ...actions,
                 ],
               ),
             ),
           ),
           const SizedBox(width: 8),
-          if (actions.isNotEmpty) actions.last,
+          presentationButton,
         ],
       ),
     );
@@ -11365,21 +11370,26 @@ class _DesignRibbonState extends State<_DesignRibbon> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _header(cs),
-          if (!widget.isCollapsed) ...[
-            Divider(height: 1, color: cs.outlineVariant),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
-              child: SizedBox(height: _contentHeight, child: _content(cs)),
-            ),
+    // 발표 중 단축키(←/→/Space)를 슬라이더가 가로채지 않도록 Tab 으로는 리본에 들어가지 않는다.
+    // 글자 크기 입력칸은 눌러서만 포커스를 받고, Enter·바깥 클릭이면 놓는다.
+    return FocusTraversalGroup(
+      descendantsAreTraversable: false,
+      child: Card(
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _header(cs),
+            if (!widget.isCollapsed) ...[
+              Divider(height: 1, color: cs.outlineVariant),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+                child: SizedBox(height: _contentHeight, child: _content(cs)),
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
@@ -11439,11 +11449,6 @@ class _DesignRibbonState extends State<_DesignRibbon> {
       _RibbonTab.bible => _bibleGroups(),
     };
     final selected = (_groupSelection[_tab] ?? 0).clamp(0, groups.length - 1);
-    final groupLabels = switch (_tab) {
-      _RibbonTab.common => ['글꼴', '배경', '미디어', '헌금송', '페이지 틀'],
-      _RibbonTab.song => ['가사', '제목'],
-      _RibbonTab.bible => ['본문', '제목'],
-    };
     return LayoutBuilder(
       builder: (context, constraints) {
         return Row(
@@ -11471,7 +11476,7 @@ class _DesignRibbonState extends State<_DesignRibbon> {
                               padding: const EdgeInsets.only(right: 4),
                               child: ChoiceChip(
                                 key: ValueKey('design-group-${_tab.name}-$i'),
-                                label: Text(groupLabels[i]),
+                                label: Text(groups[i].label),
                                 selected: selected == i,
                                 visualDensity: VisualDensity.compact,
                                 showCheckmark: false,
@@ -11608,7 +11613,7 @@ class _DesignRibbonState extends State<_DesignRibbon> {
         ],
       ),
       _RibbonGroup(
-        label: '미디어 페이드 (PPT 동영상 · 새 미디어 페이지)',
+        label: '미디어',
         columns: [
           _column([
             _PropertyRow(
@@ -11735,15 +11740,14 @@ class _DesignRibbonState extends State<_DesignRibbon> {
               ),
             ),
           ], width: _threeColorColumnWidth),
-          ..._positionGroup(
-            label: '가사 위치',
+          ..._positionColumns(
             vertical: _style.textPosition,
             offsetY: _style.textOffsetY,
             align: _style.lyricsTextAlign,
             onVertical: (v) => _update(_style.copyWith(textPosition: v)),
             onOffsetY: (v) => _update(_style.copyWith(textOffsetY: v)),
             onAlign: (v) => _update(_style.copyWith(lyricsTextAlign: v)),
-          ).columns,
+          ),
           _column([
             _PropertyRow(
               label: '추가 보조',
@@ -11868,15 +11872,14 @@ class _DesignRibbonState extends State<_DesignRibbon> {
                     ),
             ),
           ], width: _threeColorColumnWidth),
-          ..._positionGroup(
-            label: '본문 위치',
+          ..._positionColumns(
             vertical: _style.bibleTextPosition,
             offsetY: _style.bibleTextOffsetY,
             align: _style.bibleTextAlign,
             onVertical: (v) => _update(_style.copyWith(bibleTextPosition: v)),
             onOffsetY: (v) => _update(_style.copyWith(bibleTextOffsetY: v)),
             onAlign: (v) => _update(_style.copyWith(bibleTextAlign: v)),
-          ).columns,
+          ),
           _column([
             _PropertyRow(
               label: '추가 역본',
@@ -11956,8 +11959,7 @@ class _DesignRibbonState extends State<_DesignRibbon> {
   // ── 찬양/성경 공용 묶음 ──
 
   /// 본문 상자의 세로 기준 + 미세 조정 + 가로 정렬.
-  _RibbonGroup _positionGroup({
-    required String label,
+  List<Widget> _positionColumns({
     required VerticalTextPosition vertical,
     required double offsetY,
     required HorizontalPosition align,
@@ -11965,35 +11967,32 @@ class _DesignRibbonState extends State<_DesignRibbon> {
     required ValueChanged<double> onOffsetY,
     required ValueChanged<HorizontalPosition> onAlign,
   }) {
-    return _RibbonGroup(
-      label: label,
-      columns: [
-        _column([
-          _PropertyRow(
-            label: '세로 기준',
-            child: _OptionSegments<VerticalTextPosition>(
-              values: VerticalTextPosition.values,
-              selected: vertical,
-              labelOf: (v) => v.label,
-              onSelected: onVertical,
-            ),
+    return [
+      _column([
+        _PropertyRow(
+          label: '세로 기준',
+          child: _OptionSegments<VerticalTextPosition>(
+            values: VerticalTextPosition.values,
+            selected: vertical,
+            labelOf: (v) => v.label,
+            onSelected: onVertical,
           ),
-          _PropertyRow(
-            label: '미세 조정',
-            child: _OffsetSlider(value: offsetY, onChanged: onOffsetY),
+        ),
+        _PropertyRow(
+          label: '미세 조정',
+          child: _OffsetSlider(value: offsetY, onChanged: onOffsetY),
+        ),
+        _PropertyRow(
+          label: '가로 정렬',
+          child: _OptionSegments<HorizontalPosition>(
+            values: HorizontalPosition.values,
+            selected: align,
+            labelOf: (v) => v.label,
+            onSelected: onAlign,
           ),
-          _PropertyRow(
-            label: '가로 정렬',
-            child: _OptionSegments<HorizontalPosition>(
-              values: HorizontalPosition.values,
-              selected: align,
-              labelOf: (v) => v.label,
-              onSelected: onAlign,
-            ),
-          ),
-        ]),
-      ],
-    );
+        ),
+      ]),
+    ];
   }
 
   /// 리본 한 줄 높이에 맞춘 작은 스위치.
@@ -12377,8 +12376,6 @@ class _FontSizeFieldState extends State<_FontSizeField> {
               isDense: true,
               contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 5),
               border: OutlineInputBorder(),
-              labelText: null,
-              semanticCounterText: '',
             ),
             onSubmitted: (_) => _focus.unfocus(),
           ),
@@ -16114,9 +16111,10 @@ class _PresenterConsoleState extends State<_PresenterConsole> {
           OutlinedButton.icon(
             onPressed: widget.onShowMobileSinger,
             icon: const Icon(Icons.qr_code_rounded, size: 18),
-            label: const Text('모바일 연결'),
+            label: Text(widget.isMobileSingerOn ? '모바일 연결됨' : '모바일 연결'),
             style: OutlinedButton.styleFrom(
               visualDensity: VisualDensity.compact,
+              foregroundColor: widget.isMobileSingerOn ? cs.primary : null,
             ),
           ),
           const SizedBox(width: 4),
